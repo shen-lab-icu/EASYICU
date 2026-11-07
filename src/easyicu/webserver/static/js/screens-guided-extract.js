@@ -620,7 +620,7 @@
         host.setVal({ data: (result.db || 'local ICU') + ' · ' + (result.source || 'source') });
       } else {
         current.scan = result || null;
-        current.scanError = scanFailure(result && result.error);
+        current.scanError = scanFailure(result && result.error ? result : null);
       }
       host.renderThread();
       host.scheduleGuidedSlotSave('scan_extraction_folder');

@@ -46,13 +46,26 @@ from easyicu.databases import normalize_database_key
 from easyicu.export_publication import (
     REASON_IN_PROGRESS,
     UNPUBLISHED_CODE,
+    INTEGRITY_VERIFIED,
+    MEMBER_INTEGRITY_DECLARATION,
+    MEMBER_INTEGRITY_KEY,
+    ExportMemberIntegrityError,
+    ExportMemberUnreadableError,
     NativeExportUnpublishedError,
     SourceReceiptInvalidError,
     begin_native_export,
+    export_relative_path,
     finish_native_export,
     folder_unpublished_reason,
+    integrity_status,
+    load_published_manifest,
+    member_digest_record,
+    member_unreadable,
+    refusal_message,
+    require_listed_members_present,
     require_published_export_package,
     unpublished_reason,
+    verify_member_integrity,
 )
 from easyicu.outcome_availability import structural_outcome_unavailability
 from easyicu.scores.aki_profiles import renal_bundle_column_unavailability
@@ -433,6 +446,64 @@ def _peek_columns(path: Path, table: str) -> List[str]:
     return []
 
 
+def _member_refusal(exc: Exception, folder: Any = None) -> Dict[str, Any]:
+    """A visible refusal for a damaged or unreadable export member."""
+    raw_member = str(getattr(exc, "member", "") or "")
+    member_path = Path(raw_member)
+    if member_path.is_absolute() and folder:
+        try:
+            member_path = member_path.relative_to(Path(folder).absolute())
+        except ValueError:
+            pass
+    # Unsafe manifest coordinates may be absolute, including on another OS.
+    # Without a package-relative coordinate, expose only a stable short hash.
+    if (member_path.is_absolute() or ".." in member_path.parts
+            or "\\" in raw_member or "\x00" in raw_member
+            or re.match(r"^[A-Za-z]:", raw_member)):
+        member = "member-" + hashlib.sha256(raw_member.encode("utf-8")).hexdigest()[:12]
+    else:
+        member = member_path.as_posix() if raw_member else ""
+    return {
+        "ok": False, "error": exc.code, "reason": getattr(exc, "reason", exc.code),
+        # The member's logical name only; host paths stay in the server log.
+        "member": member,
+        # Human text: exactly "integrity unrecorded · re-export to verify" when
+        # no digest was ever recorded; never a host path.
+        "message": refusal_message(exc),
+        "export_path": export_relative_path(folder, member) if folder else member,
+        "ready": False,
+        "privacy": {"raw_rows_read": False, "patient_identifiers_returned": False},
+    }
+
+
+def _refuse_damaged_members(function):
+    """Dict-returning entry points answer ``{ok: False, error: <code>}``.
+
+    A truncated, corrupted or replaced export member (``export_member_unreadable``
+    / ``export_member_integrity_failed``) becomes a visible refusal the screens
+    already render, never an empty table, a zero count or an HTTP 500.
+    """
+    import functools
+
+    @functools.wraps(function)
+    def wrapper(*args, **kwargs):
+        try:
+            result = function(*args, **kwargs)
+        except (ExportMemberIntegrityError, ExportMemberUnreadableError) as exc:
+            folder = args[0] if args and isinstance(args[0], (str, Path)) else kwargs.get("path")
+            return _member_refusal(exc, folder)
+        # Visible, never silent: members whose manifest recorded no digests
+        # are named (status + "integrity unrecorded · re-export to verify").
+        if isinstance(result, dict) and isinstance(result.get("files"), list):
+            statuses = [row.get("integrity") for row in result["files"]
+                        if isinstance(row, dict) and row.get("integrity")]
+            if statuses:
+                result["member_integrity"] = integrity_status(statuses)
+        return result
+
+    return wrapper
+
+
 def scan_path(raw_path: str, source_hint: Optional[str] = None) -> Dict[str, Any]:
     """Inspect a folder and report what extraction can do with it.
 
@@ -458,6 +529,9 @@ def scan_path(raw_path: str, source_hint: Optional[str] = None) -> Dict[str, Any
     try:
         db_key = _detect_database(path)
     except (ValueError, OSError) as exc:
+        if getattr(exc, "code", None) in {"export_member_integrity_failed",
+                                          "export_member_unreadable"}:
+            return _member_refusal(exc, path)
         return {
             "ok": False,
             "error": getattr(exc, "code", "export_layout_invalid"),
@@ -488,6 +562,11 @@ def scan_path(raw_path: str, source_hint: Optional[str] = None) -> Dict[str, Any
         try:
             inspect_export_layout(path)
         except (ExportPackageError, ValueError, OSError) as exc:
+            if getattr(exc, "code", None) in {"export_member_integrity_failed",
+                                              "export_member_unreadable"}:
+                # The same refusal as every other reader: exact human text,
+                # path relative to the export root, no host path.
+                return {**_member_refusal(exc, path), "source": "module"}
             return {"ok": False, "path": str(path), "source": "module", "ready": False,
                     "error": getattr(exc, "code", "export_layout_invalid"),
                     "privacy": {"raw_rows_read": False, "patient_identifiers_returned": False}}
@@ -1442,11 +1521,13 @@ def _write_feature_definition_files(
             "file": json_name,
             "kind": "feature_definitions",
             "records": payload.get("record_count", 0),
+            **member_digest_record(out / json_name),
         },
         {
             "file": csv_name,
             "kind": "feature_definitions_csv",
             "records": payload.get("record_count", 0),
+            **member_digest_record(out / csv_name),
         },
     ]
 
@@ -2212,6 +2293,7 @@ def _resolve_export_cohort(
     }
 
 
+@_refuse_damaged_members
 def preview_export_cohort(
     data_path: str,
     database: str,
@@ -2452,6 +2534,7 @@ def resolve_registered_export_binding(
     }
 
 
+@_refuse_damaged_members
 def preview_registered_export_icd_cohort(
     export_path: str,
     database: str,
@@ -2981,6 +3064,7 @@ def make_export_runner(
                                 "concepts": len(module_concepts),
                                 "concept_ids": list(module_concepts),
                                 "rows": rows,
+                                **member_digest_record(out / fname),
                             }
                         )
                         written[-1]["column_metadata_columns"] = list(binding.columns)
@@ -3014,6 +3098,7 @@ def make_export_runner(
                             "concepts": len(module_concepts),
                             "concept_ids": list(module_concepts),
                             "rows": rows,
+                            **member_digest_record(out / fname),
                         }
                     )
                     written[-1]["column_metadata_columns"] = list(binding.columns)
@@ -3167,17 +3252,25 @@ def make_export_runner(
             "column_metadata": metadata_ref.to_dict(),
             "data_provenance": data_provenance,
             **value_publication,
+            # Every member below records sha256/bytes; readers then require them.
+            MEMBER_INTEGRITY_KEY: dict(MEMBER_INTEGRITY_DECLARATION),
         }
-        (out / "_manifest.json").write_text(
-            json.dumps(manifest, indent=2, ensure_ascii=False), encoding="utf-8"
-        )
-        finish_native_export(out)
         (out / "README.md").write_text(
             _render_export_readme(
                 manifest, files=files, definition_files=definition_files
             ),
             encoding="utf-8",
         )
+        # The shared member inventory accepts auxiliary files too. Keep the
+        # table-only ``files`` inventory stable for schema and row readers.
+        manifest["exported_files"] = [
+            *definition_files,
+            {"file": "README.md", "kind": "readme", **member_digest_record(out / "README.md")},
+        ]
+        (out / "_manifest.json").write_text(
+            json.dumps(manifest, indent=2, ensure_ascii=False), encoding="utf-8"
+        )
+        finish_native_export(out)
         from easyicu.synthetic_exports import record_generated_export
         record_generated_export(data_path, out, source_proof=synthetic_input_proof)
         return {
@@ -3203,6 +3296,7 @@ def make_export_runner(
     return runner
 
 
+@_refuse_damaged_members
 def summarize_export_workspace(raw_path: str) -> Dict[str, Any]:
     """Summarise an EasyICU module-export folder for visualization screens.
 
@@ -3402,6 +3496,7 @@ def summarize_export_workspace(raw_path: str) -> Dict[str, Any]:
     }
 
 
+@_refuse_damaged_members
 def summarize_crossdb_workspaces(raw_paths: List[str]) -> Dict[str, Any]:
     """Summarise two or more local export folders for Cross-DB preview.
 
@@ -3619,6 +3714,7 @@ def _crossdb_compatibility_gate(
     }
 
 
+@_refuse_damaged_members
 def describe_export_source(raw_path: str) -> Dict[str, Any]:
     """Return a compact registry-safe description of an export folder.
 
@@ -3677,6 +3773,7 @@ def describe_export_source(raw_path: str) -> Dict[str, Any]:
     }
 
 
+@_refuse_damaged_members
 def describe_source_tables(raw_path: str, *, planning_metadata_only: bool = False) -> Dict[str, Any]:
     """The tables and modules of a source folder, reading no table's rows.
 
@@ -3772,6 +3869,10 @@ def _research_pipeline_intake_diagnostic(exc: BaseException) -> Dict[str, Any]:
         "export_package_unreadable": "One or more export package files could not be read.",
     }
     message = messages.get(code, f"The export package failed intake contract {code}.")
+    if code in {"export_member_integrity_failed", "export_member_unreadable"}:
+        # Exactly "integrity unrecorded · re-export to verify" when no digest
+        # was ever recorded (supervisor ruling: v0.1.x web exports).
+        message = refusal_message(exc) + "."
     detail: Dict[str, Any] = {
         "intake_error_code": code,
         "intake_error_message": (
@@ -3881,6 +3982,10 @@ def validate_research_pipeline_source(
                         "relative_path": item.relative_path,
                         "sha256": item.identity.sha256,
                         "size_bytes": item.identity.size,
+                        # Only an unrecorded member adds the key, so bindings
+                        # of verified packages keep their stored digest.
+                        **({"integrity": item.integrity}
+                           if item.integrity != INTEGRITY_VERIFIED else {}),
                     }
                     for item in sorted(package.files, key=lambda value: value.relative_path)
                 ],
@@ -3990,8 +4095,7 @@ def _manifest_file_entries(manifest: Dict[str, Any]) -> List[Dict[str, Any]]:
         return [dict(row) for row in files if isinstance(row, dict) and row.get("file")]
 
     # Older full exports wrote ``easyicu_export_manifest.json`` with a short
-    # ``modules`` list. Treat those rows as hints, but still scan the folder
-    # because the manifest may be incomplete.
+    # ``modules`` list. Only listed members belong to that published export.
     modules = manifest.get("modules")
     if not isinstance(modules, list):
         return []
@@ -4037,6 +4141,15 @@ def _export_file_inventory(
         f.get("file"): f for f in _manifest_file_entries(manifest) if f.get("file")
     }
     out: List[Dict[str, Any]] = []
+    is_export = any((path / name).is_file() for name in _MODULE_MANIFESTS)
+    authority: Optional[Dict[str, Any]] = None
+    if is_export:
+        # The manifest is authoritative: a listed member that is missing
+        # refuses instead of leaving a silently smaller export.
+        authority = {k: v for k, v in manifest.items() if k != "_manifest_file"}
+        if not authority:
+            authority = load_published_manifest(path)
+        require_listed_members_present(path, authority)
     for f in sorted(path.iterdir(), key=lambda p: p.name):
         require_path(f, instance_owned=True)
         if (
@@ -4048,7 +4161,15 @@ def _export_file_inventory(
             continue
         if f.suffix.lower() not in {".csv", ".parquet", ".xlsx"}:
             continue
+        integrity = None
+        if is_export:
+            # Size + SHA-256 against the published manifest (memoised per file).
+            # A converted source folder has no export manifest: its tables are
+            # governed by the source contract, not by export publication.
+            integrity = verify_member_integrity(path, f, manifest=authority)
         meta = dict(manifest_files.get(f.name, {}))
+        if integrity is not None:
+            meta["integrity"] = integrity
         if "file" not in meta:
             meta["file"] = f.name
         if "module" not in meta:
@@ -4248,7 +4369,11 @@ def read_export_projection(
     marker, a native or legacy root manifest).
     """
 
-    require_published_export_package(Path(path).parent)
+    # One absolute path at the entry: a caller-relative path is never joined
+    # to its root twice.
+    path = Path(path).absolute()
+    require_published_export_package(path.parent)
+    verify_member_integrity(path.parent, path)
     return _read_export_projection(
         path,
         columns=columns,
@@ -4286,41 +4411,39 @@ def _read_export_frame_duckdb(
 
 
 def _read_columns(path: Path) -> List[str]:
+    """Header of one data file; an unreadable file raises, never reads as empty."""
+    suffix = path.suffix.lower()
+    if suffix not in {".csv", ".xlsx", ".parquet"}:
+        return []
     try:
         import pandas as pd
 
-        suffix = path.suffix.lower()
         if suffix == ".csv":
             return list(pd.read_csv(path, nrows=0).columns)
         if suffix == ".xlsx":
             return list(pd.read_excel(path, nrows=0).columns)
-        if suffix == ".parquet":
-            try:
-                import pyarrow.parquet as pq
+        import pyarrow.parquet as pq
 
-                return list(pq.ParquetFile(path).schema_arrow.names)
-            except Exception:
-                return list(pd.read_parquet(path).columns)
-    except Exception:
-        return []
-    return []
+        return list(pq.ParquetFile(path).schema_arrow.names)
+    except Exception as exc:
+        raise member_unreadable(path, exc) from exc
 
 
 def _count_rows(path: Path) -> int:
+    """Row count of one data file; an unreadable file raises, never counts 0."""
     try:
         if path.suffix.lower() == ".csv":
             with path.open("rb") as fh:
                 return max(sum(1 for _ in fh) - 1, 0)
         if path.suffix.lower() == ".parquet":
-            try:
-                import pyarrow.parquet as pq
+            import pyarrow.parquet as pq
 
-                return int(pq.ParquetFile(path).metadata.num_rows)
-            except Exception:
-                pass
+            return int(pq.ParquetFile(path).metadata.num_rows)
         return int(_read_export_frame(path).shape[0])
-    except Exception:
-        return 0
+    except ExportMemberUnreadableError:
+        raise
+    except Exception as exc:
+        raise member_unreadable(path, exc) from exc
 
 
 def _read_stay_ids(
@@ -4329,8 +4452,10 @@ def _read_stay_ids(
 ) -> Optional[set[str]]:
     try:
         frame = _read_stay_id_frame(path, stay_ids=stay_ids)
-    except Exception:
-        return None
+    except ExportMemberUnreadableError:
+        raise
+    except Exception as exc:
+        raise member_unreadable(path, exc) from exc
     if "stay_id" not in frame.columns:
         return None
     return {sid for sid in frame["stay_id"].map(entity_id_contract.normalize_entity_id).dropna().astype(str) if sid}
@@ -4537,8 +4662,10 @@ def _cohort_total_rows(
 def _count_matching_stay_rows(path: Path, stay_ids: set[str]) -> int:
     try:
         frame = _read_stay_id_frame(path, stay_ids=stay_ids)
-    except Exception:
-        return 0
+    except ExportMemberUnreadableError:
+        raise
+    except Exception as exc:
+        raise member_unreadable(path, exc) from exc
     if "stay_id" not in frame.columns:
         return 0
     return int(frame["stay_id"].map(entity_id_contract.normalize_entity_id).isin(stay_ids).sum())

@@ -400,6 +400,10 @@ def _file_concept_coverage(
 
     usecols = ["stay_id", *concepts]
     try:
+        from easyicu.export_publication import verify_member_integrity
+
+        # A damaged or replaced member shows as active_unreadable below.
+        verify_member_integrity(file_path.parent, file_path)
         if file_path.suffix.lower() == ".parquet":
             frame = pd.read_parquet(file_path, columns=usecols)
         elif file_path.suffix.lower() == ".xlsx":

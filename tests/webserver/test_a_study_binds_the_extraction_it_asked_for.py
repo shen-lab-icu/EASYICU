@@ -37,6 +37,7 @@ from easyicu.webserver.pi_copilot.extraction_handoff import (
 from easyicu.webserver.research_launch_scientific import bound_export_cohort_refusal
 from easyicu.webserver.routes import jobs as jobs_route
 from easyicu.webserver.routes.jobs import jobs_extract
+from tests.support.published_export import record_member_digests
 
 _MODULES = ["demographics", "outcome"]
 _COHORT = {
@@ -89,6 +90,7 @@ def _write_export(
         "files": files,
     }
     (root / "_manifest.json").write_text(json.dumps(manifest), encoding="utf-8")
+    record_member_digests(root)  # the writer records every member's digest
     return root
 
 

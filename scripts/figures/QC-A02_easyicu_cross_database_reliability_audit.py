@@ -643,10 +643,19 @@ def _source_run_lineage(
 def _require_published_exports(export_root: Path) -> None:
     """Refuse the audit unless all six database exports are published."""
 
-    from easyicu.export_publication import require_published_native_export
+    from easyicu.export_publication import (
+        require_published_native_export,
+        verify_package_members,
+    )
 
     for database in DATABASES:
         require_published_native_export(export_root / database)
+        # Publication QC is formal: refuse a damaged or unrecorded member.
+        verify_package_members(
+            export_root / database,
+            sorted((export_root / database).glob("*.parquet")),
+            formal=True,
+        )
 
 
 def _load_root_manifests(export_root: Path) -> dict[str, dict[str, Any]]:

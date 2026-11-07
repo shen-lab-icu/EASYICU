@@ -6,6 +6,7 @@ import pyarrow as pa
 import pyarrow.compute as pc
 import pyarrow.parquet as pq
 
+from tests.support.published_export import record_member_digests
 from easyicu.research_agent.discovery.idea_mining_source_status import (
     ComparisonSourceSpec,
     MeasurementAuditCriteria,
@@ -60,6 +61,7 @@ def _write_miiv(
         pq.write_table(pa.table(chemistry), database / "chemistry.parquet")
     if blood_gas is not None:
         pq.write_table(pa.table(blood_gas), database / "blood_gas.parquet")
+    record_member_digests(database)
 
 
 def test_same_row_components_are_required_and_status_partition_is_exclusive(tmp_path):
@@ -293,6 +295,7 @@ def test_measurement_audit_requires_enough_databases_and_coverage_contrast(tmp_p
         ),
         database / "chemistry.parquet",
     )
+    record_member_digests(database)
     criteria = MeasurementAuditCriteria(
         min_databases_with_valid_observations=2,
         min_valid_stays_per_database=1,
@@ -363,6 +366,7 @@ def test_pair_answerability_requires_joint_predictor_outcome_stays(tmp_path):
         pa.table({"icustay_id": [10, 11, 12], "cai": [1.0, 1.1, None]}),
         database / "blood_gas.parquet",
     )
+    record_member_digests(database)
 
     report = profile_rowwise_derived_concept(
         tmp_path,

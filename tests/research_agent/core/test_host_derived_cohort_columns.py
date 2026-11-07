@@ -45,6 +45,7 @@ from easyicu.research_agent.intake.materialized_metadata import (
     MaterializedMetadataError,
     load_verified_materialized_cohort_authority,
 )
+from tests.support.published_export import record_member_digests
 
 
 _RENAL_CONCEPTS = (
@@ -223,6 +224,7 @@ def _typed_renal_export(
         ),
         encoding="utf-8",
     )
+    record_member_digests(root)  # the writer records every member's digest
     return root
 
 

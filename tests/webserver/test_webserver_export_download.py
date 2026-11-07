@@ -63,6 +63,8 @@ def test_registered_export_bundle_contains_only_manifest_allowlist(tmp_path: Pat
             "demographics.csv",
             "feature_definitions.json",
             "feature_definitions.csv",
+            # The bundle's own statement of each member's integrity status.
+            export_download.INTEGRITY_RECEIPT_NAME,
         }
 
 

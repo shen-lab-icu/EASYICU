@@ -1056,6 +1056,8 @@ def _export_authority_provenance(
                 "id_column": item.id_column,
                 "time_column": item.time_column,
                 "time_columns": list(item.time_columns),
+                # verified, or unrecorded (the manifest recorded no digests).
+                "integrity": item.integrity,
             }
             for item in package.files
         ],

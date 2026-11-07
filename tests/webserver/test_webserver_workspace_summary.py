@@ -369,11 +369,12 @@ def _write_legacy_full_parquet_export(root: Path, database: str = "miiv") -> Pat
                 "entry_mode": "module_grouped_full_export",
                 "modules": [
                     {
-                        "group": "sepsis3_sofa2",
-                        "file": "sepsis3_sofa2_sep3_sofa2.parquet",
-                        "rows": 2,
-                        "feature_cols": 1,
+                        "group": dataio._infer_export_module(Path(file_name)),
+                        "file": file_name,
+                        "rows": len(frame),
+                        "feature_cols": len(set(frame.columns) - {"stay_id", "charttime"}),
                     }
+                    for file_name, frame in tables.items()
                 ],
             },
             indent=2,
@@ -3819,7 +3820,9 @@ def test_cohort_review_skips_large_time_indexed_sofa_for_interactive_summary(
     original_read_csv = pd.read_csv
 
     def guarded_read_csv(*args, **kwargs):
-        if "sofa2_score" in str(args[0]):
+        # The header probe (nrows=0) is metadata; any row read is refused. The
+        # inventory used to swallow this guard's error and list no columns.
+        if "sofa2_score" in str(args[0]) and kwargs.get("nrows") != 0:
             raise AssertionError(f"large SOFA module should be deferred: {args[0]}")
         return original_read_csv(*args, **kwargs)
 

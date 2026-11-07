@@ -344,6 +344,10 @@ def test_typed_adjudication_and_source_bound_feasibility_form_current_readiness(
             "rows": 2,
         },
     ]
+    # A published export carries its root manifest (mining compares members).
+    (export_dir / "_manifest.json").write_text(
+        json.dumps({"database": "miiv", "format": "csv", "files": files}), encoding="utf-8"
+    )
     desc = {
         "ok": True,
         "path": str(export_dir),

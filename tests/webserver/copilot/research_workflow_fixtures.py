@@ -14,6 +14,7 @@ from starlette.requests import Request
 
 from easyicu.webserver import study_contexts as study_context_owner
 from easyicu.webserver.pi_copilot import cohort_eligibility
+from tests.support.published_export import record_member_digests
 
 def confirmed_cohort_decision(
     option_id: str,
@@ -425,6 +426,8 @@ def _write_pipeline_export(
         ),
         encoding="utf-8",
     )
+    if current_contract:  # a current writer records every member's digest
+        record_member_digests(root)
     return root
 
 

@@ -29,6 +29,7 @@ from easyicu.research_agent.acquisition.patient_grouping import (
     load_verified_patient_grouping,
 )
 from easyicu.webserver import source_identity_authority
+from tests.support.published_export import record_member_digests
 
 
 def _sha256(path: Path) -> str:
@@ -473,6 +474,8 @@ def test_an_eicu_association_carries_source_identity_through_preparation(
             "column_metadata": write_content_addressed_sidecar(export, sidecar).to_dict(),
         })
     manifest_path.write_text(json.dumps(manifest))
+    if typed:  # a native v2 writer records every member's digest
+        record_member_digests(export)
     study = {
         "data_source": {"path": str(export), "database": "eicu"},
         "analysis_design": {"analysis_family": "association_study", "analysis_unit": "icu_stay",

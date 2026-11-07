@@ -82,3 +82,43 @@ def test_the_guided_extraction_card_uses_the_same_scan_failure_sentence(language
     result = json.loads(run_node("node", script, check=True).stdout)
     assert result["sentence"] == result["expected"]
     assert "database_detection_ambiguous" not in result["sentence"]
+
+
+@pytest.mark.requires_node
+def test_an_unrecorded_member_refusal_shows_the_exact_re_export_text():
+    script = f"""
+      global.window = global;
+      const modules = {{}};
+      window.EU_HTML = {{esc: value => String(value)}};
+      window.EasyICU = {{guidedPi: {{declare: (key, owner) => modules[key] = owner,
+        optional: key => modules[key] || null}}}};
+      require({str(JS / 'screens-guided-pi-error-text.js')!r});
+      const fs = require('fs');
+      const source = fs.readFileSync({str(JS / 'screens-extraction.js')!r}, 'utf8');
+      const start = source.indexOf('  function scanErrorState()');
+      const end = source.indexOf('  function scanResultState()', start);
+      const exScanError = {{ok: false, error: 'export_member_integrity_failed',
+        reason: 'member_digest_not_recorded', member: 'outcome.parquet',
+        message: 'integrity unrecorded · re-export to verify', export_path: 'hirid/outcome.parquet'}};
+      const exPath = '/synthetic/folder', exDatabaseMismatch = null;
+      const escHtml = window.EU_HTML.esc, pathDisplay = x => x, icon = () => '';
+      let language = 'en';
+      const t = (en, zh) => language === 'zh' ? zh : en;
+      eval(source.slice(start, end));
+      const result = {{}};
+      for (language of ['en', 'zh']) {{
+        result[language] = {{sentence: modules.errorText.scanErrorText(exScanError, t), html: scanErrorState(),
+          damaged: modules.errorText.scanErrorText({{error: 'export_member_integrity_failed',
+            reason: 'member_sha256_mismatch'}}, t)}};
+      }}
+      console.log(JSON.stringify(result));
+    """
+    result = json.loads(run_node("node", script, check=True).stdout)
+    label = "integrity unrecorded · re-export to verify"
+    assert result["en"]["sentence"] == f"{label}: hirid/outcome.parquet"
+    for language in ("en", "zh"):
+        assert label in result[language]["sentence"]
+        assert result[language]["sentence"] in result[language]["html"]
+        assert "export_member_integrity_failed" not in result[language]["html"]
+        assert label not in result[language]["damaged"]
+        assert "member_sha256_mismatch" not in result[language]["damaged"]

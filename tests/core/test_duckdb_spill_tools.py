@@ -8,6 +8,7 @@ from pathlib import Path
 import sys
 
 import pandas as pd
+from tests.support.published_export import record_member_digests
 import pyarrow.parquet as pq
 import pytest
 
@@ -105,6 +106,7 @@ def test_full_wide_builder_opens_private_engine(tmp_path, private_engines):
     )
     # The tool reads published exports only (B-EXPORT-PARTIAL).
     (source / "_manifest.json").write_text("{}", encoding="utf-8")
+    record_member_digests(source)  # the formal tool gate verifies every member
     namespace = _functions(
         "tools/run_idea_mining_real_discovery.py", ["build_full_wide_cohort"]
     )

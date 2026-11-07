@@ -49,10 +49,15 @@ OUTCOME = ["death", "los_icu"]
 
 
 def file_for(concept: str) -> Path:
-    from easyicu.export_publication import require_published_export_package
+    from easyicu.export_publication import (
+        require_verified_export_package,
+        verify_package_members,
+    )
 
-    require_published_export_package(EXPORT)
-    for f in sorted(EXPORT.glob("*.parquet")):
+    require_verified_export_package(EXPORT)
+    files = sorted(EXPORT.glob("*.parquet"))
+    verify_package_members(EXPORT, files, formal=True)  # unlisted files refused
+    for f in files:
         if concept in pq.read_schema(f).names:
             return f
     raise SystemExit(f"concept not found in export: {concept}")

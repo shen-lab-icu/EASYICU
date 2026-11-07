@@ -209,6 +209,10 @@
     if (sum.entities != null && sum.stays == null) parts.push(`${fmtInt(sum.entities)} ${t('entities', '个实体')}`);
     if (sum.modules != null) parts.push(`${fmtInt(sum.modules)} ${t('modules', '个模块')}`);
     if (sum.total_rows != null) parts.push(`${fmtInt(sum.total_rows)} ${t('rows', '行')}`);
+    // The host names an export whose manifest recorded no file digests.
+    if (s.member_integrity && s.member_integrity.status === 'unrecorded') {
+      parts.push(t('integrity unrecorded · re-export to verify', '完整性未记录 · 重新导出以核验'));
+    }
     return parts.join(' · ') || t('export folder', '导出文件夹');
   }
   // What kind of data a registered source is. The user's own export needs no

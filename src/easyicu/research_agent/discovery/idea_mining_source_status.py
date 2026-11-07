@@ -27,7 +27,10 @@ import pyarrow.parquet as pq
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
 from easyicu.databases.profiles import get_database_profile
-from easyicu.export_publication import require_published_export_package
+from easyicu.export_publication import (
+    require_verified_export_package,
+    verify_member_integrity,
+)
 
 SOURCE_STATUS_SCHEMA_VERSION = "easyicu.idea_mining_source_status/1"
 
@@ -614,6 +617,7 @@ def _comparison_profile(
             None,
             (f"comparison table missing: {path.name}",),
         )
+    verify_member_integrity(database_dir, path, formal=True)
     schema = pq.read_schema(path)
     required = [id_column, spec.column]
     if any(column not in schema.names for column in required):
@@ -659,11 +663,17 @@ def _profile_database(
     database_dir = export_root / profile.key
     # Consumption boundary: no schema or table of an unpublished export (an
     # in-progress marker, or no root manifest) reaches the decoder.
-    require_published_export_package(database_dir)
+    # Every listed member must match its recorded digest; an export without
+    # digests is refused here (these profiles are scientific evidence).
+    require_verified_export_package(database_dir)
     denominator_path = database_dir / f"{spec.denominator_table}.parquet"
     source_path = database_dir / f"{spec.source_table}.parquet"
     if not denominator_path.is_file():
         raise FileNotFoundError(f"denominator table missing: {denominator_path}")
+    for consumed in (denominator_path, source_path):
+        if consumed.is_file():
+            # A table the manifest does not list is refused, never read unverified.
+            verify_member_integrity(database_dir, consumed, formal=True)
 
     denominator_schema = pq.read_schema(denominator_path)
     if profile.stay_id_col not in denominator_schema.names:

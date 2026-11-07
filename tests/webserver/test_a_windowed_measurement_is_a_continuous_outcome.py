@@ -15,6 +15,7 @@ from easyicu.research_agent.contracts.cohort_summary import primary_descriptive_
 from easyicu.research_agent.research_context.builder import build_research_context
 from easyicu.research_agent.schema import AggregationRule, TimeWindow, VariableRole
 from easyicu.webserver import research_launch_scientific as launch
+from tests.support.published_export import record_member_digests
 
 
 WINDOWED_SUMMARY_MESSAGES = {
@@ -290,6 +291,7 @@ def _typed_export(root, definitions, *, observed=True, two_quantities=False):
         "concept_selection": {"mode": "explicit", "modules": {name: concepts for name, (_, concepts) in modules.items()}},
         "files": files, "feature_definitions": {"included": False}, "column_metadata": ref.to_dict(),
     }))
+    record_member_digests(root)  # the writer records every member's digest
     return root
 
 

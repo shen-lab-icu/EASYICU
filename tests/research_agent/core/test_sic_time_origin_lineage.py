@@ -25,6 +25,7 @@ from easyicu.research_agent.cohort.schema import (
     CohortDefinition, ConceptPredicate, TimeWindow, materialize_locked_analysis_cohort,
     recover_approved_source_analysis_cohort,
 )
+from tests.support.published_export import record_member_digests
 
 
 def _package(root, *, legacy=False):
@@ -64,6 +65,7 @@ def _package(root, *, legacy=False):
         "feature_definitions": {"included": False}, "column_metadata": reference.to_dict(),
     }
     (root / NATIVE_MANIFEST).write_text(json.dumps(manifest), encoding="utf-8")
+    record_member_digests(root)  # the writer records every member's digest
     return open_export_package(root)
 
 

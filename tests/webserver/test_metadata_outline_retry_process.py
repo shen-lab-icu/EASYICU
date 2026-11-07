@@ -164,6 +164,8 @@ reference = write_content_addressed_sidecar(export, sidecar)
     "concept_selection": {"mode": "explicit", "modules": {"demographics": ["age"]}},
     "feature_definitions": {"included": False}, "files": [{"file": "demographics.parquet",
     "module": "demographics", "concepts": 1, "concept_ids": ["age"], "column_metadata_columns": ["age"], "rows": 1}]}))
+from tests.support.published_export import record_member_digests
+record_member_digests(export)
 assert sources.register_source(str(export), label="synthetic", crossdb=False)["ok"]
 study = {"id": "study-a", "revision": 1, "question": "Describe the age distribution of adult ICU patients.",
          "data_source": {"path": str(export), "database": "miiv"}}

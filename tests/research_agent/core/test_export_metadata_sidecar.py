@@ -27,6 +27,7 @@ from easyicu.concept.metadata_sidecar import (
 )
 from easyicu.resources import load_dictionary
 from easyicu.research_agent.intake import export_package as intake
+from tests.support.published_export import record_member_digests
 
 
 def test_native_metadata_authorizes_owner_observed_and_available_receipts() -> None:
@@ -242,6 +243,7 @@ def _v2_package(root: Path, *, export_format: str = "parquet") -> Path:
         "column_metadata": reference.to_dict(),
     }
     (root / intake.NATIVE_MANIFEST).write_text(json.dumps(manifest), encoding="utf-8")
+    record_member_digests(root)  # the writer records every member's digest
     return root
 
 
@@ -467,6 +469,7 @@ def test_v2_rejects_auxiliary_identifier_bound_as_analysis_value(
     manifest["column_metadata"] = reference.to_dict()
     manifest["files"][0]["column_metadata_columns"] = list(forged.columns)
     manifest_path.write_text(json.dumps(manifest), encoding="utf-8")
+    record_member_digests(root)  # a rewritten member: the fixture re-publishes it
 
     with pytest.raises(intake.ExportPackageError) as exc_info:
         intake.open_export_package(root)
@@ -523,6 +526,7 @@ def test_v2_explicit_alias_uses_source_owner_not_prefix_guess(tmp_path: Path) ->
     manifest["files"][0]["column_metadata_columns"] = list(alias_binding.columns)
     manifest["concept_selection"]["modules"]["labs"].append("sep3")
     manifest_path.write_text(json.dumps(manifest), encoding="utf-8")
+    record_member_digests(root)  # a rewritten member: the fixture re-publishes it
 
     with intake.open_export_package(root) as package:
         assert (

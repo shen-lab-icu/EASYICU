@@ -6,22 +6,60 @@ this owner, and only files named by the sealed export manifest are bundled.
 
 from __future__ import annotations
 
+import csv
+import hashlib
+import io
 import json
 import os
 import re
 import tempfile
 import zipfile
-from dataclasses import dataclass
+from dataclasses import dataclass, field as dataclass_field
 from pathlib import Path
 from typing import Any, Mapping, Optional
 
 from easyicu.export_publication import (
+    INTEGRITY_UNRECORDED,
+    REASON_INTEGRITY_UNRECORDED,
     UNPUBLISHED_CODE,
+    ExportMemberIntegrityError,
+    ExportMemberUnreadableError,
     NativeExportUnpublishedError,
+    export_relative_path,
+    integrity_status,
+    manifest_member_records,
+    member_unreadable,
+    refusal_message,
+    require_listed_members_present,
     require_published_native_export,
+    require_member_digest,
 )
+
 from easyicu.webserver import sources, state_paths
 from easyicu.webserver.hosted import require_instance_path, require_path
+
+
+INTEGRITY_RECEIPT_NAME = "EASYICU_MEMBER_INTEGRITY.json"
+
+
+def _require_readable(path: Path, payload: bytes) -> None:
+    """An unverified member must at least parse (footer / header)."""
+
+    try:
+        if path.suffix.lower() == ".parquet":
+            import pyarrow.parquet as pq
+
+            _ = pq.ParquetFile(io.BytesIO(payload)).metadata
+        elif path.suffix.lower() == ".csv":
+            with io.TextIOWrapper(io.BytesIO(payload), encoding="utf-8-sig") as handle:
+                header = next(csv.reader(handle, strict=True), [])
+                if not any(column.strip() for column in header):
+                    raise ValueError("CSV member has no header")
+        elif path.suffix.lower() == ".xlsx":
+            with zipfile.ZipFile(io.BytesIO(payload)) as workbook:
+                workbook.infolist()  # Parse the ZIP central directory before bundling.
+    except Exception as exc:
+        raise member_unreadable(path, exc) from exc
 
 
 MAX_EXPORT_DOWNLOAD_BYTES = 512 * 1024 * 1024
@@ -42,6 +80,8 @@ class ExportDownloadBundle:
     source_id: str
     source_bytes: int
     file_count: int
+    #: ``{member: verified|unrecorded}``; also written into the archive.
+    member_integrity: Mapping[str, str] = dataclass_field(default_factory=dict)
 
 
 def _source_for_id(source_id: str, registry: Mapping[str, Any]) -> Mapping[str, Any]:
@@ -133,6 +173,37 @@ def _manifest_files(root: Path, manifest: Mapping[str, Any]) -> list[Path]:
     return files
 
 
+def _member_manifest(manifest: dict, name: str) -> dict:
+    """Resolve auxiliary declarations without changing the data writer's contract.
+
+    Sidecars have their own records outside ``files``. The conventional README
+    is also part of the download allowlist; without a recorded digest it can
+    only be downloaded as unrecorded legacy metadata, never in formal scope.
+    """
+
+    if name in manifest_member_records(manifest):
+        return manifest
+    entries = list(manifest.get("definition_files") or [])
+    definitions = manifest.get("feature_definitions")
+    if isinstance(definitions, Mapping):
+        entries.extend(definitions.get("files") or [])
+    elif isinstance(definitions, str):
+        entries.append({"file": definitions})
+    metadata = manifest.get("column_metadata")
+    if isinstance(metadata, Mapping):
+        entries.append(dict(metadata))
+    for field in ("readme", "feature_definitions_csv"):
+        if isinstance(manifest.get(field), str):
+            entries.append({"file": manifest[field]})
+    entries.append({"file": "README.md"})
+    matching = [entry for entry in entries if isinstance(entry, dict) and entry.get("file") == name]
+    if not matching:
+        return manifest  # require_member_digest reports the unlisted member
+    # Keep the other records too: a partly digested legacy package must not
+    # become wholly unrecorded when checking one auxiliary member.
+    return {**manifest, "files": [*(manifest.get("files") or []), *matching]}
+
+
 def prepare_registered_export_bundle(
     source_id: str,
     *,
@@ -157,8 +228,9 @@ def prepare_registered_export_bundle(
             status_code=409,
         ) from exc
     try:
-        manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
-    except (OSError, json.JSONDecodeError) as exc:
+        manifest_bytes = manifest_path.read_bytes()
+        manifest = json.loads(manifest_bytes)
+    except (OSError, UnicodeDecodeError, json.JSONDecodeError) as exc:
         raise ExportDownloadError(
             "registered_export_manifest_unreadable",
             "The registered export manifest cannot be read safely.",
@@ -178,6 +250,59 @@ def prepare_registered_export_bundle(
             status_code=413,
         )
 
+    # Verify the actual packed set, including auxiliary inventories. Keep the
+    # verified bytes: a concurrent replacement after this point cannot change
+    # the ZIP. The manifest cannot digest itself, but its exact parsed bytes
+    # are frozen and covered by the receipt's snapshot digests too.
+    member_integrity: dict[str, str] = {}
+    snapshots: dict[str, bytes] = {}
+    snapshot_digests: dict[str, dict] = {}
+    source_bytes = 0
+    try:
+        require_listed_members_present(root, dict(manifest))
+        for path in files:
+            name = path.relative_to(root.resolve(strict=True)).as_posix()
+            try:
+                if name == "_manifest.json":
+                    payload = manifest_bytes
+                else:
+                    # Bound each allocation even if a file grew since stat.
+                    with path.open("rb") as handle:
+                        payload = handle.read(max_source_bytes - source_bytes + 1)
+            except OSError as exc:
+                raise member_unreadable(path, exc) from exc
+            source_bytes += len(payload)
+            if source_bytes > max_source_bytes:
+                raise ExportDownloadError(
+                    "registered_export_download_too_large",
+                    "This export is too large for a browser bundle; use the local Data Extraction workspace instead.",
+                    status_code=413,
+                )
+            snapshots[name] = payload
+            sha = hashlib.sha256(payload).hexdigest()
+            snapshot_digests[name] = {"sha256": sha, "bytes": len(payload)}
+            if name == "_manifest.json":
+                continue
+            status = require_member_digest(
+                _member_manifest(dict(manifest), name), name,
+                sha256=sha, size=len(payload), path=path,
+            )
+            if status == INTEGRITY_UNRECORDED:
+                _require_readable(path, payload)
+            member_integrity[name] = status
+        if not member_integrity:
+            raise ExportMemberIntegrityError(
+                "the export manifest lists no downloadable members",
+                reason=REASON_INTEGRITY_UNRECORDED, path=root, member="_manifest.json",
+            )
+    except (ExportMemberIntegrityError, ExportMemberUnreadableError) as exc:
+        # Exactly "integrity unrecorded · re-export to verify" when no digest
+        # was ever recorded; the path is relative to the user's export root.
+        raise ExportDownloadError(
+            exc.code,
+            f"{refusal_message(exc)}: {export_relative_path(root, exc.member)}",
+            status_code=409,
+        ) from exc
     bundle_dir = Path(temp_dir) if temp_dir is not None else state_paths.state_root() / "downloads"
     require_instance_path(bundle_dir)
     bundle_dir.mkdir(parents=True, exist_ok=True)
@@ -190,8 +315,13 @@ def prepare_registered_export_bundle(
         with zipfile.ZipFile(
             archive_path, mode="w", compression=zipfile.ZIP_DEFLATED
         ) as archive:
-            for path in files:
-                archive.write(path, arcname=path.relative_to(root.resolve(strict=True)))
+            for name, payload in snapshots.items():
+                archive.writestr(name, payload)
+            archive.writestr(INTEGRITY_RECEIPT_NAME, json.dumps(
+                {**integrity_status(member_integrity.values(), manifest=dict(manifest)),
+                 "members": member_integrity, "snapshots": snapshot_digests},
+                indent=2, sort_keys=True,
+            ))
     except Exception:
         archive_path.unlink(missing_ok=True)
         raise
@@ -201,6 +331,7 @@ def prepare_registered_export_bundle(
         source_id=source_id,
         source_bytes=source_bytes,
         file_count=len(files),
+        member_integrity=member_integrity,
     )
 
 

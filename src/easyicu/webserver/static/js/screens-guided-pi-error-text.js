@@ -17,10 +17,26 @@
 
   const { esc } = window.EU_HTML;
 
+  // Exact server text for a member whose digest was never recorded (v0.1.x
+  // exports); export_path is relative to the user's export root.
+  const INTEGRITY_UNRECORDED = 'integrity unrecorded · re-export to verify';
+  const UNRECORDED_REASONS = new Set(['member_digest_not_recorded', 'member_integrity_unrecorded']);
+
   // Folder scans return codes, including intake's manifest/layout failures.
   // Both extraction screens use these sentences; unknown codes stay readable.
+  // A refusal object ({error, reason, export_path}) is accepted as well.
   function scanErrorText(code, tr) {
+    if (code && typeof code === 'object') {
+      const refusal = code;
+      if (UNRECORDED_REASONS.has(String(refusal.reason || ''))) {
+        const where = refusal.export_path ? `: ${refusal.export_path}` : '';
+        return tr(`${INTEGRITY_UNRECORDED}${where}`, `完整性未记录 · 重新导出以核验（${INTEGRITY_UNRECORDED}）${where}`);
+      }
+      code = refusal.error;
+    }
     const messages = {
+      export_member_integrity_failed: ['An export file no longer matches its published manifest; run the extraction again.', '导出文件与其发布清单不符，请重新运行提取。'],
+      export_member_unreadable: ['An export file cannot be read; run the extraction again.', '导出文件无法读取，请重新运行提取。'],
       no_path: ['Choose or paste a folder path first.', '请先选择或粘贴文件夹路径。'],
       not_a_directory: ['That path is not a folder EasyICU can open.', '该路径不是 EasyICU 能打开的文件夹。'],
       permission_denied: ['EasyICU does not have permission to read that folder.', 'EasyICU 没有读取该文件夹的权限。'],

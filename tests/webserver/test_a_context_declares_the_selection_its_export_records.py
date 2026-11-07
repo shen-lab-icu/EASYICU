@@ -62,6 +62,7 @@ from tests.webserver.copilot.research_workflow_fixtures import (
     complete_study,
     confirmed_cohort_decision,
 )
+from tests.support.published_export import record_member_digests
 
 _FIRST_STAY = (
     "each patient's later ICU stays across the bound source"
@@ -402,6 +403,7 @@ def test_the_web_runner_declares_what_its_bound_export_records(
     manifest["column_metadata"] = write_content_addressed_sidecar(export, sidecar).to_dict()
     manifest["files"][0]["column_metadata_columns"] = ["age"]
     manifest_path.write_text(json.dumps(manifest), encoding="utf-8")
+    record_member_digests(export)  # a native v2 writer records every member's digest
     runner = agent_pipeline_runs.make_research_pipeline_run_runner(
         export_path=str(export),
         study_context=study,

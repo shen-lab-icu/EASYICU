@@ -16,6 +16,12 @@ deferred to it are compared against `2786ea872` there.
 
 ## lead-r13 — entries pending merge
 
+- `0da65e721` [B52E-LEGAL-ZIP, NB52E-PATH]: web exports now write README
+  and definition files before sealing, recording their real SHA-256 and byte
+  size for strict downloads; refusal coordinates omit absolute host paths.
+  Pre-0.1.0 web exports without these digests retain the existing
+  "integrity unrecorded · re-export to verify" refusal and must be re-exported;
+  no compatibility path is provided. Extracted values are unchanged.
 - TODO(r13bounds): out-of-bounds values. The `bounds_unit_suspect` refusal
   introduced by `0aa5a8185` is being withdrawn; the line follows when that
   branch merges.

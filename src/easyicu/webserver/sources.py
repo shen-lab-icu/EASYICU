@@ -289,6 +289,8 @@ def _source_from_path(
                 "modules": desc.get("modules", []),
                 "summary": desc.get("summary", {}),
                 "file_count": len(desc.get("files", [])),
+                **({"member_integrity": desc["member_integrity"]}
+                   if desc.get("member_integrity") else {}),
                 **({"source_kind": "synthetic", "provenance": desc["provenance"]}
                    if desc.get("source_kind") == "synthetic" else {}),
             }

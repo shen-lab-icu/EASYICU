@@ -65,6 +65,7 @@ from easyicu.research_agent.trajectory.scientific_runtime_authority import (
 )
 from easyicu.resources import load_dictionary
 from tests.support.typed_export import metadata_binding
+from tests.support.published_export import record_member_digests
 
 pytestmark = [pytest.mark.integration, pytest.mark.slow]
 
@@ -224,6 +225,7 @@ def _typed_export(root: Path, *, layout: str, integer_levels: bool = False) -> P
         ),
         encoding="utf-8",
     )
+    record_member_digests(export)  # the writer records every member's digest
     return export
 
 

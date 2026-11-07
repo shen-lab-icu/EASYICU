@@ -13,6 +13,7 @@ from easyicu.webserver.pi_copilot.contracts import (
 )
 
 from tests.support.node import run_node
+from tests.support.published_export import record_member_digests
 
 
 APP = Path(__file__).parents[3] / "src/easyicu/webserver/pi_copilot/node_app"
@@ -283,6 +284,7 @@ def timing_demo_export(tmp_path):
                    "concepts": 1, "concept_ids": ["age"], "column_metadata_columns": list(binding.columns)}],
         "column_metadata": reference.to_dict(),
     }), encoding="utf-8")
+    record_member_digests(root)  # the writer records every member's digest
     return str(root)
 
 

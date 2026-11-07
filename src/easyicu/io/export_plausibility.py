@@ -16,7 +16,12 @@ from typing import Any
 
 from easyicu.concept.catalog import CONCEPT_DICTIONARY, CONCEPT_GROUPS_INTERNAL
 from easyicu.concept.export_metadata import metadata_definition_for_concept
-from easyicu.export_publication import require_published_native_export
+from easyicu.export_publication import (
+    integrity_status,
+    require_published_native_export,
+    verify_member_integrity,
+    verify_package_members,
+)
 from easyicu.resources import load_dictionary
 from easyicu.scores.sofa2_aggregate import SOFA2_COMPONENT_NAMES
 
@@ -144,6 +149,16 @@ def _numeric_check(
     return {**result, "null_check": null_check}
 
 
+def _member_integrity(root: Path) -> dict:
+    manifest = json.loads(require_published_native_export(root).read_text(encoding="utf-8"))
+    members = verify_package_members(
+        root, [str(item["file"]) for item in manifest.get("files") or []
+               if isinstance(item, dict) and item.get("file")],
+        manifest=manifest,
+    )
+    return {**integrity_status(members.values(), manifest=manifest), "members": members}
+
+
 def _views(connection, root: Path, dictionary) -> dict[str, dict]:
     root = root.resolve(strict=True)
     manifest_path = require_published_native_export(root)
@@ -173,6 +188,9 @@ def _views(connection, root: Path, dictionary) -> dict[str, dict]:
         if not path.is_relative_to(root) or path.suffix != ".parquet" or path in seen:
             raise ValueError("invalid parquet member")
         seen.add(path)
+        # Refuse a truncated, corrupted, replaced or missing member before
+        # DuckDB reads it.
+        verify_member_integrity(root, path, manifest=manifest)
         grouped.setdefault(item["module"], []).append(str(path))
     modules = {}
     for index, (module, paths) in enumerate(sorted(grouped.items())):
@@ -606,9 +624,12 @@ def build_report(
                 "threads": effective_threads,
             },
             "current": _scan(connection, Path(export_root), rules),
+            # Per consumed member: verified, or unrecorded (legacy manifest).
+            "member_integrity": _member_integrity(Path(export_root)),
         }
         if compare is not None:
             result["old"] = _scan(connection, Path(compare), rules)
+            result["old_member_integrity"] = _member_integrity(Path(compare))
             current_metrics, old_metrics = (
                 _metrics(result["current"]),
                 _metrics(result["old"]),

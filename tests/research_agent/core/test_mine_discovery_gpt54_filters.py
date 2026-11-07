@@ -5,6 +5,7 @@ from argparse import Namespace
 from pathlib import Path
 from types import ModuleType
 
+from tests.support.published_export import record_member_digests
 from easyicu.research_agent.discovery.idea_mining_funnel import (
     LiteratureFunnelSpec,
     build_literature_funnel_queries,
@@ -126,6 +127,7 @@ def test_probe_resolves_canonical_column_and_never_fakes_joint(tmp_path) -> None
     _write_parquet(tmp_path / "renal.parquet",
                    {"stay_id": [1, 2, 3, 4], "aki": [1, None, 1, 1]})
     (tmp_path / "_manifest.json").write_text("{}", encoding="utf-8")  # a published export
+    record_member_digests(tmp_path)  # the formal tool gate verifies every member
     runner.EXPORT = tmp_path
 
     col_index = runner._build_column_index()

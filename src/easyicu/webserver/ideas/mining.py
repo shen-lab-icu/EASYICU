@@ -1539,8 +1539,10 @@ def _bounded_joint_observed_entities(
         if not file_name or "stay_id" not in selected or concept_id not in selected:
             return None
         try:
+            _verify_export_member(root, root / file_name)
             frame = _read_bounded_feature_frame(root / file_name, selected, max_records)
         except Exception:
+            # Joint count unknown; the per-concept stat shows sample_unavailable.
             return None
         if frame.empty:
             entity_sets.append(set())
@@ -3320,13 +3322,18 @@ def _feature_stats(
         try:
             import pandas as pd
 
+            _verify_export_member(root, path)
             if path.suffix.lower() == ".parquet":
                 frame = pd.read_parquet(path, columns=selected)
             elif path.suffix.lower() == ".xlsx":
                 frame = pd.read_excel(path, usecols=selected)
             else:
                 frame = pd.read_csv(path, usecols=selected)
-        except Exception:
+        except Exception as exc:
+            # Never drop a concept silently: show it as unreadable.
+            out.append(_unreadable_feature_stat(concept_id, item, denominator, columns, exc))
+            if len(out) >= _MAX_FEATURE_STATS:
+                break
             continue
         if frame.empty or concept_id not in frame.columns:
             continue
@@ -3418,17 +3425,11 @@ def _bounded_feature_sample_stat(
         )
         return stat
     try:
+        _verify_export_member(root, path)
         frame = _read_bounded_feature_frame(path, selected, max_records)
     except Exception as exc:
-        stat = _metadata_feature_stat(concept_id, item, denominator, columns)
-        stat.update(
-            {
-                "status": "sample_unavailable",
-                "sample_limit_records": max_records,
-                "error_type": exc.__class__.__name__,
-                "summary_label": "The bounded sample could not be read safely; only manifest/schema presence is available.",
-            }
-        )
+        stat = _unreadable_feature_stat(concept_id, item, denominator, columns, exc)
+        stat["sample_limit_records"] = max_records
         return stat
     if frame.empty or concept_id not in frame.columns:
         return {
@@ -3630,6 +3631,36 @@ def _bounded_sample_interpretation(
 def _feature_scan_too_large(item: Dict[str, Any]) -> bool:
     rows = _safe_nonnegative_int(item.get("rows"))
     return rows is not None and rows > _IDEA_FEATURE_ROW_SCAN_LIMIT
+
+
+def _verify_export_member(root: Path, path: Path) -> None:
+    """Size + SHA-256 of a consumed export member against its manifest."""
+    from easyicu.export_publication import verify_member_integrity
+
+    verify_member_integrity(root, path)
+
+
+def _unreadable_feature_stat(
+    concept_id: str,
+    item: Dict[str, Any],
+    denominator: int,
+    columns: List[str],
+    exc: Exception,
+) -> Dict[str, Any]:
+    """The labelled ``sample_unavailable`` state for a member that cannot be read."""
+    stat = _metadata_feature_stat(concept_id, item, denominator, columns)
+    stat.update(
+        {
+            "status": "sample_unavailable",
+            "error_type": exc.__class__.__name__,
+            # Typed integrity/publication errors keep their code; any other
+            # read failure is an unreadable member.
+            "error_code": getattr(exc, "code", None) or "export_member_unreadable",
+            "summary_label": "The export file could not be read safely (damaged, or "
+            "different from its manifest); only manifest/schema presence is available.",
+        }
+    )
+    return stat
 
 
 def _metadata_feature_stat(

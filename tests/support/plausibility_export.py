@@ -13,6 +13,7 @@ from easyicu.concept.metadata_sidecar import (
     write_content_addressed_sidecar,
 )
 from tests.support.native_outcome_export import file_binding
+from tests.support.published_export import record_member_digests
 
 
 def screening_export(root: Path, *, planted: bool = False) -> Path:
@@ -135,6 +136,7 @@ def screening_export(root: Path, *, planted: bool = False) -> Path:
         ),
         encoding="utf-8",
     )
+    record_member_digests(root)
     return root
 
 
@@ -145,3 +147,4 @@ def change_column(root: Path, module: str, column: str, values: list) -> None:
     dtype = "boolean" if frame[column].dtype.kind == "b" else frame[column].dtype
     frame[column] = pd.Series(values, dtype=dtype)
     frame.to_parquet(path, index=False)
+    record_member_digests(root)  # the fixture re-publishes; this is not damage
