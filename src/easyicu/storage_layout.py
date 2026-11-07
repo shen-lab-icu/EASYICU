@@ -842,6 +842,11 @@ class TablePresence:
     files: tuple = ()
     layout: str | None = None
     path: Path | None = None
+    loader: Path | None = None
+    reason: str | None = None
+    error: StorageIntegrityError | None = None
+    contract: BucketLayout | None = None
+    candidates: tuple = ()
 
 
 SOURCE_AMBIGUOUS = "table_source_ambiguous"
@@ -877,6 +882,11 @@ def _listdir(directory: Path) -> list:
 def _table_keys(source, table: str) -> set:
     """The table name and a single configured file's stem, as spelled."""
     keys = {table}
+    if source.config.name == "miiv":
+        mapped = {"procedureevents_mv": "procedureevents", "inputevents_mv": "inputevents",
+                  "inputevents_cv": "inputevents"}.get(table)
+        if mapped:
+            keys.add(mapped)
     try:
         entries = [
             entry.get("path") or entry.get("file")
@@ -920,7 +930,7 @@ def _physical_identity(path: Path):
     return ("dir", os.path.realpath(path))
 
 
-def match_table_entries(source, table: str, *, subdirectories: bool = False) -> TableMatches:
+def match_table_entries(source, table: str, *, subdirectories: bool = True) -> TableMatches:
     """The one matcher of a table's on-disk entries (delta39d).
 
     It lists the actual directory entries, matched case-insensitively
@@ -928,8 +938,8 @@ def match_table_entries(source, table: str, *, subdirectories: bool = False) -> 
     and ``hosp`` directories in any case. Each entry is matched against the
     table name and a single configured file's stem, with the suffix '' (a
     table directory), ``.parquet``, ``.pq`` or ``_bucket`` in any case. With
-    ``subdirectories``, ``<name>.parquet`` in any other first-level directory
-    matches too (stay discovery's nested contract). Each match is typed
+    ``subdirectories``, all supported names in nested directories match too.
+    Named table sources are leaves; symlink cycles are visited once. Each match is typed
     first: a dangling link, an empty directory or an entry of another type
     is broken. Aliases of one physical source (the same realpath, or a
     hardlink with the same dev and inode) count once.
@@ -949,14 +959,40 @@ def match_table_entries(source, table: str, *, subdirectories: bool = False) -> 
                 roots.append(path)
     for root in roots:
         found += [_classify(root / n) for n in _listdir(root) if n.casefold() in wanted]
+    # Registry chunks can name a directory differently from the logical table.
+    # Keep that directory as one complete candidate, never its first chunk alone.
+    try:
+        entries = source.config.get_table(table).files
+    except (AttributeError, KeyError, ValueError):
+        entries = ()
+    if len(entries) > 1:
+        first = entries[0].get("path") or entries[0].get("file")
+        directory = base / PurePosixPath(first).parent if first else base
+        if directory != base and directory.is_dir() and any(
+            n.casefold().endswith(_PARQUET_SUFFIXES) for n in _listdir(directory)
+        ):
+            found.append(_classify(directory))
     if subdirectories:
-        nested = {k + ".parquet" for k in keys}
-        for name in _listdir(base):
-            directory = base / name
-            if directory in roots or not directory.is_dir():
-                continue
-            found += [_classify(directory / n) for n in _listdir(directory)
-                      if n.casefold() in nested]
+        visited = {os.path.realpath(root) for root in roots}
+
+        def descend(directory):
+            for name in _listdir(directory):
+                if name.startswith(".") or name.casefold() in wanted:
+                    continue
+                path = directory / name
+                if os.path.islink(path) and not path.exists():
+                    found.append(TableMatch(path, "broken"))
+                elif path.is_dir() and not name.casefold().endswith("_bucket"):
+                    identity = os.path.realpath(path)
+                    if identity in visited:
+                        continue
+                    visited.add(identity)
+                    found.extend(_classify(path / n) for n in _listdir(path)
+                                 if n.casefold() in wanted)
+                    descend(path)
+
+        for root in roots:
+            descend(root)
     seen, flat, bucket, broken, variants = set(), [], [], [], 0
     for match in found:
         if match.path.name not in canonical:
@@ -976,21 +1012,25 @@ def _bucket_derives_from(bucket: Path, flat: Path) -> bool:
     """Whether the bucket's verified ``derived_from`` binds exactly this flat source."""
     try:
         manifest = json.loads((bucket / MANIFEST).read_text())
+        if not isinstance(manifest, dict):
+            return False
         derived = manifest.get("derived_from")
         if not derived:
             return False
+        _check_bucket_derived_from(bucket, manifest)
+        _verify_bucket_sources(bucket, manifest)
         recorded = {
-            os.path.realpath(_derived_source(bucket, derived, entry)) for entry in derived["files"]
+            _physical_identity(_derived_source(bucket, derived, entry)) for entry in derived["files"]
         }
     except (OSError, ValueError, KeyError, TypeError, BucketLayoutError):
         return False
     files = [flat] if flat.is_file() else [
         flat / n for n in _listdir(flat) if n.casefold().endswith(_PARQUET_SUFFIXES)
     ]
-    return bool(files) and {os.path.realpath(f) for f in files} == recorded
+    return bool(files) and {_physical_identity(f) for f in files} == recorded
 
 
-def table_source(source, table: str, *, subdirectories: bool = False) -> TableMatches:
+def table_source(source, table: str, *, subdirectories: bool = True) -> TableMatches:
     """The table's one source, or a typed refusal (delta39d).
 
     Two or more independent sources of one table (case variants, base and
@@ -1014,37 +1054,136 @@ def table_source(source, table: str, *, subdirectories: bool = False) -> TableMa
     return found
 
 
-def table_presence(source, table: str, *, subdirectories: bool = False) -> TablePresence:
-    """The one presence decision for a table: absent, valid or broken (delta30d, delta39d).
+def _csv_loader(source, table: str) -> Path | None:
+    """CSV fallback paths belong to the decision owner too."""
+    base = Path(source.base_path)
+    try:
+        explicit = source.config.get_table(table).first_file()
+    except (AttributeError, KeyError, ValueError):
+        explicit = None
+    if explicit and str(explicit).casefold().endswith((".csv", ".csv.gz")):
+        path = base / explicit
+        if path.is_file():
+            return path
+    names = {key.casefold() + suffix for key in _table_keys(source, table)
+             for suffix in (".csv", ".csv.gz")}
+    return next((base / name for name in _listdir(base)
+                 if name.casefold() in names and (base / name).is_file()), None)
 
-    :func:`table_source` matches every actual entry (any case, every
-    contract root) and refuses independent sources. Any broken entry, even
-    beside a valid one, makes the table broken. Otherwise the owner
-    resolves and validates the single source (:func:`resolve_table_files`;
-    a flat source in another spelling is admitted through its loader scan).
-    Its files make the table valid, even a healthy zero-row file. A present
-    source the owner reads nothing from is broken. Only a table with no
-    match at all is absent.
+
+def table_decision(source, table: str, *, listings_only: bool = False) -> TablePresence:
+    """Own the complete Parquet decision and loader for reader, cohort and resolver.
+
+    Every runtime caller uses recursive nested search. Only ABSENT permits
+    the returned CSV loader. BROKEN carries the typed refusal and its reason;
+    callers rethrow it with :func:`refuse_broken_presence`. A corrupt bucket
+    may use a complete validated flat source, as before; two healthy independent
+    sources refuse. No source-choice cache is maintained here.
+
+    ``listings_only`` is for read-only installation censuses: it opens no files,
+    returns the same candidates, and conservatively refuses multiple sources
+    without inspecting a possible derived binding. Its files are unvalidated
+    and must never be used by a reader.
     """
     if source.base_path is None:
-        return TablePresence(PRESENCE_ABSENT)
-    found = table_source(source, table, subdirectories=subdirectories)
-    if found.broken:
-        return TablePresence(PRESENCE_BROKEN, path=found.broken[0].path)
-    if not found.flat and not found.bucket:
-        return TablePresence(PRESENCE_ABSENT)
-    loader = found.flat[0].path if found.flat and not found.bucket else None
-    files = resolve_table_files(source, table, loader=loader)
-    if not files:
-        return TablePresence(PRESENCE_BROKEN, path=(*found.bucket, *found.flat)[0].path)
-    layout = "bucket" if source.resolve_bucket_directory(table) is not None else "flat"
-    return TablePresence(PRESENCE_VALID, tuple(files), layout)
+        return TablePresence(PRESENCE_ABSENT, reason="parquet_source_absent")
+    from .storage_binding import (
+        StorageSourceChanged, bound_layout, bound_set, is_bound, source_key,
+    )
+
+    candidates = ()
+    path = Path(source.base_path)
+    try:
+        chosen = None if listings_only else bound_layout(source_key(source, table))
+        if chosen is not None and chosen["layout"] == "bucket":
+            path = Path(chosen["root"])
+            if not path.is_dir():
+                raise StorageSourceChanged("storage_source_missing", table, str(path / MANIFEST))
+            if os.path.realpath(path) != chosen["realpath"]:
+                raise StorageSourceChanged("storage_source_changed", table, str(path))
+        found = match_table_entries(source, table)
+        candidates = (*found.flat, *found.bucket, *found.broken)
+        if found.broken:
+            path = found.broken[0].path
+            refuse_broken_presence(table, TablePresence(PRESENCE_BROKEN, path=path))
+        if len(found.flat) > 1 or len(found.bucket) > 1:
+            raise TableScanError(SOURCE_AMBIGUOUS, table, "independent table sources")
+        flat = found.flat[0].path if found.flat else None
+        bucket = found.bucket[0].path if found.bucket else None
+        if listings_only:
+            if flat is not None and bucket is not None:
+                raise TableScanError(SOURCE_AMBIGUOUS, table, "binding not inspected by listing probe")
+            loader = bucket or flat
+            return TablePresence(
+                PRESENCE_VALID if loader else PRESENCE_ABSENT,
+                layout="bucket" if bucket else "flat" if flat else None,
+                path=loader, loader=loader or _csv_loader(source, table),
+                reason="listings_only", candidates=candidates,
+            )
+        contract = None
+        if bucket is not None:
+            path = bucket
+            try:
+                contract = read_bucket_contract(
+                    bucket, allow_legacy=source.config.name == "aumc",
+                    cache=source._bucket_layout_cache,
+                )
+            except BucketLayoutError as exc:
+                if (chosen is not None and chosen["layout"] == "bucket") or is_bound(bucket / MANIFEST):
+                    raise StorageSourceChanged("storage_source_changed", table, str(bucket / MANIFEST)) from exc
+                if flat is None:
+                    if not _listdir(bucket):
+                        raise TableScanError(LAYOUT_BROKEN, table, "empty bucket directory") from exc
+                    raise
+                # Compatibility: reject the cache and validate the entire flat
+                # source below. An invalid bucket never makes a CSV eligible.
+                record_bucket_fallback(source, table, exc)
+            else:
+                if flat is not None and not _bucket_derives_from(bucket, flat):
+                    raise TableScanError(SOURCE_AMBIGUOUS, table, "bucket is independent of flat source")
+                if chosen is not None and chosen["layout"] == "flat":
+                    raise StorageSourceChanged("storage_source_changed", table, str(bucket))
+        if contract is not None:
+            source._bucket_dir_cache[str(table).lower()] = bucket
+            return TablePresence(
+                PRESENCE_VALID, tuple(contract.files), "bucket", bucket,
+                loader=bucket, reason="parquet_source_valid", contract=contract,
+                candidates=candidates,
+            )
+        files = verify_flat_scan(source, table, () if flat is None else _loader_scan(table, flat, ()))
+        if not files:
+            if chosen is not None:
+                held = bound_set(source_key(source, table))
+                raise StorageSourceChanged("storage_source_missing", table, held[0] if held else table)
+            if flat is not None:
+                raise TableScanError(LAYOUT_BROKEN, table, "source has no readable Parquet files")
+            return TablePresence(PRESENCE_ABSENT, loader=_csv_loader(source, table),
+                                 reason="parquet_source_absent", candidates=candidates)
+        return TablePresence(PRESENCE_VALID, tuple(files), "flat", flat, loader=flat,
+                             reason="parquet_source_valid", candidates=candidates)
+    except StorageIntegrityError as exc:
+        return TablePresence(PRESENCE_BROKEN, path=path, reason=exc.reason,
+                             error=exc, candidates=candidates)
+    except OSError as exc:
+        error = unreadable_file(table, path, exc)
+        return TablePresence(PRESENCE_BROKEN, path=path, reason=error.reason,
+                             error=error, candidates=candidates)
+
+
+def table_presence(source, table: str, *, subdirectories: bool = True) -> TablePresence:
+    """Compatibility entry point; all callers share the owner's nested policy."""
+    decision = table_decision(source, table)
+    if decision.error is not None:
+        refuse_broken_presence(table, decision)
+    return decision
 
 
 def refuse_broken_presence(table: str, presence: TablePresence) -> None:
     """A present table with nothing readable is an integrity failure, never absence."""
     if presence.state != PRESENCE_BROKEN:
         return
+    if presence.error is not None:
+        raise presence.error
     if os.path.lexists(presence.path) and not presence.path.exists():
         raise TableScanError(FILE_UNREADABLE, table, f"{presence.path.name}: dangling link")
     raise TableScanError(
@@ -1966,7 +2105,8 @@ def _loader_scan(table: str, loader: Path, files: tuple[Path, ...]) -> tuple[Pat
     scan, and a loader that disagrees with the policy fails closed.
     """
     if loader.is_dir():
-        own = tuple(sorted(p for p in loader.glob("*.parquet") if not p.name.startswith(".")))
+        own = tuple(loader / name for name in _listdir(loader)
+                    if not name.startswith(".") and name.casefold().endswith(_PARQUET_SUFFIXES))
     elif loader.suffix.lower() in {".parquet", ".pq"}:
         own = (loader,) if loader.is_file() else ()
     else:
@@ -2061,13 +2201,15 @@ def resolve_table_files(
     # a bound flat table never turns into a bucket mid-run. Other tables'
     # reads, and a deliberate flat read beside a bucket, are not a choice.
     chosen = bound_layout(key)
-    root = source.resolve_bucket_directory(table)
+    decision = table_decision(source, table)
+    refuse_broken_presence(table, decision)
+    root = decision.loader if decision.layout == "bucket" else None
     if chosen is not None and chosen["layout"] == "bucket" and root is None:
         raise StorageSourceChanged("storage_source_missing", table, chosen["root"])
     if chosen is not None and chosen["layout"] == "flat" and root is not None:
         raise StorageSourceChanged("storage_source_changed", table, str(root))
     if root is None:
-        files = flat_table_files(source, table)
+        files = decision.files
         if loader is not None:
             files = _loader_scan(table, Path(loader), files)
         files = verify_flat_scan(source, table, files)
@@ -2087,11 +2229,7 @@ def resolve_table_files(
             f"the reader opened {Path(loader).name} but the storage policy "
             f"resolves the bucket installation {root.name}",
         )
-    layout = read_bucket_contract(
-        root,
-        allow_legacy=source.config.name == "aumc",
-        cache=source._bucket_layout_cache,
-    )
+    layout = decision.contract
     selected = layout.select(
         source, selector_column, selector_values,
         stay_column=stay_column, stay_values=stay_values,

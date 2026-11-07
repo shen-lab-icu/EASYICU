@@ -1577,58 +1577,8 @@ class ICUDataSource:
         if loader is None and dataset_cfg is not None:
             frame = self._read_dataset(table_name, dataset_cfg, columns, patient_ids_filter)
         elif loader is None:
-            # 🚀 优先检查分桶目录（无论是单文件还是多文件配置）
-            # 分桶目录性能远优于普通目录或单个parquet
-            bucket_loader = self._resolve_bucket_directory(table_name)
-            if bucket_loader is not None:
-                loader = bucket_loader
-            else:
-                # 修复：检查是否为多文件配置，如果是，使用目录路径
-                table_cfg = self.config.get_table(table_name)
-                if len(table_cfg.files) > 1:
-                    # 多文件配置：使用目录路径以启用多文件读取
-                    base_path = self.base_path or Path.cwd()
-                    if table_cfg.files:
-                        # HiRID特殊处理：配置中的CSV路径与实际parquet目录不同
-                        # observation_tables/csv/ -> observations/
-                        # pharma_records/csv/ -> pharma/
-                        if self.config.name == 'hirid':
-                            hirid_table_dir_mapping = {
-                                'observations': 'observations',
-                                'pharma': 'pharma',
-                            }
-                            if table_name in hirid_table_dir_mapping:
-                                mapped_dir = base_path / hirid_table_dir_mapping[table_name]
-                                if mapped_dir.is_dir():
-                                    parquet_files = list(mapped_dir.glob("*.parquet")) + list(mapped_dir.glob("*.pq"))
-                                    if parquet_files:
-                                        loader = mapped_dir
-                        
-                        # 如果HiRID映射未找到，使用默认逻辑
-                        if loader is None:
-                            # 获取目录路径（从第一个文件路径中提取）
-                            first_file = table_cfg.files[0]
-                            # 处理字符串或字典格式
-                            if isinstance(first_file, dict):
-                                first_path = Path(first_file.get('path', first_file.get('name', '')))
-                            else:
-                                first_path = Path(first_file)
-                            
-                            multi_file_dir = base_path / first_path.parent
-                            if multi_file_dir.is_dir():
-                                loader = multi_file_dir
-                            else:
-                                # 回退到单个文件解析
-                                loader = self._resolve_loader_from_disk(table_name)
-                    else:
-                        # 回退到单个文件解析
-                        loader = self._resolve_loader_from_disk(table_name)
-                else:
-                    loader = self._resolve_loader_from_disk(table_name)
-            # Whatever branch chose it, the loader is the table's one source as
-            # the shared matcher sees it (delta39d).
-            loader = self._reconcile_loader(table_name, loader)
-            
+            loader = self._resolve_loader_from_disk(table_name)
+
             # 🚀 MIMIC-III chartevents CSV fallback
             # When bucket directory is not available (due to memory constraints during conversion),
             # fall back to reading directly from CSV.gz with proper VALUE type handling
@@ -1793,63 +1743,10 @@ class ICUDataSource:
         return self._resolve_loader_from_disk(table_name)
 
     def _resolve_bucket_directory(self, table_name: str) -> Optional[Path]:
-        """Prefer a validated installation; reject corrupt caches without a flat source."""
-        if not self.base_path:
-            return None
-        from .storage_binding import StorageSourceChanged, bound_layout, source_key
-
-        # The layout this run already chose for the table is checked before
-        # any existence branch (D10D): a vanished bound bucket is missing,
-        # never a fallback to flat or to nothing.
-        chosen = bound_layout(source_key(self, table_name))
-        if chosen is not None and chosen["layout"] == "bucket":
-            root = Path(chosen["root"])
-            if not root.is_dir():
-                raise StorageSourceChanged(
-                    "storage_source_missing", table_name, str(root / storage_layout.MANIFEST)
-                )
-            if os.path.realpath(root) != chosen["realpath"]:  # another installation there
-                raise StorageSourceChanged("storage_source_changed", table_name, str(root))
-            try:
-                storage_layout.read_bucket_contract(
-                    root, allow_legacy=self.config.name == "aumc", cache=self._bucket_layout_cache,
-                )
-            except storage_layout.BucketLayoutError as exc:
-                raise StorageSourceChanged(
-                    "storage_source_changed", table_name, str(root / storage_layout.MANIFEST)
-                ) from exc
-            return root
-        failure = None
-        for base in (self.base_path, self.base_path / "icu", self.base_path / "hosp"):
-            for name in dict.fromkeys((table_name, table_name.lower())):
-                root = base / f"{name}_bucket"
-                if not root.is_dir():
-                    continue
-                try:
-                    storage_layout.read_bucket_contract(
-                        root, allow_legacy=self.config.name == "aumc", cache=self._bucket_layout_cache,
-                    )
-                except storage_layout.BucketLayoutError as exc:
-                    from .storage_binding import is_bound
-
-                    if is_bound(root / storage_layout.MANIFEST):
-                        # This run already read the layout: a change under it is
-                        # a changed source, never a fallback (D9B-LAYOUT-DOWNGRADE).
-                        raise StorageSourceChanged(
-                            "storage_source_changed", table_name, str(root / storage_layout.MANIFEST)
-                        ) from exc
-                    failure = exc
-                    continue
-                if chosen is not None:  # chosen flat: no bucket appears mid-run
-                    raise StorageSourceChanged("storage_source_changed", table_name, str(root))
-                self._bucket_dir_cache[str(table_name).lower()] = root
-                return root
-        if failure is not None:
-            if not storage_layout.flat_table_files(self, table_name):
-                raise failure
-            logger.warning("Ignoring physical cache: %s", failure.reason)
-            storage_layout.record_bucket_fallback(self, table_name, failure)
-        return None
+        """Return the bucket selected by the shared, complete decision owner."""
+        decision = storage_layout.table_decision(self, table_name)
+        storage_layout.refuse_broken_presence(table_name, decision)
+        return decision.loader if decision.layout == "bucket" else None
 
     def resolve_target_files(
         self, table_name: str, selector_column: Optional[str] = None,
@@ -1895,222 +1792,19 @@ class ICUDataSource:
         return None
 
     def _reconcile_loader(self, table_name: str, loader):
-        """Bind a disk loader to the table's one source as the shared matcher sees it (delta39d).
-
-        ``storage_layout.table_source`` lists the actual entries in any case
-        under every contract root, refuses independent sources
-        (``table_source_ambiguous``) and returns broken ones, which refuse
-        here as in stay discovery. A loader that found nothing takes the
-        matcher's single flat source (a table spelled in another case). A
-        Parquet loader that is not the matched source is
-        ``table_scan_loader_mismatch``. The reader and stay discovery
-        therefore see one source.
-        """
-        if not self.base_path or not (loader is None or isinstance(loader, Path)):
+        """Compatibility wrapper: disk loader choices belong to the owner."""
+        if not self.base_path or callable(loader):
             return loader
-        found = storage_layout.table_source(self, table_name)
-        if found.broken:
-            storage_layout.refuse_broken_presence(
-                table_name,
-                storage_layout.TablePresence(
-                    storage_layout.PRESENCE_BROKEN, path=found.broken[0].path
-                ),
-            )
-        matched = (*found.flat, *found.bucket)
-        if loader is None:
-            if found.flat and not found.bucket:
-                return found.flat[0].path
-            if matched:  # a bucket the layout resolver does not open
-                storage_layout.refuse_broken_presence(
-                    table_name,
-                    storage_layout.TablePresence(
-                        storage_layout.PRESENCE_BROKEN, path=matched[0].path
-                    ),
-                )
-            return None
-        parquet = loader.is_dir() or loader.suffix.casefold() in {".parquet", ".pq"}
-        if parquet and matched:
-            identities = {storage_layout._physical_identity(m.path) for m in matched}
-            if storage_layout._physical_identity(loader) not in identities:
-                raise storage_layout.TableScanError(
-                    "table_scan_loader_mismatch", table_name,
-                    f"the reader resolved {loader.name}; the table's source is "
-                    f"{matched[0].path.name}",
-                )
-        return loader
+        return self._resolve_loader_from_disk(table_name)
 
     def _resolve_loader_from_disk(self, table_name: str) -> Optional[Callable[[], pd.DataFrame] | Path]:
-        return self._reconcile_loader(table_name, self._resolve_loader_candidate(table_name))
+        decision = storage_layout.table_decision(self, table_name)
+        storage_layout.refuse_broken_presence(table_name, decision)
+        return decision.loader
 
     def _resolve_loader_candidate(self, table_name: str) -> Optional[Callable[[], pd.DataFrame] | Path]:
-        if not self.base_path:
-            return None
-
-        def _case_insensitive_existing_path(path: Path) -> Optional[Path]:
-            """Resolve a file path even when the exported ICU table uses camelCase.
-
-            Some public eICU exports keep table names such as ``vitalPeriodic``
-            while EasyICU's concept dictionary normalizes table keys to
-            lowercase (``vitalperiodic``). On case-sensitive volumes this would
-            silently make valid real-data tables unavailable.
-            """
-            if path.exists():
-                return path
-            parent = path.parent
-            if not parent.is_dir():
-                return None
-            target = path.name.lower()
-            for child in parent.iterdir():
-                if child.name.lower() == target:
-                    return child
-            return None
-
-        if self.config.name == 'mimic' and table_name == 'services':
-            # MIMIC-III services is a small hospital-level table used by the
-            # demographics ``adm`` concept. Prefer the original CSV when it is
-            # available because some user-side parquet conversions of this
-            # file can abort inside Arrow before Python can catch the error.
-            for candidate in [
-                self.base_path / "SERVICES.csv.gz",
-                self.base_path / "services.csv.gz",
-                self.base_path / "SERVICES.csv",
-                self.base_path / "services.csv",
-            ]:
-                resolved_csv = _case_insensitive_existing_path(candidate)
-                if resolved_csv is not None:
-                    return resolved_csv
-        
-        # 🚀 优先级最高：检查分桶目录（性能最优）
-        # 分桶目录命名规则：{table_name}_bucket
-        # 必须在检查配置文件之前，因为分桶目录是性能优化的关键
-        bucket_dir = self._resolve_bucket_directory(table_name)
-        if bucket_dir is not None:
-            return bucket_dir
-        
-        table_cfg = self.config.get_table(table_name)
-        explicit = table_cfg.first_file()
-        
-        if explicit:
-            explicit_path = self.base_path / explicit
-            if explicit_path.exists():
-                # Accept directories (partitioned datasets) and Parquet files immediately
-                if explicit_path.is_dir():
-                    # 🔧 2026-05-11: 必须验证目录里真的有 parquet 文件再返回。
-                    # 否则 eICU 等数据库会因为同名目录残留旧的 .fst 文件而被误认为
-                    # parquet 分区数据集，导致 read_parquet('{dir}/*.parquet') 找不到文件
-                    # 然后回退到 fst 路径，丢失大量数据（实测 vitalperiodic 5M → 357k 行）。
-                    if list(explicit_path.glob("*.parquet"))[:1] or list(explicit_path.glob("*.pq"))[:1]:
-                        return explicit_path
-                    # 否则继续搜索同级 / 子目录的单文件 parquet（下方逻辑）
-                elif explicit_path.suffix.lower() in {".parquet", ".pq"}:
-                    return explicit_path
-                # Otherwise continue searching for a Parquet counterpart below
-        
-        # MIMIC-IV 文件名映射: 配置中的表名 -> 文件系统中的实际文件名
-        # 因为 MIMIC-IV 改了表名,但配置文件还是用的旧名
-        # MIMIC-IV 将 MIMIC-III 的两个表合并了:
-        # - procedureevents_mv -> procedureevents
-        # - inputevents_cv 和 inputevents_mv -> inputevents
-        # 注意：对于miiv数据源，概念字典中直接使用procedureevents和inputevents
-        # 但如果数据源配置中没有定义这些表，需要从旧表名映射
-
-        config_to_file_mappings = {
-            'procedureevents_mv': 'procedureevents',  # 配置名 -> 文件名
-            'inputevents_mv': 'inputevents',
-            'inputevents_cv': 'inputevents',  # MIMIC-IV 合并了这两个表
-        }
-        
-        # 对于miiv数据源，如果请求的表在配置中不存在，尝试从映射中查找
-        # 例如：概念字典请求procedureevents，但配置中可能只有procedureevents_mv的定义
-        if self.config.name == 'miiv':
-            # 反向映射：如果请求的表名不在配置中，尝试查找对应的旧表名
-            reverse_mapping = {
-                'procedureevents': 'procedureevents_mv',
-                'inputevents': 'inputevents_mv',  # 优先使用inputevents_mv
-            }
-            if table_name not in self.config.tables and table_name in reverse_mapping:
-                # 使用映射后的表名查找文件
-                mapped_table = reverse_mapping[table_name]
-                file_base_name = config_to_file_mappings.get(mapped_table, table_name)
-            else:
-                file_base_name = config_to_file_mappings.get(table_name, table_name)
-        else:
-            # 获取实际要查找的文件名
-            file_base_name = config_to_file_mappings.get(table_name, table_name)
-
-            # 从表配置中获取实际的文件名（如果存在）
-            if table_name in self.config.tables:
-                table_config = self.config.tables[table_name]
-                if hasattr(table_config, 'files') and table_config.files:
-                    # 获取第一个文件的路径，去掉扩展名
-                    file_info = table_config.files[0]
-                    if isinstance(file_info, dict) and 'path' in file_info:
-                        file_path = file_info['path']
-                    elif hasattr(file_info, 'path'):
-                        file_path = file_info.path
-                    else:
-                        file_path = str(file_info)
-                    # 去掉扩展名，获取基础文件名（处理复合扩展名如.csv.gz）
-                    parts = file_path.split('.')
-                    if len(parts) >= 2:
-                        # 处理复合扩展名如 .csv.gz
-                        if parts[-1] == 'gz' and len(parts) >= 3 and parts[-2] == 'csv':
-                            file_base_name = '.'.join(parts[:-2])
-                        else:
-                            file_base_name = '.'.join(parts[:-1])
-                    else:
-                        file_base_name = file_path
-        
-        # Only support Parquet format - try different name variations
-        for name in [file_base_name, file_base_name.lower(), table_name, table_name.lower()]:
-            # 🚀 优先检查 bucket 目录（分桶格式，性能最优）
-            # 必须在检查 .parquet 文件之前，因为分桶目录可能与表同名
-            # 检查多个可能的位置：base_path 和子目录（如 icu/, hosp/）
-            bucket_dir = self._resolve_bucket_directory(name)
-            if bucket_dir is not None:
-                return bucket_dir
-            
-            # Try .parquet extension - 检查多个可能的位置
-            # MIMIC-IV 的表可能在 icu/ 或 hosp/ 子目录下
-            possible_parquet_paths = [
-                self.base_path / f"{name}.parquet",  # 直接在 base_path 下
-                self.base_path / "icu" / f"{name}.parquet",  # MIIV icu 子目录
-                self.base_path / "hosp" / f"{name}.parquet",  # MIIV hosp 子目录
-            ]
-            for parquet_candidate in possible_parquet_paths:
-                resolved = _case_insensitive_existing_path(parquet_candidate)
-                if resolved is not None:
-                    return resolved
-            
-            # Try .pq extension (short form) - 同样检查子目录
-            possible_pq_paths = [
-                self.base_path / f"{name}.pq",
-                self.base_path / "icu" / f"{name}.pq",
-                self.base_path / "hosp" / f"{name}.pq",
-            ]
-            for pq_candidate in possible_pq_paths:
-                resolved = _case_insensitive_existing_path(pq_candidate)
-                if resolved is not None:
-                    return resolved
-        
-        # Check subdirectory for partitioned parquet data (common in hirid observations)
-        if self.base_path is not None:
-            for name in [table_name, table_name.lower()]:
-                # 检查普通分区目录
-                subdir = self.base_path / name
-                if subdir.is_dir():
-                    # Look for Parquet files
-                    parquet_files = list(subdir.glob("*.parquet")) + list(subdir.glob("*.pq"))
-                    if parquet_files:
-                        return subdir
-        
-        # Fall back to explicit file if it exists (e.g., CSV) so that callers can handle it
-        if explicit:
-            explicit_path = self.base_path / explicit
-            if explicit_path.exists():
-                return explicit_path
-
-        return None
+        """Compatibility entry point for the shared source decision."""
+        return self._resolve_loader_from_disk(table_name)
 
     def _get_minimal_columns(self, table_name: str) -> Optional[List[str]]:
         """获取表的最小必要列集（性能优化）"""
@@ -2699,7 +2393,7 @@ class ICUDataSource:
         before = stat_identity(table, csv_path)
         unit = active_unit()
         was_racy = racily_clean(before) or (
-            unit is not None and str(csv_path) in unit.racy
+            unit is not None and os.path.realpath(csv_path) in unit.racy
         )
         key = (os.path.realpath(csv_path), *before)
         with cls._CSV_VALIDATED_LOCK:

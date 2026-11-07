@@ -197,12 +197,12 @@ def bind_files(
             if unit.versions.setdefault(path, version) != version:
                 raise StorageSourceChanged("storage_source_changed", table, path)
             if first and racily_clean(version):
-                unit.racy.add(path)  # its stat cannot vouch for its content
-            if (sha256 or path in unit.racy) and path not in unit.sha256:
+                unit.racy.add(os.path.realpath(path))  # its stat cannot vouch for its content
+            if (sha256 or os.path.realpath(path) in unit.racy) and path not in unit.sha256:
                 unit.sha256[path] = _content_sha256(path)
                 if _version(table, path) != version:  # rewritten while hashed
                     raise StorageSourceChanged("storage_source_changed", table, path)
-            elif path in unit.racy and _content_sha256(path) != unit.sha256[path]:
+            elif os.path.realpath(path) in unit.racy and _content_sha256(path) != unit.sha256[path]:
                 # Same stat, other bytes: a rewrite inside the timestamp tick.
                 raise StorageSourceChanged("storage_source_changed", table, path)
 
@@ -258,7 +258,7 @@ def consume(
             # Frozen now: a read that started racily clean stays untrusted
             # however long it runs (B-D30-RACY-AGE).
             was_racy = racily_clean(version) or (
-                unit is not None and path in unit.racy
+                unit is not None and os.path.realpath(path) in unit.racy
             )
             captured.append((table, path, fmt, sha256, version, was_racy))
     return entries

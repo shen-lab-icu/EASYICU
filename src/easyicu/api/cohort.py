@@ -80,8 +80,6 @@ def get_all_patient_ids_impl(
         database_id_config=database_id_config,
     )
     root = Path(data_path)
-    aliases = {"general": ("general", "general_table")}
-    name_candidates = aliases.get(table_name, (table_name,))
 
     try:
         all_ids: Optional[List] = None
@@ -89,7 +87,7 @@ def get_all_patient_ids_impl(
 
         from ..storage_layout import (
             ORDINAL, PRESENCE_VALID, refuse_broken_presence, restore_frame_order,
-            table_presence, unreadable_file, unreadable_file_errors,
+            table_decision, unreadable_file, unreadable_file_errors,
         )
 
         def _ids(table: str, presence) -> tuple[List, str]:
@@ -132,27 +130,19 @@ def get_all_patient_ids_impl(
         storage = storage_source(resolved_database, root)
         source_format = None
         order = "source_file_order"
-        for name in name_candidates:
-            presence = table_presence(storage, name, subdirectories=True)
-            refuse_broken_presence(name, presence)
-            if presence.state == PRESENCE_VALID:
-                all_ids, order = _ids(name, presence)
-                source_format = "parquet"
-                break
-        if all_ids is None:
-            # Only an ABSENT Parquet stay table falls back to its CSV, and the
-            # receipt says so (source_format csv_fallback).
-            for suffix in (".csv", ".csv.gz"):
-                csv_file = root / f"{table_name}{suffix}"
-                if not csv_file.exists():
-                    continue
-                from ..storage_layout import csv_table_scan
+        presence = table_decision(storage, table_name)
+        refuse_broken_presence(table_name, presence)
+        if presence.state == PRESENCE_VALID:
+            all_ids, order = _ids(table_name, presence)
+            source_format = "parquet"
+        elif presence.loader is not None:
+            # Only the owner's ABSENT decision can supply a CSV loader.
+            from ..storage_layout import csv_table_scan
 
-                csv_table_scan(storage, table_name, csv_file)
-                frame = pd.read_csv(csv_file, usecols=[id_col])
-                all_ids = frame[id_col].dropna().unique().tolist()
-                source_format = "csv_fallback"
-                break
+            csv_table_scan(storage, table_name, presence.loader)
+            frame = pd.read_csv(presence.loader, usecols=[id_col])
+            all_ids = frame[id_col].dropna().unique().tolist()
+            source_format = "csv_fallback"
 
         if all_ids is None:
             loader = base_loader_cls(
