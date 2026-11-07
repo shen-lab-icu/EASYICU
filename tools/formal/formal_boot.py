@@ -87,7 +87,8 @@ def dictionary_file(path):
         raise DictOverlayError("dict_overlay_unavailable") from exc
 
 
-def check_dictionary(expected):
+def check_dictionary(expected, input_roots=()):
+    refuse_input_dictionary(expected["path"], input_roots)
     try:
         if dictionary_file(expected["path"]) == expected:
             return
@@ -96,15 +97,27 @@ def check_dictionary(expected):
     raise DictOverlayError("dict_overlay_changed")
 
 
-def bind_dictionary(tools, path):
+def refuse_input_dictionary(path, input_roots):
+    from easyicu.storage_seal_publication import (
+        SealPublicationError, assert_configuration_outside_roots,
+    )
+
+    try:
+        assert_configuration_outside_roots(path, input_roots)
+    except SealPublicationError as exc:
+        raise DictOverlayError(exc.reason) from exc
+
+
+def bind_dictionary(tools, path, input_roots=()):
     """The first wrapper step binds launch bytes; all subsequent steps reuse them."""
+    refuse_input_dictionary(path, input_roots)
     target = os.path.join(os.path.dirname(tools), "DICT_OVERLAY.json")
     if os.path.exists(target):
         with open(target, encoding="utf-8") as fh:
             expected = json.load(fh)
         if os.path.realpath(path) != expected["path"]:
             raise DictOverlayError("dict_overlay_changed")
-        check_dictionary(expected)
+        check_dictionary(expected, input_roots)
     else:
         expected = dictionary_file(path)
         with open(target, "x", encoding="utf-8") as fh:
@@ -209,7 +222,7 @@ def worker_origin(initial_ok):
             import easyicu
             record["easyicu"] = record["path"] = os.path.realpath(easyicu.__file__)
             if "dict_overlay" in record:
-                check_dictionary(record["dict_overlay"])
+                check_dictionary(record["dict_overlay"], record.get("input_roots", ()))
                 if os.environ.get("EASYICU_DICT_PATH") != record["dict_overlay"]["path"]:
                     raise DictOverlayError("dict_overlay_changed")
             check_modules(record, names, context["allowed"])
@@ -236,8 +249,12 @@ def worker_origin(initial_ok):
 
 def main() -> None:
     overlay_path = None
-    if len(sys.argv) > 6 and sys.argv[5] == "--dict-overlay":
-        overlay_path = sys.argv[6]
+    input_roots = []
+    while len(sys.argv) > 6 and sys.argv[5] in ("--dict-overlay", "--input-root"):
+        if sys.argv[5] == "--dict-overlay":
+            overlay_path = sys.argv[6]
+        else:
+            input_roots.append(sys.argv[6])
         del sys.argv[5:7]
     if len(sys.argv) < 7:
         print("usage: formal_boot.py TOOLS CLONE SHA SITE_PACKAGES ORIGIN_OUT SCRIPT [ARGS...]",
@@ -260,12 +277,13 @@ def main() -> None:
         print(f"formal_tmpdir_unset or formal_tools_invalid: {exc}", file=sys.stderr)
         sys.exit(ORIGIN_EXIT)
     record = {"tools": tools, "src": src, "site_packages": site, "sha": sha,
+              "input_roots": input_roots,
               "tmpdir": private,
               "sys_path": list(sys.path), "script": None, "path": None, "head": None,
               "modules": {}, "mismatched": [], "complete": False}
     if overlay_path is not None:
         try:
-            record["dict_overlay"] = bind_dictionary(tools, overlay_path)
+            record["dict_overlay"] = bind_dictionary(tools, overlay_path, input_roots)
             # Only extraction receives the loader's environment input. Pin its realpath.
             if os.path.basename(script) == "v2_bench_local.py":
                 if os.environ.get("EASYICU_DICT_PATH") != overlay_path:

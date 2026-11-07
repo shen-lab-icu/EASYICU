@@ -1621,8 +1621,11 @@ def build_run_receipt(
     started_at: Optional[float] = None,
     parameters: Optional[Mapping[str, str]] = None,
 ) -> Dict[str, Any]:
+    from easyicu.storage_seal_publication import assert_roots_published
+
     run_root = Path(run_root)
     specs = list(specs)
+    assert_roots_published(spec.split(":", 2)[1] for spec in specs)
     _refuse_paths_inside_inputs({"scratch": Path(scratch), "run_root": run_root}, specs)
     code = sealed_code_identity(sealed_sha)
     approved = approved_declared_absent()

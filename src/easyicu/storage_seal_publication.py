@@ -128,6 +128,20 @@ def assert_roots_published(roots) -> SealPublicationClosure:
     Directory realpaths deduplicate cycles. Missing legacy paths retain their
     existing read-time handling; an unreadable closure fails closed.
     """
+    return _publication_closure(roots)
+
+
+def assert_configuration_outside_roots(path, roots) -> None:
+    """Refuse configuration bytes inside any input or linked/provenance root.
+
+    Ancestors used only for marker checks are not input directories: a seal
+    work_root may legitimately hold both the installs and their configuration.
+    Check containment before listing a reached directory or opening metadata.
+    """
+    _publication_closure(roots, configuration=Path(os.path.realpath(path)))
+
+
+def _publication_closure(roots, *, configuration=None) -> SealPublicationClosure:
     pending = deque(Path(p) for p in roots if p is not None)
     checked: set[Path] = set()
     installs: set[Path] = set()
@@ -251,6 +265,14 @@ def assert_roots_published(roots) -> SealPublicationClosure:
             path = resolve(requested)
             if path is None:
                 continue
+            if configuration is not None and (
+                configuration == path
+                or path.is_dir() and configuration.is_relative_to(path)
+            ):
+                raise SealPublicationError(
+                    "formal_configuration_inside_input", path,
+                    "configuration must be outside the publication closure",
+                )
             if not path.is_dir():
                 # External file targets bring their containing install into
                 # the closure, including its other links and metadata.

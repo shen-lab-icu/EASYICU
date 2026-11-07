@@ -57,6 +57,12 @@ import time
 from pathlib import Path, PurePosixPath
 from typing import Any, Dict, Iterable, List, Mapping, Optional
 
+from .storage_seal_publication import (
+    SealPublicationError,
+    assert_configuration_outside_roots,
+    assert_roots_published,
+)
+
 SNAPSHOT_SCHEMA = "easyicu.input_snapshot/1"
 CONVERSION_MANIFEST = "conversion_manifest.json"
 BUCKET_SUFFIX = "_bucket"
@@ -273,6 +279,7 @@ def _bucket_files(database: str, base: Path) -> tuple[
 
 def plan_input_files(database: str, data_path: str | Path) -> Dict[str, Any]:
     """Which files a formal run of ``database`` on ``data_path`` must snapshot."""
+    assert_roots_published([data_path])
     base = Path(data_path)
     files = _manifest_files(base, base / CONVERSION_MANIFEST, "conversion")
     chain = _declared_view_chain(base)
@@ -436,8 +443,16 @@ def main(argv: Optional[List[str]] = None) -> int:
     check.add_argument("--out", required=True, type=Path)
     plan = commands.add_parser("plan")
     plan.add_argument("specs", nargs="+")
+    config = commands.add_parser("configuration")
+    config.add_argument("--path", required=True, type=Path)
+    config.add_argument("specs", nargs="+")
     args = parser.parse_args(argv)
     try:
+        if args.command == "configuration":
+            assert_configuration_outside_roots(
+                args.path, [_spec(spec)[1] for spec in args.specs]
+            )
+            return 0
         if args.command == "plan":
             for spec in args.specs:
                 database, data_path = _spec(spec)
@@ -454,6 +469,9 @@ def main(argv: Optional[List[str]] = None) -> int:
             pre = json.loads(args.pre.read_text(encoding="utf-8"))
             result = verify_snapshot(pre)
             write_snapshot(args.out, result)
+    except SealPublicationError as error:
+        sys.stderr.write(json.dumps({"code": error.reason, "message": str(error)}) + "\n")
+        return 3
     except InputSnapshotError as error:
         sys.stderr.write(json.dumps({"code": error.code, "message": str(error),
                                      "details": error.details}, default=str) + "\n")

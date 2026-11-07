@@ -2480,3 +2480,14 @@ expands windows that carry an hours duration (SICdb mech_vent 338 → 6,459).
   `vent_ind` for ventilation exposure.
 - **[S5]** SICdb CVP coverage falls from 64% to 36% across admission years.
   Stratify CVP analyses by year.
+
+## 2026-11-07 — formal inputs, receipts and optional configuration gate before reads [B-SLPUB-FORMAL]
+
+Formal input planning (including snapshot and verify replans) and independent
+run receipts now gate every supplied input root through the full publication
+closure before reading conversion manifests. PENDING and REFUSED failures keep
+their typed reasons, including flat-only read sets. Dictionary overlays and
+REQUIRED_LAYOUT files must live outside the database and linked/provenance
+closures; a seal work_root outside those closures remains valid. The wrapper
+passes all spec roots to the staged boot, which repeats dictionary containment
+checks when binding, rechecking and starting workers. No extracted values change.

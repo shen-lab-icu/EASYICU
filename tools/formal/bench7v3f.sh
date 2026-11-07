@@ -136,6 +136,11 @@ finish_run() {  # DONE, then exit non-zero when any database or step did not exi
     exit 1; fi
   exit 0; }
 configure_dictionary() {
+  local spec db input_dir cores
+  for spec in "$@"; do
+    IFS=: read -r db input_dir cores <<< "$spec"
+    BOOT+=(--input-root "$input_dir")
+  done
   # BENCH_DICT_PATH is an explicit launch setting, receipted with wrapper parameters.
   # Caller EASYICU_DICT_* values are never used; DICT_DIR is never forwarded.
   DENV=(); DPARAM=()
@@ -208,13 +213,17 @@ verify_staged || { echo "formal_tool_changed" > "$R/RUN_INVALID"; exit 2; }
 export TMPDIR=$R/.tmp JOBLIB_TEMP_FOLDER=$R/.tmp
 SITE=$(site_packages) || { echo "site_packages_unresolved" > "$R/RUN_INVALID"; exit 2; }
 BOOT=("$PY" -I -S -P "$FT/formal_boot.py" "$FT" "$C" "$SHA" "$SITE")
-configure_dictionary
+configure_dictionary "$@"
 echo "tag=$TAG sha=$SHA mode=$MODE threads=$T workers=$WK" > "$R/status"
 if [ "${BENCH_FORMAL_RECEIPT:-0}" = 1 ]; then
   RL=${BENCH_REQUIRED_LAYOUT:-}
   [ -n "$RL" ] && [ -f "$RL" ] && [ -r "$RL" ] || {
     echo "refusing: BENCH_FORMAL_RECEIPT=1 needs BENCH_REQUIRED_LAYOUT=<REQUIRED_LAYOUT.json>" >&2
     echo "required_layout_missing" > "$R/RUN_INVALID"; echo DONE >> "$R/status"; exit 2; }
+  env -i PATH=/usr/bin:/bin TMPDIR="$R/.tmp" "${BOOT[@]}" \
+    "$R/IMPORT_ORIGIN.required_layout.json" "$FT/inputs_bench_local.py" \
+    configuration --path "$RL" "$@" || {
+    echo "required_layout_refused" > "$R/RUN_INVALID"; echo DONE >> "$R/status"; exit 2; }
   if [ -e "$R/REQUIRED_LAYOUT.json" ] && ! cmp -s "$RL" "$R/REQUIRED_LAYOUT.json"; then
     echo "refusing: $R/REQUIRED_LAYOUT.json exists and differs from $RL" >&2; exit 2; fi
   DBS=(); for spec in "$@"; do IFS=: read -r db _ _ <<< "$spec"; DBS+=("$db"); done
