@@ -341,3 +341,237 @@ def test_formal_still_refuses_a_marked_install_first(tmp_path):
     with pytest.raises(SealPublicationError) as caught:
         assert_seal_published(root, formal=True)
     assert _reason(caught) == "bucket_install_unpublished"
+
+
+# --- every reader family refuses a marked install (r13slpub increment) -----------------
+
+
+T = pd.Timestamp("2150-01-01 08:00")
+
+
+def _policy_source(database: str, root: Path) -> ICUDataSource:
+    from easyicu.resources import load_data_sources
+
+    return ICUDataSource(config=load_data_sources().get(database), base_path=root)
+
+
+def _stays(ids):
+    return pd.DataFrame(
+        {
+            "row_id": ids,
+            "subject_id": [i * 10 for i in ids],
+            "hadm_id": [i * 100 for i in ids],
+            "icustay_id": ids,
+            "intime": [T] * len(ids),
+            "outtime": [T + pd.Timedelta(days=2)] * len(ids),
+        }
+    )
+
+
+def _csv_stays(install: Path) -> Path:
+    install.mkdir(parents=True, exist_ok=True)
+    path = install / "icustays.csv"
+    _stays([1, 2]).to_csv(path, index=False)
+    return path
+
+
+def _refused(call) -> None:
+    with pytest.raises(SealPublicationError) as caught:
+        call()
+    assert caught.value.reason in {
+        "bucket_install_unpublished",
+        "bucket_install_refused",
+    }
+
+
+def test_csv_admission_refuses_an_unmanifested_marked_install(tmp_path):
+    from easyicu.storage_layout import csv_table_scan
+
+    install = tmp_path / "mimic_r13"
+    path = _csv_stays(install)
+    _mark(install, ".seal_PENDING")
+    _refused(lambda: csv_table_scan(_policy_source("mimic", install), "icustays", path))
+
+
+def test_csv_admission_refuses_a_marked_install_under_the_unregistered_override(
+    tmp_path, monkeypatch
+):
+    from easyicu.storage_layout import ALLOW_UNREGISTERED_SCAN_ENV, csv_table_scan
+
+    install = tmp_path / "mimic_r13"
+    path = _csv_stays(install)
+    (install / "conversion_manifest.json").write_text(json.dumps({"tables": []}))
+    monkeypatch.setenv(ALLOW_UNREGISTERED_SCAN_ENV, "1")
+    csv_table_scan(_policy_source("mimic", install), "icustays", path)
+    _mark(install, ".seal_PENDING")
+    _refused(lambda: csv_table_scan(_policy_source("mimic", install), "icustays", path))
+
+
+def _csv_services(install: Path) -> None:
+    # MIMIC-III services is the table the disk loader reads from its CSV.
+    install.mkdir(parents=True, exist_ok=True)
+    pd.DataFrame(
+        {
+            "row_id": [1],
+            "subject_id": [10],
+            "hadm_id": [100],
+            "transfertime": [T],
+            "prev_service": [None],
+            "curr_service": ["MED"],
+        }
+    ).to_csv(install / "services.csv", index=False)
+    # load_table fills services' stay column from icustays.
+    _stays([1000]).assign(subject_id=10, hadm_id=100).to_parquet(
+        install / "icustays.parquet"
+    )
+
+
+def test_load_table_refuses_the_csv_of_a_marked_install(tmp_path):
+    install = tmp_path / "mimic_r13"
+    _csv_services(install)
+    assert len(_policy_source("mimic", install).load_table("services").data) == 1
+    _mark(install, ".seal_PENDING")
+    _refused(lambda: _policy_source("mimic", install).load_table("services"))
+
+
+def test_the_fast_id_scan_refuses_the_csv_of_a_marked_install(tmp_path):
+    from types import SimpleNamespace
+
+    from easyicu.api.concepts import _build_fast_scan_expr
+
+    install = tmp_path / "mimic_r13"
+    _csv_services(install)
+    loader = SimpleNamespace(datasource=_policy_source("mimic", install))
+    assert _build_fast_scan_expr(loader, "services")
+    _mark(install, ".seal_PENDING")
+    loader = SimpleNamespace(datasource=_policy_source("mimic", install))
+    _refused(lambda: _build_fast_scan_expr(loader, "services"))
+
+
+def test_patient_id_discovery_refuses_the_csv_of_a_marked_install(tmp_path):
+    from easyicu.api import get_all_patient_ids
+
+    install = tmp_path / "mimic_r13"
+    _csv_stays(install)
+    ids, _column = get_all_patient_ids(install, database="mimic")
+    assert sorted(ids) == [1, 2]
+    _mark(install, ".seal_PENDING")
+    _refused(lambda: get_all_patient_ids(install, database="mimic"))
+
+
+def test_the_patient_filter_refuses_the_csv_of_a_marked_install(tmp_path):
+    from easyicu.patient_filter import PatientFilter
+
+    install = tmp_path / "mimic_r13"
+    _csv_stays(install)
+    path = install / "icustays.csv"
+    assert len(PatientFilter("mimic", install)._read_csv("icustays", path)) == 2
+    _mark(install, ".seal_PENDING")
+    # _read_table already refuses through resolve_target_files (016ddb655);
+    # the CSV admission itself (patient_filter._read_csv) must refuse too.
+    _refused(lambda: PatientFilter("mimic", install)._read_table("icustays"))
+    _refused(lambda: PatientFilter("mimic", install)._read_csv("icustays", path))
+
+
+def test_hirid_end_time_refuses_the_observation_parts_of_a_marked_install(tmp_path):
+    from easyicu.concept import ConceptDictionary, ConceptResolver
+
+    install = tmp_path / "hirid_r13"
+    (install / "observations").mkdir(parents=True)
+    for part, pid in ((1, 1), (2, 2)):
+        pd.DataFrame(
+            {"patientid": [pid], "datetime": [T], "variableid": [200]}
+        ).to_parquet(install / "observations" / f"{part}.parquet")
+    (install / "observation_tables").mkdir()
+    pd.DataFrame({"patientid": [1, 2], "part": [0, 1]}).to_csv(
+        install / "observation_tables" / "observation_tables_index.csv", index=False
+    )
+    frame = pd.DataFrame({"patientid": [1, 2]})
+
+    def synthesise():
+        return ConceptResolver(ConceptDictionary({}))._synthesise_los_column(
+            "end", _policy_source("hirid", install), frame
+        )
+
+    assert synthesise() is not None
+    _mark(install, ".seal_PENDING")
+    _refused(synthesise)
+
+
+def test_an_absent_table_of_a_marked_install_raises_instead_of_reading_empty(tmp_path):
+    from easyicu.storage_layout import verify_flat_scan
+
+    install = tmp_path / "miiv_r13"
+    install.mkdir()
+    source = _policy_source("miiv", install)
+    assert source.load_table("chartevents").data.empty
+    assert verify_flat_scan(source, "chartevents", ()) == ()
+    _mark(install, ".seal_PENDING")
+    _refused(lambda: _policy_source("miiv", install).load_table("chartevents"))
+    _refused(
+        lambda: verify_flat_scan(_policy_source("miiv", install), "chartevents", ())
+    )
+
+
+def test_the_eicu_io_reader_refuses_a_directory_of_a_marked_install(tmp_path):
+    from easyicu.concept.eicu_io import read_io_parquet
+
+    install = tmp_path / "eicu_r13"
+    (install / "intakeoutput").mkdir(parents=True)
+    pd.DataFrame(
+        {"patientunitstayid": [1], "intakeoutputoffset": [30], "cellpath": ["x"]}
+    ).to_parquet(install / "intakeoutput" / "1.parquet")
+    assert len(read_io_parquet(install / "intakeoutput", None, None, None)) == 1
+    _mark(install, ".seal_PENDING")
+    _refused(lambda: read_io_parquet(install / "intakeoutput", None, None, None))
+
+
+def test_the_mimic_column_peek_refuses_a_directory_of_a_marked_install(tmp_path):
+    from easyicu.datasource import mimic_disk_columns
+
+    install = tmp_path / "miiv_r13"
+    (install / "labevents").mkdir(parents=True)
+    pd.DataFrame(
+        {"itemid": [50912], "valuenum": [1.0], "valueuom": ["mg/dL"]}
+    ).to_parquet(install / "labevents" / "1.parquet")
+    source = _policy_source("miiv", install)
+    assert "valueuom" in mimic_disk_columns(
+        source, install / "labevents", "labevents", ["itemid"]
+    )
+    _mark(install, ".seal_PENDING")
+    _refused(
+        lambda: mimic_disk_columns(
+            source, install / "labevents", "labevents", ["itemid"]
+        )
+    )
+
+
+def test_a_cached_table_is_not_served_after_the_install_is_refused(tmp_path):
+    install = tmp_path / "mimic_r13"
+    _csv_services(install)
+    source = _policy_source("mimic", install)
+    assert len(source.load_table("services").data) == 1
+    _mark(install, ".seal_REFUSED")
+    _refused(lambda: source.load_table("services"))
+
+
+def test_the_id_map_search_does_not_skip_a_refused_table():
+    from types import SimpleNamespace
+
+    from easyicu.io.data_load import load_id_map
+
+    class Marked:
+        def load_table(self, table, columns=None):
+            raise SealPublicationError(
+                "bucket_install_unpublished", Path("/x/miiv_r13")
+            )
+
+    config = SimpleNamespace(
+        name="miiv",
+        id_configs={
+            "icustay": SimpleNamespace(table="icustays", position=3),
+            "hadm": SimpleNamespace(table="admissions", position=2),
+        },
+    )
+    with pytest.raises(SealPublicationError):
+        load_id_map(Marked(), config, "hadm_id", "stay_id")

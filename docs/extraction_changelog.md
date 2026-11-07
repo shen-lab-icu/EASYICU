@@ -40,6 +40,14 @@ check runs on every bucket open (`read_bucket_contract`) and on every table read
 (`resolve_table_files`, on the source root), so flat tables of a marked
 installation are refused as well. It is not a bucket layout error, so a marked
 bucket never falls back to the flat files of the same installation.
+The same check runs in every flat reader that bypasses those two entry points:
+the flat-scan validator (`verify_flat_scan`, so a table absent from a marked
+installation raises instead of reading as empty), the CSV admission
+(`csv_table_scan`, with or without a conversion manifest or the
+unregistered-scan override) and plain directory listings
+(`enumerate_parquet_files`). A table cached in memory is not served once a
+marker appears, and the ID-map table search re-raises typed failures instead
+of skipping the table.
 
 The formal half (`formal=True`, `bucket_install_unaccepted`) is in
 `easyicu.storage_seal_publication` for the formal run receipt to call. It

@@ -33,6 +33,7 @@ from ..table import IdTbl, TsTbl, WinTbl, as_id_tbl, as_ts_tbl, as_win_tbl, id_v
 from ..datasource import ICUDataSource, FilterSpec, FilterOp
 from ..config import DataSourceConfig, IdentifierConfig
 from .ts_utils import change_interval
+from ..value_failures import TYPED_VALUE_FAILURES
 
 
 class TimeOriginError(ValueError):
@@ -467,6 +468,8 @@ def load_id_map(
             frame = data_source.load_table(
                 cfg.table, columns=columns
             ).data
+        except TYPED_VALUE_FAILURES:
+            raise
         except Exception:
             continue
         if all(col in frame.columns for col in columns):

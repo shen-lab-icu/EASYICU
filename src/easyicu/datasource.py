@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from easyicu.runtime import duckdb_spill
 from . import storage_layout
+from .storage_seal_publication import assert_source_published
 import enum
 from contextlib import contextmanager, nullcontext
 from dataclasses import dataclass, field, replace
@@ -1493,6 +1494,8 @@ class ICUDataSource:
                 cached_frame = self._table_cache.get(cache_key)
         
         if cached_frame is not None:
+            # A marker written after the read (.seal_REFUSED) is not served from memory.
+            assert_source_published(self, table_name, formal=False)
             # 🚀 OPTIMIZATION: 从缓存中取数据后再应用patient过滤
             # 这样多个概念可以共享同一个缓存的表副本
             # ⚡ 性能优化: 避免copy(),直接返回过滤后的视图

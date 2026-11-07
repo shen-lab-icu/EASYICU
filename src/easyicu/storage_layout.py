@@ -1056,6 +1056,8 @@ def verify_flat_scan(source, table: str, files: tuple[Path, ...]) -> tuple[Path,
     manifest.  Bucket layouts carry their own manifest inventory, validated
     on open (lead-r13: MIIV labevents read 1 of 10 files).
     """
+    from .storage_seal_publication import assert_source_published  # imports this module
+    assert_source_published(source, table, formal=False)
     files = tuple(files)
     if source.base_path is None:
         return files
@@ -1163,6 +1165,8 @@ def csv_table_scan(source, table: str, path: Path) -> None:
     outputs vanished) and the CSV read is recorded; a table the manifest does
     not list is refused like an unregistered Parquet scan.
     """
+    from .storage_seal_publication import assert_source_published  # imports this module
+    assert_source_published(source, table, formal=False)
     base = None if source.base_path is None else Path(source.base_path)
     index = _conversion_index(base) if base is not None else None
     if index is None:
@@ -1265,6 +1269,9 @@ def enumerate_parquet_files(directory: Path) -> list[str]:
                 return enumerate_parquet_files(flat)
             raise
     else:
+        from .storage_seal_publication import assert_seal_published  # cycle
+
+        assert_seal_published(root, formal=False)
         paths = sorted(p for p in root.rglob("*.parquet") if not p.name.startswith("."))
     return [p.as_posix() for p in paths]
 
