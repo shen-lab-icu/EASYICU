@@ -9,7 +9,7 @@ remains compatible with SICdb 1.0.6 (the release is detected from the schema).
 
 ## 2026-11-07 — one complete table decision and loader [lead-r13, `7f72fd643`]
 
-- **B-D47-NESTED / B-D47-CSV:** reader, cohort and resolver use `storage_layout.table_decision`, including recursive nested search and typed listing refusals; configured CSV is eligible only when Parquet is absent. A healthy HiRID `General/` beside `general_table.csv` now serves Parquet to both readers, and independent root plus nested sources refuse.
+- **B-D47-NESTED / B-D47-CSV:** reader, cohort and resolver use `storage_layout.table_decision`, including recursive nested search and typed listing refusals (also inside a table's inventory); configured CSV is eligible only when Parquet is absent, and a supplied Parquet loader cannot override absence. A healthy HiRID `General/` beside `general_table.csv` now serves Parquet to both readers, and independent root plus nested sources refuse. Bound-source missing refusals keep their existing priority.
 - **B-D47-HARDLINK-PAIR:** verified flat/bucket provenance is compared by device and inode, so a hardlink alias cannot change the selected source; an independent copy still refuses.
 - **NB racy CSV aliases:** the unit's racy set and the CSV validation memo both use realpath, preserving the racy refusal to memoize across path aliases.
 - **NB B-D47-CACHE:** candidate creation during a run is outside the immutable-data-root contract and remains covered by slpub's start-of-run closure gate; no cache rescan fix is claimed here.

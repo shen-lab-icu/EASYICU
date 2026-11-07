@@ -92,10 +92,13 @@ def test_configured_hirid_csv_is_used_only_when_parquet_is_absent(tmp_path, rela
 
 
 @pytest.mark.parametrize("denial", ["chmod", "listing_error"])
-def test_unreadable_nested_directory_never_becomes_absent_csv(tmp_path, monkeypatch, denial):
+@pytest.mark.parametrize("location", ["custom", "icustays/locked"])
+def test_unreadable_nested_directory_never_becomes_absent_csv(tmp_path, monkeypatch, denial, location):
     _csv(tmp_path)
-    blocked = tmp_path / "custom"
+    blocked = tmp_path / location
     _parquet(blocked / "deeper" / "icustays.parquet")
+    if location.startswith("icustays/"):
+        _parquet(tmp_path / "icustays" / "part.parquet")
     if denial == "chmod":
         blocked.chmod(0)
     else:
@@ -111,6 +114,15 @@ def test_unreadable_nested_directory_never_becomes_absent_csv(tmp_path, monkeypa
         assert _refusals(tmp_path) == [sl.FILE_UNREADABLE] * 3
     finally:
         blocked.chmod(0o700)
+
+
+def test_a_supplied_loader_cannot_override_the_shared_absent_decision(tmp_path):
+    _csv(tmp_path)
+    other = tmp_path / "custom" / "unrelated.parquet"
+    _parquet(other)
+    with pytest.raises(sl.TableScanError) as error:
+        _source(tmp_path).resolve_target_files("icustays", loader=other)
+    assert error.value.reason == "table_scan_loader_mismatch"
 
 
 def test_verified_derived_pair_uses_inode_even_when_alias_sorts_first(tmp_path):

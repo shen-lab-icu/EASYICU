@@ -1243,13 +1243,21 @@ def _footer_rows(path: Path, table: str) -> int:
 
 
 def _visible_parquet(directory: Path) -> set[Path]:
-    return {
-        p
-        for p in directory.rglob("*")
-        if p.suffix.lower() in {".parquet", ".pq"}
-        and p.is_file()
-        and not any(part.startswith(".") for part in p.relative_to(directory).parts)
-    }
+    # Path.rglob suppresses listing PermissionError. An unreadable subtree
+    # cannot establish a complete inventory and must propagate to the owner.
+    files = set()
+    pending = [directory]
+    while pending:
+        parent = pending.pop()
+        for name in _listdir(parent):
+            if name.startswith("."):
+                continue
+            path = parent / name
+            if path.is_dir() and not path.is_symlink():
+                pending.append(path)
+            elif path.suffix.casefold() in _PARQUET_SUFFIXES and path.is_file():
+                files.add(path)
+    return files
 
 
 CONVERSION_MANIFEST = "conversion_manifest.json"  # written by io.data_converter
@@ -2216,6 +2224,11 @@ def resolve_table_files(
     if root is None:
         files = decision.files
         if loader is not None:
+            if decision.state == PRESENCE_ABSENT:
+                raise TableScanError(
+                    "table_scan_loader_mismatch", table,
+                    "a Parquet loader cannot override the owner's absent decision",
+                )
             files = _loader_scan(table, Path(loader), files)
         files = verify_flat_scan(source, table, files)
         if consume and files:
