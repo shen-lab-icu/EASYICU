@@ -982,15 +982,27 @@ def _apply_callback(
         concept_name if isinstance(frame, pd.DataFrame) and concept_name in frame.columns
         else (getattr(source, "value_var", None) or "value")
     )
+    contract = _callback_parse_contract(source)
+    # The boundary net judges the column the callback parses, which its
+    # owner may declare (eICU iv_exposure reads dosage, not drugname).
+    parsed_column = (
+        contract.parsed_column
+        if contract.parsed_column and isinstance(frame, pd.DataFrame)
+        and contract.parsed_column in frame.columns
+        else value_column
+    )
     raw = None
     if (
         definition is not None
         and getattr(source, "callback", None)
         and isinstance(frame, pd.DataFrame)
-        and value_column in frame.columns
-        and not pd.api.types.is_numeric_dtype(frame[value_column])
+        and parsed_column in frame.columns
+        and (
+            contract.categorical_map
+            or not pd.api.types.is_numeric_dtype(frame[parsed_column])
+        )
     ):
-        raw = frame[value_column].copy()
+        raw = frame[parsed_column].copy()
         raw_frame = frame[[c for c in (context.id_column,) if c and c in frame.columns]].copy()
     with source_parse_context(context):
         result = _apply_callback_body(
@@ -1004,8 +1016,21 @@ def _apply_callback(
                 concept_name if isinstance(result, pd.DataFrame) and concept_name in result.columns
                 else value_column
             )
-            count_callback_losses(raw, raw_frame, result, output_column)
+            count_callback_losses(raw, raw_frame, result, output_column, contract)
     return result
+
+
+def _callback_parse_contract(source):
+    """The parse contract of ``source``'s callback (its owner's declaration, or a map's)."""
+    from .eicu_source_callbacks import PARSE_CONTRACTS
+    from .value_kind import CallbackParseContract
+
+    expr = str(getattr(source, "callback", "") or "").strip()
+    if expr in PARSE_CONTRACTS:
+        return PARSE_CONTRACTS[expr]
+    if expr.startswith("apply_map("):
+        return CallbackParseContract(categorical_map=True)
+    return CallbackParseContract()
 
 
 def _apply_callback_body(

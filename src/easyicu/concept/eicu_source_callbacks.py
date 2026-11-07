@@ -10,7 +10,7 @@ import pandas as pd
 
 from . import eicu_medication_evidence as medication
 from . import eicu_source_qc as qc
-from .value_kind import parse_source_numeric
+from .value_kind import CallbackParseContract, parse_source_numeric
 from .eicu_io import systemic_intake
 
 CALLBACKS = frozenset({
@@ -22,6 +22,16 @@ CALLBACKS = frozenset({
     "eicu_ionized_calcium",
     "eicu_insulin_units",
 })
+
+# What a callback parses, when the boundary net must not judge the source's
+# value column (B-IMPLICIT-GATE): iv_exposure reads its dose from ``dosage``
+# whatever the value column holds (a drugname-valued source keeps names
+# there), and leaves an unknown-route order missing on purpose.
+PARSE_CONTRACTS = {
+    "eicu_iv_exposure": CallbackParseContract(
+        parsed_column="dosage", deliberate_missing=medication.route_masked,
+    ),
+}
 
 
 def _request_token(value):

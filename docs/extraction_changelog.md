@@ -95,6 +95,15 @@ median, so the value depended on which stays shared the batch.
   `fahr_between`) counts text before it becomes NaN and refuses it for a
   classless concept; a callback that parses outside the shared helper is
   counted at the callback boundary.
+- Boundary net (round 4): it judges the column the callback parses, as the
+  callback's owner declares it (eICU `iv_exposure` reads `dosage`, so a
+  drugname-valued source no longer counts drug names), and leaves out rows
+  the callback leaves missing on purpose (an unknown route). A categorical map
+  that leaves a value unmapped loses it even when it parses as a number (the
+  eICU ICDSC scores 0-8 in `delirium_positive`). A value that names an
+  assessment instrument (eICU 'Delirium Scale' rows: `CAM-ICU`, `ICDSC`) is
+  not a result: it is counted as `non_result_instrument_rows` (QC category of
+  that name), never as a loss. Counts and QC only; no value changes.
 
 ## 2026-11-06 — eICU GCS sedation windows and the published `ett_gcs` grid [lead-r13, `432ddaf3c`, `80b1cb964`, `e70102c94`, `f9b45386c`, `b7509c080`, `e1d73cd7b`, `2c0579bd5`, `942bfcbfb`, `3e23c65d4`, `06f30f7b0`]
 

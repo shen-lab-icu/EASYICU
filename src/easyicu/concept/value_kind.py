@@ -254,6 +254,39 @@ def _counted_kind(definition, database: str) -> Optional[ValueKind]:
         return None
 
 
+#: Assessment instruments whose NAME can stand in a categorical value cell
+#: (eICU 'Delirium Scale/Score' charts the scale used, 'CAM-ICU' or 'ICDSC',
+#: in the same field as the result). Such a row is not a result: it is
+#: reported as ``non_result_instrument_rows`` and never counted as a loss.
+ASSESSMENT_INSTRUMENT_NAMES = frozenset({
+    "cam-icu", "camicu", "icdsc", "rass", "sas", "cpot", "bps", "nu-desc", "4at",
+})
+
+
+def names_an_instrument(values: pd.Series) -> pd.Series:
+    """Whether each cell is exactly the name of an assessment instrument."""
+    text = values.astype("string").str.strip().str.casefold()
+    return text.isin(ASSESSMENT_INSTRUMENT_NAMES).fillna(False).astype(bool)
+
+
+@dataclass(frozen=True)
+class CallbackParseContract:
+    """What a callback parses, declared by the callback's owner.
+
+    ``parsed_column``: the raw column the callback reads its quantity from
+    when it is not the source's value column (eICU ``iv_exposure`` reads
+    ``dosage`` whatever the value column holds). ``deliberate_missing``: the
+    output rows the callback leaves missing on purpose (e.g. an unknown
+    route), which are not losses. ``categorical_map``: the callback maps
+    categories, so any unmapped value it leaves missing is a loss, even one
+    that would parse as a number.
+    """
+
+    parsed_column: Optional[str] = None
+    deliberate_missing: Optional[Callable[[pd.DataFrame], pd.Series]] = None
+    categorical_map: bool = False
+
+
 def parse_source_numeric(
     values: pd.Series,
     *,
@@ -272,14 +305,23 @@ def parse_source_numeric(
     inferred from dtypes: a numeric column has no value to lose.
     """
     converted = parser(values) if parser is not None else pd.to_numeric(values, errors="coerce")
-    context = _PARSE_CONTEXT.get()
-    if context is None or context.definition is None:
-        return converted
     if pd.api.types.is_numeric_dtype(values) and not pd.api.types.is_bool_dtype(values):
         return converted
+    _record_losses(values, pd.Series(converted, index=values.index), frame)
+    return converted
+
+
+def _record_losses(values, converted, frame, *, all_kinds=False, non_result=None) -> None:
+    """Record (and refuse for a classless concept) the cells of ``values`` lost in ``converted``."""
+    context = _PARSE_CONTEXT.get()
+    if context is None or context.definition is None:
+        return
     implicit = implicitly_numeric(context.definition)
-    if not implicit and _counted_kind(context.definition, context.database) not in ("numeric", "logical"):
-        return converted
+    if (
+        not all_kinds and not implicit
+        and _counted_kind(context.definition, context.database) not in ("numeric", "logical")
+    ):
+        return
     from ..source_bounds import record_series_coercion
 
     context.parsed.append(True)
@@ -289,7 +331,7 @@ def parse_source_numeric(
     lost = record_series_coercion(
         database=context.database, concept=context.concept, table=context.table,
         stays=None if ids is None else ids.dropna().unique().tolist(),
-        original=values, converted=pd.Series(converted, index=values.index), ids=ids,
+        original=values, converted=converted, ids=ids, non_result=non_result,
     )
     if lost and implicit:
         from ..source_bounds import small_count
@@ -303,19 +345,29 @@ def parse_source_numeric(
                 "numeric bounds)"
             ),
         )
-    return converted
 
 
-def count_callback_losses(raw: pd.Series, raw_frame: pd.DataFrame, result, value_column: str) -> None:
-    """Count, at the callback boundary, raw text that a callback turned into NaN.
+def count_callback_losses(
+    raw: pd.Series,
+    raw_frame: pd.DataFrame,
+    result,
+    value_column: str,
+    contract: Optional[CallbackParseContract] = None,
+) -> None:
+    """Count, at the callback boundary, raw values that a callback left missing.
 
     The safety net for a callback whose own parse does not go through
-    :func:`parse_source_numeric`: a raw value that is non-null and not a
-    number, on a row the callback kept, whose output value is missing, is
-    counted (and refused for a classless concept) exactly as the helper
-    would. Only rows the callback kept under the same index are judged; a
-    callback that parsed through the helper is not counted again.
+    :func:`parse_source_numeric`. ``raw`` is the column the callback parses
+    (its contract's ``parsed_column`` when it declares one). On a row the
+    callback kept under the same index and did not leave missing on purpose
+    (``contract.deliberate_missing``), a non-null raw value whose output is
+    missing is a loss when it is not a number, or, for a categorical map,
+    whatever it is (an unmapped number is not hidden by parsing). A value that
+    names an assessment instrument is never a loss: it is counted as
+    ``non_result_instrument_rows``. A callback that parsed through the helper
+    is not counted again.
     """
+    contract = contract or CallbackParseContract()
     context = _PARSE_CONTEXT.get()
     if context is None or context.definition is None or context.parsed:
         return
@@ -324,13 +376,25 @@ def count_callback_losses(raw: pd.Series, raw_frame: pd.DataFrame, result, value
     if not result.index.is_unique or not raw.index.is_unique or result.columns.duplicated().any():
         return
     kept = result.index.intersection(raw.index)
+    if contract.deliberate_missing is not None and len(kept):
+        deliberate = pd.Series(contract.deliberate_missing(result.loc[kept]), index=kept)
+        kept = kept[~deliberate.fillna(False).astype(bool).to_numpy()]
     if len(kept) == 0:
         return
     original = raw.loc[kept]
     output = result.loc[kept, value_column]
-    textual = original.notna() & pd.to_numeric(original, errors="coerce").isna()
-    if not bool(textual.any()):
+    present = original.notna()
+    instrument = present & names_an_instrument(original)
+    if contract.categorical_map:
+        candidate = present & ~instrument
+    else:
+        candidate = present & ~instrument & pd.to_numeric(original, errors="coerce").isna()
+    lost = candidate & output.isna()
+    if not bool(lost.any() or instrument.any()):
         return
-    # A text original whose output has a value was parsed (not lost).
-    converted = pd.to_numeric(original, errors="coerce").mask(textual & output.notna(), 0.0)
-    parse_source_numeric(original, frame=raw_frame.loc[kept], parser=lambda _values: converted)
+    converted = pd.Series(np.where(lost.to_numpy(), np.nan, 0.0), index=kept)
+    _record_losses(
+        original, converted, raw_frame.loc[kept],
+        all_kinds=contract.categorical_map,
+        non_result=instrument.to_numpy() if bool(instrument.any()) else None,
+    )

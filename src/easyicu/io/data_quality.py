@@ -574,7 +574,7 @@ def source_value_coercion_warnings(
     Without per-stay ledgers (republished counts) a multi-reader row is a
     lower bound marked ``union: audit_unknown``. Counts 1-9 read ``"<10"``.
     """
-    from ..source_bounds import coercion_union, small_count
+    from ..source_bounds import INSTRUMENT_FIELD, coercion_union, small_count
 
     rows: List[Dict[str, Any]] = []
     for concept, tables in coercion_union(drops_by_module).items():
@@ -595,6 +595,10 @@ def source_value_coercion_warnings(
                 "stays_with_values": small_count(stays_read),
                 "fraction_of_stays": round(fraction, 4),
                 "non_numeric_values": small_count(counts["non_numeric_values"]),
+                **(
+                    {INSTRUMENT_FIELD: small_count(counts[INSTRUMENT_FIELD])}
+                    if counts.get(INSTRUMENT_FIELD) else {}
+                ),
                 "reason": "declared_numeric_values_not_numeric",
             })
     return rows

@@ -7561,7 +7561,13 @@ def source_value_publication(
     returned for publication (counts, 1-9 as ``"<10"``, no ledger).
     """
     from ..io.data_quality import source_bounds_warnings, source_value_coercion_warnings
-    from ..source_bounds import AUDIT_UNKNOWN, coercion_union, public_bounds, small_count
+    from ..source_bounds import (
+        AUDIT_UNKNOWN,
+        INSTRUMENT_FIELD,
+        coercion_union,
+        public_bounds,
+        small_count,
+    )
 
     internal: Dict[str, dict] = {}
     audit: Dict[str, str] = {}
@@ -7574,6 +7580,13 @@ def source_value_publication(
         internal[module] = dict(counts)
     _refuse_classless_non_numeric(internal, database=database, dictionary=dictionary)
     public = {module: public_bounds(internal[module]) for module in modules}
+    instrument_rows = [
+        {"concept": concept, "source_table": table,
+         INSTRUMENT_FIELD: small_count(row[INSTRUMENT_FIELD]), "union": row["union"]}
+        for concept, tables in coercion_union(internal).items()
+        for table, row in tables.items()
+        if row.get(INSTRUMENT_FIELD)
+    ]
     union = {
         concept: {
             table: {
@@ -7591,6 +7604,8 @@ def source_value_publication(
         "qc_warnings": {
             "source_bounds_suspect": source_bounds_warnings(public),
             "source_values_not_numeric": source_value_coercion_warnings(internal),
+            # Rows whose value names an instrument (not results, never losses).
+            **({"non_result_instrument_rows": instrument_rows} if instrument_rows else {}),
             **(
                 {"source_value_counts_audit_unknown": [
                     {"module": module, "reason": AUDIT_UNKNOWN} for module in sorted(audit)

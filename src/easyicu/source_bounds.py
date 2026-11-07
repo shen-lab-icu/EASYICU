@@ -73,6 +73,7 @@ __all__ = [
     "small_count",
     "count_value",
     "AUDIT_UNKNOWN",
+    "INSTRUMENT_FIELD",
     "bounds_scope",
     "scope_active",
     "bounds_totals",
@@ -83,6 +84,10 @@ __all__ = [
 _BOUNDS_FIELDS = ("dropped_values", "stays_all_out_of_bounds", "stays_read")
 _COERCION_FIELDS = ("non_numeric_values", "stays_with_non_numeric", "stays_with_values")
 _FIELDS = _BOUNDS_FIELDS + _COERCION_FIELDS
+#: Rows whose value names an assessment instrument (e.g. eICU's 'Delirium
+#: Scale' row holding 'CAM-ICU'): not a result, so never a loss; reported as
+#: their own aggregate (sparse: present only where such rows were seen).
+INSTRUMENT_FIELD = "non_result_instrument_rows"
 # Private per-stay ledger of a coercion record (never published).
 _LEDGER = "_stays"
 AUDIT_UNKNOWN = "audit_unknown"
@@ -175,6 +180,7 @@ def record_coercion_counts(
     values_column: str,
     non_numeric_column: str,
     identified: bool = True,
+    instrument_column: Optional[str] = None,
 ) -> None:
     """Record one conversion point's non-numeric counts for one read.
 
@@ -182,27 +188,35 @@ def record_coercion_counts(
     non-null source values and those of them that did not convert to a
     number. They are summed per stay; the per-stay counts form the record's
     private ledger (``identified=False``: the id column is not a stay
-    identity, so the record has no ledger). A no-op outside any scope.
+    identity, so the record has no ledger). ``instrument_column`` counts
+    rows whose value names an instrument (``non_result_instrument_rows``).
+    A no-op outside any scope.
     """
     if not scope_active() or frame is None:
         return
     with accounting(f"coercion[{database}.{table}:{concept}]"):
         import pandas as pd
 
+        count_columns = [values_column, non_numeric_column]
+        if instrument_column is not None and instrument_column in frame.columns:
+            count_columns.append(instrument_column)
+        instrument = None
         if len(frame) == 0 or id_column not in frame.columns:
             values = non_numeric = pd.Series([], dtype="int64")
         else:
             per_stay = (
-                frame[[id_column, values_column, non_numeric_column]]
+                frame[[id_column, *count_columns]]
                 .assign(**{
-                    values_column: pd.to_numeric(frame[values_column], errors="coerce").fillna(0),
-                    non_numeric_column: pd.to_numeric(frame[non_numeric_column], errors="coerce").fillna(0),
+                    column: pd.to_numeric(frame[column], errors="coerce").fillna(0)
+                    for column in count_columns
                 })
-                .groupby(id_column, sort=False, dropna=False)[[values_column, non_numeric_column]]
+                .groupby(id_column, sort=False, dropna=False)[count_columns]
                 .sum()
             )
             values = per_stay[values_column].astype("int64")
             non_numeric = per_stay[non_numeric_column].astype("int64")
+            if len(count_columns) == 3:
+                instrument = per_stay[count_columns[2]].astype("int64")
         ledger = None
         if identified and len(frame) and id_column in frame.columns:
             ledger = {
@@ -212,6 +226,10 @@ def record_coercion_counts(
                     for stay, count in non_numeric[non_numeric > 0].items()
                 },
             }
+            if instrument is not None and bool((instrument > 0).any()):
+                ledger["instr"] = {
+                    str(stay): int(count) for stay, count in instrument[instrument > 0].items()
+                }
         with _LOCK:
             if not _SCOPES:
                 return
@@ -224,17 +242,25 @@ def record_coercion_counts(
                 "non_numeric_values": int(non_numeric.sum()),
                 "stays_with_non_numeric": int((non_numeric > 0).sum()),
                 "stays_with_values": int((values > 0).sum()),
+                **(
+                    {INSTRUMENT_FIELD: int(instrument.sum())}
+                    if instrument is not None and int(instrument.sum()) > 0 else {}
+                ),
                 _LEDGER: ledger,
             })
 
 
 def record_series_coercion(
-    *, database: str, concept: str, table: str, stays: Optional[Iterable], original, converted, ids
+    *, database: str, concept: str, table: str, stays: Optional[Iterable], original, converted, ids,
+    non_result=None,
 ) -> int:
     """Count the non-null ``original`` cells that are null in ``converted``; record them.
 
-    ``ids`` gives each cell's stay (aligned with ``original``). Returns the
-    number of non-numeric values (also outside any scope).
+    ``ids`` gives each cell's stay (aligned with ``original``). ``non_result``
+    (optional, aligned booleans) marks rows whose value names an instrument:
+    they are recorded as ``non_result_instrument_rows``, never as losses (the
+    caller keeps them non-null in ``converted``). Returns the number of
+    non-numeric values (also outside any scope).
     """
     import pandas as pd
 
@@ -248,9 +274,14 @@ def record_series_coercion(
                 "stay": pd.Series(ids).to_numpy() if ids is not None else 0,
                 "values": present.astype("int64"),
                 "non_numeric": lost.astype("int64"),
+                **(
+                    {"instrument": pd.Series(non_result).to_numpy().astype(bool).astype("int64")}
+                    if non_result is not None else {}
+                ),
             }),
             id_column="stay", values_column="values", non_numeric_column="non_numeric",
             identified=ids is not None,
+            instrument_column="instrument" if non_result is not None else None,
         )
     return count
 
@@ -360,6 +391,8 @@ def _bounds_totals(records: Iterable[Mapping]) -> dict:
                 counts[_LEDGER] = _merge_ledgers(counts.get(_LEDGER), ledger)
         for field in _BOUNDS_FIELDS if kind == "bounds" else _COERCION_FIELDS:
             counts[field] = counts.get(field, 0) + int(entry.get(field, 0))
+        if INSTRUMENT_FIELD in entry:
+            counts[INSTRUMENT_FIELD] = counts.get(INSTRUMENT_FIELD, 0) + int(entry[INSTRUMENT_FIELD])
     for tables in totals.values():
         for counts in tables.values():
             counts.pop("_no_ledger", None)
@@ -374,13 +407,19 @@ def _merge_ledgers(*ledgers: Optional[Mapping]) -> dict:
     """
     seen: set = set()
     bad: dict = {}
+    instr: dict = {}
     for ledger in ledgers:
         if not ledger:
             continue
         seen.update(ledger.get("seen") or ())
         for stay, count in (ledger.get("bad") or {}).items():
             bad[stay] = max(int(count), bad.get(stay, 0))
-    return {"seen": sorted(seen), "bad": {stay: bad[stay] for stay in sorted(bad)}}
+        for stay, count in (ledger.get("instr") or {}).items():
+            instr[stay] = max(int(count), instr.get(stay, 0))
+    merged = {"seen": sorted(seen), "bad": {stay: bad[stay] for stay in sorted(bad)}}
+    if instr:
+        merged["instr"] = {stay: instr[stay] for stay in sorted(instr)}
+    return merged
 
 
 def merge_bounds_drops(*parts: Optional[Mapping]) -> dict:
@@ -404,7 +443,7 @@ def _merge_bounds_drops(*parts: Optional[Mapping]) -> dict:
                         target.pop(_LEDGER, None)
                     else:
                         target[_LEDGER] = _merge_ledgers(target.get(_LEDGER), counts[_LEDGER])
-                for field in _FIELDS:
+                for field in (*_FIELDS, INSTRUMENT_FIELD):
                     if field in _BOUNDS_FIELDS or field in counts:
                         target[field] = target.get(field, 0) + count_value(counts.get(field, 0))
     return {
@@ -419,7 +458,9 @@ def public_bounds(totals: Optional[Mapping]) -> dict:
     for concept, tables in sorted((totals or {}).items()):
         for table, counts in sorted((tables or {}).items()):
             out.setdefault(concept, {})[table] = {
-                field: (small_count(value) if field in _COERCION_FIELDS else value)
+                field: (
+                    small_count(value) if field in (*_COERCION_FIELDS, INSTRUMENT_FIELD) else value
+                )
                 for field, value in (counts or {}).items()
                 if field != _LEDGER
             }
@@ -456,15 +497,22 @@ def coercion_union(drops_by_module: Optional[Mapping]) -> dict:
                 "stays_with_values": len(set(ledger["seen"]) | set(ledger["bad"])),
                 "union": "exact",
             }
+            if ledger.get("instr"):
+                row[INSTRUMENT_FIELD] = sum(ledger["instr"].values())
         elif len(entries) == 1:
             counts = entries[0][1]
             row = {field: count_value(counts.get(field, 0)) for field in _COERCION_FIELDS}
+            if count_value(counts.get(INSTRUMENT_FIELD, 0)):
+                row[INSTRUMENT_FIELD] = count_value(counts[INSTRUMENT_FIELD])
             row["union"] = "single_module"
         else:
             row = {
                 field: max(count_value(counts.get(field, 0)) for _m, counts in entries)
                 for field in _COERCION_FIELDS
             }
+            instrument = max(count_value(counts.get(INSTRUMENT_FIELD, 0)) for _m, counts in entries)
+            if instrument:
+                row[INSTRUMENT_FIELD] = instrument
             row["union"] = AUDIT_UNKNOWN
         row["modules"] = modules
         out.setdefault(concept, {})[table] = row

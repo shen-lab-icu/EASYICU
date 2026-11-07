@@ -327,3 +327,126 @@ def test_the_web_export_runs_the_gate_before_its_root_manifest(tmp_path, monkeyp
     with pytest.raises(ConceptValueKindUndeclared, match="'x_undeclared'"):
         runner(Job())
     assert not (paths.export / "_manifest.json").exists()
+
+
+# -- Boundary net: parsed column, deliberate missing, maps, instruments ------
+
+
+def _eicu_source(concept, **match):
+    from easyicu.resources import load_dictionary
+
+    definition = load_dictionary(include_sofa2=True, source_name="eicu").get(concept)
+    [source] = [
+        s for s in definition.sources["eicu"]
+        if all(getattr(s, key) == value for key, value in match.items())
+    ]
+    return definition, source
+
+
+def _through_callback(concept, definition, source, frame):
+    from easyicu.concept.callback_apply import _apply_callback
+
+    resolver = SimpleNamespace(dictionary={concept: definition})
+    data_source = SimpleNamespace(config=SimpleNamespace(name="eicu"))
+    with collect_bounds_drops() as drops:
+        out = _apply_callback(frame, source, concept, resolver=resolver, data_source=data_source)
+    return out, drops
+
+
+def _losses(drops, concept):
+    return sum(
+        int(counts.get("non_numeric_values", 0)) for counts in (drops.get(concept) or {}).values()
+    )
+
+
+def _instrument_rows(drops, concept):
+    return sum(
+        int(counts.get("non_result_instrument_rows", 0)) for counts in (drops.get(concept) or {}).values()
+    )
+
+
+_DRUG_NAMES = {
+    "amiodarone": "AMIODARONE 150 MG/3ML IV",
+    "fentanyl": "fentanyl citrate",
+    "morphine": "morphine sulfate",
+    "other_vaso": "vasopressin 20 units/mL",
+}
+
+
+def _orders(name, doses, routes):
+    return pd.DataFrame({
+        "patientunitstayid": list(range(1, len(doses) + 1)),
+        "drugstartoffset": 60,
+        "drugname": name,
+        "dosage": pd.Series(doses, dtype=object),
+        "routeadmin": routes,
+        "drugordercancelled": "No",
+    })
+
+
+@pytest.mark.parametrize("concept", sorted(_DRUG_NAMES))
+def test_a_drugname_valued_source_counts_no_drug_names_and_no_unknown_routes(concept):
+    definition, source = _eicu_source(concept, table="medication", value_var="drugname")
+    frame = _orders(_DRUG_NAMES[concept], ["150 mg", "50 mcg", "2 mg", "20 units"], ["IV", "IV", "", ""])
+    out, drops = _through_callback(concept, definition, source, frame)
+    assert out["drugname"].isna().sum() == 2  # the unknown routes, on purpose
+    assert _losses(drops, concept) == 0
+
+
+def test_the_net_judges_the_dose_the_callback_parses():
+    definition, source = _eicu_source("fentanyl", table="medication", value_var="drugname")
+    frame = _orders(_DRUG_NAMES["fentanyl"], ["50 mcg", "see MAR", "see MAR"], ["IV", "IV", ""])
+    _out, drops = _through_callback("fentanyl", definition, source, frame)
+    # One IV order whose dose text has no number; the unknown route is not a loss.
+    assert _losses(drops, "fentanyl") == 1
+
+
+def _chart(label_name_values):
+    return pd.DataFrame({
+        "patientunitstayid": list(range(1, len(label_name_values) + 1)),
+        "nursingchartoffset": 60,
+        "nursingchartcelltypevallabel": "Delirium Scale/Score",
+        "nursingchartcelltypevalname": [name for name, _value in label_name_values],
+        "nursingchartvalue": pd.Series([value for _name, value in label_name_values], dtype=object),
+    })
+
+
+def test_instrument_name_rows_are_not_losses_and_unmapped_numbers_are():
+    definition, source = _eicu_source(
+        "delirium_positive", table="nursecharting", regex="^Delirium Scale/Score$"
+    )
+    frame = _chart([
+        ("Delirium Scale", "CAM-ICU"), ("Delirium Scale", "ICDSC"),
+        ("Delirium Score", "Yes"), ("Delirium Score", "No"),
+        ("Delirium Score", "3"), ("Delirium Score", "0"),
+    ])
+    _out, drops = _through_callback("delirium_positive", definition, source, frame)
+    assert _instrument_rows(drops, "delirium_positive") == 2
+    assert _losses(drops, "delirium_positive") == 2  # the ICDSC scores 3 and 0
+    fields = extraction.source_value_publication(
+        {"neurological": {"source_bounds": drops}}, ["neurological"],
+        database="eicu", dictionary={"delirium_positive": definition},
+    )
+    [instrument] = fields["qc_warnings"]["non_result_instrument_rows"]
+    assert instrument["concept"] == "delirium_positive"
+    assert instrument["non_result_instrument_rows"] == "<10"
+    assert "_stays" not in json.dumps(fields)
+
+
+def test_an_unmapped_number_on_any_mapped_categorical_concept_is_a_loss():
+    from easyicu.concept.schema import ConceptSource
+
+    definition = _definition("alarm_on", class_name="lgl_cncpt")
+    source = ConceptSource(
+        table="alarms", value_var="state",
+        callback="apply_map(c(`On` = TRUE, `Off` = FALSE), var = 'state')",
+    )
+    frame = pd.DataFrame({
+        "patientunitstayid": [1, 2, 3, 4],
+        "offset": 60,
+        "state": pd.Series(["On", "Off", "7", "unclear"], dtype=object),
+    })
+    out, drops = _through_callback("alarm_on", definition, source, frame)
+    assert out["state"].isna().sum() == 2
+    assert _losses(drops, "alarm_on") == 2  # '7' parses as a number and is still lost
+    assert _instrument_rows(drops, "alarm_on") == 0

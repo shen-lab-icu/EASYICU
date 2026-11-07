@@ -79,6 +79,13 @@ def iv_exposure(frame, column):
     return out
 
 
+def route_masked(out):
+    """Rows :func:`iv_exposure` leaves missing on purpose: the route is unknown."""
+    if "eicu_route_status" not in out:
+        return pd.Series(False, index=out.index)
+    return out["eicu_route_status"].eq("unknown")
+
+
 def positive_infusion(frame, column):
     """Positive charted rate = exposure; zero = stop; unparseable = unknown."""
     out = frame.copy()
