@@ -47,6 +47,14 @@ control did register the unit-less call.
 - SICdb, AUMCdb and eICU pass hourly or point evidence: an ICUTable with no
   duration column.
 
+A numeric duration is converted with its declared unit directly
+(`pd.to_timedelta(values, unit="s"|"min"|"h"|"D")`), not through a float hours
+factor. The hours factor is inexact for seconds and minutes: on `4f3e36191`,
+2,418 of 3,600 integer seconds (0..3599) and 2,880 of 4,320 integer minutes
+came out nanoseconds off direct conversion, and 800 of the 3,600 seconds cases
+changed half-open occupancy (review D27-PRECISION). An unknown declared unit
+raises `DurationUnitError`. Hours and days are unchanged.
+
 ## 2026-11-06 — eICU GCS sedation windows and the published `ett_gcs` grid [lead-r13, `432ddaf3c`, `80b1cb964`, `e70102c94`, `f9b45386c`, `b7509c080`, `e1d73cd7b`, `2c0579bd5`, `942bfcbfb`, `3e23c65d4`, `06f30f7b0`]
 
 **Rule.** GCS marks an hour as sedated (and imputes 15, ricu `sed_impute`)

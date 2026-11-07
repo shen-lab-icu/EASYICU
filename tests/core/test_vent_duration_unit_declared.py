@@ -17,8 +17,10 @@ from easyicu.table import WinTbl
 from easyicu.table.duration import (
     DurationUnitError,
     DurationUnitUndeclaredError,
+    UNIT_DAYS,
     UNIT_HOURS,
     UNIT_MINUTES,
+    UNIT_SECONDS,
     duration_series_to_timedelta,
     set_dur_var_unit,
 )
@@ -99,3 +101,34 @@ def test_duration_helper_never_reads_numbers_as_nanoseconds():
         duration_series_to_timedelta(values, None, concept="probe")
     with pytest.raises(DurationUnitError):
         duration_series_to_timedelta(values, "timedelta", concept="probe")
+
+
+# --- D27-PRECISION: numeric durations convert with their own unit
+
+
+@pytest.mark.parametrize(
+    ("unit", "pandas_unit", "values"),
+    [
+        (UNIT_SECONDS, "s", range(3600)),
+        (UNIT_MINUTES, "min", range(0, 24 * 60 * 3)),
+        (UNIT_DAYS, "D", range(0, 400)),
+    ],
+)
+def test_integer_durations_equal_direct_unit_conversion(unit, pandas_unit, values):
+    numbers = pd.Series(list(values), dtype="int64")
+    converted = duration_series_to_timedelta(numbers, unit, concept="probe")
+    expected = pd.to_timedelta(numbers, unit=pandas_unit)
+    mismatched = int((converted != expected).sum())
+    assert mismatched == 0, f"{mismatched} of {len(numbers)} {unit} values differ"
+
+
+def test_hours_are_unchanged():
+    numbers = pd.Series([0, 1, 2.5, 3, 24, 1e-3, 0.1], dtype="float64")
+    converted = duration_series_to_timedelta(numbers, UNIT_HOURS, concept="probe")
+    assert converted.equals(pd.to_timedelta(numbers, unit="h"))
+    assert converted.equals(pd.to_timedelta(numbers * 1.0, unit="h"))
+
+
+def test_an_unknown_unit_is_a_typed_error():
+    with pytest.raises(DurationUnitError, match="unknown unit"):
+        duration_series_to_timedelta(pd.Series([1.0]), "fortnights", concept="probe")
