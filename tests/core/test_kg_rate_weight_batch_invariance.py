@@ -544,3 +544,74 @@ def test_a_bound_loader_never_selects_again():
     loader = ConceptLoader("miiv", data_path=None, low_memory=False)
     with pytest.raises(StorageIntegrityError, match="legacy_loader_source_reselect"):
         loader._select_source("miiv", "/elsewhere")
+
+
+# --- delta24w: the baseline alignment, only the ID table's reader changed
+
+
+def _aumc_admissions_root(root):
+    # Synthetic: one admission per patient, so patientid maps uniquely to a start.
+    root.mkdir(parents=True, exist_ok=True)
+    pd.DataFrame({
+        "admissionid": [11, 12], "patientid": [7, 8],
+        "admittedat": [pd.Timestamp("2100-01-01 00:00"), pd.Timestamp("2100-02-01 00:00")],
+    }).to_parquet(root / "admissions.parquet")
+    from easyicu.datasource import ICUDataSource
+    from easyicu.io.data_tools import load_src_cfg
+
+    return ICUDataSource(load_src_cfg("aumc"), base_path=root)
+
+
+def test_an_alternate_id_with_a_unique_start_is_converted(tmp_path, monkeypatch):
+    from easyicu.load_concepts import ConceptLoader
+
+    _no_env_root(monkeypatch)
+    loader = ConceptLoader(_aumc_admissions_root(tmp_path), low_memory=False)
+    frame = pd.DataFrame({"patientid": [7], "measuredat": [pd.Timestamp("2100-01-01 03:00")]})
+    out = loader._convert_time_column_to_hours(frame, "measuredat", "patientid")
+    assert out["measuredat"].tolist() == [3.0]
+
+
+@pytest.mark.parametrize("order", [["admissionid", "patientid", "time"], ["patientid", "admissionid", "time"]])
+def test_both_id_column_orders_give_the_same_hours(tmp_path, monkeypatch, order):
+    from easyicu.load_concepts import ConceptLoader
+
+    _no_env_root(monkeypatch)
+    loader = ConceptLoader(_aumc_admissions_root(tmp_path), low_memory=False)
+    frame = pd.DataFrame({
+        "admissionid": [11], "patientid": [7], "time": [pd.Timestamp("2100-01-01 03:00")],
+    })[order]
+    out = loader._convert_time_to_hours(frame, "icustay")
+    assert out["charttime"].tolist() == [3.0]  # the helper names the axis charttime
+
+
+def test_an_empty_id_configs_shape_uses_the_default_id_table(tmp_path, monkeypatch):
+    from easyicu.io.data_tools import load_src_cfg
+    from easyicu.load_concepts import ConceptLoader
+
+    monkeypatch.delenv("EASYICU_MIIV_PATH", raising=False)
+    monkeypatch.delenv("EASYICU_DATA_PATH", raising=False)
+    config = load_src_cfg("miiv").model_copy(deep=True, update={"id_configs": {}})
+    _miiv_stays(tmp_path, "2100-01-01 00:00")
+    loader = ConceptLoader(_miiv_source(tmp_path, config), low_memory=False)
+    out = loader._convert_time_column_to_hours(_events(), "charttime", "stay_id")
+    assert out["charttime"].tolist() == [6.0]
+
+
+def test_a_relative_clock_exit_never_returns_an_absolute_datetime(tmp_path, monkeypatch):
+    from easyicu.io.ts_utils import TimeAxisUnitError
+    from easyicu.load_concepts import ConceptLoader
+
+    monkeypatch.delenv("EASYICU_MIIV_PATH", raising=False)
+    monkeypatch.delenv("EASYICU_DATA_PATH", raising=False)
+    _miiv_stays(tmp_path, "2100-01-01 00:00")
+    loader = ConceptLoader(_miiv_source(tmp_path), low_memory=False)
+    # No ID the stay table carries: the baseline returned the datetime as is.
+    frame = pd.DataFrame({"device_id": [1], "charttime": [pd.Timestamp("2100-01-01 06:00")]})
+    with pytest.raises(TimeAxisUnitError, match="legacy_time_axis_unaligned"):
+        loader._relative_hours_column(frame, "charttime", "device_id")
+    # The patient table has no start time: the baseline returned the datetime.
+    pd.DataFrame({"subject_id": [5], "anchor_year": [2100]}).to_parquet(tmp_path / "patients.parquet")
+    by_patient = pd.DataFrame({"subject_id": [5], "time": [pd.Timestamp("2100-01-01 06:00")]})
+    with pytest.raises(TimeAxisUnitError, match="legacy_time_axis_unaligned"):
+        loader._relative_hours(by_patient, "patient")

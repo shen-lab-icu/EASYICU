@@ -15,7 +15,7 @@ from .config import DataSourceConfig, TableConfig
 from .datasource import ICUDataSource, MissingTableSourceError
 from .storage_layout import TableScanError, verify_flat_scan
 from .table import read_table_from
-from .io.ts_utils import change_interval
+from .io.ts_utils import TimeAxisUnitError, change_interval
 
 # DataSource 别名用于向后兼容
 DataSource = ICUDataSource
@@ -222,8 +222,9 @@ class ConceptLoader:
           then ``data_path``, ``EASYICU_<SRC>_PATH``, ``EASYICU_DATA_PATH``).
 
         A loader bound to an ``ICUDataSource`` holds its lock and cannot be
-        pickled; worker processes started by fork share it, spawn is not
-        certified.
+        pickled.  A process started by fork inherits a copy of the bound
+        source (its caches and lock are not shared across processes); spawn
+        is not certified.
         """
         if getattr(self, '_bound', None) is not None:
             raise TableScanError(
@@ -319,7 +320,7 @@ class ConceptLoader:
         )
 
     def _read_declared_table(
-        self, table_name: str, columns: Optional[Iterable[str]],
+        self, table_name: str, columns: Optional[Iterable[str]], *, full: bool = False,
     ) -> Optional[pd.DataFrame]:
         """Rows of a declared table, or ``None`` when the table is undeclared.
 
@@ -330,7 +331,7 @@ class ConceptLoader:
         if not self._declared_table_source(table_name):
             return None
         try:
-            return self._safe_load_table(table_name, columns)
+            return self._safe_load_table(table_name, columns, full=full)
         except MissingTableSourceError as exc:
             raise TableScanError(
                 "declared_table_source_missing", table_name,
@@ -412,13 +413,22 @@ class ConceptLoader:
         self,
         table_name: str,
         columns: Optional[Iterable[str]],
+        *,
+        full: bool = False,
     ) -> pd.DataFrame:
         """Load a projection, with a tightly bounded compatibility fallback.
 
         Only an explicit missing-column projection error may retry without a
         projection. I/O, corruption, permission and memory failures propagate
         unchanged. Low-memory mode never retries with a full-table read.
+        ``full``: the whole table from the bound source, neither taken from
+        nor stored in the cache (an ID table, read as ``load_id_tbl`` did).
         """
+        if full:
+            source, resolved_from, resolved_base = self._bound_source()
+            return read_table_from(
+                source, self._src_name, table_name, resolved_from, resolved_base,
+            )
         # A cached narrow projection is reusable only when it contains every
         # column requested by the next concept.  Reusing by table name alone
         # made results depend on concept order when callbacks needed extra
@@ -749,7 +759,7 @@ class ConceptLoader:
         if not merge_data:
             # 转换时间列为相对小时数
             for name in results:
-                results[name] = self._convert_time_to_hours(results[name], id_type)
+                results[name] = self._relative_hours(results[name], id_type)
             return results
         
         if len(results) == 0:
@@ -757,11 +767,11 @@ class ConceptLoader:
         
         if len(results) == 1:
             single_result = list(results.values())[0]
-            return self._convert_time_to_hours(single_result, id_type)
+            return self._relative_hours(single_result, id_type)
         
         # 合并多个概念为宽格式
         merged = self._merge_concepts(results, id_type)
-        return self._convert_time_to_hours(merged, id_type)
+        return self._relative_hours(merged, id_type)
     
     def _load_one_concept(
         self,
@@ -1090,7 +1100,7 @@ class ConceptLoader:
                 and time_col in df.columns
                 and not mimic_duration_callback
             ):
-                df = self._convert_time_column_to_hours(df, time_col, id_col)
+                df = self._relative_hours_column(df, time_col, id_col)
             
             # 调用callback
             df = apply_callback(
@@ -1214,34 +1224,52 @@ class ConceptLoader:
                 f"per-kg rate could not be loaded ({type(exc).__name__}: {exc})"
             ) from exc
 
-    def _id_start_times(
-        self, id_type: str, id_col: Optional[str], candidates: Sequence[str],
-    ) -> tuple:
-        """``(frame, start_column)`` for ``id_type``, or ``(None, None)``.
+    def _id_table(self, id_type: str) -> pd.DataFrame:
+        """The ``id_type`` ID table, read in full from the bound source.
 
-        Read from the bound source, with that source's own ``id_configs``
-        (its ID table, ID column and start column), through the declared
-        check and the cache.  ``(None, None)`` when the start column is not
-        a time this helper converts against (``candidates``), or the frame
-        has no ID column: then no conversion happens, as before.
+        The table is the bound source's own (``easyicu.table.id_table_name``
+        on its configuration, the rule ``load_id_tbl`` uses), read through
+        the declared check and the bound source.  The helpers that align a
+        datetime column to ICU hours used ``load_id_tbl`` by name, which
+        re-selected a source and could take start times from another root.
         """
         from .table import id_table_name
 
-        config = self._table_source().config
-        id_cfg = (getattr(config, 'id_configs', None) or {}).get(id_type)
-        start = getattr(id_cfg, 'start', None)
-        if not id_col or not start or start not in candidates:
-            return None, None
-        if id_col != getattr(id_cfg, 'id', None):
-            return None, None
-        table = id_table_name(config, id_type)
-        frame = self._read_declared_table(table, [id_col, start])
+        table = id_table_name(self._table_source().config, id_type)
+        frame = self._read_declared_table(table, None, full=True)
         if frame is None:
             raise TableScanError(
                 "legacy_id_table_undeclared", table,
                 f"the {id_type} ID table is not declared by the bound source",
             )
-        return frame, start
+        return frame
+
+    @staticmethod
+    def _require_relative_clock(df: pd.DataFrame, columns) -> pd.DataFrame:
+        """A relative-hour exit never returns an absolute datetime column."""
+        if df is None or len(df) == 0:
+            return df
+        for col in columns:
+            if col in df.columns and not pd.api.types.is_numeric_dtype(df[col]):
+                raise TimeAxisUnitError(
+                    "legacy_time_axis_unaligned",
+                    f"{col} could not be placed on the ICU-hour axis (no usable ID "
+                    "or start time in the bound source's ID table); it would have "
+                    "been returned as an absolute datetime",
+                )
+        return df
+
+    def _relative_hours_column(self, df: pd.DataFrame, time_col: str, id_col: str) -> pd.DataFrame:
+        """:meth:`_convert_time_column_to_hours`, never leaving a datetime."""
+        return self._require_relative_clock(
+            self._convert_time_column_to_hours(df, time_col, id_col), [time_col]
+        )
+
+    def _relative_hours(self, df: pd.DataFrame, id_type: str) -> pd.DataFrame:
+        """:meth:`_convert_time_to_hours`, never leaving a datetime."""
+        return self._require_relative_clock(
+            self._convert_time_to_hours(df, id_type), ['time', 'charttime']
+        )
 
     def _convert_time_column_to_hours(
         self,
@@ -1262,11 +1290,19 @@ class ConceptLoader:
         df = df.copy()
         df[time_col] = pd.to_datetime(df[time_col], errors='coerce')
             
-        # ICU start times from the bound source and its own id_configs.
-        intime_candidates = ['intime', 'admissiontime', 'hospitaladmittime', 'admittedat']
-        icu_times, intime_col = self._id_start_times('icustay', id_col, intime_candidates)
+        # 获取ICU入院时间
+        icu_times = self._id_table('icustay')
             
-        if icu_times is not None and not icu_times.empty and intime_col:
+        # 🔧 FIX: 支持不同数据库的入院时间列名
+        # MIMIC-IV: intime, HiRID: admissiontime, eICU: hospitaladmittime, AUMC: admittedat
+        intime_candidates = ['intime', 'admissiontime', 'hospitaladmittime', 'admittedat']
+        intime_col = None
+        for cand in intime_candidates:
+            if cand in icu_times.columns:
+                intime_col = cand
+                break
+            
+        if not icu_times.empty and intime_col:
             if id_col and id_col in df.columns and id_col in icu_times.columns:
                 df = df.merge(icu_times[[id_col, intime_col]], on=id_col, how='left')
                 df[intime_col] = pd.to_datetime(df[intime_col], errors='coerce')
@@ -1619,15 +1655,23 @@ class ConceptLoader:
         
         # 1. 转换时间列为相对小时数
         if time_col_name and not pd.api.types.is_numeric_dtype(df[time_col_name]):
-            # Start times from the bound source and its own id_configs.
-            intime_candidates = ['intime', 'admittedat', 'admissiontime',
-                                 'hospitaladmittime', 'ICUOffset']
-            id_col = self._get_id_column(df, id_type)
-            icu_times, intime_col = self._id_start_times(id_type, id_col, intime_candidates)
+            # 加载ICU入院时间
+            icu_times = self._id_table(id_type)
             
-            if icu_times is not None and not icu_times.empty:
+            if not icu_times.empty:
+                # 检测 intime 列名（不同数据库使用不同列名）
+                intime_candidates = ['intime', 'admittedat', 'admissiontime', 
+                                     'hospitaladmittime', 'ICUOffset']
+                intime_col = None
+                for cand in intime_candidates:
+                    if cand in icu_times.columns:
+                        intime_col = cand
+                        break
+                
                 if intime_col is not None:
-                    if id_col and id_col in df.columns and id_col in icu_times.columns:
+                    # 确定ID列名
+                    id_col = self._get_id_column(df, id_type)
+                    if id_col and id_col in df.columns:
                         # 合并入院时间
                         df = df.merge(icu_times[[id_col, intime_col]], on=id_col, how='left')
                         

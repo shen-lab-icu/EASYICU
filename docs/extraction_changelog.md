@@ -48,15 +48,25 @@ deferred to it are compared against `2786ea872` there.
     check, the cache, every read and the ICU start times used to place
     datetime columns on the ICU-hour axis use that one source object. Each
     cache entry records the source that produced it.
-  - ICU start times come from the bound source's own `id_configs`: its ID
-    table, ID column and start column. They used to be re-loaded by database
-    name with the packaged configuration. With a source passed to the
-    constructor, that could take start times from a different root (a
-    same-name attached source gave wrong hours) or find none at all, which
-    left the column unconverted. A selection by name after binding raises
-    `legacy_loader_source_reselect`, and
-    `tests/governance/test_legacy_loader_fail_closed.py` rejects any other
-    resolution site in the module.
+  - The ICU start times used to place a datetime column on the ICU-hour axis
+    are read from the bound source. The ID table is the bound configuration's
+    own (`easyicu.table.id_table_name`, the rule `load_id_tbl` uses), read in
+    full. The alignment itself (which start column, which ID column, the join)
+    is unchanged. Before, the table was re-loaded by database name with the
+    packaged configuration. With a source passed to the constructor, that
+    could take start times from a different root (a same-name attached source
+    gave wrong hours) or find none at all, which left the column unconverted.
+  - Disclosed behaviour change: when no usable ID or start time can align a
+    datetime column, the legacy loader now raises `TimeAxisUnitError`
+    `legacy_time_axis_unaligned`. Before, it returned the absolute datetime
+    from a relative-hour exit. Example: a patient-level table with no start
+    column.
+  - A selection by name after binding raises `legacy_loader_source_reselect`.
+    `tests/governance/test_legacy_loader_fail_closed.py` statically rejects
+    direct calls and imports of the source resolvers outside the listed
+    sites. That includes module aliases, qualified names, string `getattr`
+    and dynamic imports. It checks the module's text; it does not prove that
+    no runtime path can reach a resolver some other way.
   - Root selection:
     - An `ICUDataSource` passed to the constructor uses its own root and
       registrations. It is never re-selected by name.
@@ -69,8 +79,9 @@ deferred to it are compared against `2786ea872` there.
       first, then `data_path`, then `EASYICU_<SRC>_PATH`, then
       `EASYICU_DATA_PATH`.
   - A loader bound to an `ICUDataSource` holds that source's lock and cannot
-    be pickled. Worker processes started by fork share it; spawn is not
-    certified.
+    be pickled. A process started by fork inherits a copy of the bound
+    source; its caches and lock are not shared state synchronised across
+    processes. Spawn is not certified.
   - An empty read comes only from a table the bound source does not declare.
     That is decided before the read.
   - A declared table without a file raises `declared_table_source_missing`, a
