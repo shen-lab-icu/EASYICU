@@ -125,14 +125,15 @@ def make_pre_integrity_web_export(export: Path) -> None:
 
     That writer labelled exports ``easyicu_native_export_v2`` with data_path,
     cohort_contract and column_metadata, but no ``export_kind``, no
-    ``contract_revision`` and no member digests: readers can only call it
-    unrecorded (non-formal) or refuse it (formal).
+    ``contract_revision``, no time-window/provenance fields and no member
+    digests: readers can only call it unrecorded (non-formal) or refuse it (formal).
     """
 
     strip_digests(export)
     path = export / "_manifest.json"
     manifest = json.loads(path.read_text(encoding="utf-8"))
-    for key in ("member_integrity", "export_kind", "contract_revision"):
+    for key in ("member_integrity", "export_kind", "contract_revision",
+                "time_window_authority", "data_provenance"):
         manifest.pop(key, None)
     manifest.setdefault("data_path", "/synthetic/raw")
     manifest.setdefault("cohort_contract", {"preset": "all_icu"})

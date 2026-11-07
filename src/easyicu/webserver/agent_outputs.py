@@ -270,6 +270,7 @@ def _load_context(export_path: str, source: Dict[str, Any]) -> Dict[str, Any]:
         folder_unpublished_reason,
         load_published_manifest,
         member_unreadable,
+        require_listed_members_present,
         verify_member_integrity,
     )
 
@@ -280,6 +281,7 @@ def _load_context(export_path: str, source: Dict[str, Any]) -> Dict[str, Any]:
         )
     files = [f for f in source.get("files", []) if isinstance(f, dict)]
     manifest = load_published_manifest(root)
+    require_listed_members_present(root, manifest)
     entries: List[Tuple[str, Path, Dict[str, Any]]] = []
     member_integrity: Dict[str, str] = {}
     for meta in files:

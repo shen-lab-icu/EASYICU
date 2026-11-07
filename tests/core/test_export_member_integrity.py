@@ -591,7 +591,8 @@ def _legacy_inventories(export: Path, *, conflict: bool) -> list[str]:
     path = export / "_manifest.json"
     manifest = json.loads(path.read_text(encoding="utf-8"))
     entries = manifest.pop("files")
-    for native_only in ("schema_version", "member_integrity", "column_metadata"):
+    for native_only in ("schema_version", "member_integrity", "column_metadata",
+                        "export_kind", "contract_revision"):
         manifest.pop(native_only, None)
     manifest["files"] = (
         [dict(e) for e in entries] if conflict else [e["file"] for e in entries])
@@ -658,12 +659,18 @@ def test_an_unrecorded_zip_states_it_and_formal_scope_refuses_it(unrecorded, tmp
     bundle = export_download.prepare_registered_export_bundle(
         "src_0123456789ab", registry=_registry(unrecorded), temp_dir=tmp_path / "zips")
     try:
-        assert set(bundle.member_integrity.values()) == {"unrecorded"}
+        # Data members remain unrecorded. The receipt now also covers sidecars,
+        # whose independently recorded digests can still verify.
+        data_members = {entry["file"] for entry in _manifest(unrecorded)["files"]}
+        assert {name: bundle.member_integrity[name] for name in data_members} == {
+            name: "unrecorded" for name in data_members}
         with zipfile.ZipFile(bundle.path) as archive:
             receipt = json.loads(archive.read(export_download.INTEGRITY_RECEIPT_NAME))
+            assert set(receipt["members"]) == set(archive.namelist()) - {
+                "_manifest.json", export_download.INTEGRITY_RECEIPT_NAME}
         assert receipt["status"] == "unrecorded"
         assert receipt["label"] == UNRECORDED_LABEL
-        assert set(receipt["members"].values()) == {"unrecorded"}
+        assert receipt["members"] == dict(bundle.member_integrity)
     finally:
         bundle.path.unlink(missing_ok=True)
     with publication.formal_integrity_scope(propagate_to_children=False):

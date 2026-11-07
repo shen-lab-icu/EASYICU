@@ -4042,8 +4042,7 @@ def _manifest_file_entries(manifest: Dict[str, Any]) -> List[Dict[str, Any]]:
         return [dict(row) for row in files if isinstance(row, dict) and row.get("file")]
 
     # Older full exports wrote ``easyicu_export_manifest.json`` with a short
-    # ``modules`` list. Treat those rows as hints, but still scan the folder
-    # because the manifest may be incomplete.
+    # ``modules`` list. Only listed members belong to that published export.
     modules = manifest.get("modules")
     if not isinstance(modules, list):
         return []

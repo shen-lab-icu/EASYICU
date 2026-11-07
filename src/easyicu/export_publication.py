@@ -327,9 +327,10 @@ def require_published_native_export(export_dir: Union[str, Path]) -> Path:
 #   deleting the digest fields refuses (``member_digest_not_recorded``), as
 #   does any manifest carrying ``export_kind`` or ``contract_revision``.
 #   Limit: deleting ``export_kind``/``contract_revision``/``member_integrity``
-#   and the digests from a manifest that has data_path, cohort_contract and
-#   column_metadata forges the pre-6064eaf6a signature: visible as unrecorded
-#   in the UI, refused by every formal path, never certified.
+#   and the digests, time_window_authority and data_provenance from a manifest
+#   that has data_path, cohort_contract and column_metadata forges the
+#   pre-6064eaf6a signature: visible as unrecorded in the UI, refused by every
+#   formal path, never certified.
 
 INTEGRITY_FAILED_CODE = "export_member_integrity_failed"
 UNREADABLE_CODE = "export_member_unreadable"
@@ -402,7 +403,10 @@ def member_unreadable(path: Union[str, Path], exc: BaseException) -> ExportMembe
 LEGACY_WEB_PRE_KIND = "legacy_web_pre_6064eaf6a"
 LEGACY_NO_SCHEMA = "legacy_no_schema_version"
 _PRE_KIND_WEB_PRESENT = ("data_path", "cohort_contract", "column_metadata")
-_PRE_KIND_WEB_ABSENT = ("export_kind", "contract_revision", MEMBER_INTEGRITY_KEY)
+_PRE_KIND_WEB_ABSENT = (
+    "export_kind", "contract_revision", MEMBER_INTEGRITY_KEY,
+    "time_window_authority", "data_provenance",
+)
 
 
 def _is_pre_kind_web_export(manifest: dict) -> bool:
@@ -421,10 +425,14 @@ def legacy_manifest_format(manifest: object) -> str | None:
 
     if not isinstance(manifest, dict) or MEMBER_INTEGRITY_KEY in manifest:
         return None
-    if manifest.get("schema_version") is None:
-        return LEGACY_NO_SCHEMA
     if _is_pre_kind_web_export(manifest):
         return LEGACY_WEB_PRE_KIND
+    # Only the identified pre-kind web signature may carry column_metadata
+    # without a digest contract; missing schema alone cannot erase markers.
+    if any(key in manifest for key in ("export_kind", "contract_revision", "column_metadata")):
+        return None
+    if "schema_version" not in manifest:
+        return LEGACY_NO_SCHEMA
     return None
 
 
@@ -650,6 +658,11 @@ def require_member_digest(manifest: dict, member: str, *, sha256: str, size: int
 
     relative = Path(member).as_posix()
     records = manifest_member_records(manifest)
+    if relative not in records:
+        raise ExportMemberIntegrityError(
+            f"{relative} is not listed in the export manifest",
+            reason=REASON_MEMBER_UNRECORDED, path=path, member=relative,
+        )
     if manifest_integrity_contract(manifest) == "legacy" and not any(records.values()):
         # An explicitly legacy manifest whose writer never recorded digests:
         # nothing to compare. Formal scope refuses it; the UI path shows it.
@@ -660,11 +673,6 @@ def require_member_digest(manifest: dict, member: str, *, sha256: str, size: int
                 reason=REASON_INTEGRITY_UNRECORDED, path=path, member=relative,
             )
         return INTEGRITY_UNRECORDED
-    if relative not in records:
-        raise ExportMemberIntegrityError(
-            f"{relative} is not listed in the export manifest",
-            reason=REASON_MEMBER_UNRECORDED, path=path, member=relative,
-        )
     recorded = records[relative]
     if recorded is None:
         raise ExportMemberIntegrityError(
@@ -734,7 +742,7 @@ def verify_member_integrity(package_root: Union[str, Path], member: Union[str, P
     ``member`` is an absolute path, a caller-relative path inside the root, or
     a path relative to ``package_root``. Returns :data:`INTEGRITY_VERIFIED`, or
     :data:`INTEGRITY_UNRECORDED` for an explicitly legacy manifest without
-    digests (refused in formal scope). Memoised per stat identity.
+    digests (refused in formal scope). Only non-formal reads use the stat memo.
     """
 
     root = Path(package_root).absolute()
@@ -751,7 +759,9 @@ def verify_member_integrity(package_root: Union[str, Path], member: Union[str, P
     records = manifest_member_records(payload)
     recorded = records.get(relative)
     # Cheap size refusal first; hash only when the record has a digest.
-    sha = _member_sha256(path) if recorded is not None and (
+    is_formal = formal if formal is not None else formal_integrity_active()
+    hash_member = _hash_file if is_formal else _member_sha256
+    sha = hash_member(path) if recorded is not None and (
         recorded[1] is None or recorded[1] == size) else ""
     return require_member_digest(payload, relative, sha256=sha, size=size, path=path,
                                  formal=formal)

@@ -102,9 +102,12 @@ SPECIAL_GROUPS = {
 
 
 def module_cols(root, db, module):
+    from easyicu.export_publication import verify_member_integrity
+
     p = os.path.join(root, db, module + ".parquet")
     if not os.path.isfile(p):
         return None  # 该库未提取该模块
+    verify_member_integrity(os.path.join(root, db), p, formal=True)
     return set(pq.ParquetFile(p).schema.names)
 
 
@@ -138,7 +141,13 @@ def audit(root):
         print(f"\n[{gname}] @ {mod}  概念={concepts}")
         print(f"    合法缺失库(loader排除): {sorted(excl) or '无'}")
         for db in dbs:
-            cols = module_cols(root, db, mod)
+            try:
+                cols = module_cols(root, db, mod)
+            except (ExportMemberIntegrityError, ExportMemberUnreadableError) as exc:
+                reason = getattr(exc, "reason", exc.code)
+                print(f"    {db:6s} REFUSED {exc.code} ({reason})")
+                bugs.append((gname, db, mod, [exc.code]))
+                continue
             if cols is None:
                 # An expected module that is missing is a failure, never a pass.
                 print(f"    {db:6s} BUG★模块缺失 (未找到 {mod}.parquet)")
