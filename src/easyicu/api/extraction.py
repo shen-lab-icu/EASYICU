@@ -24,6 +24,7 @@ from ..source_bounds import (
     bounds_scope,
     bounds_totals,
     merge_bounds_drops,
+    public_bounds,
 )
 from ..concept.catalog import BOUNDS_AUDIT_CONCEPTS, CONCEPT_GROUPS_INTERNAL
 from ..config import DATABASE_ID_CONFIG
@@ -7496,32 +7497,141 @@ def _native_export_runtime_provenance(*, source_name: str | None = None) -> Dict
     }
 
 
-def _refuse_classless_non_numeric(drops_by_module: Mapping, *, database: str) -> None:
+def publication_dictionary(database: str):
+    """The effective dictionary a publication of ``database`` is judged against.
+
+    The shipped dictionary with that source's overlay (e.g. SIC's case-duration
+    concepts): the same object the native publisher binds columns to, and the
+    one the classless gate must use (never a reloaded base dictionary).
+    """
+    return load_dictionary(include_sofa2=True, source_name=str(database).strip().lower())
+
+
+def _refuse_classless_non_numeric(
+    drops_by_module: Mapping, *, database: str, dictionary
+) -> None:
     """Refuse a run in which a classless, unbounded concept lost non-numeric values.
 
     Such a concept is numeric only by default (ricu ``num_cncpt``); its text
-    would otherwise become NaN without a declaration. Raises the typed
+    would otherwise become NaN without a declaration. Every module's counts
+    are checked FIRST, before any aggregation, so no other module's read can
+    hide an anomaly. ``dictionary`` is the run's effective dictionary (with
+    any source-specific overlay), never a reloaded base one. Raises the typed
     ``ConceptValueKindUndeclared`` naming the concept and the count.
     """
     from ..concept.value_kind import ConceptValueKindUndeclared, implicitly_numeric
-    from ..source_bounds import non_numeric_by_concept
+    from ..source_bounds import count_value, non_numeric_by_concept, small_count
 
-    counts = non_numeric_by_concept(*(drops_by_module or {}).values())
-    offending = sorted(name for name, count in counts.items() if count > 0)
+    offending: Dict[str, List[str]] = {}
+    for module in sorted(drops_by_module or {}):
+        for concept, tables in ((drops_by_module or {})[module] or {}).items():
+            if any(
+                count_value((counts or {}).get("non_numeric_values", 0)) > 0
+                for counts in (tables or {}).values()
+            ):
+                offending.setdefault(concept, []).append(module)
     if not offending:
         return
-    dictionary = load_dictionary(include_sofa2=True)
-    for name in offending:
+    totals = non_numeric_by_concept(*(drops_by_module or {}).values())
+    for name in sorted(offending):
         definition = dictionary[name] if name in dictionary.keys() else None
         if definition is None or implicitly_numeric(definition):
             raise ConceptValueKindUndeclared(
                 concept_id=name, database=database,
                 class_name=None if definition is None else definition.class_name,
                 detail=(
-                    f"{counts[name]} source value(s) do not parse as numbers, and the "
-                    "concept is numeric only by default (no class, no numeric bounds)"
+                    f"{small_count(totals.get(name, 1))} source value(s) do not parse as "
+                    "numbers, and the concept is numeric only by default (no class, no "
+                    f"numeric bounds); modules: {', '.join(offending[name])}"
                 ),
             )
+
+
+def source_value_publication(
+    module_results: Mapping, modules: Sequence[str], *, database: str, dictionary
+) -> Dict[str, object]:
+    """The one pre-commit gate and count fields of every publication format.
+
+    ``module_results`` maps a module to its result (``source_bounds`` with the
+    private per-stay ledger when it was counted in this process). A module
+    whose result has no ``source_bounds`` was never counted (an old receipt,
+    an uncounted producer): it is listed as ``audit_unknown``, never zero.
+    The classless refusal runs first on every module; then the run-level
+    union and the QC rows are computed. Only the de-identified aggregate is
+    returned for publication (counts, 1-9 as ``"<10"``, no ledger).
+    """
+    from ..io.data_quality import source_bounds_warnings, source_value_coercion_warnings
+    from ..source_bounds import AUDIT_UNKNOWN, coercion_union, public_bounds, small_count
+
+    internal: Dict[str, dict] = {}
+    audit: Dict[str, str] = {}
+    for module in modules:
+        module_result = (module_results or {}).get(module) or {}
+        counts = module_result.get("source_bounds")
+        if not isinstance(counts, Mapping):
+            audit[module] = AUDIT_UNKNOWN
+            counts = {}
+        internal[module] = dict(counts)
+    _refuse_classless_non_numeric(internal, database=database, dictionary=dictionary)
+    public = {module: public_bounds(internal[module]) for module in modules}
+    union = {
+        concept: {
+            table: {
+                **{key: (small_count(value) if isinstance(value, int) else value)
+                   for key, value in row.items()},
+            }
+            for table, row in tables.items()
+        }
+        for concept, tables in coercion_union(internal).items()
+    }
+    return {
+        "source_bounds_drops": public,
+        "source_values_not_numeric": union,
+        "source_bounds_audit": audit,
+        "qc_warnings": {
+            "source_bounds_suspect": source_bounds_warnings(public),
+            "source_values_not_numeric": source_value_coercion_warnings(internal),
+            **(
+                {"source_value_counts_audit_unknown": [
+                    {"module": module, "reason": AUDIT_UNKNOWN} for module in sorted(audit)
+                ]}
+                if audit else {}
+            ),
+        },
+    }
+
+
+def module_results_from_producer_manifests(
+    root: Path, modules: Sequence[str], *, label: str = "module"
+) -> Dict[str, Dict[str, object]]:
+    """Module results for publication read back from published producer manifests.
+
+    The one path by which a recovery or republication passes each module's
+    full counts to :func:`_publish_native_export_v2`: ``errors`` and
+    ``source_bounds`` (published counts, without ledgers) plus the runtime
+    receipts. A manifest without ``source_bounds`` gives a result without it,
+    which the publisher records as ``audit_unknown`` (never as zero).
+    """
+    import json
+
+    results: Dict[str, Dict[str, object]] = {}
+    for module in modules:
+        path = Path(root) / f"{module}.manifest.json"
+        # No producer manifest: no counts (audit_unknown); the publisher
+        # itself refuses a module whose files it cannot bind.
+        manifest = json.loads(path.read_text(encoding="utf-8")) if path.is_file() else {}
+        entry: Dict[str, object] = {
+            "errors": list(manifest.get("errors") or []),
+            "elapsed": float(manifest.get("elapsed_sec") or 0.0),
+            "peak_rss_mb": float(manifest.get("peak_rss_mb") or 0.0),
+            "peak_working_set_mb": float(manifest.get("peak_working_set_mb") or 0.0),
+        }
+        if isinstance(manifest.get("source_bounds"), Mapping):
+            entry["source_bounds"] = dict(manifest["source_bounds"])
+        if manifest.get("resource_plan") is not None:
+            entry["resource_plan"] = manifest["resource_plan"]
+        results[module] = entry
+    return results
 
 
 def _publish_native_export_v2(
@@ -7594,7 +7704,7 @@ def _publish_native_export_v2(
     published_modules = list(modules)
 
     normalized_database = str(database).strip().lower()
-    dictionary = load_dictionary(include_sofa2=True, source_name=normalized_database)
+    dictionary = publication_dictionary(normalized_database)
     source_config = load_src_cfg(normalized_database)
     class_prefixes = tuple(
         str(value).strip().lower()
@@ -7962,10 +8072,10 @@ def _publish_native_export_v2(
                 ),
                 # Source values the loaders dropped by the declared bounds,
                 # per source table (source_bounds); counts only.
-                "source_bounds": dict(
-                    ((result["modules"].get(module) or {}).get("source_bounds") or {}).get(concept)
+                "source_bounds": public_bounds({
+                    concept: ((result["modules"].get(module) or {}).get("source_bounds") or {}).get(concept)
                     or {}
-                ),
+                }).get(concept, {}),
             }
             if concept in semantic_audit:
                 status["excluded_semantically_invalid"] = int(
@@ -8143,22 +8253,13 @@ def _publish_native_export_v2(
         manifest["storage_fallbacks"] = list(result["storage_fallbacks"])
     # Values outside declared bounds are dropped, never refused: the receipt
     # carries the totals and the release QC warns on suspect sources.
-    from ..io.data_quality import source_bounds_warnings, source_value_coercion_warnings
-
-    manifest["source_bounds_drops"] = {
-        module: dict((result["modules"].get(module) or {}).get("source_bounds") or {})
-        for module in modules
-    }
     # Source values of a declared numeric concept that were not numbers are
     # counted in the same records (non_numeric_values); a classless concept
-    # with any of them refuses publication (B-IMPLICIT-GATE).
-    _refuse_classless_non_numeric(manifest["source_bounds_drops"], database=database)
-    manifest["qc_warnings"] = {
-        "source_bounds_suspect": source_bounds_warnings(manifest["source_bounds_drops"]),
-        "source_values_not_numeric": source_value_coercion_warnings(
-            manifest["source_bounds_drops"]
-        ),
-    }
+    # with any of them refuses publication (B-IMPLICIT-GATE), judged against
+    # this run's effective dictionary. Shared by every publication format.
+    manifest.update(source_value_publication(
+        result.get("modules") or {}, modules, database=database, dictionary=dictionary
+    ))
     if "sepsis3_sofa1" in modules:
         context_ref = (result["modules"]["sepsis3_sofa1"].get("derivation_contexts") or {}).get(
             "sep3_sofa1"
@@ -8683,7 +8784,8 @@ def extract_database(
             "errors": mod_result["errors"],
             "warnings": mod_result["warnings"],
             "bounds": mod_result["bounds"],
-            "source_bounds": mod_result["source_bounds"],
+            # Counts only: the private per-stay ledger stays in this process.
+            "source_bounds": public_bounds(mod_result["source_bounds"]),
             "elapsed_sec": mod_result["elapsed"],
             "start_rss_mb": manifest.get("start_rss_mb", 0.0),
             "peak_rss_mb": mod_result["peak_rss_mb"],
@@ -8713,6 +8815,14 @@ def extract_database(
             "resource_plan": module_resource_plans[mod_name].to_dict(),
             "resource_execution_limits": resource_execution_limits,
         }
+        if not native_export_v2 and output_dir is not None and not mod_result["errors"]:
+            # A flat (non-native) export commits each module here: the same
+            # classless gate as every publication runs before its file and
+            # manifest are written (native-v2 runs it in its publisher).
+            _refuse_classless_non_numeric(
+                {mod_name: mod_result["source_bounds"]}, database=str(database),
+                dictionary=publication_dictionary(str(database)),
+            )
         # 每个模块一个宽表 parquet：manifest["saved"] 只有一条（键=模块名），
         # info 里带 concepts（列名清单）+ concept_meta（逐概念 rows/bounds provenance）。
         for _saved_key, info in manifest.get("saved", {}).items():

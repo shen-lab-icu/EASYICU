@@ -64,6 +64,37 @@ median, so the value depended on which stays shared the batch.
   error. The community overlay's `adv_resp` now declares `lgl_cncpt`.
 - Demos (eICU, MIIV, MIMIC-III, default mode, 20 modules): identical to the
   base; no cell that held a value became NaN.
+- **Multi-concept SQL now casts a VARCHAR value column (disclosed change).**
+  When the long-table batch (one query, several concepts) reads a VARCHAR
+  value column, its value is `TRY_CAST(value AS DOUBLE)` in the bounds test,
+  the aggregate and the bounds counts; a value that does not cast is NULL
+  (counted as non-numeric) instead of being compared and aggregated as text.
+  A DOUBLE value column produces the same SQL as before. Default values are
+  unchanged on the G1 3,000-stay samples (server, 2026-11-07, base
+  `372d563a1` vs this round, import origin asserted per run): eICU
+  (`eicu_var`, string temperature/etCO2 channels) all 20 published module
+  parquets byte-identical; MIIV, AUMC, SIC and MIMIC-III CareVue on the
+  modules that read long tables through the multi-concept SQL (outcome,
+  vitals, blood_gas, chemistry, hematology, ventilator, respiratory) 7/7
+  byte-identical each. Manifests differ only by the added count fields.
+- One publication gate (round 3, delta23v): the native publisher, the web
+  export and the flat (`native_export_v2=False`) grouped export share one
+  pre-commit gate and count fields (`source_bounds_drops`,
+  `source_values_not_numeric`, `source_bounds_audit`, `qc_warnings`); a
+  refusal leaves no root manifest (flat: no module manifest). The gate judges
+  a concept by the run's effective per-source dictionary (SIC overlay
+  included) and checks every module's counts before any aggregation.
+- Run-level non-numeric counts are the union of the reading modules keyed by
+  stay (a private per-stay ledger that is never published): disjoint readers
+  add up and a clean reader cannot mask an anomalous one. Published counts
+  1-9 read `"<10"`. Republication (EX-A02) and staging recovery (EX-A03)
+  pass every module's published counts through one path; a module manifest
+  without counts is `audit_unknown`, never zero, and a source read by several
+  modules without ledgers is a lower bound marked `audit_unknown`.
+- A callback's first parse of raw values (e.g. eICU temperature
+  `fahr_between`) counts text before it becomes NaN and refuses it for a
+  classless concept; a callback that parses outside the shared helper is
+  counted at the callback boundary.
 
 ## 2026-11-06 — eICU GCS sedation windows and the published `ett_gcs` grid [lead-r13, `432ddaf3c`, `80b1cb964`, `e70102c94`, `f9b45386c`, `b7509c080`, `e1d73cd7b`, `2c0579bd5`, `942bfcbfb`, `3e23c65d4`, `06f30f7b0`]
 

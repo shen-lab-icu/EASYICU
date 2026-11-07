@@ -23,6 +23,7 @@ import pytest
 from easyicu.concept.aggregation_route import force_raw_aggregation, record_duckdb_routes
 from easyicu.concept.value_kind import ConceptValueKindUndeclared
 from easyicu.io.data_quality import SOURCE_BOUNDS_WARN_MIN_STAYS, source_value_coercion_warnings
+from easyicu.api.extraction import publication_dictionary
 from easyicu.source_bounds import collect_bounds_drops, non_numeric_by_concept
 from tests.support.urine_raw_source import _load, _source
 
@@ -147,7 +148,9 @@ def test_a_declared_numeric_concept_warns_and_publishes(tmp_path):
     ]
     from easyicu.api.extraction import _refuse_classless_non_numeric
 
-    _refuse_classless_non_numeric({"vitals": drops}, database="sic")  # temp has bounds: no refusal
+    _refuse_classless_non_numeric(
+        {"vitals": drops}, database="sic", dictionary=publication_dictionary("sic")
+    )  # temp has bounds: no refusal
 
 
 @pytest.mark.parametrize("readers", [2, 5])
@@ -158,12 +161,14 @@ def test_a_source_read_by_several_modules_is_counted_once(tmp_path, readers):
     one = {"vitals": drops}
     many = {f"module_{index}": drops for index in range(readers)}
     assert source_value_coercion_warnings(many) == [
-        {**row, "module": "module_0"} for row in source_value_coercion_warnings(one)
+        {**row, "modules": sorted(many)} for row in source_value_coercion_warnings(one)
     ]
     [row] = source_value_coercion_warnings(many)
     assert (row["non_numeric_values"], row["stays_with_non_numeric"]) == (_STAYS, _STAYS)
     assert non_numeric_by_concept(*many.values()) == non_numeric_by_concept(drops) == {"temp": _STAYS}
-    _refuse_classless_non_numeric(many, database="sic")  # temp is declared: no refusal
+    _refuse_classless_non_numeric(
+        many, database="sic", dictionary=publication_dictionary("sic")
+    )  # temp is declared: no refusal
 
 
 def _classless(monkeypatch, name):
@@ -186,7 +191,10 @@ def test_a_classless_concept_refuses_publication(tmp_path, monkeypatch):
     _classless(monkeypatch, "temp")
     # Read by three modules, the refusal still names the unique count.
     with pytest.raises(ConceptValueKindUndeclared, match=rf"'temp'.*: {_STAYS} source value.*declare class"):
-        _refuse_classless_non_numeric({"a": drops, "b": drops, "c": drops}, database="sic")
+        _refuse_classless_non_numeric(
+            {"a": drops, "b": drops, "c": drops}, database="sic",
+            dictionary=publication_dictionary("sic"),
+        )
 
 
 def test_a_refused_run_leaves_no_published_export(tmp_path, monkeypatch):
@@ -199,13 +207,21 @@ def test_a_refused_run_leaves_no_published_export(tmp_path, monkeypatch):
     generate_source(root, "sic", stays=6)
     _classless(monkeypatch, "temp")
     # The synthetic installation is numeric; the count stands in for text.
-    monkeypatch.setattr(
-        "easyicu.source_bounds.non_numeric_by_concept", lambda *parts: {"temp": 3}
-    )
+    real_totals = extraction.bounds_totals
+
+    def totals(records):
+        out = dict(real_totals(records))
+        out["temp"] = {**out.get("temp", {}), "data_float_h": {
+            "dropped_values": 0, "stays_all_out_of_bounds": 0, "stays_read": 0,
+            "non_numeric_values": 3, "stays_with_non_numeric": 1, "stays_with_values": 1,
+        }}
+        return out
+
+    monkeypatch.setattr(extraction, "bounds_totals", totals)
     monkeypatch.setattr(extraction, "_get_extraction_mp_context", inprocess_mp_context)
     out = tmp_path / "export"
     try:
-        with pytest.raises(ConceptValueKindUndeclared, match="'temp'.*3 source value"):
+        with pytest.raises(ConceptValueKindUndeclared, match="'temp'.*<10 source value"):
             extraction.extract_database(
                 "sic", data_path=str(root), output_dir=str(out), modules=["outcome", "vitals"],
                 native_export_v2=True, verbose=False,

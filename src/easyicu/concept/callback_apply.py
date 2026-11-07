@@ -68,6 +68,7 @@ from .blood_gas_specimen import (
 )
 from .eicu_sedation_scale import RASS_SCALE_CALLBACK, restrict_to_rass_scale
 from .errors import ConceptExtractionUnavailable
+from .value_kind import parse_source_numeric
 from .loader import _get_concept_bounds
 from .expr_parser import (
     _apply_binary_op,
@@ -708,7 +709,7 @@ def _normalize_eicu_tidal_volume_frame(
         None,
     )
 
-    raw = pd.to_numeric(out[value_column], errors="coerce")
+    raw = parse_source_numeric(out[value_column], frame=out)
     normalized = raw.copy()
     if ages is None:
         ages = pd.Series(np.nan, index=out.index, dtype="float64")
@@ -923,7 +924,7 @@ def _drop_declared_row_exclusions(frame: pd.DataFrame, source, concept_name=None
         if not isinstance(deduplicate_by, list) or not all(isinstance(c, str) for c in deduplicate_by):
             raise TypeError("deduplicate_by must be a list of column names")
         frame = frame.copy()
-        frame[concept_name] = pd.to_numeric(frame[concept_name], errors="coerce")
+        frame[concept_name] = parse_source_numeric(frame[concept_name], frame=frame)
         frame = frame.drop_duplicates(subset=[*deduplicate_by, concept_name])
     return frame
 
@@ -941,6 +942,73 @@ def _status_token(value) -> str:
     return token
 
 def _apply_callback(
+    frame: pd.DataFrame,
+    source: ConceptSource,
+    concept_name: str,
+    unit_column: Optional[str] = None,
+    resolver: Optional['ConceptResolver'] = None,
+    patient_ids: Optional[List] = None,
+    data_source: Optional['ICUDataSource'] = None,
+    interval: Optional[Union[str, pd.Timedelta]] = None,
+    *,
+    _source_rows_validated: bool = False,
+) -> pd.DataFrame:
+    """Apply ``source``'s callback with its source and effective declaration in context.
+
+    Every first parse of the concept's raw values inside the callback goes
+    through :func:`~easyicu.concept.value_kind.parse_source_numeric`, which
+    counts (and, for a classless concept, refuses) values that are not
+    numbers before they become NaN (D23V-RAW-EARLY).
+    """
+    from .value_kind import SourceParseContext, current_parse_context, source_parse_context
+
+    table = str(getattr(source, "table", "") or "")
+    context = current_parse_context()
+    if context is not None and context.concept == concept_name and context.table == table:
+        return _apply_callback_body(
+            frame, source, concept_name, unit_column, resolver, patient_ids, data_source,
+            interval, _source_rows_validated=_source_rows_validated,
+        )
+    dictionary = getattr(resolver, "dictionary", None)
+    definition = dictionary.get(concept_name) if dictionary is not None else None
+    context = SourceParseContext(
+        database=str(getattr(getattr(data_source, "config", None), "name", "") or ""),
+        concept=str(concept_name),
+        table=table,
+        definition=definition,
+        id_column=_patient_id_column(frame, data_source) if isinstance(frame, pd.DataFrame) else None,
+    )
+    value_column = (
+        concept_name if isinstance(frame, pd.DataFrame) and concept_name in frame.columns
+        else (getattr(source, "value_var", None) or "value")
+    )
+    raw = None
+    if (
+        definition is not None
+        and getattr(source, "callback", None)
+        and isinstance(frame, pd.DataFrame)
+        and value_column in frame.columns
+        and not pd.api.types.is_numeric_dtype(frame[value_column])
+    ):
+        raw = frame[value_column].copy()
+        raw_frame = frame[[c for c in (context.id_column,) if c and c in frame.columns]].copy()
+    with source_parse_context(context):
+        result = _apply_callback_body(
+            frame, source, concept_name, unit_column, resolver, patient_ids, data_source,
+            interval, _source_rows_validated=_source_rows_validated,
+        )
+        if raw is not None:
+            from .value_kind import count_callback_losses
+
+            output_column = (
+                concept_name if isinstance(result, pd.DataFrame) and concept_name in result.columns
+                else value_column
+            )
+            count_callback_losses(raw, raw_frame, result, output_column)
+    return result
+
+
+def _apply_callback_body(
     frame: pd.DataFrame,
     source: ConceptSource,
     concept_name: str,
@@ -988,8 +1056,8 @@ def _apply_callback(
         if expr == "mimic_support_evidence":
             return support_evidence(frame, source, concept_name)
         if expr == "mimic_positive_dose":
-            amount = pd.to_numeric(source_values(frame, source, "amount", concept_name), errors="coerce")
-            rate = pd.to_numeric(source_values(frame, source, "rate", concept_name), errors="coerce")
+            amount = parse_source_numeric(source_values(frame, source, "amount", concept_name), frame=frame)
+            rate = parse_source_numeric(source_values(frame, source, "rate", concept_name), frame=frame)
             return frame.loc[amount.gt(0) | rate.gt(0)].assign(**{concept_name: True})
         if expr == "mimic_antibacterial_inputs":
             return antibacterial_inputs(frame, source, concept_name, data_source)
@@ -2023,7 +2091,7 @@ def _apply_callback(
             if na_mask.any():
                 for fallback_col in ("value", "valuetext"):
                     if fallback_col in frame.columns and fallback_col != concept_name:
-                        fallback = pd.to_numeric(frame[fallback_col], errors='coerce')
+                        fallback = parse_source_numeric(frame.loc[na_mask, fallback_col], frame=frame)
                         series = series.where(~na_mask, fallback)
                         na_mask = series.isna()
                         if not na_mask.any():
@@ -2044,14 +2112,18 @@ def _apply_callback(
                     if not na_mask.any():
                         break
 
-        result = pd.to_numeric(series, errors='coerce')
-        failed_mask = result.isna() & series.notna()
-        if failed_mask.any():
-            fixed = pd.to_numeric(
-                series[failed_mask].astype(str).str.rstrip('%'), errors='coerce'
-            )
-            result = result.copy()
-            result.loc[failed_mask] = fixed
+        def _parse_percent(raw: pd.Series) -> pd.Series:
+            parsed = pd.to_numeric(raw, errors='coerce')
+            failed_mask = parsed.isna() & raw.notna()
+            if failed_mask.any():
+                fixed = pd.to_numeric(
+                    raw[failed_mask].astype(str).str.rstrip('%'), errors='coerce'
+                )
+                parsed = parsed.copy()
+                parsed.loc[failed_mask] = fixed
+            return parsed
+
+        result = parse_source_numeric(series, frame=frame, parser=_parse_percent)
         result = _scale_fractional_percent(result)
         # Cast to object first so pandas 2.x string-backed columns accept float values.
         if hasattr(frame[concept_name], 'dtype') and str(frame[concept_name].dtype) in ('string', 'str'):
@@ -2068,12 +2140,13 @@ def _apply_callback(
             else (source.value_var or "value")
         )
         if val_col in frame.columns:
-            extracted = (
-                frame[val_col]
-                .astype("string")
-                .str.extract(r"^\s*(-?\d+(?:\.\d+)?)", expand=False)
+            frame[val_col] = parse_source_numeric(
+                frame[val_col], frame=frame,
+                parser=lambda raw: pd.to_numeric(
+                    raw.astype("string").str.extract(r"^\s*(-?\d+(?:\.\d+)?)", expand=False),
+                    errors="coerce",
+                ),
             )
-            frame[val_col] = pd.to_numeric(extracted, errors="coerce")
         return frame
 
     if expr in {"community_vent_mode_control", "community_vent_mode_seq"}:
@@ -2226,7 +2299,7 @@ def _apply_callback(
         
         series = frame[compare_col]
         if isinstance(value, (int, float)) and not pd.api.types.is_numeric_dtype(series):
-            series = pd.to_numeric(series, errors="coerce")
+            series = parse_source_numeric(series, frame=frame)
         comparator = op_map[op_token]
         # 🚀 Vectorized comparison instead of .apply(lambda) — avoids N python calls
         na_mask = series.isna()
@@ -2244,7 +2317,7 @@ def _apply_callback(
         symbol = match.group(1)
         value = _parse_literal(match.group(2))
         frame = frame.copy()
-        series = pd.to_numeric(frame[concept_name], errors="coerce")
+        series = parse_source_numeric(frame[concept_name], frame=frame)
         result = _apply_binary_op(symbol, series, value)
         frame.loc[:, concept_name] = result
         return frame
@@ -2262,7 +2335,7 @@ def _apply_callback(
         item_col = source.sub_var or "itemid"
         if value_col not in frame.columns or item_col not in frame.columns:
             return frame
-        values = pd.to_numeric(frame[value_col], errors="coerce")
+        values = parse_source_numeric(frame[value_col], frame=frame)
         itemids = pd.to_numeric(frame[item_col], errors="coerce")
         irrigant_in = itemids.eq(227488) & values.gt(0)
         frame[value_col] = values.where(~irrigant_in, -values)
@@ -2279,7 +2352,7 @@ def _apply_callback(
         )
         if value_col not in frame.columns:
             return frame
-        values = pd.to_numeric(frame[value_col], errors="coerce")
+        values = parse_source_numeric(frame[value_col], frame=frame)
         values = values.where(values <= 2500, values / 10.0)
         frame[value_col] = values.where(values <= 4500)
         return frame
@@ -2289,7 +2362,7 @@ def _apply_callback(
         frame = frame.copy()
         val_col = concept_name if concept_name in frame.columns else (source.value_var or 'value')
         if val_col in frame.columns:
-            frame[val_col] = pd.to_numeric(frame[val_col], errors='coerce').apply(np.floor)
+            frame[val_col] = parse_source_numeric(frame[val_col], frame=frame).apply(np.floor)
         return frame
 
     # Handle transform_fun(ceiling) or transform_fun(ceil) - apply ceiling function
@@ -2297,7 +2370,7 @@ def _apply_callback(
         frame = frame.copy()
         val_col = concept_name if concept_name in frame.columns else (source.value_var or 'value')
         if val_col in frame.columns:
-            frame[val_col] = pd.to_numeric(frame[val_col], errors='coerce').apply(np.ceil)
+            frame[val_col] = parse_source_numeric(frame[val_col], frame=frame).apply(np.ceil)
         return frame
 
     # Handle transform_fun(round) - apply round function
@@ -2305,7 +2378,7 @@ def _apply_callback(
         frame = frame.copy()
         val_col = concept_name if concept_name in frame.columns else (source.value_var or 'value')
         if val_col in frame.columns:
-            frame[val_col] = pd.to_numeric(frame[val_col], errors='coerce').round()
+            frame[val_col] = parse_source_numeric(frame[val_col], frame=frame).round()
         return frame
 
     # Handle transform_fun(na_below(<threshold>)) - map sentinel values below a
@@ -2317,7 +2390,7 @@ def _apply_callback(
         frame = frame.copy()
         val_col = concept_name if concept_name in frame.columns else (source.value_var or 'value')
         if val_col in frame.columns:
-            series = pd.to_numeric(frame[val_col], errors='coerce')
+            series = parse_source_numeric(frame[val_col], frame=frame)
             frame[val_col] = series.where(series >= threshold)
         return frame
 
@@ -2333,7 +2406,7 @@ def _apply_callback(
         frame = frame.copy()
         val_col = concept_name if concept_name in frame.columns else (source.value_var or 'value')
         if val_col in frame.columns:
-            series = pd.to_numeric(frame[val_col], errors='coerce')
+            series = parse_source_numeric(frame[val_col], frame=frame)
             fahrenheit = series.between(low, high)
             frame[val_col] = series.mask(fahrenheit, (series - 32.0) * 5.0 / 9.0)
         return frame
@@ -2346,7 +2419,7 @@ def _apply_callback(
         frame = frame.copy()
         val_col = concept_name if concept_name in frame.columns else (source.value_var or 'value')
         if val_col in frame.columns:
-            series = pd.to_numeric(frame[val_col], errors='coerce')
+            series = parse_source_numeric(frame[val_col], frame=frame)
             frame[val_col] = series.where(series <= threshold)
         return frame
 
@@ -2362,7 +2435,7 @@ def _apply_callback(
         frame = frame.copy()
         val_col = concept_name if concept_name in frame.columns else (source.value_var or 'value')
         if val_col in frame.columns:
-            series = pd.to_numeric(frame[val_col], errors='coerce')
+            series = parse_source_numeric(frame[val_col], frame=frame)
             frame[val_col] = series.where(~series.gt(threshold), series / factor)
         return frame
 
@@ -2378,7 +2451,7 @@ def _apply_callback(
         frame = frame.copy()
         val_col = concept_name if concept_name in frame.columns else (source.value_var or 'value')
         if val_col in frame.columns:
-            series = pd.to_numeric(frame[val_col], errors='coerce')
+            series = parse_source_numeric(frame[val_col], frame=frame)
             frame[val_col] = series.where(~series.le(threshold), series * factor)
         return frame
 
@@ -2407,7 +2480,7 @@ def _apply_callback(
         
         if id_col and time_col and val_col in frame.columns:
             # Convert to numeric
-            frame[val_col] = pd.to_numeric(frame[val_col], errors='coerce')
+            frame[val_col] = parse_source_numeric(frame[val_col], frame=frame)
             
             # Group by id and time, apply aggregation
             group_cols = [id_col, time_col]
@@ -2584,7 +2657,7 @@ def _apply_callback(
             # An empty source (e.g. the CareVue view's MetaVision table) has
             # nothing to convert; rows without the value column still fail.
             return frame
-        numeric = pd.to_numeric(frame.loc[mask, concept_name], errors="coerce")
+        numeric = parse_source_numeric(frame.loc[mask, concept_name], frame=frame)
         transformed = _apply_binary_op(symbol, numeric, value)
         
         # 明确转换类型以避免 dtype 不兼容警告
@@ -3650,8 +3723,10 @@ def _apply_callback(
         # Apply aumc_rass transformation: extract first 2 characters as integer
         # Similar to ricu's: as.integer(substr(x, 1L, 2L))
         series = frame[concept_name].copy()
-        series = series.astype(str).str[:2]
-        series = pd.to_numeric(series, errors='coerce')
+        series = parse_source_numeric(
+            series, frame=frame,
+            parser=lambda raw: pd.to_numeric(raw.astype(str).str[:2], errors="coerce"),
+        )
         frame[concept_name] = series
         return frame
 
@@ -3763,11 +3838,11 @@ def _apply_callback(
             else:
                 # No data_source - just cap at 90 if age already exists
                 if concept_name in frame.columns:
-                    frame[concept_name] = pd.to_numeric(frame[concept_name], errors='coerce')
+                    frame[concept_name] = parse_source_numeric(frame[concept_name], frame=frame)
                     frame.loc[frame[concept_name] > 90, concept_name] = 90
         elif concept_name in frame.columns:
             # Age already calculated - just cap at 90
-            frame[concept_name] = pd.to_numeric(frame[concept_name], errors='coerce')
+            frame[concept_name] = parse_source_numeric(frame[concept_name], frame=frame)
             frame.loc[frame[concept_name] > 90, concept_name] = 90
         
         return frame
@@ -3847,7 +3922,7 @@ def _apply_callback(
         # CareVue stays, 604 rows were passed through as mcg/kg/min).
         if val_var in frame.columns:
             frame = frame.copy()
-            frame[val_var] = pd.to_numeric(frame[val_var], errors='coerce')
+            frame[val_var] = parse_source_numeric(frame[val_var], frame=frame)
             weight = pd.to_numeric(frame.get('weight', pd.Series(np.nan, index=frame.index)), errors='coerce')
             mask = weight > 0
             frame.loc[mask, val_var] = frame.loc[mask, val_var] / weight[mask]
@@ -3960,7 +4035,7 @@ def _apply_callback(
         if expr == "sic_rate_units":
             if val_var in frame.columns:
                 frame = frame.copy()
-                frame[val_var] = pd.to_numeric(frame[val_var], errors='coerce')
+                frame[val_var] = parse_source_numeric(frame[val_var], frame=frame)
                 frame = frame.drop(columns=['weight'], errors='ignore')
         # Try to add weight
         elif (
@@ -4002,7 +4077,7 @@ def _apply_callback(
         # g/min number would publish a ~1e-5 "rate" under the kg unit.
         if expr == "sic_rate_kg" and val_var in frame.columns:
             frame = frame.copy()
-            frame[val_var] = pd.to_numeric(frame[val_var], errors='coerce')
+            frame[val_var] = parse_source_numeric(frame[val_var], frame=frame)
             weight = (
                 pd.to_numeric(frame['weight'], errors='coerce')
                 if 'weight' in frame.columns
@@ -4027,7 +4102,7 @@ def _apply_callback(
 
         if not (stop_var and index_var):
             raise ValueError("SICdb rates require explicit start and stop columns")
-        frame = frame.loc[pd.to_numeric(frame[val_var], errors="coerce").gt(0)].copy()
+        frame = frame.loc[parse_source_numeric(frame[val_var], frame=frame).gt(0)].copy()
         frame = materialize_intervals(
             frame, start=index_var, stop=stop_var, data_source=data_source,
         )
@@ -4152,8 +4227,8 @@ def _apply_callback(
             frame = frame.copy()
             frame[concept_name] = pd.concat(
                 [
-                    pd.to_numeric(frame[concept_name], errors="coerce"),
-                    pd.to_numeric(frame[alternate_value_col], errors="coerce"),
+                    parse_source_numeric(frame[concept_name], frame=frame),
+                    parse_source_numeric(frame[alternate_value_col], frame=frame),
                 ],
                 axis=1,
             ).max(axis=1, skipna=True)
@@ -4387,7 +4462,7 @@ def _apply_callback(
         if index_column is None or id_column is None:
             raise KeyError("sum_at_same_time requires an id and a time column")
         work = frame.copy()
-        work[concept_name] = pd.to_numeric(work[concept_name], errors="coerce")
+        work[concept_name] = parse_source_numeric(work[concept_name], frame=work)
         work = work.dropna(subset=[concept_name])
         if work.empty:
             return work
@@ -4453,7 +4528,7 @@ def _apply_callback(
             if DEBUG_CALLBACK:
                 print("    [SKIP] no patients")
             if concept_name in frame.columns:
-                frame[concept_name] = pd.to_numeric(frame[concept_name], errors='coerce')
+                frame[concept_name] = parse_source_numeric(frame[concept_name], frame=frame)
             return frame
         
         if DEBUG_CALLBACK:
@@ -4535,7 +4610,7 @@ def _apply_callback(
                 return unavailable("wbc_patient_identifier_missing")
             
             # Ensure numeric types
-            frame[concept_name] = pd.to_numeric(frame[concept_name], errors='coerce')
+            frame[concept_name] = parse_source_numeric(frame[concept_name], frame=frame)
             wbc_df['wbc'] = pd.to_numeric(wbc_df['wbc'], errors='coerce')
             
             # Ensure matching dtypes for merge columns (fix int32 vs int64 issue)

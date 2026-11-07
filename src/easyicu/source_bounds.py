@@ -26,7 +26,17 @@ original that becomes NaN/NULL is counted, never converted silently
     stays with at least one non-null source value at that conversion point.
 
 A concept without a class and without bounds that has any such value is
-refused at publication (``ConceptValueKindUndeclared``).
+refused at publication (``ConceptValueKindUndeclared``): the refusal checks
+every module's counts first, before any aggregation.
+
+A coercion record also carries a PRIVATE per-stay ledger (``_stays``: the
+stays with values and each stay's non-numeric count). It travels with the
+in-process totals and the temporary worker manifests only, so a source read
+by several modules is merged as a union keyed by stay identity
+(:func:`coercion_union`). Published manifests carry :func:`public_bounds`
+only: counts, with 1-9 written ``"<10"`` (:func:`small_count`), never the
+ledger. A published count read back (republication) has no ledger: a source
+read by several modules then has a lower bound and ``audit_unknown``.
 
 Every bounded reader calls :func:`record_read_counts`. The record goes to the
 innermost active :func:`bounds_scope` of this process (a reader outside any
@@ -58,6 +68,11 @@ __all__ = [
     "record_coercion_counts",
     "record_series_coercion",
     "non_numeric_by_concept",
+    "coercion_union",
+    "public_bounds",
+    "small_count",
+    "count_value",
+    "AUDIT_UNKNOWN",
     "bounds_scope",
     "scope_active",
     "bounds_totals",
@@ -68,6 +83,23 @@ __all__ = [
 _BOUNDS_FIELDS = ("dropped_values", "stays_all_out_of_bounds", "stays_read")
 _COERCION_FIELDS = ("non_numeric_values", "stays_with_non_numeric", "stays_with_values")
 _FIELDS = _BOUNDS_FIELDS + _COERCION_FIELDS
+# Private per-stay ledger of a coercion record (never published).
+_LEDGER = "_stays"
+AUDIT_UNKNOWN = "audit_unknown"
+_SMALL = "<10"
+
+
+def small_count(value) -> object:
+    """A user-visible count: 1-9 is written ``"<10"`` (0 and >= 10 as they are)."""
+    value = count_value(value)
+    return _SMALL if 0 < value < 10 else value
+
+
+def count_value(value) -> int:
+    """An int from a count that may be published (``"<10"`` reads as 1, a lower bound)."""
+    if value == _SMALL:
+        return 1
+    return int(value or 0)
 
 
 class SourceBoundsAuditError(RuntimeError):
@@ -142,12 +174,15 @@ def record_coercion_counts(
     id_column: str,
     values_column: str,
     non_numeric_column: str,
+    identified: bool = True,
 ) -> None:
     """Record one conversion point's non-numeric counts for one read.
 
     ``frame`` has an id column and two count columns at any grain: the
     non-null source values and those of them that did not convert to a
-    number. They are summed per stay. A no-op outside any scope.
+    number. They are summed per stay; the per-stay counts form the record's
+    private ledger (``identified=False``: the id column is not a stay
+    identity, so the record has no ledger). A no-op outside any scope.
     """
     if not scope_active() or frame is None:
         return
@@ -168,6 +203,15 @@ def record_coercion_counts(
             )
             values = per_stay[values_column].astype("int64")
             non_numeric = per_stay[non_numeric_column].astype("int64")
+        ledger = None
+        if identified and len(frame) and id_column in frame.columns:
+            ledger = {
+                "seen": sorted(str(stay) for stay in values.index[values.to_numpy() > 0]),
+                "bad": {
+                    str(stay): int(count)
+                    for stay, count in non_numeric[non_numeric > 0].items()
+                },
+            }
         with _LOCK:
             if not _SCOPES:
                 return
@@ -180,6 +224,7 @@ def record_coercion_counts(
                 "non_numeric_values": int(non_numeric.sum()),
                 "stays_with_non_numeric": int((non_numeric > 0).sum()),
                 "stays_with_values": int((values > 0).sum()),
+                _LEDGER: ledger,
             })
 
 
@@ -205,6 +250,7 @@ def record_series_coercion(
                 "non_numeric": lost.astype("int64"),
             }),
             id_column="stay", values_column="values", non_numeric_column="non_numeric",
+            identified=ids is not None,
         )
     return count
 
@@ -304,9 +350,37 @@ def _bounds_totals(records: Iterable[Mapping]) -> dict:
             entry["table"], dict.fromkeys(_BOUNDS_FIELDS, 0)
         )
         # Coercion fields appear where a conversion point counted (sparse).
+        if kind != "bounds":
+            had_coercion = any(field in counts for field in _COERCION_FIELDS)
+            ledger = entry.get(_LEDGER)
+            if ledger is None or (had_coercion and _LEDGER not in counts):
+                counts.pop(_LEDGER, None)
+                counts["_no_ledger"] = True
+            elif not counts.get("_no_ledger"):
+                counts[_LEDGER] = _merge_ledgers(counts.get(_LEDGER), ledger)
         for field in _BOUNDS_FIELDS if kind == "bounds" else _COERCION_FIELDS:
             counts[field] = counts.get(field, 0) + int(entry.get(field, 0))
+    for tables in totals.values():
+        for counts in tables.values():
+            counts.pop("_no_ledger", None)
     return _merge_bounds_drops(totals)
+
+
+def _merge_ledgers(*ledgers: Optional[Mapping]) -> dict:
+    """Union of per-stay ledgers: stays with values, and each stay's largest count.
+
+    Two reads of the same stay and source read the same source events, so a
+    stay's count is the larger of its records, never their sum.
+    """
+    seen: set = set()
+    bad: dict = {}
+    for ledger in ledgers:
+        if not ledger:
+            continue
+        seen.update(ledger.get("seen") or ())
+        for stay, count in (ledger.get("bad") or {}).items():
+            bad[stay] = max(int(count), bad.get(stay, 0))
+    return {"seen": sorted(seen), "bad": {stay: bad[stay] for stay in sorted(bad)}}
 
 
 def merge_bounds_drops(*parts: Optional[Mapping]) -> dict:
@@ -317,39 +391,92 @@ def merge_bounds_drops(*parts: Optional[Mapping]) -> dict:
 
 def _merge_bounds_drops(*parts: Optional[Mapping]) -> dict:
     merged: dict = {}
+    unledgered: set = set()
     for part in parts:
         for concept, tables in (part or {}).items():
             for table, counts in (tables or {}).items():
+                counts = counts or {}
                 target = merged.setdefault(concept, {}).setdefault(table, dict.fromkeys(_BOUNDS_FIELDS, 0))
+                if any(field in counts for field in _COERCION_FIELDS):
+                    # A part without a ledger makes the merged ledger unknown.
+                    if _LEDGER not in counts or (concept, table) in unledgered:
+                        unledgered.add((concept, table))
+                        target.pop(_LEDGER, None)
+                    else:
+                        target[_LEDGER] = _merge_ledgers(target.get(_LEDGER), counts[_LEDGER])
                 for field in _FIELDS:
-                    if field in _BOUNDS_FIELDS or field in (counts or {}):
-                        target[field] = target.get(field, 0) + int(counts.get(field, 0))
+                    if field in _BOUNDS_FIELDS or field in counts:
+                        target[field] = target.get(field, 0) + count_value(counts.get(field, 0))
     return {
         concept: {table: dict(merged[concept][table]) for table in sorted(merged[concept])}
         for concept in sorted(merged)
     }
 
 
-def non_numeric_by_concept(*parts: Optional[Mapping]) -> dict:
-    """``{concept: non_numeric_values}``: unique per concept and source, summed over sources.
+def public_bounds(totals: Optional[Mapping]) -> dict:
+    """The published form of ``{concept: {table: counts}}``: no ledger, 1-9 as ``"<10"``."""
+    out: dict = {}
+    for concept, tables in sorted((totals or {}).items()):
+        for table, counts in sorted((tables or {}).items()):
+            out.setdefault(concept, {})[table] = {
+                field: (small_count(value) if field in _COERCION_FIELDS else value)
+                for field, value in (counts or {}).items()
+                if field != _LEDGER
+            }
+    return out
 
-    ``parts`` are ``{concept: {table: counts}}`` totals of the modules of one
-    run. A source read by several modules is the same read of the same
-    stays, so it is counted once: the module that read the most stays
-    (as :func:`easyicu.io.data_quality.source_value_coercion_warnings`
-    reports it), never the sum across the modules that read it.
+
+def coercion_union(drops_by_module: Optional[Mapping]) -> dict:
+    """Run-level non-numeric counts ``{concept: {table: counts}}`` across modules.
+
+    A source read by several modules is merged as the union of their ledgers,
+    keyed by stay (a stay's count is the largest of its records): disjoint
+    readers add up, a reader that saw more stays cannot hide one that saw
+    the anomalies. ``union`` says how exact the row is: ``exact`` (every
+    reader had a ledger), ``single_module`` (one reader's published counts)
+    or ``audit_unknown`` (several readers without ledgers: each field is the
+    largest reader's, a lower bound). Integers; :func:`public_bounds` and
+    :func:`small_count` format them for publication.
     """
-    best: dict = {}
-    for part in parts:
-        for concept, tables in (part or {}).items():
+    readers: dict = {}
+    for module in sorted(drops_by_module or {}):
+        for concept, tables in ((drops_by_module or {})[module] or {}).items():
             for table, counts in (tables or {}).items():
                 counts = counts or {}
-                rank = (int(counts.get("stays_with_values", 0)), int(counts.get("non_numeric_values", 0)))
-                if (concept, table) not in best or rank > best[(concept, table)]:
-                    best[(concept, table)] = rank
+                if any(field in counts for field in _COERCION_FIELDS):
+                    readers.setdefault((concept, table), []).append((module, counts))
     out: dict = {}
-    for (concept, _table), (_stays, non_numeric) in best.items():
-        out[concept] = out.get(concept, 0) + non_numeric
+    for (concept, table), entries in sorted(readers.items()):
+        modules = [module for module, _counts in entries]
+        if all(isinstance(counts.get(_LEDGER), Mapping) for _m, counts in entries):
+            ledger = _merge_ledgers(*(counts[_LEDGER] for _m, counts in entries))
+            row = {
+                "non_numeric_values": sum(ledger["bad"].values()),
+                "stays_with_non_numeric": len(ledger["bad"]),
+                "stays_with_values": len(set(ledger["seen"]) | set(ledger["bad"])),
+                "union": "exact",
+            }
+        elif len(entries) == 1:
+            counts = entries[0][1]
+            row = {field: count_value(counts.get(field, 0)) for field in _COERCION_FIELDS}
+            row["union"] = "single_module"
+        else:
+            row = {
+                field: max(count_value(counts.get(field, 0)) for _m, counts in entries)
+                for field in _COERCION_FIELDS
+            }
+            row["union"] = AUDIT_UNKNOWN
+        row["modules"] = modules
+        out.setdefault(concept, {})[table] = row
+    return out
+
+
+def non_numeric_by_concept(*parts: Optional[Mapping]) -> dict:
+    """``{concept: non_numeric_values}`` of the union of ``parts`` (see :func:`coercion_union`)."""
+    union = coercion_union({f"part_{index:06d}": part for index, part in enumerate(parts)})
+    out: dict = {}
+    for concept, tables in union.items():
+        out[concept] = sum(row["non_numeric_values"] for row in tables.values())
     return out
 
 

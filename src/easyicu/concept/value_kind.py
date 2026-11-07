@@ -197,3 +197,140 @@ def default_aggregate(kind: ValueKind, *, nullable_status: bool) -> str:
     if kind == "logical":
         return "max" if nullable_status else "any"
     return "first"
+
+
+# ---------------------------------------------------------------------------
+# First parse of raw source values (B-IMPLICIT-GATE, D23V-RAW-EARLY)
+# ---------------------------------------------------------------------------
+
+from contextlib import contextmanager  # noqa: E402
+from contextvars import ContextVar  # noqa: E402
+from dataclasses import dataclass, field  # noqa: E402
+from typing import Callable, Iterator, Optional  # noqa: E402
+
+
+@dataclass(frozen=True)
+class SourceParseContext:
+    """The source and the effective declaration of the values a callback parses.
+
+    ``definition`` is the resolver's own (per-database, overlay-applied)
+    definition of ``concept``; ``id_column`` names the stay identifier of the
+    frames the callback parses (``None``: counted without a per-stay ledger).
+    """
+
+    database: str
+    concept: str
+    table: str
+    definition: object
+    id_column: Optional[str]
+    #: Set once a parse in this context has counted (so the callback-boundary
+    #: check of :func:`count_callback_losses` does not count the values twice).
+    parsed: list = field(default_factory=list)
+
+
+_PARSE_CONTEXT: ContextVar[Optional[SourceParseContext]] = ContextVar(
+    "easyicu_source_parse_context", default=None
+)
+
+
+@contextmanager
+def source_parse_context(context: Optional[SourceParseContext]) -> Iterator[None]:
+    """Make ``context`` the source of every :func:`parse_source_numeric` in the block."""
+    token = _PARSE_CONTEXT.set(context)
+    try:
+        yield
+    finally:
+        _PARSE_CONTEXT.reset(token)
+
+
+def current_parse_context() -> Optional[SourceParseContext]:
+    return _PARSE_CONTEXT.get()
+
+
+def _counted_kind(definition, database: str) -> Optional[ValueKind]:
+    try:
+        return declared_value_kind(definition, database=database)
+    except ConceptValueKindUndeclared:
+        return None
+
+
+def parse_source_numeric(
+    values: pd.Series,
+    *,
+    frame: Optional[pd.DataFrame] = None,
+    parser: Optional[Callable[[pd.Series], pd.Series]] = None,
+) -> pd.Series:
+    """The first parse of a concept's raw source values into numbers.
+
+    Returns exactly ``pd.to_numeric(values, errors="coerce")`` (or
+    ``parser(values)``). Inside a callback's :func:`source_parse_context`,
+    every non-null value that does not become a number is counted for that
+    concept and source in the bounds owner's records (with the stays of
+    ``frame``), and a concept that is numeric only by default (no class, no
+    numeric bounds) refuses it with ``ConceptValueKindUndeclared``. A concept
+    declared text is a deliberate parse and is not counted. Nothing is
+    inferred from dtypes: a numeric column has no value to lose.
+    """
+    converted = parser(values) if parser is not None else pd.to_numeric(values, errors="coerce")
+    context = _PARSE_CONTEXT.get()
+    if context is None or context.definition is None:
+        return converted
+    if pd.api.types.is_numeric_dtype(values) and not pd.api.types.is_bool_dtype(values):
+        return converted
+    implicit = implicitly_numeric(context.definition)
+    if not implicit and _counted_kind(context.definition, context.database) not in ("numeric", "logical"):
+        return converted
+    from ..source_bounds import record_series_coercion
+
+    context.parsed.append(True)
+    ids = None
+    if frame is not None and context.id_column and context.id_column in frame.columns:
+        ids = frame[context.id_column].reindex(values.index)
+    lost = record_series_coercion(
+        database=context.database, concept=context.concept, table=context.table,
+        stays=None if ids is None else ids.dropna().unique().tolist(),
+        original=values, converted=pd.Series(converted, index=values.index), ids=ids,
+    )
+    if lost and implicit:
+        from ..source_bounds import small_count
+
+        raise ConceptValueKindUndeclared(
+            concept_id=context.definition.name, database=context.database,
+            class_name=context.definition.class_name,
+            detail=(
+                f"{small_count(lost)} value(s) of source {context.table!r} do not parse as "
+                "numbers, and the concept is numeric only by default (no class, no "
+                "numeric bounds)"
+            ),
+        )
+    return converted
+
+
+def count_callback_losses(raw: pd.Series, raw_frame: pd.DataFrame, result, value_column: str) -> None:
+    """Count, at the callback boundary, raw text that a callback turned into NaN.
+
+    The safety net for a callback whose own parse does not go through
+    :func:`parse_source_numeric`: a raw value that is non-null and not a
+    number, on a row the callback kept, whose output value is missing, is
+    counted (and refused for a classless concept) exactly as the helper
+    would. Only rows the callback kept under the same index are judged; a
+    callback that parsed through the helper is not counted again.
+    """
+    context = _PARSE_CONTEXT.get()
+    if context is None or context.definition is None or context.parsed:
+        return
+    if not isinstance(result, pd.DataFrame) or value_column not in result.columns:
+        return
+    if not result.index.is_unique or not raw.index.is_unique or result.columns.duplicated().any():
+        return
+    kept = result.index.intersection(raw.index)
+    if len(kept) == 0:
+        return
+    original = raw.loc[kept]
+    output = result.loc[kept, value_column]
+    textual = original.notna() & pd.to_numeric(original, errors="coerce").isna()
+    if not bool(textual.any()):
+        return
+    # A text original whose output has a value was parsed (not lost).
+    converted = pd.to_numeric(original, errors="coerce").mask(textual & output.notna(), 0.0)
+    parse_source_numeric(original, frame=raw_frame.loc[kept], parser=lambda _values: converted)

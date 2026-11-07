@@ -2743,6 +2743,12 @@ def make_export_runner(
         module_resource_plans: Dict[str, Dict[str, object]] = {}
         stay_time_upper_bounds = None
         runtime_unavailable: List[Dict[str, Any]] = []
+        # Every module's source-value counts (bounds drops, non-numeric
+        # values with their private per-stay ledger), for the shared
+        # pre-commit gate before the root manifest (B-IMPLICIT-GATE).
+        from easyicu.source_bounds import bounds_scope, bounds_totals
+
+        source_value_counts: Dict[str, Dict[str, Any]] = {}
         with api.keep_cache(database=database, data_path=str(data_path)):
             for i, mod in enumerate(sel, start=1):
                 if getattr(job, "cancel_requested", False):
@@ -2830,20 +2836,24 @@ def make_export_runner(
                         )
                     # Share the grouped export's score owner so point organs
                     # cannot replace rolling companions or change its row set.
-                    df = extraction._load_module_concepts(
-                        api.load_concepts,
-                        module_name=mod,
-                        load_kwargs=dict(
-                            concepts=list(load_plan.source_concepts),
-                            patient_ids=patient_ids,
-                            database=database,
-                            data_path=str(data_path),
-                            use_sofa2=use_sofa2,
-                            merge=True,
-                            verbose=False,
-                            **module_kwargs,
-                        ),
-                    )
+                    with bounds_scope() as module_source_records:
+                        df = extraction._load_module_concepts(
+                            api.load_concepts,
+                            module_name=mod,
+                            load_kwargs=dict(
+                                concepts=list(load_plan.source_concepts),
+                                patient_ids=patient_ids,
+                                database=database,
+                                data_path=str(data_path),
+                                use_sofa2=use_sofa2,
+                                merge=True,
+                                verbose=False,
+                                **module_kwargs,
+                            ),
+                        )
+                    source_value_counts[mod] = {
+                        "source_bounds": bounds_totals(module_source_records)
+                    }
                 except DuckDBQueryInterrupted:
                     if getattr(job, "cancel_requested", False):
                         break
@@ -3026,6 +3036,14 @@ def make_export_runner(
                 database=metadata_database, file_bindings=metadata_file_bindings,
                 time_window_authority=time_window_authority, data_provenance=data_provenance,
             )
+        # The shared pre-commit gate of every publication format: a classless
+        # concept with non-numeric source values refuses here, before the
+        # root manifest exists; the counts published are the de-identified
+        # aggregate only.
+        value_publication = extraction.source_value_publication(
+            source_value_counts, list(source_value_counts),
+            database=metadata_database, dictionary=metadata_dictionary,
+        )
         manifest = {
             "schema_version": _NATIVE_EXPORT_SCHEMA_V2,
             **source_fields(data_path),
@@ -3073,6 +3091,7 @@ def make_export_runner(
             ),
             "column_metadata": metadata_ref.to_dict(),
             "data_provenance": data_provenance,
+            **value_publication,
         }
         (out / "_manifest.json").write_text(
             json.dumps(manifest, indent=2, ensure_ascii=False), encoding="utf-8"
