@@ -204,8 +204,9 @@ def test_a_linked_conversion_manifest_is_still_verified_and_copied(world):
 
 def test_a_linked_raw_manifest_is_pinned_and_copied_as_an_owned_file(world, tmp_path):
     """A production root may link its raw database's manifest (no derived_from; data_path names the
-    raw directory). It plans, is pinned by sha256, copies byte-identical as an owned file, and a target
-    that changes after planning is refused."""
+    raw directory). It plans, is pinned by sha256, is copied as an owned file that keeps every field
+    and declares the pinned source as its view (R13-SEAL-VIEW), and a target that changes after
+    planning is refused."""
     sic = Path(json.loads(world["config"].read_text())["dbs"]["sic"]["current_root"])
     raw = world["databases"] / "raw_sic"
     raw.mkdir()
@@ -226,7 +227,10 @@ def test_a_linked_raw_manifest_is_pinned_and_copied_as_an_owned_file(world, tmp_
         sic / sr.CONVERSION_MANIFEST, dest, sic, tmp_path / "new", pinned
     )
     assert not dest.is_symlink()
-    assert dest.read_bytes() == (raw / sr.CONVERSION_MANIFEST).read_bytes()
+    source = json.loads((raw / sr.CONVERSION_MANIFEST).read_text())
+    assert json.loads(dest.read_text()) == dict(
+        source, derived_from={"path": pinned["source"], "sha256": pinned["sha256"]}
+    )
 
     (raw / sr.CONVERSION_MANIFEST).write_text(
         json.dumps({"db": "sic", "data_path": "/elsewhere"})

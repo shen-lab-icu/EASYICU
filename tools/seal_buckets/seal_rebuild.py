@@ -58,7 +58,8 @@ the memgate admits it, then DBs run in parallel):
   2. a hidden staging root  b6_root/.<target>.seal_staging  (refused if it or the target exists):
      every entry of the current formal root except the rebuilt buckets, as symlinks (per-file links inside
      real dirs; every link target must resolve inside the allowed roots); conversion_manifest.json is
-     copied with data_path re-pointed to the target (its derived_from sha256 is re-verified first);
+     copied with data_path re-pointed to the target (its derived_from sha256 is re-verified first;
+     a linked manifest without one gains derived_from = its pinned source, R13-SEAL-VIEW);
   3. the builder with exactly the parameters of the current bucket (asserted against its manifest and
      receipt), in a minimal environment built from scratch: its own HOME / EASYICU_HOME / XDG_CACHE_HOME /
      TMPDIR / DuckDB spill under b6_root/_scratch/seal_<sha9>/<build>/<db>/, PYTHONPATH = that build's
@@ -989,12 +990,19 @@ def _conversion_decision(
             not Path(d["path"]).is_file() or sha256_file(Path(d["path"])) != d["sha256"]
         ):
             raise SealError("conversion_manifest_derived_from_changed", src.parent.name)
+    # R13-SEAL-VIEW: a linked installation manifest becomes the new root's own file, so the data
+    # root moves to the new root and every mirrored link would resolve outside it
+    # (storage_read_outside_data_root). The owned copy therefore declares the installation it views,
+    # bound to the plan-time pinned bytes, exactly as a farm manifest does (seal_farm).
+    bind_view = d is None and pinned["linked"] and cv_input is None
+    if bind_view:
+        c["derived_from"] = {"path": pinned["source"], "sha256": pinned["sha256"]}
     data_path = c.get("data_path")
     if data_path == str(old_root):
         c["data_path"] = str(new_root)
         return data, c
     if data_path is None or (pinned["linked"] and data_path == str(real.parent)):
-        return data, None
+        return data, (c if bind_view else None)
     raise SealError("conversion_manifest_data_path_unexpected", src.parent.name)
 
 
@@ -1006,9 +1014,11 @@ def rewritten_conversion_manifest(
     Its source is read once and verified on those bytes (D29-CONVERSION-RACE): the file it resolves
     to must have the sha256 pinned at plan time, and a ``derived_from`` binding (always required of a
     root's own, non-linked manifest) must still match its source, except for the explicitly pinned
-    CareVue build-input plan, where historical lineage remains provenance. Only ``data_path`` may change: the
-    current root's path is re-pointed to the new root; a linked source manifest that names its own
-    directory keeps it. Returns the new content, or None when the content is unchanged."""
+    CareVue build-input plan, where historical lineage remains provenance. Only ``data_path`` and, for a
+    linked manifest without one, ``derived_from`` may change: the current root's path is re-pointed to
+    the new root; a linked source manifest that names its own directory keeps it, and its copy declares
+    the linked source as a view ({path: realpath, sha256} pinned at plan time) so the new root's links
+    into that installation stay admitted. Returns the new content, or None when unchanged."""
     return _conversion_decision(
         src, old_root, new_root, pinned or manifest_source(src)
     )[1]
