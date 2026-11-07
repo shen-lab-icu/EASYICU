@@ -7316,7 +7316,7 @@ def _native_export_runtime_provenance(*, source_name: str | None = None) -> Dict
     import duckdb
     import pyarrow
 
-    from ..resolver_pool import resolver_pool_size
+    from ..resolver_pool import resolver_pool_size, resolver_pool_wait_seconds
 
     package_root = Path(__file__).resolve().parents[1]
     repository_root = package_root.parents[1]
@@ -7403,6 +7403,7 @@ def _native_export_runtime_provenance(*, source_name: str | None = None) -> Dict
         "duckdb_version": duckdb.__version__,
         # Calls on a shared loader each hold one of at most N resolvers.
         "resolver_pool_size": resolver_pool_size(),
+        "resolver_pool_wait_seconds": resolver_pool_wait_seconds(),
     }
 
 

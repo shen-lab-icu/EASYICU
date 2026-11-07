@@ -1,48 +1,66 @@
-"""Per-call resolver checkout for a loader shared across threads (B18).
+"""Per-call resolver checkout for a loader shared across threads (B18, D27).
 
 A ``ConceptResolver`` runs one top-level ``load_concepts`` call at a time; a
 call from another context is refused with ``ResolverBusyError``. A loader that
 concurrent callers share (the ``api.concepts`` global loader cache) therefore
-lends each call ONE resolver from a bounded pool it owns:
+lends each call ONE resolver from a bounded pool it owns.
 
-* the call opens a scope (:func:`resolver_call_scope`), a ``ContextVar`` that
-  binds the resolvers it checked out;
-* the first load in the scope checks one out (:func:`call_resolver`): an idle
-  resolver is reused (the loader's own resolver first, so sequential callers
-  and ``keep_cache`` keep their caches); with none idle and fewer than N
-  members a new one is created; with N members the caller BLOCKS on the pool
-  condition until a call returns one. No timeouts, no re-routing;
-* a nested load in the same context (or a ``contextvars.copy_context`` worker)
-  reaches the same scope and so the call's own resolver, where resolver
-  nesting applies; anything that re-enters that resolver from another context
-  still gets ``ResolverBusyError``. The pool is never consulted for it;
-* the scope returns its resolvers on every exit path (``finally``).
+Call scope. ``resolver_call_scope`` opens a scope (bound in a ``ContextVar``)
+whose owner is the call. A nested load in the same context, or a
+``contextvars.copy_context`` worker, enters the same scope as another user.
+The scope closes when its owner exits, and its leases go back to the pool
+only after the LAST user has left. A copied context that tries to enter a
+closed scope (it outlived its call) is refused with ``ResolverCallClosed``:
+it still names the old call, so starting a new call from it silently would
+be wrong (D27-SCOPE-LIFETIME).
+
+Leases. The pool records a lease as ``slot.owner = scope``, a single store
+under the pool's lock; nothing else marks a resolver as taken. Cleanup
+releases every slot whose owner is the scope, so a lease interrupted between
+the checkout and the caller seeing it is still found and returned
+(D27-CHECKOUT-CANCEL). A released resolver whose own call is still running
+(a joined worker) becomes idle when that call ends (``defer_until_idle``).
+
+Waiting. With all N members leased a checkout waits on the pool's
+``Condition`` for at most the configured wait, then raises the typed
+``ResolverPoolExhausted`` (a call that waits on a plain thread which itself
+calls ``load_concepts`` can otherwise never finish).
 
 Each member keeps the resolver's own bounded caches and revalidation, so the
-pool can hold up to N times the per-resolver cache cap. N defaults to
-:data:`DEFAULT_POOL_SIZE`; ``EASYICU_RESOLVER_POOL_SIZE`` sets it (a positive
-integer) and run metadata records it.
+cached data can reach N times the per-resolver cache cap (the cap is not a
+bound on process memory). N defaults to :data:`DEFAULT_POOL_SIZE` and the
+wait to :data:`DEFAULT_POOL_WAIT_SECONDS`; both are set by environment
+variables and recorded in run metadata.
 """
 
 from __future__ import annotations
 
 import contextvars
+import math
 import os
 import threading
+import time
 from contextlib import contextmanager
 from typing import Callable, Iterator, Optional
 
+from .resolver_errors import ResolverCallClosed, ResolverPoolExhausted
+
 __all__ = [
     "DEFAULT_POOL_SIZE",
+    "DEFAULT_POOL_WAIT_SECONDS",
     "POOL_SIZE_ENV",
+    "POOL_WAIT_ENV",
     "ResolverPool",
     "call_resolver",
     "resolver_call_scope",
     "resolver_pool_size",
+    "resolver_pool_wait_seconds",
 ]
 
 DEFAULT_POOL_SIZE = 4
 POOL_SIZE_ENV = "EASYICU_RESOLVER_POOL_SIZE"
+DEFAULT_POOL_WAIT_SECONDS = 600.0
+POOL_WAIT_ENV = "EASYICU_RESOLVER_POOL_WAIT_SECONDS"
 
 
 def resolver_pool_size() -> int:
@@ -59,8 +77,33 @@ def resolver_pool_size() -> int:
     return size
 
 
+def resolver_pool_wait_seconds() -> float:
+    """The configured longest pool wait (a finite, positive number of seconds)."""
+    raw = os.environ.get(POOL_WAIT_ENV, "").strip()
+    if not raw:
+        return DEFAULT_POOL_WAIT_SECONDS
+    try:
+        seconds = float(raw)
+    except ValueError:
+        raise ValueError(f"{POOL_WAIT_ENV} must be a positive number of seconds, got {raw!r}") from None
+    if not math.isfinite(seconds) or seconds <= 0:
+        raise ValueError(f"{POOL_WAIT_ENV} must be a positive number of seconds, got {raw!r}")
+    return seconds
+
+
+class _Slot:
+    __slots__ = ("resolver", "owner")
+
+    def __init__(self, resolver, owner=None) -> None:
+        self.resolver = resolver
+        self.owner = owner  # None = idle; a scope = leased; _RETURNING = waiting for its call
+
+
+_RETURNING = object()
+
+
 class ResolverPool:
-    """At most ``size`` resolvers; a checkout blocks on the pool when all are out."""
+    """At most ``size`` resolvers, each leased to at most one call scope."""
 
     def __init__(
         self,
@@ -68,93 +111,168 @@ class ResolverPool:
         factory: Callable[[], object],
         *,
         size: Optional[int] = None,
+        wait_seconds: Optional[float] = None,
         on_create: Optional[Callable[[object], None]] = None,
+        defer_until_idle: Optional[Callable[[object, Callable[[], None]], bool]] = None,
     ) -> None:
         self.size = resolver_pool_size() if size is None else int(size)
         if self.size < 1:
             raise ValueError(f"resolver pool size must be positive, got {self.size}")
+        self.wait_seconds = resolver_pool_wait_seconds() if wait_seconds is None else float(wait_seconds)
+        if not math.isfinite(self.wait_seconds) or self.wait_seconds <= 0:
+            raise ValueError(f"resolver pool wait must be positive, got {self.wait_seconds}")
         self._primary = primary
         self._factory = factory
         self._on_create = on_create
-        self._members: list = [primary]
-        self._idle: list = [primary]
+        self._defer_until_idle = defer_until_idle
+        self._slots: list = [_Slot(primary)]
         self._condition = threading.Condition()
 
-    def checkout(self):
+    def _held_by(self, owner):
+        for slot in self._slots:
+            if slot.owner is owner:
+                return slot.resolver
+        return None
+
+    def checkout(self, owner=None):
+        """Lease one resolver to ``owner`` (idempotent per owner); wait if all are leased.
+
+        Without an owner (manual use) the lease is anonymous and only
+        :meth:`checkin` returns it.
+        """
+        if owner is None:
+            owner = object()
+        elif owner is _RETURNING:
+            raise ValueError("a lease needs an owner")
+        deadline = time.monotonic() + self.wait_seconds
         with self._condition:
             while True:
-                if self._idle:
-                    index = next(
-                        (i for i, r in enumerate(self._idle) if r is self._primary),
-                        len(self._idle) - 1,
-                    )
-                    return self._idle.pop(index)
-                if len(self._members) < self.size:
+                held = self._held_by(owner)
+                if held is not None:
+                    return held
+                free = [slot for slot in self._slots if slot.owner is None]
+                if free:
+                    slot = next((s for s in free if s.resolver is self._primary), free[-1])
+                    slot.owner = owner  # the lease: one store, found again by owner
+                    return slot.resolver
+                if len(self._slots) < self.size:
                     resolver = self._factory()
                     if self._on_create is not None:
                         self._on_create(resolver)
-                    self._members.append(resolver)
+                    self._slots.append(_Slot(resolver, owner))  # the lease: one append
                     return resolver
-                self._condition.wait()
+                remaining = deadline - time.monotonic()
+                if remaining <= 0:
+                    raise ResolverPoolExhausted(self.size, self.wait_seconds)
+                self._condition.wait(remaining)
+
+    def release(self, owner) -> None:
+        """Return every resolver leased to ``owner``; one still running returns when its call ends."""
+        with self._condition:
+            for slot in self._slots:
+                if slot.owner is not owner:
+                    continue
+                if self._defer_until_idle is not None and self._defer_until_idle(
+                    slot.resolver, lambda slot=slot, owner=owner: self._returned(slot, owner)
+                ):
+                    slot.owner = _RETURNING
+                else:
+                    slot.owner = None
+            self._condition.notify_all()
+
+    def _returned(self, slot, owner) -> None:
+        with self._condition:
+            if slot.owner is _RETURNING or slot.owner is owner:
+                slot.owner = None
+                self._condition.notify_all()
 
     def checkin(self, resolver) -> None:
+        """Return one resolver leased outside a call scope (tests, manual use)."""
         with self._condition:
-            if not any(member is resolver for member in self._members):
+            slot = next((s for s in self._slots if s.resolver is resolver), None)
+            if slot is None:
                 raise RuntimeError("resolver_pool_foreign: this resolver is not a member of the pool")
-            if any(idle is resolver for idle in self._idle):
+            if slot.owner is None:
                 raise RuntimeError("resolver_pool_double_return: this resolver is already idle")
-            self._idle.append(resolver)
-            self._condition.notify()
+            slot.owner = None
+            self._condition.notify_all()
 
     def members(self) -> tuple:
         with self._condition:
-            return tuple(self._members)
+            return tuple(slot.resolver for slot in self._slots)
 
     def stats(self) -> dict:
         with self._condition:
-            return {"size": self.size, "members": len(self._members), "idle": len(self._idle)}
+            return {
+                "size": self.size,
+                "members": len(self._slots),
+                "idle": sum(slot.owner is None for slot in self._slots),
+            }
 
 
-class _CallHolds:
-    __slots__ = ("lock", "held")
+class _CallScope:
+    """One call's leases; closed when its owner exits, released after its last user."""
+
+    __slots__ = ("lock", "owner", "users", "closed", "released", "pools")
 
     def __init__(self) -> None:
         self.lock = threading.Lock()
-        self.held: list = []  # (pool, resolver) pairs, at most one per pool
+        self.owner = object()
+        self.users = {self.owner}  # entry tokens; a set add/discard is one operation
+        self.closed = False
+        self.released = False
+        self.pools: list = []
+
+    def leave(self, entry) -> None:
+        with self.lock:
+            self.users.discard(entry)
+            if entry is self.owner:
+                self.closed = True
+            release = self.closed and not self.users and not self.released
+            if release:
+                self.released = True
+            pools = list(self.pools) if release else []
+        for pool in pools:
+            pool.release(self)
 
 
-_CALL_HOLDS: contextvars.ContextVar[Optional[_CallHolds]] = contextvars.ContextVar(
-    "easyicu_call_resolvers", default=None
+_CALL_SCOPE: contextvars.ContextVar[Optional[_CallScope]] = contextvars.ContextVar(
+    "easyicu_call_scope", default=None
 )
 
 
 @contextmanager
 def resolver_call_scope() -> Iterator[None]:
-    """Bind one call's checked-out resolvers; nested scopes join the outer one."""
-    if _CALL_HOLDS.get() is not None:
-        yield
+    """Open this call's scope, or enter the open scope of the call this context belongs to."""
+    scope = _CALL_SCOPE.get()
+    if scope is not None:
+        entry = object()
+        try:
+            with scope.lock:
+                if scope.closed:
+                    raise ResolverCallClosed("copied context")
+                scope.users.add(entry)
+            yield
+        finally:
+            scope.leave(entry)  # no-op unless the entry was added
         return
-    holds = _CallHolds()
-    token = _CALL_HOLDS.set(holds)
+    scope = _CallScope()
     try:
+        _CALL_SCOPE.set(scope)
         yield
     finally:
-        _CALL_HOLDS.reset(token)
-        with holds.lock:
-            held, holds.held = holds.held, []
-        for pool, resolver in held:
-            pool.checkin(resolver)
+        _CALL_SCOPE.set(None)  # this branch only runs with no scope bound
+        scope.leave(scope.owner)
 
 
 def call_resolver(pool: ResolverPool):
-    """The resolver this call holds from ``pool``, checking one out the first time."""
-    holds = _CALL_HOLDS.get()
-    if holds is None:
+    """The resolver this call leases from ``pool``, leasing one the first time."""
+    scope = _CALL_SCOPE.get()
+    if scope is None:
         raise RuntimeError("call_resolver needs an open resolver_call_scope")
-    with holds.lock:
-        for owner, resolver in holds.held:
-            if owner is pool:
-                return resolver
-        resolver = pool.checkout()
-        holds.held.append((pool, resolver))
-        return resolver
+    with scope.lock:
+        if scope.released:
+            raise ResolverCallClosed("call scope")
+        if not any(known is pool for known in scope.pools):
+            scope.pools.append(pool)  # registered before the lease, so cleanup finds it
+        return pool.checkout(scope)

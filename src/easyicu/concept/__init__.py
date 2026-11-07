@@ -17,7 +17,7 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 import hashlib
 from dataclasses import dataclass, field, replace, asdict
 from pathlib import Path
-from threading import RLock, local as thread_local
+from threading import Condition, Lock, RLock, local as thread_local
 from typing import Dict, FrozenSet, Iterable, List, Mapping, MutableMapping, Optional, Union
 
 import numpy as np
@@ -752,64 +752,156 @@ def _in_binding_unit(method):
 
     @functools.wraps(method)
     def wrapper(self, *args, **kwargs):
-        from ..resolver_errors import ResolverBusyError
+        from ..resolver_errors import ResolverBusyError, ResolverCallClosed
         from ..storage_binding import active_unit, binding_unit
         from .stay_tables import StayTableUnbound
 
-        inside = _RESOLVER_CALLS.get()
-        if id(self) in inside:
+        calls = _RESOLVER_CALLS.get()
+        record = next((call for call in calls if call.resolver_id == id(self)), None)
+        if record is not None:
             # Nested: recursion, or a concept worker run in the call's copied
-            # context. It must find the outer call's live unit.
-            if active_unit() is None:
-                raise StayTableUnbound("load_concepts")
-            return method(self, *args, **kwargs)
+            # context. It joins the call as one more user and must find the
+            # call still open and its live unit (D27-SCOPE-LIFETIME).
+            entry = object()
+            try:
+                if not record.guard.join(record, entry):
+                    raise ResolverCallClosed("copied context")
+                if active_unit() is None:
+                    raise StayTableUnbound("load_concepts")
+                return method(self, *args, **kwargs)
+            finally:
+                record.guard.leave(record, entry)
         # A top-level call in this context. The resolver's per-call state
         # (depth, batch scope, request caches) is per instance, so one
         # top-level call runs at a time (B-STAY-SCOPE). Another context's
         # call is refused at once, never made to wait: a plain thread-pool
         # worker re-entering the resolver while the call holding it waits
-        # for that worker would wait forever (B18-REENTRY-DEADLOCK).
-        lock = _top_level_call_lock(self)
-        if not lock.acquire(blocking=False):
-            raise ResolverBusyError(id(self))
+        # for that worker would wait forever (B18-REENTRY-DEADLOCK). The
+        # record exists before the guard is taken and the ``finally`` checks
+        # who actually holds it, so an interrupt anywhere after the take
+        # still releases it (D27-LOCK-CANCEL). The guard is released when
+        # the call AND every joined worker have left.
+        guard = _call_guard(self)
+        record = _ResolverCall(guard, id(self))
         try:
+            if not guard.enter(record):
+                raise ResolverBusyError(id(self))
             if getattr(self, "_load_depth", 0):
                 # No call of this resolver is live (this context holds its
-                # lock), yet it looks nested: the outer call and its unit are
+                # guard), yet it looks nested: the outer call and its unit are
                 # gone. Refuse rather than run unbound (D8C-RECOVERY-OWNER).
                 raise StayTableUnbound("load_concepts")
-            token = _RESOLVER_CALLS.set(inside | {id(self)})
-            try:
-                with binding_unit():
+            _RESOLVER_CALLS.set(calls + (record,))
+            with binding_unit():
+                try:
+                    return method(self, *args, **kwargs)
+                finally:
                     try:
-                        return method(self, *args, **kwargs)
+                        # The call ends with its joined workers: no new joins,
+                        # and the depth, unit and guard outlive any worker
+                        # still running in the call's copied context.
+                        guard.close_and_wait(record)
                     finally:
                         if self._load_depth:  # left before its own finally ran
                             self._load_depth = 0
                             self._end_top_level_load()
-            finally:
-                _RESOLVER_CALLS.reset(token)
         finally:
-            lock.release()
+            _RESOLVER_CALLS.set(calls)
+            guard.leave(record, record)
 
     return wrapper
 
 
-_CALL_LOCKS_GUARD = RLock()
+class _ResolverCall:
+    """One top-level call of one resolver; its users are the call and its joined workers."""
+
+    __slots__ = ("guard", "resolver_id", "users", "closed")
+
+    def __init__(self, guard: "_CallGuard", resolver_id: int) -> None:
+        self.guard = guard
+        self.resolver_id = resolver_id
+        self.users = {self}  # the call itself; joined workers add their own entries
+        self.closed = False
 
 
-def _top_level_call_lock(resolver) -> RLock:
-    lock = resolver.__dict__.get("_top_level_call_lock")
-    if lock is None:  # a resolver built without __init__ (copies, test doubles)
-        with _CALL_LOCKS_GUARD:
-            lock = resolver.__dict__.setdefault("_top_level_call_lock", RLock())
-    return lock
+class _CallGuard:
+    """Which call holds a resolver. Taking it is one store; release follows the holder."""
+
+    __slots__ = ("mutex", "changed", "call", "after")
+
+    def __init__(self) -> None:
+        self.mutex = Lock()
+        self.changed = Condition(self.mutex)
+        self.call: Optional[_ResolverCall] = None
+        self.after: list = []
+
+    def enter(self, record: _ResolverCall) -> bool:
+        with self.mutex:
+            if self.call is not None:
+                return False
+            self.call = record
+            return True
+
+    def join(self, record: _ResolverCall, entry) -> bool:
+        with self.mutex:
+            if self.call is not record or record.closed:
+                return False
+            record.users.add(entry)
+            return True
+
+    def close_and_wait(self, record: _ResolverCall) -> None:
+        """Close the call to new joins and wait for the workers already joined."""
+        with self.mutex:
+            if self.call is not record:
+                return
+            record.closed = True
+            while record.users - {record}:
+                self.changed.wait()
+
+    def leave(self, record: _ResolverCall, entry) -> None:
+        with self.mutex:
+            if self.call is not record:
+                return  # this record never held the guard (busy) or already left
+            record.users.discard(entry)
+            self.changed.notify_all()
+            if entry is record:
+                record.closed = True
+            if not (record.closed and not record.users):
+                return
+            self.call = None
+            after, self.after = self.after, []
+        for callback in after:
+            callback()
+
+    def defer(self, callback) -> bool:
+        """Run ``callback`` when the running call ends; False if none is running."""
+        with self.mutex:
+            if self.call is None:
+                return False
+            self.after.append(callback)
+            return True
 
 
-# The resolvers whose ``load_concepts`` is running in this context. Threads
-# a call starts in a copied context see it, so their calls are nested.
+_CALL_GUARDS_GUARD = Lock()
+
+
+def _call_guard(resolver) -> _CallGuard:
+    guard = resolver.__dict__.get("_call_guard")
+    if guard is None:  # a resolver built without __init__ (copies, test doubles)
+        with _CALL_GUARDS_GUARD:
+            guard = resolver.__dict__.setdefault("_call_guard", _CallGuard())
+    return guard
+
+
+def defer_until_resolver_idle(resolver, callback) -> bool:
+    """For the resolver pool: return a leased resolver only after its call ends."""
+    return _call_guard(resolver).defer(callback)
+
+
+# The resolver calls running in this context (``_ResolverCall`` records).
+# Threads a call starts in a copied context see them, so their calls nest.
 _RESOLVER_CALLS: contextvars.ContextVar = contextvars.ContextVar(
-    "easyicu_resolver_calls", default=frozenset()
+    "easyicu_resolver_calls", default=()
 )
 
 
@@ -849,7 +941,7 @@ class ConceptResolver:
         # 🔧 嵌套调用深度跟踪：防止递归概念的内部调用清除缓存
         self._load_depth = 0
         # One top-level ``load_concepts`` at a time per resolver (_in_binding_unit).
-        self._top_level_call_lock = RLock()
+        self._call_guard = _CallGuard()
         # ⚡ PERF: 跨模块缓存复用模式 — 保留 raw/table 缓存在 top-level 调用间
         self._keep_cache_between_calls = False
         # 💾 PC safety: byte budget + LRU accounting shared by the caches above.

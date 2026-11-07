@@ -62,28 +62,16 @@ def _touch(path: Path) -> None:
 
 
 def _released(resolver=None) -> None:
-    from easyicu.concept import _RESOLVER_CALLS
+    from easyicu.concept import _RESOLVER_CALLS, _call_guard
 
     assert live_units() == ()
     assert held_stay_tables() == 0
     assert active_unit() is None
-    assert _RESOLVER_CALLS.get() == frozenset()  # no call marked live in this context
+    assert _RESOLVER_CALLS.get() == ()  # no call marked live in this context
     if resolver is not None:
         assert resolver._load_depth == 0
-        # The call lock is free for another thread right away.
-        free: list = []
-        thread = threading.Thread(
-            target=lambda: free.append(_lock_of(resolver).acquire(timeout=5) and (_lock_of(resolver).release() or True))
-        )
-        thread.start()
-        thread.join(timeout=10)
-        assert free == [True]
-
-
-def _lock_of(resolver):
-    from easyicu.concept import _top_level_call_lock
-
-    return _top_level_call_lock(resolver)
+        guard = _call_guard(resolver)
+        assert guard.call is None and guard.after == []  # free for another thread
 
 
 def _fail_on_read(monkeypatch, error):

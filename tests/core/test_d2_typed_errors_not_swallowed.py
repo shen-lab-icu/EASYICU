@@ -24,7 +24,7 @@ import pytest
 import easyicu
 from easyicu.io import ts_utils
 from easyicu.io.ts_utils import IntervalAggregationError, TimeAxisUnitError
-from easyicu.resolver_errors import ResolverBusyError
+from easyicu.resolver_errors import ResolverBusyError, ResolverCallClosed, ResolverPoolExhausted
 from easyicu.storage_layout import StorageIntegrityError, TableScanError
 from easyicu.utils.exact_sum import ExactSumOverflowError
 from easyicu.value_failures import TYPED_VALUE_FAILURES
@@ -54,10 +54,12 @@ def test_the_shared_tuple_names_every_type():
     # lead-r13 delta4: the exact-sum refusal (D4-EXACT-CATCH) and the undeclared
     # time-axis unit (D4-AXIS-CATCH) are value failures too; a broad catch must
     # not turn them into an empty or unaggregated result. lead-r13 delta18s:
-    # a busy shared resolver (B18-REENTRY-DEADLOCK) is refused, not swallowed.
+    # a busy shared resolver (B18-REENTRY-DEADLOCK) is refused, not swallowed;
+    # delta27s: so are a copied context outliving its call and an exhausted
+    # resolver pool.
     assert set(TYPED_VALUE_FAILURES) == {
         IntervalAggregationError, StorageIntegrityError, ExactSumOverflowError,
-        TimeAxisUnitError, ResolverBusyError,
+        TimeAxisUnitError, ResolverBusyError, ResolverCallClosed, ResolverPoolExhausted,
     }
 
 

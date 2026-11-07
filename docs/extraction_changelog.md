@@ -7,7 +7,7 @@ answers is in brackets.
 lead-r13 (0.2.0) is validated on SICdb 1.0.8, the default release, and
 remains compatible with SICdb 1.0.6 (the release is detected from the schema).
 
-## 2026-11-06 — sharing one resolver across threads needs `copy_context` [lead-r13, B-STAY-SCOPE `0feee4fed`, B18-REENTRY-DEADLOCK `723edab14`, resolver pool]
+## 2026-11-06 — sharing one resolver across threads needs `copy_context` [lead-r13, B-STAY-SCOPE `0feee4fed`, B18-REENTRY-DEADLOCK `723edab14`, resolver pool `3802ddf70`, delta27s]
 
 **What changed.** Values do not move. A `ConceptResolver` runs one top-level
 `load_concepts` call at a time. A call from another context while one is
@@ -26,6 +26,18 @@ defaults to 4 (`EASYICU_RESOLVER_POOL_SIZE`) and is recorded in the export's
 `runtime_provenance.resolver_pool_size`. Each pooled resolver keeps its own
 bounded caches, so the pool can hold up to N times the per-resolver cache cap.
 Chunked loads keep their per-chunk resolvers and never use a pool member.
+
+A call's lifetime covers the workers that joined it (`copy_context`): the
+call returns, and its resolver's guard and pool lease are released, only
+after every joined worker has left. A copied context that outlives its call
+and tries to load through it is refused with `ResolverCallClosed`. A pool wait
+is bounded by `EASYICU_RESOLVER_POOL_WAIT_SECONDS` (default 600, recorded as
+`runtime_provenance.resolver_pool_wait_seconds`) and then raises
+`ResolverPoolExhausted`. An interrupt right after a lease or a guard is taken
+leaves neither held. `keep_cache` only marks the loader's own resolver; under
+concurrent calls a context may be lent another pooled resolver between two
+calls and then misses those cached tables (values are unchanged). The cache
+cap bounds cached data, not process memory.
 
 ## 2026-11-06 — the DuckDB and pandas load paths publish the same rows [lead-r13, `f486570e2`]
 
