@@ -639,7 +639,7 @@ def test_clean_step_records_and_a_clean_live_receipt_pass(origins):
 
     assert set(out) == {"extract:sic", "memgate:sic", "workers:sic",
                         "inputs:snapshot", "inputs:verify", "receipt"}
-    assert out["workers:sic"] == {"workers": 0, "records": []}
+    assert out["workers:sic"] == {"workers": 0, "records": [], "aborted_retried": 0}
 
 
 @pytest.mark.parametrize("change,code", [

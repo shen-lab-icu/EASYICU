@@ -51,6 +51,7 @@ import stat  # noqa: E402
 import subprocess  # noqa: E402
 import tempfile  # noqa: E402
 import types  # noqa: E402
+import uuid  # noqa: E402
 
 ORIGIN_EXIT = 97
 
@@ -130,8 +131,11 @@ def worker_origin(initial_ok):
     context = json.loads(os.environ["FORMAL_BOOT_CONTEXT"])
     record = dict(context["record"], complete=False, modules={}, mismatched=[],
                   pid=os.getpid(), isolated=sys.flags.isolated, no_site=sys.flags.no_site,
-                  safe_path=sys.flags.safe_path, sys_path=list(sys.path))
-    out = os.path.join(os.environ["FORMAL_WORKER_ORIGIN_DIR"], f"{os.getpid()}.json")
+                  safe_path=sys.flags.safe_path, sys_path=list(sys.path),
+                  worker_id=uuid.uuid4().hex,
+                  stream_attempt=json.loads(os.environ.get("FORMAL_STREAM_ATTEMPT", "null")))
+    out = os.path.join(os.environ["FORMAL_WORKER_ORIGIN_DIR"],
+                       f"{os.getpid()}-{record['worker_id']}.json")
 
     def check(complete=False):
         try:

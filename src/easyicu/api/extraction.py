@@ -3293,6 +3293,7 @@ def _stream_module_batches_to_parquet(
     """
     import json
     import multiprocessing as mp
+    import uuid
     from pathlib import Path
 
     import pyarrow as pa
@@ -3487,6 +3488,7 @@ def _stream_module_batches_to_parquet(
             output_rows = 0
             part_name = None
             batch_bounds: Dict = {}
+            worker_attempt = {}
             batch_part = destination.with_name(f".{module_name}.batch-{index:05d}.parquet")
             if batch_part.exists() or batch_part.is_symlink():
                 # An uncommitted part of a killed attempt (the ledger did not
@@ -3510,8 +3512,23 @@ def _stream_module_batches_to_parquet(
                         ),
                         daemon=False,
                     )
-                    process.start()
+                    # The spawn main writes its origin before the target runs.
+                    # Carry the existing ledger's batch identity across that boundary.
+                    attempt = {"module": module_name, "batch_index": index,
+                               "start_offset": start, "attempt_id": uuid.uuid4().hex}
+                    previous_attempt = os.environ.get("FORMAL_STREAM_ATTEMPT")
+                    os.environ["FORMAL_STREAM_ATTEMPT"] = json.dumps(attempt)
+                    try:
+                        process.start()
+                    finally:
+                        if previous_attempt is None:
+                            os.environ.pop("FORMAL_STREAM_ATTEMPT", None)
+                        else:
+                            os.environ["FORMAL_STREAM_ATTEMPT"] = previous_attempt
                     process.join()
+                    worker_attempt = {"stream_attempt": attempt,
+                                      "worker_pid": getattr(process, "pid", None),
+                                      "worker_exit_code": process.exitcode}
                     if process.exitcode != 0:
                         record = (
                             json.loads(marker.read_text(encoding="utf-8"))
@@ -3519,6 +3536,7 @@ def _stream_module_batches_to_parquet(
                         )
                         marker.unlink(missing_ok=True)
                         batch_part.unlink(missing_ok=True)
+                        batch_part.with_name(f".{batch_part.name}.partial").unlink(missing_ok=True)
                         delta = _oom_kill_delta(kills_before, _cgroup_oom_kills())
                         evidence = _worker_memory_evidence(
                             process.exitcode, [record] if record else [], delta
@@ -3532,7 +3550,15 @@ def _stream_module_batches_to_parquet(
                                 "previous_batch_size": current_batch_size,
                                 "batch_size": retry,
                                 "evidence": evidence,
-                                "worker_exit_code": process.exitcode,
+                                **worker_attempt,
+                                "part_discarded": True,
+                                "discarded_part": batch_part.name,
+                                "termination_evidence": {
+                                    "oom_kill_delta": delta,
+                                    "failures": [{k: record[k] for k in (
+                                        "memory_exhausted", "exception_type") if k in record}]
+                                    if record else [],
+                                },
                             })
                             current_batch_size = retry
                             commit_ledger(current_batch_size)
@@ -3556,8 +3582,10 @@ def _stream_module_batches_to_parquet(
                                 "start_offset": start,
                                 "previous_batch_size": current_batch_size,
                                 "batch_size": retry,
-                                "worker_exit_code": process.exitcode,
                                 "oom_kill_counter": "unavailable",
+                                **worker_attempt,
+                                "part_discarded": True,
+                                "discarded_part": batch_part.name,
                                 # Supporting evidence only: the sampled peak of
                                 # this process tree while the child ran.
                                 "process_tree_peak_rss_mb": round(
@@ -3686,6 +3714,7 @@ def _stream_module_batches_to_parquet(
                     # Concepts the loader returned for this batch; Arrow's
                     # structural nulls do not make a concept produced.
                     "loader_concepts": batch_loader_concepts,
+                    **worker_attempt,
                     **batch_memory,
                 }
             )
@@ -8399,6 +8428,11 @@ def _publish_native_export_v2(
             module: list(result["modules"][module]["stream_resume_events"])
             for module in modules
             if (result.get("modules", {}).get(module) or {}).get("stream_resume_events")
+        },
+        "stream_batches": {
+            module: list(result["modules"][module]["stream_batches"])
+            for module in modules
+            if (result.get("modules", {}).get(module) or {}).get("stream_batches")
         },
         "resource_plan": result.get("resource_plan"),
         "module_resource_plans": result.get("module_resource_plans"),

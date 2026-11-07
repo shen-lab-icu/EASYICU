@@ -437,9 +437,74 @@ def _origin_ok(record: Any, sealed_sha: str, src: str, tools: str, script: str,
     )
 
 
+def _stream_attempt(value: Any) -> bool:
+    return (isinstance(value, dict) and isinstance(value.get("module"), str)
+            and value["module"] not in ("", ".", "..")
+            and os.path.basename(value["module"]) == value["module"]
+            and type(value.get("batch_index")) is int and value["batch_index"] > 0
+            and type(value.get("start_offset")) is int and value["start_offset"] >= 0
+            and isinstance(value.get("attempt_id"), str) and bool(value["attempt_id"]))
+
+
+def _aborted_retried(record: dict, manifest: dict, completed: list, export: Path) -> bool:
+    """Reconcile one startup-only check with the published stream ledger.
+
+    A bare exit code never certifies OOM. Reapply the extractor's evidence
+    rule, then require discarded output and a completed successor's postcheck.
+    """
+    from easyicu.api.extraction import _worker_memory_evidence
+
+    attempt = record.get("stream_attempt")
+    if not _stream_attempt(attempt) or type(record.get("pid")) is not int:
+        return False
+    module = attempt["module"]
+    events = manifest.get("stream_resume_events", {})
+    batches = manifest.get("stream_batches", {})
+    if not isinstance(events, dict) or not isinstance(batches, dict):
+        return False
+    events, batches = events.get(module, []), batches.get(module, [])
+    if not isinstance(events, list) or not isinstance(batches, list):
+        return False
+    matches = [e for e in events if isinstance(e, dict)
+               and e.get("stream_attempt") == attempt and e.get("worker_pid") == record["pid"]]
+    if len(matches) != 1:
+        return False
+    event = matches[0]
+    evidence = event.get("termination_evidence")
+    part = f".{module}.batch-{attempt['batch_index']:05d}.parquet"
+    if (event.get("kind") != "isolated_batch_memory_retry"
+            or event.get("batch_index") != attempt["batch_index"]
+            or event.get("start_offset") != attempt["start_offset"]
+            or type(event.get("worker_exit_code")) is not int
+            or event["worker_exit_code"] == 0 or not isinstance(evidence, dict)
+            or event.get("evidence") not in ("oom_kill_event", "memory_exception")
+            or (event["evidence"] == "oom_kill_event" and (
+                type(evidence.get("oom_kill_delta")) is not int or evidence["oom_kill_delta"] <= 0))
+            or _worker_memory_evidence(event["worker_exit_code"], evidence.get("failures"),
+                                       evidence.get("oom_kill_delta")) != event["evidence"]
+            or event.get("part_discarded") is not True or event.get("discarded_part") != part
+            or os.path.lexists(export / part) or os.path.lexists(export / f".{part}.partial")):
+        return False
+    successors = []
+    for batch in batches:
+        if not isinstance(batch, dict):
+            continue
+        successor = batch.get("stream_attempt")
+        if (_stream_attempt(successor) and successor["attempt_id"] != attempt["attempt_id"]
+                and all(successor[k] == attempt[k] for k in ("module", "batch_index", "start_offset"))
+                and batch.get("batch_index") == attempt["batch_index"]
+                and batch.get("start_offset") == attempt["start_offset"]
+                and batch.get("batch_process_isolation") is True
+                and type(batch.get("worker_exit_code")) is int and batch["worker_exit_code"] == 0
+                and type(batch.get("worker_pid")) is int and batch["worker_pid"] > 0):
+            successors.extend(r for r in completed if r.get("stream_attempt") == successor
+                              and r.get("pid") == batch.get("worker_pid"))
+    return len(successors) == 1
+
+
 def _worker_origins(db: str, folder: Path, src: str, sealed_sha: str,
                     tools: str, root: str) -> Dict[str, Any]:
-    """Bind each worker's completed full origin check by content digest.
+    """Bind every full check, reconciling only certified discarded retries.
 
     Workers check their modules both before and after their target. A run
     without spawned workers may have no records.
@@ -448,8 +513,7 @@ def _worker_origins(db: str, folder: Path, src: str, sealed_sha: str,
         raise ReceiptError("formal_import_origin_mismatch", "worker folder escapes the run",
                            step=f"workers:{db}")
     records = sorted(folder.glob("*.json")) if folder.is_dir() else []
-    bad = []
-    bound = []
+    loaded = []
     for path in records:
         try:
             if not _under_real(str(path), root):
@@ -457,19 +521,48 @@ def _worker_origins(db: str, folder: Path, src: str, sealed_sha: str,
             record = json.loads(path.read_text(encoding="utf-8"))
         except (OSError, ValueError):
             record = None
-        if not (_origin_ok(record, sealed_sha, src, tools, EXTRACTION_DRIVER, root)
+        loaded.append((path, record))
+
+    def clean(record):
+        return (isinstance(record, dict) and type(record.get("complete")) is bool
+                and _origin_ok({**record, "complete": True}, sealed_sha, src, tools,
+                               EXTRACTION_DRIVER, root)
                 and record.get("ok") is True and record.get("isolated")
                 and record.get("no_site") and record.get("safe_path")
-                and _under_real(record.get("easyicu"), src)):
+                and _under_real(record.get("easyicu"), src))
+
+    completed = [r for _, r in loaded if clean(r) and r["complete"]]
+    export = folder.parent / "export"
+    manifest = {}
+    if any(clean(r) and not r["complete"] for _, r in loaded):
+        try:
+            path = export / "_manifest.json"
+            if not _under_real(str(path), root):
+                raise ValueError("retry manifest escapes the run")
+            manifest = json.loads(path.read_text(encoding="utf-8"))
+            if not isinstance(manifest, dict):
+                manifest = {}
+        except (OSError, ValueError):
+            manifest = {}
+    bad, bound = [], []
+    aborted_retried = 0
+    for path, record in loaded:
+        recovered = (clean(record) and record["complete"] is False
+                     and _aborted_retried(record, manifest, completed, export))
+        if not clean(record) or (not record["complete"] and not recovered):
             bad.append(path.name)
         else:
+            aborted_retried += int(recovered)
             bound.append({"path": str(path), "sha256": sha256_file(path),
-                          "pid": record.get("pid"), "modules": len(record.get("modules") or {})})
+                          "pid": record.get("pid"), "worker_id": record.get("worker_id"),
+                          "stream_attempt": record.get("stream_attempt"),
+                          "status": "aborted_retried" if recovered else "completed",
+                          "modules": len(record.get("modules") or {})})
     if bad:
         raise ReceiptError("formal_import_origin_mismatch",
                            f"{db}: {len(bad)} extraction worker(s) started outside the boot's "
                            "origins", step=f"workers:{db}", workers=bad[:20])
-    return {"workers": len(records), "records": bound}
+    return {"workers": len(records), "records": bound, "aborted_retried": aborted_retried}
 
 
 def formal_import_origins(run_root: Path, sealed_sha: str, code: Mapping[str, Any],
@@ -482,7 +575,8 @@ def formal_import_origins(run_root: Path, sealed_sha: str, code: Mapping[str, An
     under the boot), its spawned workers (``<db>/worker_origin/*.json``) and
     both input-snapshot steps
     (``IMPORT_ORIGIN.inputs_<step>.json``, ``inputs_bench_local.py``) must be
-    complete, at the sealed HEAD, with easyicu from the clone's src, no
+    complete (except certified discarded isolated attempts with a completed
+    same-batch successor), at the sealed HEAD, with easyicu from the clone's src, no
     mismatched module and a temp dir inside the run root (never /tmp). The receipt's own step is checked live through the
     boot (``formal_boot_live``) before RUN_RECEIPT.json is written; outside
     the boot it is ``formal_boot_missing``.

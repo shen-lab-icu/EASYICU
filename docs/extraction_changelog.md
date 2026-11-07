@@ -112,6 +112,13 @@ matching the verified script, retaining the staged `.py` rule. Each worker
 runs the full module-origin check before and after its target, and the
 receipt binds the completed record's SHA-256, flags, HEAD and source roots.
 
+The delta51p follow-up binds isolated worker origins to the existing stream
+ledger's batch and attempt identities. A startup-only record is accepted as
+`aborted_retried` (counted in the receipt) only for a certified memory
+termination whose uncommitted part was discarded and whose same-batch
+successor has a complete origin postcheck. Unmatched, uncertified,
+undiscarded or unrecovered attempts still refuse the formal receipt.
+
 ## 2026-11-07 — readers refuse a bucket installation the seal tool has not published [lead-r13, branch `r13slpub`]
 
 **Rule.** The seal tool writes `.<install>.seal_PENDING` beside an installation

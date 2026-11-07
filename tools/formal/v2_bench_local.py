@@ -13,7 +13,8 @@ formal_boot.py:
   method, api/extraction.py:2021) re-runs this file as __mp_main__, binds
   its private temp directory, and checks its own loaded modules and actual
   interpreter flags before and after its target, else it exits 97; the
-  receipt binds OUT/worker_origin/<pid>.json by SHA-256.
+  receipt binds OUT/worker_origin/<pid>-<worker_id>.json by SHA-256 and
+  reconciles aborted isolated attempts with the published stream ledger.
 The file name ends in "bench_local.py" on purpose: memgate.py and the
 wrapper's core checks count a scope by that substring.
 
