@@ -1588,6 +1588,67 @@ def rm_cols(
         raise TypeError(f"Unsupported type: {type(data)}")
 
 # 便捷函数用于加载表
+def select_table_source(src: str, kwargs: dict | None = None):
+    """The data source :func:`load_table` reads ``src`` from.
+
+    An attached source wins; otherwise a source is built from the packaged
+    configuration and the base path (``path`` popped from ``kwargs``, then
+    ``EASYICU_<SRC>_PATH``, then ``EASYICU_DATA_PATH``).  Returns
+    ``(data_source, resolved_from, resolved_base_path)``.  Callers that must
+    decide something about the table before reading it (the legacy
+    ``ConceptLoader``) use this same selection.
+    """
+    from pathlib import Path
+
+    from easyicu.io.attach import data
+
+    kwargs = {} if kwargs is None else kwargs
+    resolved_base_path: str | None = None
+    if data.is_attached(src):
+        data_source = data.get_source(src)
+        resolved_from = "attached_source"
+        try:
+            resolved_base_path = str(getattr(data_source, "base_path", None))
+        except Exception:
+            resolved_base_path = None
+        if 'path' in kwargs:
+            # The attached source owns its base path.  A matching (or empty)
+            # path names the same source; another one is a conflict, never a
+            # silently ignored argument.
+            path = kwargs.pop('path')
+            attached_base = getattr(data_source, "base_path", None)
+            if path is not None and (
+                attached_base is None or Path(path).resolve() != Path(attached_base).resolve()
+            ):
+                raise ValueError(
+                    f"load_table({src!r}): path {path!s} differs from the attached "
+                    f"source's base path {attached_base!s}"
+                )
+        return data_source, resolved_from, resolved_base_path
+
+    from easyicu.io.data_tools import load_src_cfg
+    import os
+    from easyicu.datasource import ICUDataSource
+
+    config = load_src_cfg(src)
+    base_path = kwargs.pop('path', None)
+    if base_path is not None:
+        resolved_from = "explicit_path_kwarg"
+    else:
+        env_var = f"EASYICU_{src.upper()}_PATH"
+        base_path = os.environ.get(env_var)
+        if base_path is not None:
+            resolved_from = f"env:{env_var}"
+        else:
+            base_path = os.environ.get("EASYICU_DATA_PATH")
+            resolved_from = (
+                "env:EASYICU_DATA_PATH" if base_path is not None else "unresolved"
+            )
+    resolved_base_path = str(base_path) if base_path else None
+    data_source = ICUDataSource(config, base_path=Path(base_path) if base_path else None)
+    return data_source, resolved_from, resolved_base_path
+
+
 def load_table(src: str, table_name: str, **kwargs) -> pd.DataFrame:
     """
     加载表 - 便捷函数
@@ -1605,51 +1666,20 @@ def load_table(src: str, table_name: str, **kwargs) -> pd.DataFrame:
         >>> df = load_table('mimic_demo', 'patients')
         >>> df = load_table('miiv', 'labevents', path='/data/mimic-iv/3.1')
     """
-    from easyicu.io.attach import data
+    data_source, resolved_from, resolved_base_path = select_table_source(src, kwargs)
+    return read_table_from(
+        data_source, src, table_name, resolved_from, resolved_base_path, **kwargs
+    )
 
-    resolved_from: str
-    resolved_base_path: str | None = None
-    # 首先尝试从全局附加的数据源获取
-    if data.is_attached(src):
-        data_source = data.get_source(src)
-        resolved_from = "attached_source"
-        try:
-            resolved_base_path = str(getattr(data_source, "base_path", None))
-        except Exception:
-            resolved_base_path = None
-    else:
-        # 如果没有附加，尝试从配置创建
-        from easyicu.io.data_tools import load_src_cfg
-        from pathlib import Path
-        import os
-        config = load_src_cfg(src)
-        from easyicu.datasource import ICUDataSource
 
-        # 提取 path 参数（如果提供）
-        base_path = kwargs.pop('path', None)
+def read_table_from(
+    data_source, src: str, table_name: str, resolved_from, resolved_base_path, **kwargs
+) -> pd.DataFrame:
+    """Read ``table_name`` from an already selected ``data_source``.
 
-        # 如果没有提供 path，尝试从环境变量获取
-        if base_path is not None:
-            resolved_from = "explicit_path_kwarg"
-        else:
-            env_var = f"EASYICU_{src.upper()}_PATH"
-            base_path = os.environ.get(env_var)
-            if base_path is not None:
-                resolved_from = f"env:{env_var}"
-            else:
-                # 尝试通用环境变量
-                base_path = os.environ.get("EASYICU_DATA_PATH")
-                resolved_from = (
-                    "env:EASYICU_DATA_PATH" if base_path is not None else "unresolved"
-                )
-
-        resolved_base_path = str(base_path) if base_path else None
-        # 创建数据源
-        data_source = ICUDataSource(
-            config,
-            base_path=Path(base_path) if base_path else None
-        )
-
+    The read and lineage half of :func:`load_table`, for a caller that has
+    bound one source (``ConceptLoader``) and must not select it again.
+    """
     icu_table = data_source.load_table(table_name, **kwargs)
     result = icu_table.data
     # A-P2-14: env/attach resolution must be traceable on the returned frame,
@@ -1671,6 +1701,18 @@ def load_table(src: str, table_name: str, **kwargs) -> pd.DataFrame:
     result.attrs["easyicu_table_name"] = table_name
     return result
 
+def id_table_name(cfg, id_type: str) -> str:
+    """The table holding ``id_type`` in ``cfg``: its ``id_configs``, else ricu's default."""
+    id_cfg = (getattr(cfg, 'id_configs', None) or {}).get(id_type)
+    if id_cfg is not None and id_cfg.table:
+        return id_cfg.table
+    defaults = {'icustay': 'icustays', 'hadm': 'admissions', 'patient': 'patients'}
+    if id_type not in defaults:
+        raise ValueError(
+            f"Unknown id_type '{id_type}' for source '{getattr(cfg, 'name', cfg)}'"
+        )
+    return defaults[id_type]
+
 def load_id_tbl(src: str, id_type: str, **kwargs) -> pd.DataFrame:
     """
     Load ID table for a given ID type (R ricu load_id_tbl).
@@ -1690,24 +1732,7 @@ def load_id_tbl(src: str, id_type: str, **kwargs) -> pd.DataFrame:
     
     # Load source configuration
     cfg = load_src_cfg(src)
-    
-    # Try to find table from id_configs
-    table_name = None
-    if hasattr(cfg, 'id_configs') and id_type in cfg.id_configs:
-        id_cfg = cfg.id_configs[id_type]
-        if id_cfg.table:
-            table_name = id_cfg.table
-    
-    # Fallback logic if not explicitly configured
-    if not table_name:
-        if id_type == 'icustay':
-            table_name = 'icustays'
-        elif id_type == 'hadm':
-            table_name = 'admissions'
-        elif id_type == 'patient':
-            table_name = 'patients'
-        else:
-            raise ValueError(f"Unknown id_type '{id_type}' for source '{src}'")
+    table_name = id_table_name(cfg, id_type)
     
     # Load the table
     try:

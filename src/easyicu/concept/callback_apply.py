@@ -3253,11 +3253,15 @@ def _apply_callback(
                                 frame = frame.merge(per_stay, on=id_col, how='left')
             except TYPED_VALUE_FAILURES:
                 raise
-            except Exception as e:
-                # 如果获取体重失败，使用默认值
-                if DEBUG_MODE:
-                    logger.warning(f"获取体重失败: {e}")
-                pass
+            except Exception as exc:
+                # A load failure is not "no weight" (see mimic_kg_rate).  The
+                # former ``pass`` NA-ed every absolute-dose rate of the frame,
+                # and whether the load failed depended on which stays shared
+                # the batch (lead-r13 aumcwt).
+                raise RuntimeError(
+                    f"aumc_rate_kg_weight_load_failed: weight for {concept_name} "
+                    f"could not be loaded ({type(exc).__name__}: {exc})"
+                ) from exc
 
         return aumc_rate_kg(
             frame,

@@ -5,17 +5,17 @@
 from typing import List, Optional, Union, Dict, Any, Iterable, Sequence, Mapping
 import logging
 from datetime import timedelta
-from concurrent.futures import ThreadPoolExecutor, as_completed
+from concurrent.futures import ThreadPoolExecutor
 
 import pandas as pd
 
 from .value_failures import TYPED_VALUE_FAILURES
 from .concept import Concept, load_dictionary
-from .concept.errors import ConceptExtractionUnavailable
-from .config import DataSourceConfig, TableConfig, load_src_cfg
-from .datasource import ICUDataSource
-from .table import load_table
-from .io.ts_utils import change_interval
+from .config import DataSourceConfig, TableConfig
+from .datasource import ICUDataSource, MissingTableSourceError
+from .storage_layout import TableScanError, verify_flat_scan
+from .table import read_table_from
+from .io.ts_utils import TimeAxisUnitError, change_interval
 
 # DataSource 别名用于向后兼容
 DataSource = ICUDataSource
@@ -117,6 +117,41 @@ def _is_missing_column_projection_error(exc: Exception) -> bool:
     )
 
 
+def _declared_source_present(source, table_name: str) -> bool:
+    """Whether the loader the datasource's reader will use finds the table.
+
+    Decided per reader branch (``ICUDataSource._load_raw_frame``), with the
+    datasource's and the storage owner's own resolution, no glob of its own:
+
+    - a bucket installation (``ICUDataSource.resolve_bucket_directory``) is
+      the reader's first choice;
+    - a table configured as several files is read as a Parquet directory:
+      present only when the storage owner's file set for it
+      (``ICUDataSource.resolve_target_files``, i.e.
+      ``storage_layout.resolve_table_files``) is not empty.  That call keeps
+      ``table_scan_files_missing`` for a table the conversion manifest lists.
+      A CSV the disk resolver would fall back to never vouches for it;
+    - any other table is read from ``ICUDataSource.resolve_loader_from_disk``
+      (configured file, flat Parquet, CSV);
+    - MIMIC-III ``chartevents``: its CSV export is a candidate physical
+      source only (the reader uses it with an item filter).
+    """
+    if getattr(source, 'base_path', None) is None:
+        return False
+    if source.resolve_bucket_directory(table_name) is not None:
+        return True
+    table_cfg = source.config.get_table(table_name)
+    if len(getattr(table_cfg, 'files', None) or ()) > 1:
+        return bool(source.resolve_target_files(table_name))
+    if source.resolve_loader_from_disk(table_name) is not None:
+        return True
+    return bool(
+        getattr(source.config, 'name', None) == 'mimic'
+        and table_name == 'chartevents'
+        and source._resolve_mimic3_chartevents_csv() is not None
+    )
+
+
 class ConceptLoader:
     """概念加载器 - 复刻 R ricu 的 load_concepts"""
     
@@ -130,18 +165,15 @@ class ConceptLoader:
             low_memory: 低内存模式（None=自动检测，True=强制启用，False=禁用）
                         低内存模式使用 DuckDB filter pushdown，避免加载全表
         """
-        self._data_source: Optional[ICUDataSource] = None
-        if isinstance(src, ICUDataSource):
-            self._data_source = src
-            self.src = src.config
-        elif isinstance(src, DataSourceConfig):
-            self.src = src
-        elif isinstance(src, str):
-            self.src = load_src_cfg(src)
-        else:
+        if not isinstance(src, (ICUDataSource, DataSourceConfig, str)):
             raise TypeError(f"不支持的数据源类型: {type(src)}")
-        self._src_name = self.src.name
+        # The one source every read of this loader uses, selected here once
+        # (see _select_source); nothing re-resolves it by name afterwards.
+        self._bound: Optional[tuple] = None
         self.data_path = data_path
+        self._select_source(src, data_path)
+        self.src = self._table_source().config
+        self._src_name = self.src.name
         
         # 🚀 低内存模式：自动检测或手动指定
         # HiRID 强制使用低内存模式（observations 表有 7.77 亿行）
@@ -151,29 +183,161 @@ class ConceptLoader:
             self._low_memory = low_memory
         else:
             # 自动检测：可用内存 < 24GB 时启用低内存模式
-            try:
+            import importlib.util
+
+            if importlib.util.find_spec("psutil") is None:
+                self._low_memory = False
+            else:
                 import psutil
+
                 available_gb = psutil.virtual_memory().available / (1024 ** 3)
                 self._low_memory = available_gb < 24
-            except ImportError:
-                self._low_memory = False
         
-        # 🚀 低内存模式下，自动创建 ICUDataSource 以启用 filter pushdown
-        if self._low_memory and self._data_source is None and data_path:
-            try:
-                self._data_source = ICUDataSource(self.src, base_path=data_path)
-                logger.info(f"🧠 低内存模式启用 for {self._src_name}")
-            except Exception as e:
-                logger.warning(f"无法创建 ICUDataSource: {e}")
+        if self._low_memory:
+            logger.info(f"🧠 低内存模式启用 for {self._src_name}")
         
         self._id_lookup_cache: Optional[pd.DataFrame] = None
         self._table_cache: Dict[str, pd.DataFrame] = {}
+        # The source object that produced each cache entry.
+        self._table_cache_source: Dict[str, object] = {}
     
     def _get_table_config(self, table_name: Optional[str]) -> Optional[TableConfig]:
         """根据表名获取配置。"""
         if not table_name or not hasattr(self.src, 'tables'):
             return None
         return self.src.tables.get(table_name)
+
+    def _select_source(self, src, data_path) -> None:
+        """Bind this loader's one source.  The only source resolution here.
+
+        Root-selection rule:
+
+        - an ``ICUDataSource``: that object, with its own root and
+          registrations; never re-resolved by name;
+        - a ``DataSourceConfig``: ``ICUDataSource(config, data_path)``.  Only
+          ``data_path`` gives the root: no environment root, no attached
+          source;
+        - a database name: the source ``load_table`` selects
+          (``easyicu.table.select_table_source``: an attached source first,
+          then ``data_path``, ``EASYICU_<SRC>_PATH``, ``EASYICU_DATA_PATH``).
+
+        A loader bound to an ``ICUDataSource`` holds its lock and cannot be
+        pickled.  A process started by fork inherits a copy of the bound
+        source (its caches and lock are not shared across processes); spawn
+        is not certified.
+        """
+        if getattr(self, '_bound', None) is not None:
+            raise TableScanError(
+                "legacy_loader_source_reselect", str(getattr(self, '_src_name', src)),
+                "this loader already has a bound source; it is never re-selected",
+            )
+        if isinstance(src, ICUDataSource):
+            base = getattr(src, 'base_path', None)
+            bound = (src, 'explicit_source', None if base is None else str(base))
+        elif isinstance(src, DataSourceConfig):
+            from pathlib import Path
+
+            base = Path(data_path) if data_path else None
+            bound = (
+                ICUDataSource(src, base_path=base),
+                'explicit_config',
+                None if base is None else str(base),
+            )
+        else:
+            from .table import select_table_source
+
+            bound = select_table_source(src, {'path': data_path})
+        self._bound = bound
+
+    def _bound_source(self) -> tuple:
+        """``(source, resolved_from, resolved_base_path)`` bound at construction.
+
+        Preload, the declared check, the cache, the ID tables and every read
+        use this one object.
+        """
+        bound = getattr(self, '_bound', None)
+        if bound is None:
+            raise TableScanError(
+                "legacy_loader_unbound", str(getattr(self, '_src_name', '?')),
+                "the loader has no bound source",
+            )
+        return bound
+
+    @property
+    def _data_source(self):
+        """The bound source (kept for callers that read ``_data_source``)."""
+        return self._table_source()
+
+    def _table_source(self):
+        """The bound source object (see :meth:`_select_source`)."""
+        return self._bound_source()[0]
+
+    def _cached_table(self, table_name: str, source) -> Optional[pd.DataFrame]:
+        """A cache entry, only when ``source`` produced it."""
+        cached = self._table_cache.get(table_name)
+        if cached is None:
+            return None
+        producer = getattr(self, '_table_cache_source', {}).get(table_name)
+        if producer is not source:
+            raise TableScanError(
+                "table_cache_source_changed", table_name,
+                "the cached rows were produced by a different source object",
+            )
+        return cached
+
+    def _cache_table(self, table_name: str, frame: pd.DataFrame, source) -> None:
+        self._table_cache[table_name] = frame
+        if not hasattr(self, '_table_cache_source'):
+            self._table_cache_source = {}
+        self._table_cache_source[table_name] = source
+
+    def _declared_table_source(self, table_name: str, source=None) -> bool:
+        """Decide a table before any read, on the source that will be read.
+
+        ``False``: the selected source does not declare the table (not in its
+        configuration, not registered): absent, so the read is empty without
+        a read or an exception.  ``True``: declared, with a physical source.
+        A declared table without one raises ``declared_table_source_missing``
+        (a ``StorageIntegrityError``) on every database, whatever the
+        datasource itself would return for it (MIIV returns an empty frame).
+        """
+        source = self._table_source() if source is None else source
+        registered = getattr(source, '_table_sources', None) or {}
+        datasets = getattr(source, '_dataset_sources', None) or {}
+        if table_name in registered or table_name in datasets:
+            return True
+        tables = getattr(getattr(source, 'config', None), 'tables', None) or {}
+        if table_name not in tables:
+            return False
+        if _declared_source_present(source, table_name):
+            return True
+        # A table the conversion manifest lists keeps its own failure.
+        verify_flat_scan(source, table_name, ())
+        raise TableScanError(
+            "declared_table_source_missing", table_name,
+            f"declared for {self._src_name} but no file or registration "
+            "was found",
+        )
+
+    def _read_declared_table(
+        self, table_name: str, columns: Optional[Iterable[str]], *, full: bool = False,
+    ) -> Optional[pd.DataFrame]:
+        """Rows of a declared table, or ``None`` when the table is undeclared.
+
+        A declared table without a physical source fails typed
+        (``declared_table_source_missing``, a ``StorageIntegrityError``)
+        before anything is read or cached; it is never "no data".
+        """
+        if not self._declared_table_source(table_name):
+            return None
+        try:
+            return self._safe_load_table(table_name, columns, full=full)
+        except MissingTableSourceError as exc:
+            raise TableScanError(
+                "declared_table_source_missing", table_name,
+                f"declared for {self._src_name} but no file or registration "
+                "was found",
+            ) from exc
     
     def _infer_required_columns(
         self,
@@ -249,18 +413,28 @@ class ConceptLoader:
         self,
         table_name: str,
         columns: Optional[Iterable[str]],
+        *,
+        full: bool = False,
     ) -> pd.DataFrame:
         """Load a projection, with a tightly bounded compatibility fallback.
 
         Only an explicit missing-column projection error may retry without a
         projection. I/O, corruption, permission and memory failures propagate
         unchanged. Low-memory mode never retries with a full-table read.
+        ``full``: the whole table from the bound source, neither taken from
+        nor stored in the cache (an ID table, read as ``load_id_tbl`` did).
         """
+        if full:
+            source, resolved_from, resolved_base = self._bound_source()
+            return read_table_from(
+                source, self._src_name, table_name, resolved_from, resolved_base,
+            )
         # A cached narrow projection is reusable only when it contains every
         # column requested by the next concept.  Reusing by table name alone
         # made results depend on concept order when callbacks needed extra
         # source columns.
-        cached = self._table_cache.get(table_name)
+        source, resolved_from, resolved_base = self._bound_source()
+        cached = self._cached_table(table_name, source)
         requested_columns = list(dict.fromkeys(columns or []))
         if cached is not None and (
             not requested_columns
@@ -272,11 +446,9 @@ class ConceptLoader:
         df = None
         if requested_columns:
             try:
-                df = load_table(
-                    self._src_name,
-                    table_name,
-                    columns=requested_columns,
-                    path=self.data_path,
+                df = read_table_from(
+                    source, self._src_name, table_name, resolved_from,
+                    resolved_base, columns=requested_columns,
                 )
             except TYPED_VALUE_FAILURES:
                 raise
@@ -288,13 +460,17 @@ class ConceptLoader:
                     "without projection outside low-memory mode",
                     table_name,
                 )
-                df = load_table(self._src_name, table_name, path=self.data_path)
+                df = read_table_from(
+                    source, self._src_name, table_name, resolved_from, resolved_base,
+                )
         else:
-            df = load_table(self._src_name, table_name, path=self.data_path)
+            df = read_table_from(
+                source, self._src_name, table_name, resolved_from, resolved_base,
+            )
         
         # 🚀 存入缓存以供后续复用
         if df is not None:
-            self._table_cache[table_name] = df
+            self._cache_table(table_name, df, source)
         
         return df
     
@@ -389,11 +565,10 @@ class ConceptLoader:
             return [v for v in patient_ids.tolist() if not pd.isna(v)]
         if isinstance(patient_ids, (list, tuple, set)):
             return [value for value in patient_ids if not pd.isna(value)]
-        try:
-            return [patient_ids] if not pd.isna(patient_ids) else []
-        except (ValueError, TypeError):
-            # pd.isna on array-like returns array, not scalar
+        if not pd.api.types.is_scalar(patient_ids):
+            # pd.isna on an array-like returns an array, not a scalar
             return list(patient_ids)
+        return [patient_ids] if not pd.isna(patient_ids) else []
 
     def _load_id_lookup(self) -> pd.DataFrame:
         """加载包含 stay/hadm/subject 映射的参考表，用于ID转换。"""
@@ -419,12 +594,8 @@ class ConceptLoader:
         columns = [col for col in desired_cols if (available is None or col in available)]
         columns = columns or None
 
-        try:
-            lookup = self._safe_load_table(table_name, columns)
-        except TYPED_VALUE_FAILURES:
-            raise
-        except Exception as exc:
-            logger.warning("无法加载ID映射表 %s: %s", table_name, exc)
+        lookup = self._read_declared_table(table_name, columns)
+        if lookup is None:
             lookup = pd.DataFrame()
 
         self._id_lookup_cache = lookup
@@ -544,7 +715,7 @@ class ConceptLoader:
                 print(f"🚀 并行加载 {len(concept_objs)} 个概念 (工作线程: {max_workers})...")
             
             with ThreadPoolExecutor(max_workers=max_workers) as executor:
-                future_to_concept = {
+                futures = [
                     executor.submit(
                         self._load_one_concept,
                         concept=concept,
@@ -553,26 +724,18 @@ class ConceptLoader:
                         interval=interval,
                         aggregate=aggregate if not isinstance(aggregate, dict) else aggregate.get(concept.name),
                         **kwargs
-                    ): concept
+                    )
                     for concept in concept_objs
-                }
-                
-                for future in as_completed(future_to_concept):
-                    concept = future_to_concept[future]
-                    try:
-                        data = future.result()
-                        if verbose:
-                            print(f"  ✅ {concept.name}")
-                        if data is not None and len(data) > 0:
-                            results[concept.name] = data
-                    except ConceptExtractionUnavailable:
-                        raise
-                    except TYPED_VALUE_FAILURES:
-                        raise
-                    except Exception as e:
-                        if verbose:
-                            print(f"  ❌ {concept.name}: {e}")
-                        logger.error(f"加载概念 {concept.name} 失败", exc_info=True)
+                ]
+                # Results are taken in request order: the earliest requested
+                # failed concept raises, as in serial loading, and no partial
+                # set of the healthy concepts is ever returned.
+                for concept, future in zip(concept_objs, futures):
+                    data = future.result()
+                    if verbose:
+                        print(f"  ✅ {concept.name}")
+                    if data is not None and len(data) > 0:
+                        results[concept.name] = data
         else:
             # 串行加载（默认行为）
             for concept in concept_objs:
@@ -596,7 +759,7 @@ class ConceptLoader:
         if not merge_data:
             # 转换时间列为相对小时数
             for name in results:
-                results[name] = self._convert_time_to_hours(results[name], id_type)
+                results[name] = self._relative_hours(results[name], id_type)
             return results
         
         if len(results) == 0:
@@ -604,11 +767,11 @@ class ConceptLoader:
         
         if len(results) == 1:
             single_result = list(results.values())[0]
-            return self._convert_time_to_hours(single_result, id_type)
+            return self._relative_hours(single_result, id_type)
         
         # 合并多个概念为宽格式
         merged = self._merge_concepts(results, id_type)
-        return self._convert_time_to_hours(merged, id_type)
+        return self._relative_hours(merged, id_type)
     
     def _load_one_concept(
         self,
@@ -640,10 +803,8 @@ class ConceptLoader:
             
             # 🚀 重要：必须重用 ConceptLoader 的数据源，以便共享表缓存和预加载的数据
             # 如果创建新的数据源，预加载的表会丢失
-            if self._data_source is None:
-                raise RuntimeError("rec_cncpt concepts require a data source, but none is available")
-            
-            data_source = self._data_source
+            # The loader's one bound source.
+            data_source = self._table_source()
             
             # 创建 ConceptResolver（它会从数据源加载表）
             resolver = ConceptResolver(load_dictionary(self._src_name))
@@ -753,12 +914,9 @@ class ConceptLoader:
         if required_columns:
             logger.debug(f"   🔹 表 {table_name} 推断的列: {required_columns}")
         
-        try:
-            df = self._safe_load_table(table_name, required_columns)
-        except TYPED_VALUE_FAILURES:
-            raise
-        except Exception as e:
-            logger.warning(f"无法加载表 {table_name}: {e}")
+        df = self._read_declared_table(table_name, required_columns)
+        if df is None:
+            # This database declares no such table: absence, not a failed read.
             return pd.DataFrame()
         
         # 2. 过滤患者
@@ -883,12 +1041,9 @@ class ConceptLoader:
         else:
             required_columns = self._columns_for_source(source, id_type)
         
-        try:
-            df = self._safe_load_table(table_name, required_columns)
-        except TYPED_VALUE_FAILURES:
-            raise
-        except Exception as e:
-            logger.warning(f"无法加载表 {table_name}: {e}")
+        df = self._read_declared_table(table_name, required_columns)
+        if df is None:
+            # This database declares no such table: absence, not a failed read.
             return pd.DataFrame()
         
         # 2. 过滤 sub_var (如 itemid)
@@ -945,7 +1100,7 @@ class ConceptLoader:
                 and time_col in df.columns
                 and not mimic_duration_callback
             ):
-                df = self._convert_time_column_to_hours(df, time_col, id_col)
+                df = self._relative_hours_column(df, time_col, id_col)
             
             # 调用callback
             df = apply_callback(
@@ -955,7 +1110,7 @@ class ConceptLoader:
                 unit_column=source.unit_var,
                 resolver=None,  # ConceptLoader不使用resolver
                 patient_ids=patient_ids,
-                data_source=self._data_source,
+                data_source=self._table_source(),
                 interval=interval,
             )
 
@@ -1061,10 +1216,61 @@ class ConceptLoader:
             return None
         except TYPED_VALUE_FAILURES:
             raise
-        except Exception as e:
-            logger.debug(f"获取体重数据失败: {e}")
-            return None
-    
+        except Exception as exc:
+            # A failed weight load is not "no weight": returning None made
+            # every per-kg rate of the frame NA without a trace.
+            raise RuntimeError(
+                f"kg_rate_weight_load_failed: weight for the {self._src_name} "
+                f"per-kg rate could not be loaded ({type(exc).__name__}: {exc})"
+            ) from exc
+
+    def _id_table(self, id_type: str) -> pd.DataFrame:
+        """The ``id_type`` ID table, read in full from the bound source.
+
+        The table is the bound source's own (``easyicu.table.id_table_name``
+        on its configuration, the rule ``load_id_tbl`` uses), read through
+        the declared check and the bound source.  The helpers that align a
+        datetime column to ICU hours used ``load_id_tbl`` by name, which
+        re-selected a source and could take start times from another root.
+        """
+        from .table import id_table_name
+
+        table = id_table_name(self._table_source().config, id_type)
+        frame = self._read_declared_table(table, None, full=True)
+        if frame is None:
+            raise TableScanError(
+                "legacy_id_table_undeclared", table,
+                f"the {id_type} ID table is not declared by the bound source",
+            )
+        return frame
+
+    @staticmethod
+    def _require_relative_clock(df: pd.DataFrame, columns) -> pd.DataFrame:
+        """A relative-hour exit never returns an absolute datetime column."""
+        if df is None or len(df) == 0:
+            return df
+        for col in columns:
+            if col in df.columns and not pd.api.types.is_numeric_dtype(df[col]):
+                raise TimeAxisUnitError(
+                    "legacy_time_axis_unaligned",
+                    f"{col} could not be placed on the ICU-hour axis (no usable ID "
+                    "or start time in the bound source's ID table); it would have "
+                    "been returned as an absolute datetime",
+                )
+        return df
+
+    def _relative_hours_column(self, df: pd.DataFrame, time_col: str, id_col: str) -> pd.DataFrame:
+        """:meth:`_convert_time_column_to_hours`, never leaving a datetime."""
+        return self._require_relative_clock(
+            self._convert_time_column_to_hours(df, time_col, id_col), [time_col]
+        )
+
+    def _relative_hours(self, df: pd.DataFrame, id_type: str) -> pd.DataFrame:
+        """:meth:`_convert_time_to_hours`, never leaving a datetime."""
+        return self._require_relative_clock(
+            self._convert_time_to_hours(df, id_type), ['time', 'charttime']
+        )
+
     def _convert_time_column_to_hours(
         self,
         df: pd.DataFrame,
@@ -1081,35 +1287,29 @@ class ConceptLoader:
             return df
         
         # 尝试转换为datetime
-        try:
-            df = df.copy()
-            df[time_col] = pd.to_datetime(df[time_col], errors='coerce')
+        df = df.copy()
+        df[time_col] = pd.to_datetime(df[time_col], errors='coerce')
             
-            # 获取ICU入院时间
-            from .table import load_id_tbl
-            icu_times = load_id_tbl(self._src_name, 'icustay', path=self.data_path)
+        # 获取ICU入院时间
+        icu_times = self._id_table('icustay')
             
-            # 🔧 FIX: 支持不同数据库的入院时间列名
-            # MIMIC-IV: intime, HiRID: admissiontime, eICU: hospitaladmittime, AUMC: admittedat
-            intime_candidates = ['intime', 'admissiontime', 'hospitaladmittime', 'admittedat']
-            intime_col = None
-            for cand in intime_candidates:
-                if cand in icu_times.columns:
-                    intime_col = cand
-                    break
+        # 🔧 FIX: 支持不同数据库的入院时间列名
+        # MIMIC-IV: intime, HiRID: admissiontime, eICU: hospitaladmittime, AUMC: admittedat
+        intime_candidates = ['intime', 'admissiontime', 'hospitaladmittime', 'admittedat']
+        intime_col = None
+        for cand in intime_candidates:
+            if cand in icu_times.columns:
+                intime_col = cand
+                break
             
-            if not icu_times.empty and intime_col:
-                if id_col and id_col in df.columns and id_col in icu_times.columns:
-                    df = df.merge(icu_times[[id_col, intime_col]], on=id_col, how='left')
-                    df[intime_col] = pd.to_datetime(df[intime_col], errors='coerce')
+        if not icu_times.empty and intime_col:
+            if id_col and id_col in df.columns and id_col in icu_times.columns:
+                df = df.merge(icu_times[[id_col, intime_col]], on=id_col, how='left')
+                df[intime_col] = pd.to_datetime(df[intime_col], errors='coerce')
                     
-                    time_diff = (df[time_col] - df[intime_col]).dt.total_seconds() / 3600
-                    df[time_col] = time_diff
-                    df = df.drop(columns=[intime_col])
-        except TYPED_VALUE_FAILURES:
-            raise
-        except Exception as e:
-            logger.debug(f"时间转换失败: {e}")
+                time_diff = (df[time_col] - df[intime_col]).dt.total_seconds() / 3600
+                df[time_col] = time_diff
+                df = df.drop(columns=[intime_col])
         
         return df
 
@@ -1125,17 +1325,15 @@ class ConceptLoader:
             df[time_col]
         ):
             return df
-        if self._data_source is None or not id_col or id_col not in df.columns:
+        if not id_col or id_col not in df.columns:
             raise ValueError(
                 "MIMIC duration time alignment requires a data source and ICU stay id"
             )
         try:
-            table = self._data_source.load_table(
-                'icustays',
-                columns=[id_col, 'intime'],
-                verbose=False,
-            )
-            bounds = table.data if hasattr(table, 'data') else table
+            # The bound source, its declared check and cache.
+            bounds = self._read_declared_table('icustays', [id_col, 'intime'])
+            if bounds is None:
+                raise ValueError("icustays is not declared by the bound source")
         except Exception as exc:
             raise ValueError(
                 "MIMIC duration time alignment could not load ICU intime"
@@ -1237,29 +1435,21 @@ class ConceptLoader:
             
             # 按照依赖顺序加载子概念
             for sub_name in sub_concept_names:
-                try:
-                    # 从字典中加载子概念定义
-                    concept_dict = load_dictionary(self._src_name)
-                    if sub_name not in concept_dict:
-                        logger.warning(f"找不到子概念 {sub_name}")
-                        continue
-                    sub_concept = concept_dict[sub_name]
-                    
-                    # 递归加载子概念
-                    data = self._load_one_concept(
-                        sub_concept, patient_ids, id_type, interval, aggregate, **kwargs
-                    )
-                    
-                    if data is not None and len(data) > 0:
-                        sub_data[sub_name] = data
-                        
-                except TYPED_VALUE_FAILURES:
-                    raise
-                except Exception as e:
-                    logger.warning(f"加载子概念 {sub_name} 失败: {e}")
-                    import traceback
-                    traceback.print_exc()
+                # 从字典中加载子概念定义
+                concept_dict = load_dictionary(self._src_name)
+                if sub_name not in concept_dict:
+                    logger.warning(f"找不到子概念 {sub_name}")
                     continue
+                sub_concept = concept_dict[sub_name]
+                    
+                # 递归加载子概念
+                data = self._load_one_concept(
+                    sub_concept, patient_ids, id_type, interval, aggregate, **kwargs
+                )
+                    
+                if data is not None and len(data) > 0:
+                    sub_data[sub_name] = data
+                        
             
             if not sub_data:
                 result = pd.DataFrame()
@@ -1282,17 +1472,9 @@ class ConceptLoader:
                     # 有回调，需要通过 ConceptResolver 处理
                     # 这里我们需要使用不同的路径：直接委托给 ConceptResolver
                     from .concept import ConceptResolver
-                    from .datasource import ICUDataSource
-                    from .config import load_src_cfg
-                    from pathlib import Path
-                    
-                    # 创建或获取数据源
-                    if self._data_source is not None:
-                        data_source = self._data_source
-                    else:
-                        # 创建新的数据源
-                        config = load_src_cfg(self._src_name)
-                        data_source = ICUDataSource(config, base_path=Path(self.data_path) if self.data_path else None)
+
+                    # The loader's one bound source.
+                    data_source = self._table_source()
                     
                     # 创建 ConceptResolver
                     resolver = ConceptResolver(load_dictionary(self._src_name))
@@ -1379,11 +1561,7 @@ class ConceptLoader:
         """
         if not target_unit or 'value' not in data.columns or 'unit' not in data.columns:
             return data
-        try:
-            from .utils.unit_conversion import UnitConverter
-        except ImportError:
-            logger.debug("unit_conversion module unavailable; skipping conversion")
-            return data
+        from .utils.unit_conversion import UnitConverter
 
         target_norm = UnitConverter.normalize_unit(target_unit)
         out = data.copy()
@@ -1394,27 +1572,16 @@ class ConceptLoader:
         unique_units = units.dropna().unique()
         unconvertible: list[str] = []
         for unit_value in unique_units:
-            try:
-                src_norm = UnitConverter.normalize_unit(unit_value)
-            except Exception:
-                unconvertible.append(unit_value)
-                continue
+            src_norm = UnitConverter.normalize_unit(unit_value)
             if src_norm == target_norm:
                 continue
             if not UnitConverter.can_convert(unit_value, target_unit, substance):
                 unconvertible.append(unit_value)
                 continue
             mask = units == unit_value
-            try:
-                converted = UnitConverter.convert(
-                    values[mask].to_numpy(), unit_value, target_unit, substance
-                )
-            except Exception as exc:
-                logger.debug(
-                    "unit conversion %r -> %r failed: %s", unit_value, target_unit, exc
-                )
-                unconvertible.append(unit_value)
-                continue
+            converted = UnitConverter.convert(
+                values[mask].to_numpy(), unit_value, target_unit, substance
+            )
             values.loc[mask] = converted
             out.loc[mask, 'unit'] = target_unit
 
@@ -1489,8 +1656,7 @@ class ConceptLoader:
         # 1. 转换时间列为相对小时数
         if time_col_name and not pd.api.types.is_numeric_dtype(df[time_col_name]):
             # 加载ICU入院时间
-            from easyicu.table import load_id_tbl
-            icu_times = load_id_tbl(self._src_name, id_type, path=self.data_path)
+            icu_times = self._id_table(id_type)
             
             if not icu_times.empty:
                 # 检测 intime 列名（不同数据库使用不同列名）
@@ -1860,18 +2026,6 @@ class ConceptLoader:
             mode_str = "并行" if parallel_mode else "串行"
             print(f"⚡ 预加载表 ({mode_str}模式)...")
         
-        # 🚀 初始化 ICUDataSource（如果还没有）
-        # 这对 rec_cncpt 概念至关重要，因为 ConceptResolver 需要数据源对象
-        if self._data_source is None:
-            from .datasource import ICUDataSource
-            from pathlib import Path
-            self._data_source = ICUDataSource(
-                self.src,
-                base_path=Path(self.data_path) if self.data_path else None
-            )
-            if verbose:
-                print(f"  初始化数据源: {self._src_name}")
-            
         # 1. Identify required tables and columns - 递归收集所有依赖
         table_columns = {} # table_name -> set of columns
         
@@ -1884,33 +2038,29 @@ class ConceptLoader:
                 return
             visited.add(concept_name)
             
-            try:
-                from .concept import load_dictionary
-                dict_obj = load_dictionary(self._src_name, include_sofa2='sofa2' in concept_name)
-                if concept_name not in dict_obj._concepts:
-                    return
+            from .concept import load_dictionary
+            dict_obj = load_dictionary(self._src_name, include_sofa2='sofa2' in concept_name)
+            if concept_name not in dict_obj._concepts:
+                return
                     
-                concept = dict_obj._concepts[concept_name]
+            concept = dict_obj._concepts[concept_name]
                 
-                # 处理当前概念
-                sources = concept.for_data_source(self.src)
-                for source in sources:
-                    if not source.table:
-                        continue
-                    cols = self._columns_for_source(source, id_type)
-                    if cols:
-                        if source.table not in table_columns:
-                            table_columns[source.table] = set()
-                        table_columns[source.table].update(cols)
+            # 处理当前概念
+            sources = concept.for_data_source(self.src)
+            for source in sources:
+                if not source.table:
+                    continue
+                cols = self._columns_for_source(source, id_type)
+                if cols:
+                    if source.table not in table_columns:
+                        table_columns[source.table] = set()
+                    table_columns[source.table].update(cols)
                 
-                # 递归处理依赖
-                if hasattr(concept, 'items') and concept.items:
-                    for dep_name in concept.items.keys():
-                        collect_dependencies(dep_name, visited)
+            # 递归处理依赖
+            if hasattr(concept, 'items') and concept.items:
+                for dep_name in concept.items.keys():
+                    collect_dependencies(dep_name, visited)
                         
-            except Exception as e:
-                if verbose:
-                    print(f"  ⚠️  收集依赖 {concept_name} 失败: {e}")
         
         # Helper to process a concept
         def process_concept(c):
@@ -1949,11 +2099,16 @@ class ConceptLoader:
             skip_preload_tables.add('observations')
         
         # 2. Load and filter
+        preload_source = self._table_source()
         for table_name, columns in table_columns.items():
-            cached = self._table_cache.get(table_name)
+            cached = self._cached_table(table_name, preload_source)
             if cached is not None and set(columns).issubset(cached.columns):
                 continue
             
+            if not self._declared_table_source(table_name, preload_source):
+                # Undeclared here: the concept read is empty without a read.
+                continue
+
             # 🚀 跳过需要概念特定过滤的超大表
             if table_name in skip_preload_tables:
                 if verbose:
@@ -1963,63 +2118,47 @@ class ConceptLoader:
             if verbose:
                 print(f"  Loading {table_name} with {len(columns)} columns...")
             
-            try:
-                # 🚀 优化：如果有 data_source，使用它并传递患者过滤器以在读取时就过滤
-                if self._data_source is not None and patient_ids is not None:
-                    # 构造患者过滤器
-                    from .datasource import FilterSpec, FilterOp
-                    # 确定ID列名
-                    id_col = self._canonical_id_column(id_type)
-                    # 转换患者ID列表
-                    if isinstance(patient_ids, pd.DataFrame):
-                        if id_col in patient_ids.columns:
-                            patient_list = patient_ids[id_col].dropna().unique().tolist()
-                        else:
-                            patient_list = None
+            # 🚀 优化：如果有 data_source，使用它并传递患者过滤器以在读取时就过滤
+            if patient_ids is not None:
+                # 构造患者过滤器
+                from .datasource import FilterSpec, FilterOp
+                # 确定ID列名
+                id_col = self._canonical_id_column(id_type)
+                # 转换患者ID列表
+                if isinstance(patient_ids, pd.DataFrame):
+                    if id_col in patient_ids.columns:
+                        patient_list = patient_ids[id_col].dropna().unique().tolist()
                     else:
-                        patient_list = self._coerce_patient_list(patient_ids)
-                    
-                    if patient_list:
-                        patient_filter = FilterSpec(column=id_col, op=FilterOp.IN, value=patient_list)
-                        icu_table = self._data_source.load_table(
-                            table_name,
-                            columns=list(columns),
-                            filters=[patient_filter],
-                            verbose=verbose
-                        )
-                        df = icu_table.data
-                    else:
-                        # 没有有效的患者ID，回退到普通加载
-                        try:
-                            df = load_table(self._src_name, table_name, columns=list(columns), path=self.data_path)
-                        except TYPED_VALUE_FAILURES:
-                            raise
-                        except Exception:
-                            df = load_table(self._src_name, table_name, path=self.data_path)
-                        df = self._ensure_id_column(df, id_type)
-                        if patient_ids is not None:
-                            df = self._filter_by_patient(df, patient_ids, id_type)
+                        patient_list = None
                 else:
-                    # 没有 data_source 或 patient_ids，使用原有逻辑
-                    try:
-                        df = load_table(self._src_name, table_name, columns=list(columns), path=self.data_path)
-                    except TYPED_VALUE_FAILURES:
-                        raise
-                    except Exception:
-                        df = load_table(self._src_name, table_name, path=self.data_path)
+                    patient_list = self._coerce_patient_list(patient_ids)
                     
+                if patient_list:
+                    patient_filter = FilterSpec(column=id_col, op=FilterOp.IN, value=patient_list)
+                    icu_table = preload_source.load_table(
+                        table_name,
+                        columns=list(columns),
+                        filters=[patient_filter],
+                        verbose=verbose
+                    )
+                    df = icu_table.data
+                else:
+                    # 没有有效的患者ID，回退到普通加载
+                    df = self._safe_load_table(table_name, list(columns))
                     df = self._ensure_id_column(df, id_type)
                     if patient_ids is not None:
                         df = self._filter_by_patient(df, patient_ids, id_type)
+            else:
+                # 没有 data_source 或 patient_ids，使用原有逻辑
+                df = self._safe_load_table(table_name, list(columns))
+                    
+                df = self._ensure_id_column(df, id_type)
+                if patient_ids is not None:
+                    df = self._filter_by_patient(df, patient_ids, id_type)
                 
-                # Store in cache
-                self._table_cache[table_name] = df
+            # Store in cache, with the source that produced it
+            self._cache_table(table_name, df, preload_source)
                 
-            except TYPED_VALUE_FAILURES:
-                raise
-            except Exception as e:
-                if verbose:
-                    print(f"  ⚠️  Failed to preload {table_name}: {e}")
 
 def load_concepts(
     concepts: Union[str, List[str]],

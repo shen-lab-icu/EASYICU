@@ -1,0 +1,617 @@
+"""A per-kg rate's weight is resolved per stay, whatever stays share the frame.
+
+lead-r13 aumcwt: AUMC weight concatenates admissions rows (weightgroup, which
+carry ``admittedat``) with measured numericitems weights (which do not).  The
+admission alignment took the origin from the frame whenever the column was
+present, so a stay without a weightgroup had no origin unless another stay of
+the same frame contributed an admissions row.  In a 50-stay batch whose only
+epinephrine stay was such a stay, the one-stay weight load raised, the
+``aumc_rate_kg`` dispatch swallowed it and every rate of that stay became NA;
+the unbatched run, whose frame held other stays, kept them.
+"""
+
+from __future__ import annotations
+
+from types import SimpleNamespace
+
+import numpy as np
+import pandas as pd
+import pytest
+
+from easyicu.concept import ConceptResolver, ConceptSource, _apply_callback
+
+MEASURED_ONLY = 7  # the stay without a weightgroup
+STAYS = list(range(1, 51))
+ADMITTED = {stay: 600.0 * stay for stay in STAYS}  # absolute source minutes
+
+
+def _aumc(admission_ids=STAYS):
+    admissions = pd.DataFrame(
+        {
+            "admissionid": list(admission_ids),
+            "admittedat": [ADMITTED[s] for s in admission_ids],
+            "dischargedat": [ADMITTED[s] + 6000.0 for s in admission_ids],
+        }
+    )
+    return SimpleNamespace(
+        config=SimpleNamespace(name="aumc"),
+        load_table=lambda *_args, **_kwargs: admissions,
+    )
+
+
+def _weight_sources(stays):
+    """The two AUMC weight sources for ``stays``, concatenated as the loader does."""
+    grouped = [s for s in stays if s != MEASURED_ONLY]
+    admissions = pd.DataFrame(
+        {
+            "admissionid": grouped,
+            "weight": [75.0] * len(grouped),
+            "admittedat": [ADMITTED[s] for s in grouped],
+            "dischargedat": [ADMITTED[s] + 6000.0 for s in grouped],
+        },
+        columns=["admissionid", "weight", "admittedat", "dischargedat"],
+    )
+    measured = [s for s in stays if s == MEASURED_ONLY]
+    numeric = pd.DataFrame(
+        {
+            "admissionid": measured * 3,
+            "weight": [79.0, 80.0, 81.0][: 3 * len(measured)],
+            "measuredat": [ADMITTED[MEASURED_ONLY] + m for m in (-60.0, 60.0, 600.0)][: 3 * len(measured)],
+        },
+        columns=["admissionid", "weight", "measuredat"],
+    )
+    return pd.concat([admissions, numeric], ignore_index=True)
+
+
+class _WeightResolver:
+    """Loads AUMC weight for the requested stays through the alignment owner."""
+
+    def __init__(self, source):
+        self.source = source
+        self.owner = ConceptResolver.__new__(ConceptResolver)
+        self.owner._aumc_admissions_cache = None
+
+    def _load_single_concept(self, concept_name, data_source, *, patient_ids, **_kwargs):
+        assert concept_name == "weight"
+        stays = list(patient_ids["admissionid"])
+        aligned = self.owner._align_time_to_admission(
+            _weight_sources(stays), data_source, ["admissionid"], "measuredat",
+            clip_icu_episode=False,
+        )
+        return SimpleNamespace(data=aligned)
+
+
+def _epi_rows(stays):
+    return pd.DataFrame(
+        {
+            "admissionid": stays,
+            "start": [ADMITTED[s] + 120.0 for s in stays],
+            "stop": [ADMITTED[s] + 240.0 for s in stays],
+            "dose": [8.0] * len(stays),
+            "doseunit": ["µg"] * len(stays),
+            "doserateunit": ["min"] * len(stays),
+            "doserateperkg": [False] * len(stays),
+        }
+    )
+
+
+def _epi_rate(stays, source=None):
+    source = source or _aumc()
+    return _apply_callback(
+        _epi_rows(stays),
+        ConceptSource(
+            callback="aumc_rate_kg", table="drugitems", value_var="dose",
+            unit_var="doseunit", index_var="start",
+            params={"rel_weight": "doserateperkg", "rate_uom": "doserateunit", "stop_var": "stop"},
+        ),
+        concept_name="epi_rate",
+        resolver=_WeightResolver(source),
+        data_source=source,
+    )
+
+
+def _rows_of(result, stay):
+    rows = result.loc[result["admissionid"] == stay]
+    return rows.drop(columns=["admissionid"]).reset_index(drop=True)
+
+
+def test_measured_weight_stay_alone_in_its_frame_keeps_its_per_kg_rate():
+    alone = _epi_rate([MEASURED_ONLY])
+    shared = _epi_rate(STAYS)
+
+    assert not _rows_of(alone, MEASURED_ONLY).empty
+    assert _rows_of(alone, MEASURED_ONLY)["epi_rate"].notna().all()
+    assert _rows_of(alone, MEASURED_ONLY)["epi_rate"].to_numpy() == pytest.approx(8.0 / 80.0)
+    pd.testing.assert_frame_equal(_rows_of(alone, MEASURED_ONLY), _rows_of(shared, MEASURED_ONLY))
+
+
+def test_admission_origin_comes_from_the_admissions_table_for_rows_without_one():
+    owner = ConceptResolver.__new__(ConceptResolver)
+    owner._aumc_admissions_cache = None
+    frame = _weight_sources([MEASURED_ONLY])  # admittedat column present, all NA
+
+    out = owner._align_time_to_admission(
+        frame, _aumc(), ["admissionid"], "measuredat", clip_icu_episode=False,
+    )
+
+    assert out["measuredat"].tolist() == pytest.approx([-1.0, 1.0, 10.0])
+    assert "admittedat" not in out.columns and "dischargedat" not in out.columns
+
+
+def test_empty_weight_input_aligns_to_an_empty_frame():
+    owner = ConceptResolver.__new__(ConceptResolver)
+    owner._aumc_admissions_cache = None
+    empty = _weight_sources([]).iloc[0:0]
+
+    out = owner._align_time_to_admission(
+        empty, _aumc(), ["admissionid"], "measuredat", clip_icu_episode=False,
+    )
+
+    assert out.empty
+    assert "admittedat" not in out.columns
+
+
+def test_alignment_failure_in_the_weight_load_raises_instead_of_na_rates():
+    # The admissions table has no row for the stay: a real alignment failure.
+    source = _aumc(admission_ids=[1, 2])
+
+    with pytest.raises(RuntimeError, match="aumc_rate_kg_weight_load_failed") as info:
+        _epi_rate([MEASURED_ONLY], source=source)
+    assert isinstance(info.value.__cause__, ValueError)
+    assert "admittedat" in str(info.value.__cause__)
+
+
+def test_aumc_rate_kg_weight_load_failure_raises():
+    class _Failing:
+        def _load_single_concept(self, *_args, **_kwargs):
+            raise OSError("read failed")
+
+    with pytest.raises(RuntimeError, match="aumc_rate_kg_weight_load_failed"):
+        _apply_callback(
+            _epi_rows([1]),
+            ConceptSource(
+                callback="aumc_rate_kg", table="drugitems", value_var="dose",
+                unit_var="doseunit", index_var="start",
+                params={"rel_weight": "doserateperkg", "rate_uom": "doserateunit", "stop_var": "stop"},
+            ),
+            concept_name="epi_rate",
+            resolver=_Failing(),
+            data_source=_aumc(),
+        )
+
+
+def test_legacy_loader_weight_load_failure_raises():
+    from easyicu.load_concepts import ConceptLoader
+
+    loader = ConceptLoader.__new__(ConceptLoader)
+    loader._src_name = "aumc"
+
+    def _fail(**_kwargs):
+        raise OSError("read failed")
+
+    loader._load_one_concept = _fail
+    frame = pd.DataFrame({"admissionid": [1], "dose": [np.float64(1.0)]})
+    with pytest.raises(RuntimeError, match="kg_rate_weight_load_failed"):
+        loader._get_patient_weights(frame, "admissionid", "icustay")
+
+
+# --- Legacy ConceptLoader: a read failure is never "no data" (delta13w D13W-LEGACY-CATCH)
+
+
+def _legacy_loader():
+    from easyicu.load_concepts import ConceptLoader
+
+    loader = ConceptLoader.__new__(ConceptLoader)
+    loader._src_name = "aumc"
+    loader.src = SimpleNamespace(tables={"numericitems": object()})
+    loader.data_path = None
+    # The selected source registers the table: declared and present.
+    loader._table_source = lambda: SimpleNamespace(_table_sources={"numericitems": object()})
+    loader._columns_for_source = lambda *_args, **_kwargs: None
+    loader._preload_tables = lambda *_args, **_kwargs: None
+    return loader
+
+
+def test_legacy_source_read_failure_raises():
+    loader = _legacy_loader()
+
+    def _fail(*_args, **_kwargs):
+        raise OSError("read failed")
+
+    loader._safe_load_table = _fail
+    with pytest.raises(OSError, match="read failed"):
+        loader._load_concept_source(
+            source=ConceptSource(table="numericitems", sub_var="itemid", ids=[1]),
+            concept_name="weight", patient_ids=None, id_type="icustay", interval=None,
+        )
+
+
+def test_legacy_undeclared_table_is_empty_without_a_read():
+    loader = _legacy_loader()
+    loader._table_source = lambda: SimpleNamespace(config=SimpleNamespace(tables={}))
+
+    def _no_read(*_args, **_kwargs):
+        raise AssertionError("an undeclared table is never read")
+
+    loader._safe_load_table = _no_read
+    out = loader._load_concept_source(
+        source=ConceptSource(table="no_such_table", sub_var="itemid", ids=[1]),
+        concept_name="weight", patient_ids=None, id_type="icustay", interval=None,
+    )
+    assert out.empty
+
+
+def test_legacy_declared_table_without_a_file_fails_typed(tmp_path):
+    from easyicu.load_concepts import ConceptLoader
+    from easyicu.storage_layout import StorageIntegrityError
+
+    # AUMC declares admissions; the installation root has no file and no
+    # conversion manifest.
+    loader = ConceptLoader("aumc", data_path=str(tmp_path), low_memory=False)
+    with pytest.raises(StorageIntegrityError, match="declared_table_source_missing") as info:
+        loader._read_declared_table("admissions", None)
+    assert info.value.reason == "declared_table_source_missing"
+
+
+@pytest.mark.parametrize("workers", [1, 2])
+def test_legacy_load_concepts_refuses_partial_results_in_both_modes(workers):
+    from easyicu.concept import load_dictionary
+
+    dictionary = load_dictionary("miiv")
+    concepts = [dictionary["hr"], dictionary["sbp"], dictionary["map"]]
+    loader = _legacy_loader()
+
+    def _one(*, concept, **_kwargs):
+        if concept.name == "sbp":
+            raise OSError("injected read failure")
+        return pd.DataFrame({"stay_id": [1], "charttime": [0.0], concept.name: [1.0]})
+
+    loader._load_one_concept = _one
+    with pytest.raises(OSError, match="injected read failure"):
+        loader.load_concepts(concepts, verbose=False, concept_workers=workers)
+
+
+def test_legacy_weightless_stay_gives_no_weight_without_raising():
+    loader = _legacy_loader()
+    loader._load_one_concept = lambda **_kwargs: pd.DataFrame()
+    frame = pd.DataFrame({"admissionid": [1], "dose": [1.0]})
+
+    assert loader._get_patient_weights(frame, "admissionid", "icustay") is None
+
+
+def _cvp_loader(fail_with):
+    from easyicu.load_concepts import ConceptLoader
+
+    loader = ConceptLoader("miiv", low_memory=False)
+    loader._preload_tables = lambda *_args, **_kwargs: None
+    healthy = loader._load_concept_source
+
+    def _source(*, source, concept_name, **kwargs):
+        if concept_name == "cvp_raw":
+            raise fail_with
+        if concept_name in ("hr", "dbp"):
+            return pd.DataFrame({"stay_id": [1], "charttime": [pd.Timestamp("2100-01-01")], "value": [60.0]})
+        return healthy(source=source, concept_name=concept_name, **kwargs)
+
+    loader._load_concept_source = _source
+    loader._convert_time_to_hours = lambda frame, _id_type: frame
+    return loader
+
+
+@pytest.mark.parametrize("workers", [1, 2])
+@pytest.mark.parametrize(
+    "error, pattern",
+    [
+        (OSError("child read failed"), "child read failed"),
+        (RuntimeError("kg_rate_weight_load_failed: weight"), "kg_rate_weight_load_failed"),
+    ],
+)
+def test_legacy_recursive_concept_with_a_failing_child_is_refused(workers, error, pattern):
+    loader = _cvp_loader(error)
+
+    with pytest.raises(type(error), match=pattern):
+        loader.load_concepts(["hr", "cvp_qc"], verbose=False, concept_workers=workers)
+    assert not any(key[0] == "cvp_qc" for key in getattr(loader, "_concept_cache", {}))
+
+
+def _miiv_without_files(tmp_path):
+    from easyicu.load_concepts import ConceptLoader
+
+    # MIIV declares labevents; the root has no file and no conversion
+    # manifest.  The datasource itself would return an empty frame here.
+    return ConceptLoader("miiv", data_path=str(tmp_path), low_memory=False)
+
+
+def test_miiv_declared_table_without_a_file_fails_typed_on_read(tmp_path):
+    from easyicu.storage_layout import StorageIntegrityError
+
+    loader = _miiv_without_files(tmp_path)
+    with pytest.raises(StorageIntegrityError, match="declared_table_source_missing"):
+        loader._load_concept_source(
+            source=ConceptSource(table="labevents", sub_var="itemid", ids=[50912]),
+            concept_name="crea", patient_ids=None, id_type="icustay", interval=None,
+        )
+    assert loader._table_cache == {}
+
+
+def test_miiv_declared_table_without_a_file_fails_typed_on_preload(tmp_path):
+    from easyicu.concept import load_dictionary
+    from easyicu.storage_layout import StorageIntegrityError
+
+    loader = _miiv_without_files(tmp_path)
+    crea = load_dictionary("miiv")["crea"]
+    with pytest.raises(StorageIntegrityError, match="declared_table_source_missing"):
+        loader._preload_tables([crea], None, "icustay")
+    assert loader._table_cache == {}
+
+
+def test_miiv_manifest_listed_table_without_files_keeps_the_scan_failure(tmp_path):
+    import json
+
+    from easyicu.storage_layout import StorageIntegrityError
+
+    # Listed in the conversion manifest, files gone: the storage owner's
+    # verify_flat_scan decides it, as in the datasource's own reader.
+    (tmp_path / "conversion_manifest.json").write_text(json.dumps({"tables": [{
+        "table": "labevents", "row_count": 1,
+        "outputs": [{"relative_path": "labevents.parquet"}],
+    }]}))
+    loader = _miiv_without_files(tmp_path)
+    with pytest.raises(StorageIntegrityError, match="table_scan_files_missing"):
+        loader._read_declared_table("labevents", None)
+    assert loader._table_cache == {}
+
+
+def test_attached_source_with_an_extended_config_is_read(tmp_path):
+    from easyicu.config import TableConfig
+    from easyicu.io.attach import data as attached
+    from easyicu.io.data_tools import load_src_cfg
+    from easyicu.load_concepts import ConceptLoader
+
+    pd.DataFrame({"admissionid": [1, 2], "itemid": [7, 7], "value": [1.0, 2.0]}).to_parquet(
+        tmp_path / "site_extra.parquet"
+    )
+    config = load_src_cfg("aumc").model_copy(deep=True)
+    config.tables["site_extra"] = TableConfig(
+        name="site_extra", files=[{"path": "site_extra.parquet"}],
+    )
+    attached.attach_src(config, tmp_path, force=True)
+    try:
+        loader = ConceptLoader("aumc", data_path=str(tmp_path), low_memory=False)
+        out = loader._read_declared_table("site_extra", None)
+    finally:
+        attached.detach_src("aumc")
+    assert out is not None and len(out) == 2
+
+
+# --- delta19w: one bound source; presence by the reader's own loader
+
+
+def _no_env_root(monkeypatch):
+    for name in ("EASYICU_AUMC_PATH", "EASYICU_HIRID_PATH", "EASYICU_DATA_PATH"):
+        monkeypatch.delenv(name, raising=False)
+
+
+def _aumc_admissions():
+    # Synthetic: two admissions, no real identifiers.
+    return pd.DataFrame({
+        "admissionid": [1, 2], "gender": ["Man", "Vrouw"], "agegroup": ["70-79", "60-69"],
+        "admittedat": [0, 0], "dischargedat": [3_600_000, 7_200_000], "dateofdeath": [None, None],
+    })
+
+
+def _aumc_instance(root):
+    from easyicu.datasource import ICUDataSource
+    from easyicu.io.data_tools import load_src_cfg
+
+    return ICUDataSource(load_src_cfg("aumc"), base_path=root)
+
+
+@pytest.mark.parametrize("patient_ids", [None, [1, 2]], ids=["safe_read", "icutable_pushdown"])
+def test_a_source_passed_to_the_loader_is_never_reselected_by_name(tmp_path, monkeypatch, patient_ids):
+    from easyicu.concept import load_dictionary
+    from easyicu.load_concepts import ConceptLoader
+
+    _no_env_root(monkeypatch)
+    _aumc_admissions().to_parquet(tmp_path / "admissions.parquet")
+    source = _aumc_instance(tmp_path)
+    loader = ConceptLoader(source, low_memory=False)  # root carried by the source only
+    loader._preload_tables([load_dictionary("aumc")["sex"]], patient_ids, "icustay")
+    out = loader._read_declared_table("admissions", ["admissionid", "gender"])
+    assert len(out) == 2
+    assert loader._table_source() is source
+    assert loader._table_cache_source["admissions"] is source
+
+
+def test_a_registered_in_memory_source_is_read_through_the_bound_source(monkeypatch):
+    from easyicu.datasource import ICUDataSource
+    from easyicu.io.data_tools import load_src_cfg
+    from easyicu.load_concepts import ConceptLoader
+
+    _no_env_root(monkeypatch)
+    source = ICUDataSource(load_src_cfg("aumc"), base_path=None)
+    source.register_table_source("admissions", lambda: _aumc_admissions())
+    loader = ConceptLoader(source, low_memory=False)
+    out = loader._read_declared_table("admissions", ["admissionid", "gender"])
+    assert len(out) == 2
+    assert loader._table_cache_source["admissions"] is source
+
+
+def test_a_cache_entry_from_another_source_is_never_reused(tmp_path, monkeypatch):
+    from easyicu.load_concepts import ConceptLoader
+    from easyicu.storage_layout import StorageIntegrityError
+
+    _no_env_root(monkeypatch)
+    _aumc_admissions().to_parquet(tmp_path / "admissions.parquet")
+    loader = ConceptLoader(_aumc_instance(tmp_path), low_memory=False)
+    loader._table_cache["admissions"] = _aumc_admissions()
+    loader._table_cache_source["admissions"] = object()
+    with pytest.raises(StorageIntegrityError, match="table_cache_source_changed"):
+        loader._read_declared_table("admissions", None)
+
+
+def test_hirid_multi_file_table_with_only_its_csv_is_missing_not_empty(tmp_path, monkeypatch):
+    from easyicu.load_concepts import ConceptLoader
+    from easyicu.storage_layout import StorageIntegrityError
+
+    # The packaged HiRID pharma shape: pharma_records/csv/part-0.csv ...;
+    # the reader reads that directory's Parquet, and it holds only a CSV.
+    _no_env_root(monkeypatch)
+    csv_dir = tmp_path / "pharma_records" / "csv"
+    csv_dir.mkdir(parents=True)
+    pd.DataFrame({"patientid": [1], "pharmaid": [7], "givenat": [0], "givendose": [1.0]}).to_csv(
+        csv_dir / "part-0.csv", index=False
+    )
+    loader = ConceptLoader("hirid", data_path=str(tmp_path), low_memory=True)
+    with pytest.raises(StorageIntegrityError, match="declared_table_source_missing"):
+        loader._read_declared_table("pharma", None)
+    assert loader._table_cache == {}
+
+
+# --- delta20w: ICU start times come from the bound source and its id_configs
+
+
+def _miiv_stays(root, start, table="icustays"):
+    # Synthetic: one stay, a fixed start.
+    root.mkdir(parents=True, exist_ok=True)
+    pd.DataFrame({"stay_id": [1], "intime": [pd.Timestamp(start)]}).to_parquet(root / f"{table}.parquet")
+
+
+def _miiv_source(root, config=None):
+    from easyicu.datasource import ICUDataSource
+    from easyicu.io.data_tools import load_src_cfg
+
+    return ICUDataSource(config or load_src_cfg("miiv"), base_path=root)
+
+
+def _events():
+    return pd.DataFrame({"stay_id": [1], "charttime": [pd.Timestamp("2100-01-01 06:00")]})
+
+
+def _both_helpers(loader):
+    first = loader._convert_time_column_to_hours(_events(), "charttime", "stay_id")
+    second = loader._convert_time_to_hours(_events(), "icustay")
+    return float(first["charttime"].iloc[0]), float(second["charttime"].iloc[0])
+
+
+def test_start_times_of_an_explicit_source_without_an_env_root(tmp_path, monkeypatch):
+    from easyicu.load_concepts import ConceptLoader
+
+    monkeypatch.delenv("EASYICU_MIIV_PATH", raising=False)
+    monkeypatch.delenv("EASYICU_DATA_PATH", raising=False)
+    _miiv_stays(tmp_path, "2100-01-01 00:00")
+    loader = ConceptLoader(_miiv_source(tmp_path), low_memory=False)
+    assert _both_helpers(loader) == (6.0, 6.0)
+
+
+def test_start_times_never_come_from_a_same_name_attached_source(tmp_path, monkeypatch):
+    from easyicu.io.attach import data as attached
+    from easyicu.io.data_tools import load_src_cfg
+    from easyicu.load_concepts import ConceptLoader
+
+    monkeypatch.delenv("EASYICU_MIIV_PATH", raising=False)
+    monkeypatch.delenv("EASYICU_DATA_PATH", raising=False)
+    _miiv_stays(tmp_path / "attached", "2100-01-01 05:00")  # would give 1 h
+    _miiv_stays(tmp_path / "bound", "2100-01-01 00:00")
+    attached.attach_src(load_src_cfg("miiv"), tmp_path / "attached", force=True)
+    try:
+        loader = ConceptLoader(_miiv_source(tmp_path / "bound"), low_memory=False)
+        hours = _both_helpers(loader)
+    finally:
+        attached.detach_src("miiv")
+    assert hours == (6.0, 6.0)
+
+
+def test_start_times_use_the_bound_sources_own_id_table(tmp_path, monkeypatch):
+    from easyicu.config import TableConfig
+    from easyicu.io.data_tools import load_src_cfg
+    from easyicu.load_concepts import ConceptLoader
+
+    monkeypatch.delenv("EASYICU_MIIV_PATH", raising=False)
+    monkeypatch.delenv("EASYICU_DATA_PATH", raising=False)
+    config = load_src_cfg("miiv").model_copy(deep=True)
+    config.tables["site_stays"] = TableConfig(name="site_stays", files=[{"path": "site_stays.parquet"}])
+    config.id_configs["icustay"] = config.id_configs["icustay"].model_copy(update={"table": "site_stays"})
+    _miiv_stays(tmp_path, "2100-01-01 00:00", table="site_stays")
+    loader = ConceptLoader(_miiv_source(tmp_path, config), low_memory=False)
+    assert _both_helpers(loader) == (6.0, 6.0)
+
+
+def test_a_bound_loader_never_selects_again():
+    from easyicu.load_concepts import ConceptLoader
+    from easyicu.storage_layout import StorageIntegrityError
+
+    loader = ConceptLoader("miiv", data_path=None, low_memory=False)
+    with pytest.raises(StorageIntegrityError, match="legacy_loader_source_reselect"):
+        loader._select_source("miiv", "/elsewhere")
+
+
+# --- delta24w: the baseline alignment, only the ID table's reader changed
+
+
+def _aumc_admissions_root(root):
+    # Synthetic: one admission per patient, so patientid maps uniquely to a start.
+    root.mkdir(parents=True, exist_ok=True)
+    pd.DataFrame({
+        "admissionid": [11, 12], "patientid": [7, 8],
+        "admittedat": [pd.Timestamp("2100-01-01 00:00"), pd.Timestamp("2100-02-01 00:00")],
+    }).to_parquet(root / "admissions.parquet")
+    from easyicu.datasource import ICUDataSource
+    from easyicu.io.data_tools import load_src_cfg
+
+    return ICUDataSource(load_src_cfg("aumc"), base_path=root)
+
+
+def test_an_alternate_id_with_a_unique_start_is_converted(tmp_path, monkeypatch):
+    from easyicu.load_concepts import ConceptLoader
+
+    _no_env_root(monkeypatch)
+    loader = ConceptLoader(_aumc_admissions_root(tmp_path), low_memory=False)
+    frame = pd.DataFrame({"patientid": [7], "measuredat": [pd.Timestamp("2100-01-01 03:00")]})
+    out = loader._convert_time_column_to_hours(frame, "measuredat", "patientid")
+    assert out["measuredat"].tolist() == [3.0]
+
+
+@pytest.mark.parametrize("order", [["admissionid", "patientid", "time"], ["patientid", "admissionid", "time"]])
+def test_both_id_column_orders_give_the_same_hours(tmp_path, monkeypatch, order):
+    from easyicu.load_concepts import ConceptLoader
+
+    _no_env_root(monkeypatch)
+    loader = ConceptLoader(_aumc_admissions_root(tmp_path), low_memory=False)
+    frame = pd.DataFrame({
+        "admissionid": [11], "patientid": [7], "time": [pd.Timestamp("2100-01-01 03:00")],
+    })[order]
+    out = loader._convert_time_to_hours(frame, "icustay")
+    assert out["charttime"].tolist() == [3.0]  # the helper names the axis charttime
+
+
+def test_an_empty_id_configs_shape_uses_the_default_id_table(tmp_path, monkeypatch):
+    from easyicu.io.data_tools import load_src_cfg
+    from easyicu.load_concepts import ConceptLoader
+
+    monkeypatch.delenv("EASYICU_MIIV_PATH", raising=False)
+    monkeypatch.delenv("EASYICU_DATA_PATH", raising=False)
+    config = load_src_cfg("miiv").model_copy(deep=True, update={"id_configs": {}})
+    _miiv_stays(tmp_path, "2100-01-01 00:00")
+    loader = ConceptLoader(_miiv_source(tmp_path, config), low_memory=False)
+    out = loader._convert_time_column_to_hours(_events(), "charttime", "stay_id")
+    assert out["charttime"].tolist() == [6.0]
+
+
+def test_a_relative_clock_exit_never_returns_an_absolute_datetime(tmp_path, monkeypatch):
+    from easyicu.io.ts_utils import TimeAxisUnitError
+    from easyicu.load_concepts import ConceptLoader
+
+    monkeypatch.delenv("EASYICU_MIIV_PATH", raising=False)
+    monkeypatch.delenv("EASYICU_DATA_PATH", raising=False)
+    _miiv_stays(tmp_path, "2100-01-01 00:00")
+    loader = ConceptLoader(_miiv_source(tmp_path), low_memory=False)
+    # No ID the stay table carries: the baseline returned the datetime as is.
+    frame = pd.DataFrame({"device_id": [1], "charttime": [pd.Timestamp("2100-01-01 06:00")]})
+    with pytest.raises(TimeAxisUnitError, match="legacy_time_axis_unaligned"):
+        loader._relative_hours_column(frame, "charttime", "device_id")
+    # The patient table has no start time: the baseline returned the datetime.
+    pd.DataFrame({"subject_id": [5], "anchor_year": [2100]}).to_parquet(tmp_path / "patients.parquet")
+    by_patient = pd.DataFrame({"subject_id": [5], "time": [pd.Timestamp("2100-01-01 06:00")]})
+    with pytest.raises(TimeAxisUnitError, match="legacy_time_axis_unaligned"):
+        loader._relative_hours(by_patient, "patient")

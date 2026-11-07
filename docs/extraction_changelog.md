@@ -135,6 +135,100 @@ every batch is `produced_all_null`.
   - a missing isolated-batch receipt is a typed `stream_failure`
     (`batch_receipt_missing`, with the batch and sidecar kind).
 
+## 2026-11-06 — AUMC per-kg rates do not depend on the batch; weight-load failures raise [lead-r13, `6aec07c8a`, `9c585941d` and the fail-closed legacy-loader pass]
+
+- Rule: an AUMC row with no `admittedat` of its own takes its admission origin
+  from the admissions table. AUMC `weight` is the only concept that
+  concatenates admissions rows (weightgroup, which carry `admittedat`) with
+  rows from another table (measured `numericitems` weights, which do not). An
+  empty input aligns to an empty frame. A frame where no row has an origin
+  still raises.
+- Rationale: the origin used to come from the frame. A stay with measured
+  weights but no weightgroup had no origin when it was the only stay of its
+  per-kg rate frame. The weight load then raised, `aumc_rate_kg` swallowed the
+  error, and every absolute-dose rate of that stay was NA. This happened only
+  when a stream batch's only stay with a given drug was such a stay.
+- Failure handling (AUMC): a failed weight load for `aumc_rate_kg` now
+  raises `aumc_rate_kg_weight_load_failed` with its cause, as
+  `hirid_rate_kg`, `mimic_kg_rate` and `sic_rate_kg` already did.
+- Failure handling (deprecated `ConceptLoader`, every database): the loader
+  fails closed.
+  - One source per loader, bound at construction. Preload, the declared
+    check, the cache, every read and the ICU start times used to place
+    datetime columns on the ICU-hour axis use that one source object. Each
+    cache entry records the source that produced it.
+  - The ICU start times used to place a datetime column on the ICU-hour axis
+    are read from the bound source. The ID table is the bound configuration's
+    own (`easyicu.table.id_table_name`, the rule `load_id_tbl` uses), read in
+    full. The alignment itself (which start column, which ID column, the join)
+    is unchanged. Before, the table was re-loaded by database name with the
+    packaged configuration. With a source passed to the constructor, that
+    could take start times from a different root (a same-name attached source
+    gave wrong hours) or find none at all, which left the column unconverted.
+  - Disclosed behaviour change: when no usable ID or start time can align a
+    datetime column, the legacy loader now raises `TimeAxisUnitError`
+    `legacy_time_axis_unaligned`. Before, it returned the absolute datetime
+    from a relative-hour exit. Example: a patient-level table with no start
+    column.
+  - A selection by name after binding raises `legacy_loader_source_reselect`.
+    `tests/governance/test_legacy_loader_fail_closed.py` statically rejects
+    direct calls and imports of the source resolvers outside the listed
+    sites. That includes module aliases, qualified names, string `getattr`
+    and dynamic imports. It checks the module's text; it does not prove that
+    no runtime path can reach a resolver some other way.
+  - Root selection:
+    - An `ICUDataSource` passed to the constructor uses its own root and
+      registrations. It is never re-selected by name.
+    - A `DataSourceConfig` is read with that configuration, from `data_path`
+      only. It inherits no environment root and no attached source; with
+      `data_path=None` it has no root. Before, its tables were read with the
+      packaged configuration.
+    - A database name binds the source `load_table` selects
+      (`easyicu.table.select_table_source`). That is an attached source
+      first, then `data_path`, then `EASYICU_<SRC>_PATH`, then
+      `EASYICU_DATA_PATH`.
+  - A loader bound to an `ICUDataSource` holds that source's lock and cannot
+    be pickled. A process started by fork inherits a copy of the bound
+    source; its caches and lock are not shared state synchronised across
+    processes. Spawn is not certified.
+  - An empty read comes only from a table the bound source does not declare.
+    That is decided before the read.
+  - A declared table without a file raises `declared_table_source_missing`, a
+    `StorageIntegrityError`, on every database. This includes MIIV, where the
+    datasource itself returns an empty frame. A table the conversion manifest
+    lists keeps `table_scan_files_missing`. Presence is decided by the loader
+    the reader will use: a table configured as several files is a Parquet
+    directory, present only when the storage owner's file set
+    (`resolve_target_files`) is not empty. A CSV next to it does not count
+    (HiRID `pharma_records/csv/` with CSV only used to read as empty). The
+    MIMIC-III `chartevents` CSV counts only as a candidate physical source.
+- Public API change: `easyicu.table.load_table` on an attached source now
+  accepts a `path` equal to the source's base path (or `None`) and raises
+  `ValueError` for a different one. It used to raise `TypeError` for any
+  `path`. Its read half is also available as `easyicu.table.read_table_from`,
+  and `load_id_tbl`'s ID-table rule as `easyicu.table.id_table_name`.
+  - Any other read, ID-lookup, time-conversion, unit-conversion, preload or
+    sub-concept failure propagates. A recursive concept is never built or
+    cached from a healthy subset of its sub-concepts.
+  - Its per-kg weight load raises `kg_rate_weight_load_failed`.
+  - The parallel collector raises the earliest requested failure, as serial
+    loading does.
+  - `tests/governance/test_legacy_loader_fail_closed.py` keeps every
+    `except` in the module raising.
+- Affected: values change for AUMC only (the origin rule). The failure
+  handling of the deprecated `ConceptLoader` applies to every database.
+- Impact:
+  - At batch 50 on the AUMC sample, `epi_rate` and `epi60` regain 115 hourly
+    cells in <10 stays and `dobu_rate` and `dobu60` regain 14. That restores the
+    knock-on `norepi_equiv` and SOFA cardiovascular cells (sofa1 63, sofa2 133).
+    These modules at batch 50 now equal the default byte for byte.
+  - Default output is unchanged: 20/20 module files are byte-identical with
+    `8999b6728` on the AUMC sample.
+  - In the raw `weight` concept, before its per-stay aggregation, the time
+    column of measured-weight rows changes from NA to hours since ICU
+    admission. Weight values, static weight, BMI and per-kg values are
+    unchanged.
+
 ## 2026-11-06 — eICU GCS sedation windows and the published `ett_gcs` grid [lead-r13, `432ddaf3c`, `80b1cb964`, `e70102c94`, `f9b45386c`, `b7509c080`, `e1d73cd7b`, `2c0579bd5`, `942bfcbfb`, `3e23c65d4`, `06f30f7b0`]
 
 **Rule.** GCS marks an hour as sedated (and imputes 15, ricu `sed_impute`)
