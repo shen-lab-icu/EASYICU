@@ -331,8 +331,9 @@ def _publication_closure(
                     )
         bucket_links = payload.get("bucket_links")
         if isinstance(bucket_links, dict):
-            for name, target in bucket_links.items():
-                if isinstance(target, str):
+            for name, entry in bucket_links.items():
+                target = sealed_link_target(entry)
+                if target is not None:
                     # Formal farm receipt readers use Path(raw) from cwd.
                     enqueue(target, Path(target), f"bucket_links.{name}", is_metadata=False)
 
@@ -506,6 +507,46 @@ def _bind_bucket(install: Path, receipt: dict, root: Path, has_manifest: bool) -
         )
 
 
+def sealed_link_target(entry: Any) -> str | None:
+    """The link target a farm receipt's ``bucket_links`` entry records, else None.
+
+    The seal tool writes ``lead_r13.seal_farm_receipt/2`` entries as
+    ``{kind, source, target, contract}``; an older receipt wrote the target
+    path itself. Both name the same thing: the path the farm link must resolve
+    to. Any other shape names nothing and is refused by the caller.
+    """
+    if isinstance(entry, str) and entry:
+        return entry
+    if isinstance(entry, dict):
+        target = entry.get("target")
+        if isinstance(target, str) and target:
+            return target
+    return None
+
+
+def sealed_bucket_tables(install: Path) -> list[str]:
+    """The tables whose buckets ``install``'s PASS in-root seal receipt binds; [] without one.
+
+    A sealed root names them in ``tables``; a farm in ``bucket_links``
+    (``<table>_bucket``). A farm's conversion manifest drops a bucket-only table
+    (CareVue chartevents), so the receipt is what registers it for a formal run.
+    No receipt, or one that is not PASS, registers nothing here; reading such a
+    bucket stays refused by the formal checks.
+    """
+    try:
+        receipt = _passing_receipt(Path(install))
+    except SealPublicationError:
+        return []
+    names = receipt.get("tables") if "tables" in receipt else receipt.get("bucket_links")
+    if not isinstance(names, dict):
+        return []
+    return sorted(
+        name[: -len(BUCKET_SUFFIX)] if name.endswith(BUCKET_SUFFIX) else name
+        for name in names
+        if isinstance(name, str) and name
+    )
+
+
 def _assert_accepted(root: Path) -> None:
     install = root.parent
     has_manifest = (root / MANIFEST).is_file()
@@ -518,11 +559,16 @@ def _assert_accepted(root: Path) -> None:
         raise SealPublicationError(
             UNACCEPTED, install, "receipt binds no tables or bucket links"
         )
-    link = links.get(root.name)
-    if link is None:
+    entry = links.get(root.name)
+    if entry is None:
         # A farm receipt alone never accepts anything.
         raise SealPublicationError(
             UNACCEPTED, install, f"{root.name} is not a sealed link"
+        )
+    link = sealed_link_target(entry)
+    if link is None:
+        raise SealPublicationError(
+            UNACCEPTED, install, f"{root.name} sealed link names no target"
         )
     real = Path(os.path.realpath(root))
     if Path(os.path.realpath(link)) != real:

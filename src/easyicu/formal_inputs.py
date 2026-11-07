@@ -152,18 +152,25 @@ def _declared_view_chain(base: Path) -> Optional[Dict[str, str]]:
 
 
 def _bucket_tables(base: Path) -> List[str]:
-    """The tables a formal run of ``base`` may read: its conversion-registered set.
+    """The tables a formal run of ``base`` may read: its conversion-registered set, plus
+    the bucket tables its own PASS seal receipt binds (R13-FARM-TABLES).
 
     Bucket installations are resolved for these tables only, through the
     reader's own resolver (root, ``icu/``, ``hosp/``); an installation no
     registered table resolves to is never read and is only reported
     (``unused_installations``, delta16v B-UNUSED-NESTED).
     """
+    from .storage_seal_publication import sealed_bucket_tables
+
     names: Dict[str, str] = {}
     for entry in _load_manifest(base / CONVERSION_MANIFEST)["tables"]:
         table = entry.get("table") if isinstance(entry, dict) else None
         if isinstance(table, str) and table:
             names.setdefault(table.lower(), table)
+    # R13-FARM-TABLES: a table the root's own PASS seal receipt binds as a bucket (a farm's
+    # bucket-only table is absent from its conversion manifest) is read, so it is validated.
+    for table in sealed_bucket_tables(base):
+        names.setdefault(table.lower(), table)
     return sorted(names.values())
 
 

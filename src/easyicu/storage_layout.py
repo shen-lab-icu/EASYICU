@@ -1731,6 +1731,9 @@ def record_consumed(
     if fmt in (FORMAT_PARQUET, FORMAT_CSV) and files:
         layout = LAYOUT_CSV if fmt == FORMAT_CSV else LAYOUT_FLAT
         _log_table_layout(base, table, layout, base, lambda: _flat_derived_from(base, files))
+        # R13-READ-LOG: a consumed flat or CSV file was read, so the run log names that read
+        # (``table_read``) whatever path opened it; the consumed set and storage_reads agree.
+        _log_table_read(None if base is None else Path(base), table, layout, files)
     return entries
 
 
@@ -2171,6 +2174,11 @@ def record_table_read(source, table: str, layout: str, paths: Iterable[Path] = (
     worker processes report into one receipt.
     """
     base = None if source.base_path is None else Path(source.base_path)
+    _log_table_read(base, table, layout, paths)
+
+
+def _log_table_read(base, table: str, layout: str, paths: Iterable[Path] = ()) -> None:
+    """The ``table_read`` event of :func:`record_table_read` (also logged by :func:`record_consumed`)."""
     layout_path, layout_realpath = _layout_paths(base, layout, paths)
     _log_fallback({"event": TABLE_READ_EVENT, "root": str(base), "table": table,
                    "layout": layout, "layout_path": layout_path,
