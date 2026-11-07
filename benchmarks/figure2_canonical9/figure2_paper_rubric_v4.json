@@ -1149,6 +1149,8 @@
     "src/easyicu/research_agent/user_extensions.py",
     "src/easyicu/research_agent/validity_signals.py",
     "src/easyicu/research_agent/viability.py",
+    "src/easyicu/resolver_errors.py",
+    "src/easyicu/resolver_pool.py",
     "src/easyicu/resources.py",
     "src/easyicu/runtime/__init__.py",
     "src/easyicu/runtime/cache_manager.py",
@@ -1556,7 +1558,7 @@
     "src/easyicu/webserver/zotero_probe.py"
   ],
   "scorer_tree_root": "benchmarks/figure2_canonical9/successor_v4",
-  "scorer_tree_sha256": "c49174d709e79b2c40d31b91785b8f674ce2d6c15c5c57ca4a4acb92b30dadc7",
+  "scorer_tree_sha256": "05ea5074c60cf923e56de2ac6d457fcc7c9f5de82edda1513923813156b7cd28",
   "suite_projection_sha256": "11c39afac69c9a0b560c6aa92be19f05725f04c66b9d2c499cfdb353c40295ab",
   "suite_ref": "easyicu_evaluation_protocol_suite/v2",
   "tasks": [
