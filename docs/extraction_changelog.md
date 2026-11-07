@@ -229,6 +229,99 @@ every batch is `produced_all_null`.
     admission. Weight values, static weight, BMI and per-kg values are
     unchanged.
 
+## 2026-11-06 — a concept's value kind is declared, never sampled from the batch [lead-r13, r13vgcs: `27e369bde`, `18203ef3a` and its follow-up]
+
+**Rule.** Whether a concept's values are numeric, logical or text comes from
+its declared class (`num_cncpt`/`unt_cncpt`, `lgl_cncpt`, `fct_cncpt`/
+`chr_cncpt`), its numeric bounds, or, for a `rec_cncpt`, its declared unit or
+recipe; ricu's default aggregate follows from that kind (numeric median,
+logical any, text first). The rule that coerced a column to numbers when more
+than half of its first 100 non-missing values parsed is removed, together with
+the 100-row boolean sniff in the concept merge and the `infer_dtype` check in
+the requested-column materializer. Before, a batch whose first rows were text
+kept a numeric concept as text and aggregated it with `first` instead of the
+median, so the value depended on which stays shared the batch.
+
+- AUMC `vgcs`: co-hour verbal scores were averaged in one batch and the first
+  one kept in another; now always the median.
+- eICU `tgcs`: the nursecharting text "Unable to score…" made a batch keep
+  `tgcs` as text; it is now NaN and the co-hour median is taken.
+- Export: a declared numeric or logical concept column is written as numbers;
+  a declared text concept stays text whatever its values look like.
+- Counted conversion (B-IMPLICIT-GATE): every source value of a declared
+  numeric concept that is not a number becomes NaN and is counted per concept
+  and source, at each conversion point (raw resolver, single/multi/wide SQL,
+  module export), in the manifest's `source_bounds_drops` records
+  (`non_numeric_values`, `stays_with_non_numeric`, `stays_with_values`), with
+  the QC warning `source_values_not_numeric` at the bounds thresholds. The
+  12 formerly classless raw measurements (`bnd`, `bun_raw`, `crea_raw`,
+  `etco2_raw`, `hct_raw`, `hgb_raw`, `inr_pt`, `minute_vol_raw`,
+  `myoglobin_raw`, `na_raw`, `ph_raw`, `temp_raw`) declare `num_cncpt`; on
+  the six G1 samples none of their source values is non-numeric.
+- **Migration.** Custom concepts must declare `class` for logical/categorical
+  values; a classless concept is numeric and refuses non-numeric values
+  (`ConceptValueKindUndeclared`, naming the concept and the count; an
+  extraction that meets one is not published). An explicitly declared
+  `num_cncpt` keeps turning non-numeric values into NaN, counted. A
+  `rec_cncpt` with no unit and no registered recipe kind raises the same
+  error. The community overlay's `adv_resp` now declares `lgl_cncpt`.
+- Demos (eICU, MIIV, MIMIC-III, default mode, 20 modules): identical to the
+  base; no cell that held a value became NaN.
+- **Multi-concept SQL now casts a VARCHAR value column (disclosed change).**
+  When the long-table batch (one query, several concepts) reads a VARCHAR
+  value column, its value is `TRY_CAST(value AS DOUBLE)` in the bounds test,
+  the aggregate and the bounds counts; a value that does not cast is NULL
+  (counted as non-numeric) instead of being compared and aggregated as text.
+  A DOUBLE value column produces the same SQL as before. Default values are
+  unchanged on the G1 3,000-stay samples (server, 2026-11-07, base
+  `372d563a1` vs this round, import origin asserted per run): eICU
+  (`eicu_var`, string temperature/etCO2 channels) all 20 published module
+  parquets byte-identical; MIIV, AUMC, SIC and MIMIC-III CareVue on the
+  modules that read long tables through the multi-concept SQL (outcome,
+  vitals, blood_gas, chemistry, hematology, ventilator, respiratory) 7/7
+  byte-identical each. Manifests differ only by the added count fields.
+- One publication gate (round 3, delta23v): the native publisher, the web
+  export and the flat (`native_export_v2=False`) grouped export share one
+  pre-commit gate and count fields (`source_bounds_drops`,
+  `source_values_not_numeric`, `source_bounds_audit`, `qc_warnings`); a
+  refusal leaves no root manifest (flat: no module manifest). The gate judges
+  a concept by the run's effective per-source dictionary (SIC overlay
+  included) and checks every module's counts before any aggregation.
+- Run-level non-numeric counts are the union of the reading modules keyed by
+  stay (a private per-stay ledger that is never published): disjoint readers
+  add up and a clean reader cannot mask an anomalous one. Published counts
+  1-9 read `"<10"`. Republication (EX-A02) and staging recovery (EX-A03)
+  pass every module's published counts through one path; a module manifest
+  without counts is `audit_unknown`, never zero, and a source read by several
+  modules without ledgers is a lower bound marked `audit_unknown`.
+- A callback's first parse of raw values (e.g. eICU temperature
+  `fahr_between`) counts text before it becomes NaN and refuses it for a
+  classless concept; a callback that parses outside the shared helper is
+  counted at the callback boundary.
+- Boundary net (round 4): it judges the column the callback parses, as the
+  callback's owner declares it (eICU `iv_exposure` reads `dosage`, so a
+  drugname-valued source no longer counts drug names), and leaves out rows
+  the callback leaves missing on purpose (an unknown route). A categorical map
+  that leaves a value unmapped loses it even when it parses as a number (the
+  eICU ICDSC scores 0-8 in `delirium_positive`). A value that names an
+  assessment instrument (eICU 'Delirium Scale' rows: `CAM-ICU`, `ICDSC`) is
+  not a result: it is counted as `non_result_instrument_rows` (QC category of
+  that name), never as a loss. Counts and QC only; no value changes.
+- Boundary net (round 4, N31 review): values a parse grammar leaves missing
+  on purpose are marked where they are parsed and counted as
+  `intentional_missing_rows` (own QC category, never losses): eICU GCS
+  charting that says the item was not scored ("Unable to score ...", "not
+  assessed", a verbal `T`/`1T`), a paused/held/stopped/off infusion rate,
+  an order with an unknown route. A callback output that cannot be matched
+  to its raw values (duplicate row index or output column) is no longer
+  skipped: the read is `boundary_reads_audit_unknown` and its union
+  `audit_unknown`. A subset parse matches stays by position (a
+  duplicate-index frame parses as before instead of raising). Two records of
+  one read (a clean pass, then an anomalous one) are merged before
+  de-duplication, so the anomaly is kept. `extract_database()` returns the
+  counts without the private per-stay ledger. Counts and QC only; no value
+  changes.
+
 ## 2026-11-06 — eICU GCS sedation windows and the published `ett_gcs` grid [lead-r13, `432ddaf3c`, `80b1cb964`, `e70102c94`, `f9b45386c`, `b7509c080`, `e1d73cd7b`, `2c0579bd5`, `942bfcbfb`, `3e23c65d4`, `06f30f7b0`]
 
 **Rule.** GCS marks an hour as sedated (and imputes 15, ricu `sed_impute`)

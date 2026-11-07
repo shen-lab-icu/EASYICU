@@ -229,7 +229,8 @@ def test_export_bytes_and_manifest_counts_do_not_depend_on_batch_size(tmp_path):
     _sha, temp_status, receipt, qc = published[1]
     assert temp_status["source_bounds"] == {"data_float_h": _EXPECTED}
     assert receipt["vitals"]["temp"] == {"data_float_h": _EXPECTED}
-    assert qc == {"source_bounds_suspect": []}  # one stay is below the warning floor
+    # One stay is below the warning floor; no source value was non-numeric.
+    assert qc == {"source_bounds_suspect": [], "source_values_not_numeric": []}
 
 
 def test_a_failed_batch_and_its_resume_count_each_stay_once(tmp_path, monkeypatch):

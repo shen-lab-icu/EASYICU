@@ -146,6 +146,7 @@
     "src/easyicu/concept/source_duration.py",
     "src/easyicu/concept/stay_tables.py",
     "src/easyicu/concept/utils.py",
+    "src/easyicu/concept/value_kind.py",
     "src/easyicu/concept/window_expansion.py",
     "src/easyicu/concept_catalog.py",
     "src/easyicu/concept_output_sources.py",
@@ -1551,7 +1552,7 @@
     "src/easyicu/webserver/zotero_probe.py"
   ],
   "scorer_tree_root": "benchmarks/figure2_canonical9/successor_v4",
-  "scorer_tree_sha256": "91ca49c3e806c06cb5dd4af53329b5e6d65a0310c3c1c2e5684003a2a30e310f",
+  "scorer_tree_sha256": "71e0fc3c5df3655e16a39b08e96e9e0e15761383a12d5cc2feae415721bba35c",
   "suite_projection_sha256": "11c39afac69c9a0b560c6aa92be19f05725f04c66b9d2c499cfdb353c40295ab",
   "suite_ref": "easyicu_evaluation_protocol_suite/v2",
   "tasks": [

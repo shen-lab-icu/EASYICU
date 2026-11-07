@@ -1014,6 +1014,7 @@ class ConceptResolver:
         *,
         materialize_missing: bool = True,
         value_dtypes: Optional[Mapping[str, object]] = None,
+        logical_names: Iterable[str] = (),
     ) -> pd.DataFrame:
         """Keep merged value types and missing values stable through Parquet.
 
@@ -1037,11 +1038,13 @@ class ConceptResolver:
                     value_dtypes is not None
                     and pd.api.types.is_bool_dtype(value_dtypes.get(name))
                 )
-                if not (
-                    boolean_producer or pd.api.types.infer_dtype(values, skipna=True) == "boolean"
-                ):
+                # A declared logical concept is boolean in every batch,
+                # including one whose cells happen to be all missing.
+                if not (boolean_producer or name in logical_names):
                     continue
-                values = values.astype("boolean")
+                from .value_kind import coerce_declared_values
+
+                values = coerce_declared_values(values, "logical")
             elif not materialize_missing:
                 continue
             elif value_dtypes is not None and name in value_dtypes:
@@ -1099,6 +1102,18 @@ class ConceptResolver:
         if isinstance(loaded, dict):
             return loaded
         return {names[0]: loaded}
+
+    def _declared_logical_names(self, names: Iterable[str], data_source) -> set:
+        """Requested dictionary concepts whose declared value kind is logical."""
+        from .value_kind import declared_value_kind
+
+        database = getattr(getattr(data_source, "config", None), "name", "")
+        logical = set()
+        for name in names:
+            definition = self.dictionary.get(name)
+            if definition is not None and declared_value_kind(definition, database=database) == "logical":
+                logical.add(name)
+        return logical
 
     def get_raw_concept(
         self,
@@ -2439,6 +2454,7 @@ class ConceptResolver:
                     names,
                     materialize_missing=not defer_empty_columns_to_arrow,
                     value_dtypes=value_dtypes,
+                    logical_names=self._declared_logical_names(names, data_source),
                 )
 
             # 如果是r_compatible模式，使用增强的ricu风格合并
@@ -2522,6 +2538,7 @@ class ConceptResolver:
                                 names,
                                 materialize_missing=not defer_empty_columns_to_arrow,
                                 value_dtypes=value_dtypes,
+                                logical_names=self._declared_logical_names(names, data_source),
                             )
                         # Partial merge failed (e.g. non-charttime time column) — fall through to full merge
                     elif _all_covered:
@@ -2537,6 +2554,7 @@ class ConceptResolver:
                             names,
                             materialize_missing=not defer_empty_columns_to_arrow,
                             value_dtypes=value_dtypes,
+                            logical_names=self._declared_logical_names(names, data_source),
                         )
                 _materialize_covered_wide_tables_for_fallback()
                 return self._to_r_format_merged_enhanced(
@@ -2577,6 +2595,7 @@ class ConceptResolver:
                 names,
                 materialize_missing=not defer_empty_columns_to_arrow,
                 value_dtypes=value_dtypes,
+                logical_names=self._declared_logical_names(names, data_source),
             )
             return merged
         finally:
@@ -5668,12 +5687,52 @@ class ConceptResolver:
         # but ONLY if most values are actually numeric strings (not legitimate strings like 'invasive').
         if concept_name in combined.columns and not combined.empty:
             if not pd.api.types.is_numeric_dtype(combined[concept_name]):
-                sample = combined[concept_name].dropna().head(100)
-                if len(sample) > 0:
-                    numeric_converted = pd.to_numeric(sample, errors='coerce')
-                    pct_convertible = float(numeric_converted.notna().sum()) / len(sample)
-                    if pct_convertible > 0.5:
-                        combined[concept_name] = pd.to_numeric(combined[concept_name], errors='coerce')
+                # The dictionary, not the batch, says whether the column is
+                # numeric. Sampling the first rows let the stays sharing a
+                # batch choose between median and first-row aggregation (AUMC
+                # vgcs: 6735 'Geïntubeerd' is text in a numeric concept).
+                from ..source_bounds import record_series_coercion
+                from .value_kind import (
+                    ConceptValueKindUndeclared,
+                    coerce_declared_values,
+                    declared_value_kind,
+                    implicitly_numeric,
+                )
+
+                _database = getattr(data_source.config, "name", "")
+                _original = combined[concept_name]
+                _converted = coerce_declared_values(
+                    _original, declared_value_kind(definition, database=_database)
+                )
+                # Every non-null source value that does not convert is counted
+                # per concept and source (B-IMPLICIT-GATE), never dropped
+                # silently; a classless concept refuses it.
+                if isinstance(patient_ids, dict):
+                    _coerced_stays = list(next(iter(patient_ids.values()), []))
+                else:
+                    _coerced_stays = None if patient_ids is None else list(patient_ids)
+                _non_numeric = record_series_coercion(
+                    database=_database,
+                    concept=concept_name,
+                    table="+".join(sorted({str(getattr(src, "table", "")) for src in sources})),
+                    stays=_coerced_stays,
+                    original=_original,
+                    converted=_converted,
+                    ids=(
+                        combined[id_columns[0]]
+                        if id_columns and id_columns[0] in combined.columns else None
+                    ),
+                )
+                if _non_numeric and implicitly_numeric(definition):
+                    raise ConceptValueKindUndeclared(
+                        concept_id=definition.name, database=_database,
+                        class_name=definition.class_name,
+                        detail=(
+                            f"{_non_numeric} value(s) do not parse as numbers, and the "
+                            "concept is numeric only by default (no class, no numeric bounds)"
+                        ),
+                    )
+                combined[concept_name] = _converted
         
         sort_keys = [col for col in id_columns if col]
         if index_column:
@@ -5882,19 +5941,17 @@ class ConceptResolver:
                 if _is_num_win_tbl:
                     agg_method = '__skip_change_interval__'
                 
-                # Default aggregation based on value type (matches R ricu)
+                # Default aggregation from the declared value kind (R ricu:
+                # numeric median, logical any, character first), never from
+                # the dtype a batch happened to produce.
                 if agg_method is None:
-                    # Check value column type
                     if concept_name in combined.columns:
-                        col_dtype = combined[concept_name].dtype
-                        if pd.api.types.is_bool_dtype(col_dtype):
-                            agg_method = 'max' if any(
-                                _is_nullable_status_source(concept_name, src) for src in sources
-                            ) else 'any'
-                        elif pd.api.types.is_numeric_dtype(col_dtype):
-                            agg_method = 'median'  # R ricu: numeric -> "median"
-                        else:
-                            agg_method = 'first'  # R ricu: character/other -> "first"
+                        from .value_kind import declared_value_kind, default_aggregate
+
+                        agg_method = default_aggregate(
+                            declared_value_kind(definition, database=getattr(data_source.config, "name", "")),
+                            nullable_status=any(_is_nullable_status_source(concept_name, src) for src in sources),
+                        )
             
             # 🚀 CRITICAL FIX: Expand win_tbl data BEFORE change_interval
             # R ricu does: expand(win_tbl) -> change_interval(ts_tbl)
@@ -8428,15 +8485,16 @@ class ConceptResolver:
                     value_col = getattr(result, 'value_column', None)
                 
                 if value_col and value_col in result.data.columns:
-                    if pd.api.types.is_bool_dtype(result.data[value_col]):
-                        agg_method = 'max' if any(
+                    # Declared value kind, not the dtype this batch produced.
+                    from .value_kind import declared_value_kind, default_aggregate
+
+                    agg_method = default_aggregate(
+                        declared_value_kind(definition, database=getattr(data_source.config, "name", "")),
+                        nullable_status=any(
                             _is_nullable_status_source(concept_name, src)
                             for src in definition.for_data_source(data_source.config)
-                        ) else 'any'
-                    elif pd.api.types.is_numeric_dtype(result.data[value_col]):
-                        agg_method = 'median'  # Changed from 'mean' to 'median' to match R ricu default
-                    else:
-                        agg_method = 'first'
+                        ),
+                    )
                 else:
                     # Default to 'first' if no value column found
                     agg_method = 'first'
@@ -10135,17 +10193,17 @@ class ConceptResolver:
                     value_col = result.value_column or concept_name
                     
                     if value_col in df.columns and id_cols:
-                        # R ricu aggregate.id_tbl: numeric -> median, logical -> any, character -> first
-                        col_dtype = df[value_col].dtype
-                        if pd.api.types.is_bool_dtype(col_dtype):
-                            agg_func = 'max' if any(
+                        # R ricu aggregate.id_tbl: numeric -> median, logical -> any,
+                        # character -> first, from the declared value kind.
+                        from .value_kind import declared_value_kind, default_aggregate
+
+                        agg_func = default_aggregate(
+                            declared_value_kind(definition, database=getattr(data_source.config, "name", "")),
+                            nullable_status=any(
                                 _is_nullable_status_source(concept_name, src)
                                 for src in definition.for_data_source(data_source.config)
-                            ) else 'any'
-                        elif pd.api.types.is_numeric_dtype(col_dtype):
-                            agg_func = 'median'
-                        else:
-                            agg_func = 'first'
+                            ),
+                        )
                         
                         # 聚合到每个患者一行
                         agg_df = df.groupby(id_cols, as_index=False).agg({value_col: agg_func})
@@ -10919,12 +10977,14 @@ class ConceptResolver:
                 and any(_is_nullable_status_source(name, src)
                         for src in definition.for_data_source(data_source.config))
             },
+            logical_columns=self._declared_logical_names(concept_data, data_source),
         )
         result = self._ensure_requested_concept_columns(
             result,
             concept_names,
             materialize_missing=materialize_missing_concepts,
             value_dtypes=value_dtypes,
+            logical_names=self._declared_logical_names(concept_names, data_source),
         )
         
         # 确保概念列按请求的顺序排列

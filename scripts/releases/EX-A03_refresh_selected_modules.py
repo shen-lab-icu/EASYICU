@@ -49,6 +49,7 @@ from easyicu.api.extraction import (  # noqa: E402
     EXTRACT_MODULES,
     _publish_native_export_v2,
     _resource_budget_execution_limits,
+    module_results_from_producer_manifests,
     plan_extraction_resources,
     plan_module_extraction_resources,
 )
@@ -958,28 +959,23 @@ def _recover_native_staging_publication(
     reopen the raw database or recompute a module during recovery.
     """
 
-    module_results: dict[str, dict[str, Any]] = {}
     module_resource_plans: dict[str, Any] = {}
     for module in modules:
-        manifest = _read_json(
+        _read_json(
             staging_root / f"{module}.manifest.json",
             label=f"{module} staged producer manifest",
         )
-        errors = list(manifest.get("errors") or [])
-        if errors:
+    # The publisher's one recovery path carries each module's full counts
+    # (source_bounds); a manifest without them is audit_unknown, never zero.
+    module_results = module_results_from_producer_manifests(staging_root, modules)
+    for module, entry in module_results.items():
+        if entry["errors"]:
             raise ModuleRefreshError(
-                f"Cannot recover {module} native publication: {errors}"
+                f"Cannot recover {module} native publication: {entry['errors']}"
             )
-        module_results[module] = {
-            "errors": [],
-            "elapsed": float(manifest.get("elapsed_sec") or 0.0),
-            "peak_rss_mb": float(manifest.get("peak_rss_mb") or 0.0),
-            "peak_working_set_mb": float(
-                manifest.get("peak_working_set_mb") or 0.0
-            ),
-        }
-        if manifest.get("resource_plan") is not None:
-            module_resource_plans[module] = manifest["resource_plan"]
+        resource_plan = entry.pop("resource_plan", None)
+        if resource_plan is not None:
+            module_resource_plans[module] = resource_plan
 
     _publish_native_export_v2(
         database=database,

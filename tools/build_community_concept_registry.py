@@ -391,6 +391,9 @@ def build_registry() -> dict[str, dict[str, Any]]:
     for concept, callback in (("vent_mode", "community_vent_mode_control"), ("vent_breath_seq", "community_vent_mode_seq")):
         add(registry, concept, "zhejiang_eicu", numeric("nursingchart_vitalsign", "呼吸机模式", "NursingEvent_item", value_var="NursingEvent_val", callback=callback))
     add(registry, "adv_resp", "zhejiang_eicu", numeric("nursingchart_vitalsign", "呼吸机模式", "NursingEvent_item", callback="transform_fun(set_val(TRUE))"))
+    # Concept-level class: a classless concept is numeric by default and refuses
+    # non-numeric values, so the logical overlay declares its kind explicitly.
+    registry["adv_resp"]["class_name"] = "lgl_cncpt"
 
     add(registry, "vent_rate", "zigong", source("dtnursingchart", value_var="F", class_name="col_itm"))
     add(registry, "tidal_vol_set", "zigong", source("dtnursingchart", value_var="Vt_setting", class_name="col_itm"))

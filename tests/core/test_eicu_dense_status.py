@@ -57,7 +57,7 @@ def test_aggregation_follows_source_binding_even_for_an_alias(callback, expected
         return frame.assign(endpoint=pd.Series([pd.NA, pd.NA, True, pd.NA, False, pd.NA], dtype="boolean"))
 
     monkeypatch.setattr(owner, "_apply_callback", decode)
-    definition = ConceptDefinition(name="endpoint", target="ts_tbl", sources={"eicu": [ConceptSource(
+    definition = ConceptDefinition(name="endpoint", target="ts_tbl", class_name="lgl_cncpt", sources={"eicu": [ConceptSource(
         table="patient", value_var="endpoint", index_var="unitdischargeoffset", callback=callback,
     )]})
     frame = pd.DataFrame({
@@ -135,7 +135,7 @@ def test_recursive_logical_aggregation_obeys_the_source_binding(monkeypatch, den
     import easyicu.concept as owner
 
     definition = ConceptDefinition(
-        name="endpoint", callback="synthetic_status", sub_concepts=["raw_status"],
+        name="endpoint", callback="synthetic_status", sub_concepts=["raw_status"], class_name="lgl_cncpt",
         sources={"eicu": [ConceptSource(callback="eicu_hospital_mortality_status_v1" if dense else "identity_callback")]},
     )
     resolver = ConceptResolver(ConceptDictionary({"endpoint": definition}))

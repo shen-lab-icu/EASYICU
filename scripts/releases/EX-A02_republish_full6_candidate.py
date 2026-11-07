@@ -285,8 +285,12 @@ def _republish_database(
         output_dir=str(database_root),
         modules=list(MODULES),
         max_patients=old_payload.get("max_patients"),
+        # Every module's full counts, through the publisher's one recovery
+        # path: a module manifest without counts is audit_unknown, never zero.
         result={
-            "modules": {module: {"errors": []} for module in MODULES}
+            "modules": extraction_api.module_results_from_producer_manifests(
+                database_root, MODULES
+            )
         },
     )
     new_manifest = _read_json(old_manifest)

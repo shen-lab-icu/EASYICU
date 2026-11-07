@@ -654,6 +654,7 @@ def merge_concepts_r_style(
     *,
     consume_input: bool = False,
     dense_status_columns: Iterable[str] = (),
+    logical_columns: Iterable[str] = (),
 ) -> pd.DataFrame:
     """以ricu风格合并多个概念数据
     
@@ -671,6 +672,8 @@ def merge_concepts_r_style(
             清空传入字典，从而避免最终宽表合并时仍保留整套上游帧。公开调用
             默认保留输入，维持既有 API 语义。
         dense_status_columns: Source-bound statuses whose nulls retain record identity.
+        logical_columns: Concepts whose declared value kind is logical. Their
+            hourly merge is a logical any whatever values one batch holds.
         
     Returns:
         合并后的宽格式DataFrame
@@ -678,6 +681,7 @@ def merge_concepts_r_style(
     if not concept_data:
         return pd.DataFrame()
     dense_status_columns = frozenset(dense_status_columns)
+    logical_columns = frozenset(logical_columns)
     
     # 标准化列名
     # 🚀 优化：不再 .copy()，调用者 _to_r_format_merged_enhanced 已经复制过
@@ -933,18 +937,17 @@ def merge_concepts_r_style(
         is_boolean_col = False
         if name in df.columns:
             col = df[name]
-            if col.dtype == bool or col.dtype == 'boolean':
-                is_boolean_col = True
-            elif col.dtype == object:
-                non_na = col.dropna()
-                if len(non_na) > 0:
-                    is_boolean_col = all(isinstance(v, (bool, np.bool_)) for v in non_na.head(100))
+            # Declared logical concepts, not the first rows of this batch,
+            # decide the boolean merge.
+            is_boolean_col = col.dtype == bool or col.dtype == 'boolean' or name in logical_columns
         
         if is_boolean_col:
             # ⚡ PERF: 向量化布尔聚合替代逐组 Python 函数
             # bool 列中 True=1, False=0, max() 相当于 any()，且自动跳过 NaN
+            from ..concept.value_kind import coerce_declared_values
+
             _bool_df = df[keep_cols].copy()
-            _bool_df[name] = _bool_df[name].astype('float32')
+            _bool_df[name] = coerce_declared_values(_bool_df[name], "logical").astype('float32')
             prepared = _bool_df.groupby(
                 ["id", "time"], as_index=False, dropna=name not in dense_status_columns
             ).agg({name: 'max'})

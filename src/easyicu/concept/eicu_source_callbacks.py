@@ -10,6 +10,7 @@ import pandas as pd
 
 from . import eicu_medication_evidence as medication
 from . import eicu_source_qc as qc
+from .value_kind import CallbackParseContract, parse_source_numeric
 from .eicu_io import systemic_intake
 
 CALLBACKS = frozenset({
@@ -21,6 +22,16 @@ CALLBACKS = frozenset({
     "eicu_ionized_calcium",
     "eicu_insulin_units",
 })
+
+# What a callback parses, when the boundary net must not judge the source's
+# value column (B-IMPLICIT-GATE): iv_exposure reads its dose from ``dosage``
+# whatever the value column holds (a drugname-valued source keeps names
+# there), and leaves an unknown-route order missing on purpose.
+PARSE_CONTRACTS = {
+    "eicu_iv_exposure": CallbackParseContract(
+        parsed_column="dosage", deliberate_missing=medication.route_masked,
+    ),
+}
 
 
 def _request_token(value):
@@ -193,7 +204,7 @@ def apply(frame, source, concept_name, data_source=None):
         if source.table == "medication":
             return medication.positive_value(frame, column)
         out = frame.copy()
-        values = pd.to_numeric(frame[column], errors="coerce")
+        values = parse_source_numeric(frame[column], frame=frame)
         out[column] = values.gt(0).astype("boolean").mask(~np.isfinite(values) | values.lt(0))
         return out
     if expr == "eicu_dex_order":
@@ -211,7 +222,7 @@ def apply(frame, source, concept_name, data_source=None):
         return _circulatory_support(frame, column)
     if expr == "eicu_ionized_calcium":
         out = frame.copy()
-        values = pd.to_numeric(frame[column], errors="coerce")
+        values = parse_source_numeric(frame[column], frame=frame)
         mgdl = frame.labmeasurenameinterface.astype("string").str.fullmatch(r"\s*mg\s*/\s*dl\s*", case=False, na=False)
         out[column] = values.where(~(values.gt(2.5) | (mgdl & values.gt(2))), values / 4.008)
         return out

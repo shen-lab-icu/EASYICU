@@ -2929,6 +2929,7 @@
   "class_name": "rec_cncpt"
  },
  "bnd": {
+  "class_name": "num_cncpt",
   "unit": "%",
   "description": "band form neutrophils",
   "omopid": 4100147,
@@ -10651,6 +10652,7 @@
   "aggregate": "max"
  },
  "inr_pt": {
+  "class_name": "num_cncpt",
   "description": "prothrombin time/international normalized ratio",
   "omopid": 4306239,
   "category": "hematology",
@@ -36713,6 +36715,7 @@
   }
  },
  "temp_raw": {
+  "class_name": "num_cncpt",
   "requires_explicit_opt_in": true,
   "unit": [
    "C",
@@ -36879,6 +36882,7 @@
   "_comment": "2026-11-04 bounds audit round 5: 0 = within the existing inclusive public range [32, 42]; 1 = outside that range and needs review; 2 = non-finite or non-numeric. Missing values remain missing. Flags are computed before aggregation; max reports any flagged source observation in the requested window. Request the matching raw concept separately, with aggregate=False for individual source values. A flag is not evidence of clinical validity and does not widen public bounds."
  },
  "etco2_raw": {
+  "class_name": "num_cncpt",
   "requires_explicit_opt_in": true,
   "unit": [
    "mmHg",
@@ -37002,6 +37006,7 @@
   "_comment": "2026-11-04 bounds audit round 5: 0 = within the existing inclusive public range [10, 60]; 1 = outside that range and needs review; 2 = non-finite or non-numeric. Missing values remain missing. Flags are computed before aggregation; max reports any flagged source observation in the requested window. Request the matching raw concept separately, with aggregate=False for individual source values. A flag is not evidence of clinical validity and does not widen public bounds."
  },
  "hgb_raw": {
+  "class_name": "num_cncpt",
   "requires_explicit_opt_in": true,
   "source_channel_priority": [
    "lab",
@@ -37152,6 +37157,7 @@
   "_comment": "2026-11-04 bounds audit round 5: 0 = within the existing inclusive public range [4, 18]; 1 = outside that range and needs review; 2 = non-finite or non-numeric. Missing values remain missing. Flags are computed before aggregation; max reports any flagged source observation in the requested window. Request the matching raw concept separately, with aggregate=False for individual source values. A flag is not evidence of clinical validity and does not widen public bounds."
  },
  "hct_raw": {
+  "class_name": "num_cncpt",
   "requires_explicit_opt_in": true,
   "unit": "%",
   "description": "Charted hematocrit before range filtering",
@@ -37235,6 +37241,7 @@
   "_comment": "2026-11-04 bounds audit round 5: 0 = within the existing inclusive public range [15, 60]; 1 = outside that range and needs review; 2 = non-finite or non-numeric. Missing values remain missing. Flags are computed before aggregation; max reports any flagged source observation in the requested window. Request the matching raw concept separately, with aggregate=False for individual source values. A flag is not evidence of clinical validity and does not widen public bounds."
  },
  "ph_raw": {
+  "class_name": "num_cncpt",
   "requires_explicit_opt_in": true,
   "source_channel_priority": [
    "lab",
@@ -37390,6 +37397,7 @@
   "_comment": "2026-11-04 bounds audit round 5: 0 = within the existing inclusive public range [6.8, 8]; 1 = outside that range and needs review; 2 = non-finite or non-numeric. Missing values remain missing. Flags are computed before aggregation; max reports any flagged source observation in the requested window. Request the matching raw concept separately, with aggregate=False for individual source values. A flag is not evidence of clinical validity and does not widen public bounds."
  },
  "bun_raw": {
+  "class_name": "num_cncpt",
   "requires_explicit_opt_in": true,
   "unit": "mg/dL",
   "description": "Charted blood urea nitrogen before range filtering",
@@ -37478,6 +37486,7 @@
   "_comment": "2026-11-04 bounds audit round 5: 0 = within the existing inclusive public range [0, 200]; 1 = outside that range and needs review; 2 = non-finite or non-numeric. Missing values remain missing. Flags are computed before aggregation; max reports any flagged source observation in the requested window. Request the matching raw concept separately, with aggregate=False for individual source values. A flag is not evidence of clinical validity and does not widen public bounds."
  },
  "crea_raw": {
+  "class_name": "num_cncpt",
   "requires_explicit_opt_in": true,
   "source_channel_priority": [
    "lab",
@@ -37629,6 +37638,7 @@
   "_comment": "2026-11-04 bounds audit round 5: 0 = within the existing inclusive public range [0, 25]; 1 = outside that range and needs review; 2 = non-finite or non-numeric. Missing values remain missing. Flags are computed before aggregation; max reports any flagged source observation in the requested window. Request the matching raw concept separately, with aggregate=False for individual source values. A flag is not evidence of clinical validity and does not widen public bounds."
  },
  "na_raw": {
+  "class_name": "num_cncpt",
   "requires_explicit_opt_in": true,
   "unit": [
    "mEq/L",
@@ -37728,6 +37738,7 @@
   "_comment": "2026-11-04 bounds audit round 5: 0 = within the existing inclusive public range [110, 165]; 1 = outside that range and needs review; 2 = non-finite or non-numeric. Missing values remain missing. Flags are computed before aggregation; max reports any flagged source observation in the requested window. Request the matching raw concept separately, with aggregate=False for individual source values. A flag is not evidence of clinical validity and does not widen public bounds."
  },
  "myoglobin_raw": {
+  "class_name": "num_cncpt",
   "requires_explicit_opt_in": true,
   "unit": [
    "ng/mL",
@@ -37942,6 +37953,7 @@
   "_comment": "R6-F008: shares the exact hourly inputs and R2 rule with cvp in every database. Multiple flags are joined with a vertical bar. High values in 30-50 are retained in cvp; suspected arterial mixing and isolated spikes are flags only. SIC raw values beyond the main bounds remain inspectable with exclusion reasons."
  },
  "minute_vol_raw": {
+  "class_name": "num_cncpt",
   "unit": "L/min",
   "description": "SICdb charted minute ventilation before the analytical gate",
   "category": "ventilator",

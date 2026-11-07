@@ -1299,12 +1299,11 @@ def fill_gaps(
 
                     if _is_single_id:
                         id_col_name = id_cols[0]
-                        # Detect dtype from first ID
-                        sample_id = all_ids[0]
-                        if isinstance(sample_id, (int, np.integer)):
-                            id_arr = np.repeat(np.array(all_ids, dtype=np.int64), counts)
-                        else:
-                            id_arr = np.repeat(np.array(all_ids), counts)
+                        # The ID dtype comes from every ID, never the first one.
+                        id_values = np.asarray(all_ids)
+                        if id_values.dtype.kind in "iu":
+                            id_values = id_values.astype(np.int64)
+                        id_arr = np.repeat(id_values, counts)
                     else:
                         id_arr = None  # handled below
 
