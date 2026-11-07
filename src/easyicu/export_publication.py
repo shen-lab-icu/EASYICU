@@ -655,8 +655,8 @@ def require_member_digest(manifest: dict, member: str, *, sha256: str, size: int
         # nothing to compare. Formal scope refuses it; the UI path shows it.
         if formal if formal is not None else formal_integrity_active():
             raise ExportMemberIntegrityError(
-                f"{relative}: its export manifest records no digests; a formal "
-                "consumer requires a re-export that records them",
+                f"{INTEGRITY_UNRECORDED_LABEL}: {relative} (its export manifest "
+                "records no digests; a formal consumer requires them)",
                 reason=REASON_INTEGRITY_UNRECORDED, path=path, member=relative,
             )
         return INTEGRITY_UNRECORDED
@@ -668,7 +668,8 @@ def require_member_digest(manifest: dict, member: str, *, sha256: str, size: int
     recorded = records[relative]
     if recorded is None:
         raise ExportMemberIntegrityError(
-            f"the export manifest records no digest for {relative}",
+            f"{INTEGRITY_UNRECORDED_LABEL}: {relative} (the export manifest "
+            "records no digest for it)",
             reason=REASON_DIGEST_UNRECORDED, path=path, member=relative,
         )
     expected_sha, expected_size = recorded
@@ -809,8 +810,8 @@ def require_verified_export_package(export_dir: Union[str, Path], *,
         # Nothing listed means nothing verifiable: never a vacuous "verified".
         if formal if formal is not None else formal_integrity_active():
             raise ExportMemberIntegrityError(
-                f"{root.name}: its export manifest lists no members; a formal "
-                "consumer requires a re-export that records them",
+                f"{INTEGRITY_UNRECORDED_LABEL}: {root.name} (its export manifest "
+                "lists no members; a formal consumer requires them)",
                 reason=REASON_INTEGRITY_UNRECORDED, path=root, member="",
             )
         return {"status": INTEGRITY_UNRECORDED, "label": INTEGRITY_UNRECORDED_LABEL,
@@ -818,6 +819,35 @@ def require_verified_export_package(export_dir: Union[str, Path], *,
     statuses = verify_package_members(root, [root / name for name in names],
                                       manifest=manifest, formal=formal)
     return integrity_status(statuses.values(), manifest=manifest)
+
+
+#: Reasons whose user-facing text is exactly :data:`INTEGRITY_UNRECORDED_LABEL`:
+#: the bytes cannot be verified because no digest was ever recorded.
+UNRECORDED_REASONS = frozenset({REASON_DIGEST_UNRECORDED, REASON_INTEGRITY_UNRECORDED})
+
+
+def refusal_message(exc: BaseException) -> str:
+    """The human message for a member refusal (no host paths).
+
+    An unrecorded digest reads exactly "integrity unrecorded · re-export to
+    verify"; a damaged or unreadable member asks for a new extraction.
+    """
+
+    if getattr(exc, "reason", None) in UNRECORDED_REASONS:
+        return INTEGRITY_UNRECORDED_LABEL
+    if isinstance(exc, ExportMemberUnreadableError) or getattr(exc, "code", None) == UNREADABLE_CODE:
+        return "export member cannot be read · re-run the extraction"
+    return "export member does not match its published manifest · re-run the extraction"
+
+
+def export_relative_path(package_root: Union[str, Path], member: str) -> str:
+    """``<export folder>/<member>``: the member relative to the user's export root."""
+
+    name = Path(package_root).name
+    member = Path(str(member or "")).as_posix()
+    if not member or Path(member).is_absolute() or ".." in Path(member).parts:
+        return name
+    return f"{name}/{member}"
 
 
 def integrity_status(statuses: Iterable[str], *, manifest: object = None) -> dict:

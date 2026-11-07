@@ -21,8 +21,10 @@ from easyicu.export_publication import (
     ExportMemberIntegrityError,
     ExportMemberUnreadableError,
     NativeExportUnpublishedError,
+    export_relative_path,
     integrity_status,
     member_unreadable,
+    refusal_message,
     require_listed_members_present,
     require_published_native_export,
     verify_member_integrity,
@@ -214,10 +216,11 @@ def prepare_registered_export_bundle(
                 _require_readable(root / name)
             member_integrity[name] = status
     except (ExportMemberIntegrityError, ExportMemberUnreadableError) as exc:
+        # Exactly "integrity unrecorded · re-export to verify" when no digest
+        # was ever recorded; the path is relative to the user's export root.
         raise ExportDownloadError(
             exc.code,
-            "An export file no longer matches its published manifest "
-            f"({exc.member}); re-run the extraction before downloading.",
+            f"{refusal_message(exc)}: {export_relative_path(root, exc.member)}",
             status_code=409,
         ) from exc
     source_bytes = sum(path.stat().st_size for path in files)

@@ -800,9 +800,13 @@ def _validated_columns(values: Sequence[object], *, path: Path) -> Tuple[str, ..
 
 
 def _member_integrity_error(exc: ExportMemberIntegrityError) -> ExportPackageError:
-    return ExportPackageError(
+    # The owner's message already starts with "integrity unrecorded · re-export
+    # to verify" when no digest was recorded; the reason travels with it.
+    error = ExportPackageError(
         f"{exc} ({exc.reason})", code=INTEGRITY_FAILED_CODE, member=exc.member
     )
+    error.reason = exc.reason
+    return error
 
 
 def _schema_for_file(

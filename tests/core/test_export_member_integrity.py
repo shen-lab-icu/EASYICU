@@ -781,3 +781,74 @@ def test_the_aumc_checker_never_certifies_an_unrecorded_export(unrecorded):
     source = (REPO / "tools/verify_aumc_ventilator_sources.py").read_text(encoding="utf-8")
     assert "'integrity_certified':set(member_integrity.values())=={'verified'}" in source
     assert "uncertified: export integrity unrecorded" in source
+
+
+# --- ruling (i): a v0.1.x web export is refused with the exact re-export text --
+
+LABEL = "integrity unrecorded · re-export to verify"
+
+
+@pytest.fixture
+def v01_web(published, tmp_path):
+    """A web export as v0.1.x wrote it: export_kind, no digests, no declaration."""
+    export = _copy(published, tmp_path / "exports" / "hirid")
+    strip_digests(export)
+    manifest = _manifest(export)
+    manifest.pop("member_integrity", None)
+    manifest["export_kind"] = "web_module_extraction"
+    (export / "_manifest.json").write_text(json.dumps(manifest), encoding="utf-8")
+    return export
+
+
+def _no_host_path(payload, tmp_path) -> None:
+    text = json.dumps(payload, ensure_ascii=False)
+    assert str(tmp_path) not in text
+    assert '"/' not in text  # no string value starts with an absolute path
+
+
+@pytest.mark.parametrize("reader", ["describe_export_source", "scan_path",
+                                    "summarize_export_workspace"])
+def test_web_readers_refuse_a_v01_export_with_the_exact_text(v01_web, tmp_path, reader):
+    from easyicu.webserver import dataio
+
+    answer = getattr(dataio, reader)(str(v01_web))
+    assert answer["ok"] is False
+    assert answer["reason"] == publication.REASON_DIGEST_UNRECORDED
+    assert answer["message"] == LABEL
+    assert answer["export_path"].startswith("hirid/") and answer["export_path"].endswith(".parquet")
+    _no_host_path(answer, tmp_path)
+
+
+def test_intake_refuses_a_v01_export_with_the_exact_text(v01_web, tmp_path):
+    from easyicu.research_agent.intake import export_package as intake
+    from easyicu.webserver import dataio
+
+    with pytest.raises(intake.ExportPackageError) as caught:
+        intake.open_export_package(v01_web)
+    assert str(caught.value).startswith(f"{LABEL}: ")
+    assert str(tmp_path) not in str(caught.value)
+    detail = dataio._research_pipeline_intake_diagnostic(caught.value)
+    assert detail["intake_error_message"].startswith(LABEL)
+    _no_host_path(detail, tmp_path)
+
+
+def test_the_download_refuses_a_v01_export_with_the_exact_text(v01_web, tmp_path):
+    from easyicu.webserver import export_download
+
+    with pytest.raises(export_download.ExportDownloadError) as caught:
+        export_download.prepare_registered_export_bundle(
+            "src_0123456789ab", registry=_registry(v01_web), temp_dir=tmp_path / "zips")
+    assert caught.value.message.startswith(f"{LABEL}: hirid/")
+    assert str(tmp_path) not in caught.value.message
+    assert "re-run the extraction" not in caught.value.message
+
+
+def test_the_package_gate_refuses_a_v01_or_unrecorded_export_with_the_exact_text(
+        v01_web, unrecorded):
+    with pytest.raises(publication.ExportMemberIntegrityError) as v01:
+        publication.require_verified_export_package(v01_web)
+    assert str(v01.value).startswith(f"{LABEL}: ")
+    with pytest.raises(publication.ExportMemberIntegrityError) as legacy:
+        publication.require_verified_export_package(unrecorded)
+    assert str(legacy.value).startswith(f"{LABEL}: ")
+    assert publication.refusal_message(v01.value) == LABEL

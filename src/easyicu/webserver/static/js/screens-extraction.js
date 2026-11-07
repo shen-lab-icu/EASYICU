@@ -873,7 +873,7 @@
           }
           exReal = 'scanresult';
         }
-        else { exScanError = (r && r.error) || 'scan_failed'; exReal = 'scanresult'; }
+        else { exScanError = (r && r.error) ? r : 'scan_failed'; exReal = 'scanresult'; }
         repaint();
       }).catch(err => {
         if (exReal !== 'scanning') return;

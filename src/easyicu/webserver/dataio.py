@@ -54,12 +54,14 @@ from easyicu.export_publication import (
     NativeExportUnpublishedError,
     SourceReceiptInvalidError,
     begin_native_export,
+    export_relative_path,
     finish_native_export,
     folder_unpublished_reason,
     integrity_status,
     load_published_manifest,
     member_digest_record,
     member_unreadable,
+    refusal_message,
     require_listed_members_present,
     require_published_export_package,
     unpublished_reason,
@@ -444,12 +446,17 @@ def _peek_columns(path: Path, table: str) -> List[str]:
     return []
 
 
-def _member_refusal(exc: Exception) -> Dict[str, Any]:
+def _member_refusal(exc: Exception, folder: Any = None) -> Dict[str, Any]:
     """A visible refusal for a damaged or unreadable export member."""
+    member = getattr(exc, "member", "")
     return {
         "ok": False, "error": exc.code, "reason": getattr(exc, "reason", exc.code),
         # The member's logical name only; host paths stay in the server log.
-        "member": getattr(exc, "member", ""),
+        "member": member,
+        # Human text: exactly "integrity unrecorded · re-export to verify" when
+        # no digest was ever recorded; never a host path.
+        "message": refusal_message(exc),
+        "export_path": export_relative_path(folder, member) if folder else member,
         "ready": False,
         "privacy": {"raw_rows_read": False, "patient_identifiers_returned": False},
     }
@@ -469,7 +476,8 @@ def _refuse_damaged_members(function):
         try:
             result = function(*args, **kwargs)
         except (ExportMemberIntegrityError, ExportMemberUnreadableError) as exc:
-            return _member_refusal(exc)
+            folder = args[0] if args and isinstance(args[0], (str, Path)) else kwargs.get("path")
+            return _member_refusal(exc, folder)
         # Visible, never silent: members whose manifest recorded no digests
         # are named (status + "integrity unrecorded · re-export to verify").
         if isinstance(result, dict) and isinstance(result.get("files"), list):
@@ -507,6 +515,9 @@ def scan_path(raw_path: str, source_hint: Optional[str] = None) -> Dict[str, Any
     try:
         db_key = _detect_database(path)
     except (ValueError, OSError) as exc:
+        if getattr(exc, "code", None) in {"export_member_integrity_failed",
+                                          "export_member_unreadable"}:
+            return _member_refusal(exc, path)
         return {
             "ok": False,
             "error": getattr(exc, "code", "export_layout_invalid"),
@@ -537,6 +548,11 @@ def scan_path(raw_path: str, source_hint: Optional[str] = None) -> Dict[str, Any
         try:
             inspect_export_layout(path)
         except (ExportPackageError, ValueError, OSError) as exc:
+            if getattr(exc, "code", None) in {"export_member_integrity_failed",
+                                              "export_member_unreadable"}:
+                # The same refusal as every other reader: exact human text,
+                # path relative to the export root, no host path.
+                return {**_member_refusal(exc, path), "source": "module"}
             return {"ok": False, "path": str(path), "source": "module", "ready": False,
                     "error": getattr(exc, "code", "export_layout_invalid"),
                     "privacy": {"raw_rows_read": False, "patient_identifiers_returned": False}}
@@ -3800,6 +3816,10 @@ def _research_pipeline_intake_diagnostic(exc: BaseException) -> Dict[str, Any]:
         "export_package_unreadable": "One or more export package files could not be read.",
     }
     message = messages.get(code, f"The export package failed intake contract {code}.")
+    if code in {"export_member_integrity_failed", "export_member_unreadable"}:
+        # Exactly "integrity unrecorded · re-export to verify" when no digest
+        # was ever recorded (supervisor ruling: v0.1.x web exports).
+        message = refusal_message(exc) + "."
     detail: Dict[str, Any] = {
         "intake_error_code": code,
         "intake_error_message": (
