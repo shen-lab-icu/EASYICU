@@ -7316,8 +7316,10 @@ def _native_export_runtime_provenance(*, source_name: str | None = None) -> Dict
     import duckdb
     import pyarrow
 
-    from ..resolver_pool import resolver_pool_size, resolver_pool_wait_seconds
+    from ..resolver_pool import resolver_pool_config
 
+    # The values this process's resolver pools use (frozen), not a fresh read.
+    pool_config = resolver_pool_config()
     package_root = Path(__file__).resolve().parents[1]
     repository_root = package_root.parents[1]
     foundation_files = {
@@ -7402,8 +7404,8 @@ def _native_export_runtime_provenance(*, source_name: str | None = None) -> Dict
         "pyarrow_version": pyarrow.__version__,
         "duckdb_version": duckdb.__version__,
         # Calls on a shared loader each hold one of at most N resolvers.
-        "resolver_pool_size": resolver_pool_size(),
-        "resolver_pool_wait_seconds": resolver_pool_wait_seconds(),
+        "resolver_pool_size": pool_config["size"],
+        "resolver_pool_wait_seconds": pool_config["wait_seconds"],
     }
 
 

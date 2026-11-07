@@ -34,6 +34,7 @@ from easyicu.webserver import cohort_review
 from easyicu.webserver import dataio
 from easyicu.webserver import hosted
 from easyicu.webserver import sources as source_store
+from easyicu.value_failures import TYPED_VALUE_FAILURES
 from easyicu.webserver.crossdb_parquet import (
     ParquetAggregationError,
     parquet_feature_distributions,
@@ -1338,6 +1339,11 @@ def _load_raw_feature_data(
                 frame = _materialize_raw_output_columns(frame, load_plan)
                 all_data.extend(_wide_concepts_to_long(frame, chunk, sample_size))
             except _CrossdbRawCancelled:
+                raise
+            except TYPED_VALUE_FAILURES:
+                # A typed value failure (an exhausted resolver pool, a closed
+                # call, a storage contradiction...) is the result; retrying
+                # concept by concept must not turn it into a success.
                 raise
             except Exception:
                 used_fallback = True

@@ -11,6 +11,7 @@ from fastapi.testclient import TestClient
 
 import easyicu
 from easyicu import cohort_visualization
+from easyicu.resolver_errors import ResolverCallClosed, ResolverPoolExhausted
 from easyicu.webserver import crossdb_review
 from easyicu.webserver.app import app
 
@@ -271,3 +272,42 @@ def test_raw_run_rejects_missing_requested_database_before_loading(
     assert detail["requested_databases"] == ["miiv", "eicu", "aumc"]
     assert detail["detected_databases"] == ["miiv", "eicu"]
     assert detail["missing_databases"] == ["aumc"]
+
+
+@pytest.mark.parametrize(
+    "typed",
+    [
+        lambda: ResolverPoolExhausted(1, 0.5),
+        lambda: ResolverCallClosed("call scope"),
+    ],
+    ids=["pool-exhausted", "call-closed"],
+)
+def test_raw_loader_surfaces_a_typed_failure_without_a_per_concept_retry(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, typed
+) -> None:
+    """A typed value failure in the batch is the result, never retried into a success."""
+    root = tmp_path / "databases"
+    (root / "mimiciv").mkdir(parents=True)
+    _patch_distribution(monkeypatch)
+    calls: list[tuple[str, ...]] = []
+    failure = typed()
+
+    def fake_load(*, concepts: list[str], **_kwargs: object) -> pd.DataFrame:
+        calls.append(tuple(concepts))
+        if len(concepts) > 1:
+            raise failure
+        return _frame_for(concepts)
+
+    monkeypatch.setattr(easyicu, "load_concepts", fake_load)
+
+    with pytest.raises(type(failure)) as exc_info:
+        crossdb_review._load_raw_feature_data(
+            data_root=str(root),
+            concepts=["feature_a", "feature_b"],
+            databases=["miiv"],
+            max_patients=40,
+            sample_size=100,
+        )
+
+    assert exc_info.value is failure
+    assert calls == [("feature_a", "feature_b")]  # no per-concept retry ran

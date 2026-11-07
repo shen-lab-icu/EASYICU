@@ -47,9 +47,14 @@ ResolverPoolExhausted = getattr(resolver_errors, "ResolverPoolExhausted", _Absen
 
 @pytest.fixture(autouse=True)
 def _fresh_global_loader():
+    # Pools freeze the size/wait configuration per process; tests that set
+    # the environment start from an unfrozen one.
+    reset = getattr(pool_module, "_reset_resolver_pool_config", lambda: None)
+    reset()
     api.clear_global_loader()
     yield
     api.clear_global_loader()
+    reset()
 
 
 def _resolver():
@@ -357,3 +362,19 @@ def test_the_pool_wait_is_configured_validated_and_recorded(monkeypatch):
     from easyicu.api.extraction import _native_export_runtime_provenance
 
     assert _native_export_runtime_provenance()["resolver_pool_wait_seconds"] == 2.5
+
+
+def test_run_metadata_records_the_frozen_pool_values_not_a_later_environment(monkeypatch):
+    """Residual (3): the record names the values the pools use."""
+    monkeypatch.setenv(pool_module.POOL_SIZE_ENV, "3")
+    monkeypatch.setenv(pool_module.POOL_WAIT_ENV, "7")
+    first = ResolverPool(object(), object)  # freezes this process's configuration
+    assert (first.size, first.wait_seconds) == (3, 7.0)
+    monkeypatch.setenv(pool_module.POOL_SIZE_ENV, "5")
+    monkeypatch.setenv(pool_module.POOL_WAIT_ENV, "9")
+    later = ResolverPool(object(), object)
+    assert (later.size, later.wait_seconds) == (3, 7.0)
+    from easyicu.api.extraction import _native_export_runtime_provenance
+
+    record = _native_export_runtime_provenance()
+    assert (record["resolver_pool_size"], record["resolver_pool_wait_seconds"]) == (3, 7.0)

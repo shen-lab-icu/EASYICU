@@ -53,6 +53,7 @@ __all__ = [
     "ResolverPool",
     "call_resolver",
     "resolver_call_scope",
+    "resolver_pool_config",
     "resolver_pool_size",
     "resolver_pool_wait_seconds",
 ]
@@ -91,6 +92,32 @@ def resolver_pool_wait_seconds() -> float:
     return seconds
 
 
+_CONFIG_LOCK = threading.Lock()
+_CONFIG: Optional[tuple] = None
+
+
+def resolver_pool_config() -> dict:
+    """This process's pool size and wait, frozen at the first use.
+
+    Every pool created without explicit values uses them, and run metadata
+    records them, so a later change of the environment cannot make the
+    record disagree with the pools that served the run.
+    """
+    global _CONFIG
+    with _CONFIG_LOCK:
+        if _CONFIG is None:
+            _CONFIG = (resolver_pool_size(), resolver_pool_wait_seconds())
+        size, wait_seconds = _CONFIG
+    return {"size": size, "wait_seconds": wait_seconds}
+
+
+def _reset_resolver_pool_config() -> None:
+    """Forget the frozen configuration (tests that change the environment)."""
+    global _CONFIG
+    with _CONFIG_LOCK:
+        _CONFIG = None
+
+
 class _Slot:
     __slots__ = ("resolver", "owner")
 
@@ -115,10 +142,11 @@ class ResolverPool:
         on_create: Optional[Callable[[object], None]] = None,
         defer_until_idle: Optional[Callable[[object, Callable[[], None]], bool]] = None,
     ) -> None:
-        self.size = resolver_pool_size() if size is None else int(size)
+        config = resolver_pool_config() if size is None or wait_seconds is None else None
+        self.size = config["size"] if size is None else int(size)
         if self.size < 1:
             raise ValueError(f"resolver pool size must be positive, got {self.size}")
-        self.wait_seconds = resolver_pool_wait_seconds() if wait_seconds is None else float(wait_seconds)
+        self.wait_seconds = config["wait_seconds"] if wait_seconds is None else float(wait_seconds)
         if not math.isfinite(self.wait_seconds) or self.wait_seconds <= 0:
             raise ValueError(f"resolver pool wait must be positive, got {self.wait_seconds}")
         self._primary = primary

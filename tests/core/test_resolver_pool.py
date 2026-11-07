@@ -21,6 +21,7 @@ import pytest
 
 from easyicu.api import concepts as api
 from easyicu.concept import ConceptResolver, stay_tables
+import easyicu.resolver_pool as pool_module
 from easyicu.resolver_errors import ResolverBusyError
 from easyicu.resolver_pool import (
     DEFAULT_POOL_SIZE,
@@ -43,9 +44,14 @@ pytestmark = pytest.mark.filterwarnings("ignore")
 
 @pytest.fixture(autouse=True)
 def _fresh_global_loader():
+    # Pools freeze the size/wait configuration per process; tests that set
+    # the environment start from an unfrozen one.
+    reset = getattr(pool_module, "_reset_resolver_pool_config", lambda: None)
+    reset()
     api.clear_global_loader()
     yield
     api.clear_global_loader()
+    reset()
 
 
 def _api_load(root, stays=_IDS, **extra):
