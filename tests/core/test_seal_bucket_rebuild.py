@@ -428,19 +428,23 @@ def test_install_writes_the_in_root_receipt_last_then_read_only_then_renames(
     (staging / "bucket" / "part.parquet").write_bytes(b"PAR1")
     os.symlink(tmp_path, staging / "link")
     seen = {}
-    rename = os.rename
+    rename = sr.rename_noreplace
 
     def spy(src, dst):
         seen["receipt"] = (Path(src) / sr.IN_ROOT_RECEIPT).is_file()
-        seen["writable_inside"] = [
-            p for p in sr.writable_entries(Path(src)) if p != "."
-        ]
+        seen["writable"] = sr.writable_entries(Path(src))  # the root included
         seen["target_absent"] = not Path(dst).exists()
-        rename(src, dst)
+        seen["pending"] = sr.pending_marker(Path(dst)).is_file()
+        return rename(src, dst)
 
-    monkeypatch.setattr(sr.os, "rename", spy)
+    monkeypatch.setattr(sr, "rename_noreplace", spy)
     record = sr.install(staging, target, {"verdict": "PASS"})
-    assert seen == {"receipt": True, "writable_inside": [], "target_absent": True}
+    assert seen == {
+        "receipt": True,
+        "writable": [],
+        "target_absent": True,
+        "pending": True,
+    }
     assert _ro(target) and sr.writable_entries(target) == []
     assert record["in_root_receipt_sha256"] == sr.sha256_file(
         target / sr.IN_ROOT_RECEIPT

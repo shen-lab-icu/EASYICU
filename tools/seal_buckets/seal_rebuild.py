@@ -21,17 +21,21 @@ Usage (entry point: seal_rebuild.sh; never launched without coordinator-assigned
 Exit codes: 0 every selected DB PASS (or DRY_RUN_OK / IDENTICAL), 1 any typed failure, 2 usage.
 Every failure is a typed reason in the status file and on stdout; nothing is swallowed. The exit code is
 decided from structured verdicts only (never from status text); any untyped exception is a failure.
-One run per seal SHA and mode: an exclusive fcntl lock ($WORK_ROOT/.seal_<sha9>_<mode>.lock) is taken
-before planning; a second entry is refused (seal_run_locked).
+One run per seal SHA and mode: exclusive fcntl locks ($WORK_ROOT/.seal_<sha9>_<mode>.lock and, unless
+--dry-run, the same name in b6_root, the real target space) are taken before planning; a second entry is
+refused (seal_run_locked).
 
 Review round 2 (delta26t) contracts:
   * checkouts and scratch are created exclusively (an existing path or a link below the tool's roots is
     refused); scratch carries this run's owner token and only owned scratch is removed;
-  * the builder runs as `python -c BUILDER_BOOT <builder>` with PYTHONPATH=<clone>/src: the boot asserts
-    that easyicu imports from that clone at the seal SHA (builder_import_origin_mismatch otherwise) and
-    the receipt records import_origin {path, head}; footer_scan/bucket_compare/negzero_table never import
-    easyicu;
-  * conversion_manifest.json is always an owned, re-verified copy (a link included), and every link --
+  * the builder runs as `python -S -c BUILDER_BOOT <builder>` (builder_argv): no site hook runs, the
+    import path is the clone's src + stdlib + the interpreter's site-packages (SEAL_SITE_PACKAGES, named
+    explicitly); easyicu must import from that clone at the seal SHA, and after the builder ends every
+    easyicu.* module must come from the clone and every duckdb.*/pyarrow.* module from that
+    site-packages (builder_import_origin_mismatch otherwise); the receipt records import_origin {path,
+    head, modules, mismatched}; footer_scan/bucket_compare/negzero_table never import easyicu;
+  * conversion_manifest.json is always an owned copy of the bytes verified against the plan-time sha256
+    (read once; a link included), and every link --
     and everything reachable through a directory link -- must stay inside the allowed roots;
   * a failure after the rename leaves .<target>.seal_REFUSED and a FAILED receipt; compare (and any
     acceptance) goes through accept_root: external PASS receipt, bound in-root receipt, no refusal,
@@ -57,15 +61,19 @@ the memgate admits it, then DBs run in parallel):
      layout parameters equal to the current bucket's;
   5. footer_scan.py over the whole staging root; its per-bucket footer row totals must equal the QC rows;
   6. ORDER OF THE LAST STEPS (no partially installed root is ever visible under its final name):
-       a. the in-root receipt <root>/_SEAL_BUILD_RECEIPT.json is written as the LAST content step;
-       b. read-only is applied to every directory and regular file under the staging root (symlinks and
-          their targets untouched), except the staging directory itself;
-       c. atomic rename staging -> target (same parent directory);
-       d. the target directory itself is made read-only; the whole tree is verified read-only;
-       e. the external receipt $WORK/<build>/receipt_<db>.json is written last; it records the verified
-          read-only state and the sha256 of the in-root receipt.
-     A failure before (c) leaves only the hidden staging root (never renamed); a rerun refuses until an
-     operator removes it.
+       a. after the builds, everything under the staging root is made read-only; each bucket manifest
+          must still be the one QC recorded, then the footer scan runs on the frozen tree;
+       b. the in-root receipt <root>/_SEAL_BUILD_RECEIPT.json is written as the LAST content step;
+       c. the staging root itself is made read-only and the whole tree is verified (read-only, in-root
+          receipt sha) -- the final name never exists writable or unverified;
+       d. a durable pending marker b6_root/.<target>.seal_PENDING is written (O_EXCL, fsync'd);
+       e. one atomic NO-REPLACE rename staging -> target (renameat2 RENAME_NOREPLACE on Linux, renamex_np
+          RENAME_EXCL on macOS; without one the publish is refused, rename_noreplace_unavailable); an
+          existing target, even an empty directory that just appeared, is target_exists;
+       f. the external receipt $WORK/<build>/receipt_<db>.json is written; then the commit removes the
+          pending marker. accept_root refuses a root with a pending (root_pending) or refusal marker.
+     A failure before (e) leaves only the hidden staging root; a crash between (e) and (f) leaves a
+     read-only, verified root that stays refused (pending) until an operator decides.
   CareVue (build1 only, after its bucket root PASSES): the farm b6_root/mimic_cv_dir_r13 is assembled the
   same way (staging, ro, rename): the current farm's flat links and per-file dirs replicated exactly,
   chartevents_bucket -> the new build1 bucket, conversion_manifest.json with data_path re-pointed; refused
@@ -77,6 +85,8 @@ Never databases/, the CareVue view, or any current root. Receipts hold aggregate
 from __future__ import annotations
 
 import argparse
+import ctypes
+import errno
 import fcntl
 import glob
 import hashlib
@@ -105,35 +115,81 @@ SKIP_RE = re.compile(
 CONVERSION_MANIFEST = "conversion_manifest.json"
 IN_ROOT_RECEIPT = "_SEAL_BUILD_RECEIPT.json"
 REFUSAL_SUFFIX = ".seal_REFUSED"
+PENDING_SUFFIX = ".seal_PENDING"
 OWNER_TOKEN = ".seal_owner"
 OK_VERDICTS = frozenset({"PASS", "IDENTICAL", "DRY_RUN_OK"})
 ADOPTION_RECEIPT = "_BUCKET_ADOPTION_RECEIPT.json"
 SOURCE_ORDINAL = "_easyicu_source_ordinal"
 FORBIDDEN_CORES = ((5, 105), (146, 179), (224, 1 << 20))
 ORIGIN_EXIT = 97
-# Launches the seal clone's builder like `python <builder>` (sys.path[0] = scripts/), but only after
-# asserting that `easyicu` imports from that clone's src at the seal SHA: `python <clone>/scripts/x.py`
-# does not put src on sys.path, and a venv may carry an editable easyicu pointing at other code.
+# Launches the seal clone's builder like `python <builder>` (sys.path[0] = scripts/), under `python -S`:
+# no site hook (sitecustomize, usercustomize, .pth) runs, and the import path is set here explicitly --
+# the clone's src, the interpreter's standard library, and this interpreter's own site-packages (named
+# by the seal as SEAL_SITE_PACKAGES; its .pth lines are not executed). Before the builder runs, `easyicu` must import from the
+# clone's src at the seal SHA; after it ends (normally or by sys.exit), every loaded easyicu.* module must
+# come from the clone's src and every duckdb.*/pyarrow.* module from that site-packages. Any mismatch is
+# exit 97 (builder_import_origin_mismatch); the record (paths, head, modules) goes to SEAL_ORIGIN_OUT.
 BUILDER_BOOT = r"""
 import json, os, runpy, subprocess, sys
 clone, sha, out = os.environ["SEAL_CLONE"], os.environ["SEAL_SHA"], os.environ["SEAL_ORIGIN_OUT"]
-record = {"path": None, "head": None}
-try:
-    import easyicu
-    record["path"] = os.path.realpath(easyicu.__file__)
-    record["head"] = subprocess.run(["git", "rev-parse", "HEAD"], cwd=clone, capture_output=True,
-                                    text=True).stdout.strip()
-finally:
+real = os.path.realpath
+src = real(os.path.join(clone, "src"))
+site = [real(os.environ["SEAL_SITE_PACKAGES"])]
+base = real(sys.base_prefix) + os.sep
+stdlib = [p for p in sys.path if p and real(p).startswith(base) and not real(p).startswith(src)]
+sys.path[:] = [src, *stdlib, *site]
+roots = {"easyicu": [src], "duckdb": site, "pyarrow": site}
+record = {"path": None, "head": None, "sys_path": list(sys.path), "site_packages": site,
+          "modules": {}, "mismatched": [], "complete": False}
+
+
+def check():
+    mods = {}
+    for name, mod in list(sys.modules.items()):
+        top = name.split(".")[0]
+        if top in roots:
+            f = getattr(mod, "__file__", None)
+            mods[name] = real(f) if f else None
+    record["modules"] = mods
+    record["mismatched"] = sorted(
+        n for n, f in mods.items()
+        if (f is None and n.startswith("easyicu"))
+        or (f is not None and not any(f.startswith(r + os.sep) for r in roots[n.split(".")[0]]))
+    )
+
+
+def dump():
     with open(out, "w") as fh:
         json.dump(record, fh, sort_keys=True)
-src = os.path.realpath(os.path.join(clone, "src")) + os.sep
-if not (record["path"] or "").startswith(src) or record["head"] != sha:
+
+
+try:
+    import easyicu
+    record["path"] = real(easyicu.__file__)
+    record["head"] = subprocess.run(["git", "rev-parse", "HEAD"], cwd=clone, capture_output=True,
+                                    text=True).stdout.strip()
+    check()
+finally:
+    dump()
+if not (record["path"] or "").startswith(src + os.sep) or record["head"] != sha or record["mismatched"]:
     print("builder_import_origin_mismatch", file=sys.stderr)
     sys.exit(97)
 builder = sys.argv[1]
 sys.argv = sys.argv[1:]
 sys.path.insert(0, os.path.dirname(os.path.abspath(builder)))
-runpy.run_path(builder, run_name="__main__")
+code = 0
+try:
+    runpy.run_path(builder, run_name="__main__")
+except SystemExit as exc:
+    code = exc.code
+finally:
+    check()
+    record["complete"] = True
+    dump()
+if record["mismatched"]:
+    print("builder_import_origin_mismatch " + " ".join(record["mismatched"][:5]), file=sys.stderr)
+    sys.exit(97)
+sys.exit(code)
 """
 
 _B6 = "/home/zhuhb/workspace/claude-ws/_data/b6_root"
@@ -429,6 +485,37 @@ def verify_checkout(code: Path, full: str) -> None:
         raise SealError("checkout_not_clean", str(code))
 
 
+def builder_argv(python: str, builder: Path) -> list[str]:
+    """How every builder is launched: -S (no site hooks) and the boot, never `python <builder>`."""
+    return [python, "-S", "-c", BUILDER_BOOT, str(builder)]
+
+
+def site_packages(python: str) -> str:
+    """The configured interpreter's own site-packages, named explicitly for the -S builder boot: a
+    venv's lib/python*/site-packages (from its pyvenv.cfg layout, nothing executed), else the
+    interpreter's purelib asked under -S (no site hooks)."""
+    venv = Path(python).parent.parent
+    if (venv / "pyvenv.cfg").is_file():
+        found = sorted(venv.glob("lib/python3*/site-packages"))
+        if len(found) != 1:
+            raise SealError("site_packages_unresolved", str(venv))
+        return str(found[0])
+    done = subprocess.run(
+        [
+            python,
+            "-S",
+            "-c",
+            "import sysconfig; print(sysconfig.get_paths()['purelib'])",
+        ],
+        capture_output=True,
+        text=True,
+    )
+    path = done.stdout.strip()
+    if done.returncode != 0 or not Path(path).is_dir():
+        raise SealError("site_packages_unresolved", python)
+    return path
+
+
 def read_origin(path: Path) -> dict:
     try:
         rec = json.loads(path.read_text())
@@ -438,11 +525,15 @@ def read_origin(path: Path) -> dict:
 
 
 def origin_ok(origin: dict, code: Path, full: str) -> bool:
+    """The boot's record: easyicu from the clone's src at the SHA, the builder ran to completion under
+    the boot, and no easyicu.*/duckdb.*/pyarrow.* module came from anywhere else (D29-BOOT-HOOK)."""
     src = os.path.realpath(code / "src") + os.sep
     return (
         bool(origin.get("path"))
         and str(origin["path"]).startswith(src)
         and origin.get("head") == full
+        and origin.get("complete") is True
+        and origin.get("mismatched") == []
     )
 
 
@@ -460,20 +551,38 @@ def assert_no_links_below(path: Path, base: Path) -> None:
             raise SealError("path_is_link", str(cur))
 
 
-def acquire_run_lock(seal: "Seal"):
-    """Exclusive cross-process lock per seal SHA and mode, taken before planning (D26-CONCURRENCY).
+class RunLocks:
+    def __init__(self) -> None:
+        self.handles: list = []
 
-    Two entry points for the same SHA and mode would plan the same targets and scratch; the second is
-    refused instead of racing (it never waits, and never touches the first run's directories)."""
-    root = Path(seal.cfg["work_root"])
-    root.mkdir(parents=True, exist_ok=True)
-    fh = open(root / f".seal_{seal.s9}_{seal.mode}.lock", "a")
-    try:
-        fcntl.flock(fh, fcntl.LOCK_EX | fcntl.LOCK_NB)
-    except OSError as exc:
-        fh.close()
-        raise SealError("seal_run_locked", f"{seal.s9} {seal.mode}") from exc
-    return fh
+    def close(self) -> None:
+        for fh in self.handles:
+            fh.close()
+        self.handles = []
+
+
+def acquire_run_lock(seal: "Seal") -> RunLocks:
+    """Exclusive cross-process locks per seal SHA and mode, taken before planning (D26-CONCURRENCY):
+    one in the work root and one in the real target space, b6_root (D29-NOREPLACE), so a run from
+    another work root or config that targets the same b6 names is refused too.
+
+    The second entry is refused instead of racing (it never waits, and never touches the first run's
+    directories). Publishing itself never relies on the locks: the rename is RENAME_NOREPLACE."""
+    locks = RunLocks()
+    roots = [Path(seal.cfg["work_root"])]
+    if not seal.dry_run:  # a dry run publishes nothing and writes nothing under b6_root
+        roots.append(seal.b6)
+    for root in roots:
+        root.mkdir(parents=True, exist_ok=True)
+        fh = open(root / f".seal_{seal.s9}_{seal.mode}.lock", "a")
+        try:
+            fcntl.flock(fh, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        except OSError as exc:
+            fh.close()
+            locks.close()
+            raise SealError("seal_run_locked", f"{seal.s9} {seal.mode} {root}") from exc
+        locks.handles.append(fh)
+    return locks
 
 
 def claim_scratch(scr: Path, base: Path, token: str) -> None:
@@ -639,23 +748,28 @@ def manifest_source(src: Path) -> dict:
     }
 
 
-def rewritten_conversion_manifest(
-    src: Path, old_root: Path, new_root: Path, pinned: dict | None = None
-) -> dict | None:
-    """The mirrored conversion manifest is always an owned file (a link is read, never re-linked).
-
-    Its source is verified first: the file it resolves to must still have the sha256 pinned at plan
-    time, and a ``derived_from`` binding (always required of a root's own, non-linked manifest) must
-    still match its source. Only ``data_path`` may change: the current root's path is re-pointed to
-    the new root; a linked source manifest that names its own directory keeps it. Returns the new
-    content, or None when the content is unchanged (the caller then copies the verified bytes)."""
-    pinned = pinned or manifest_source(src)
+def _pinned_bytes(src: Path, pinned: dict) -> bytes:
+    """Read the pinned source ONCE and verify the plan-time sha256 on exactly these bytes."""
     real = Path(pinned["source"])
-    if Path(os.path.realpath(src)) != real or sha256_file(real) != pinned["sha256"]:
+    if Path(os.path.realpath(src)) != real:
         raise SealError("conversion_manifest_source_changed", src.parent.name)
     try:
-        c = json.loads(real.read_text())
-    except (OSError, ValueError) as exc:
+        data = real.read_bytes()
+    except OSError as exc:
+        raise SealError("conversion_manifest_unreadable", src.parent.name) from exc
+    if hashlib.sha256(data).hexdigest() != pinned["sha256"]:
+        raise SealError("conversion_manifest_source_changed", src.parent.name)
+    return data
+
+
+def _conversion_decision(
+    src: Path, old_root: Path, new_root: Path, pinned: dict
+) -> tuple[bytes, dict | None]:
+    data = _pinned_bytes(src, pinned)
+    real = Path(pinned["source"])
+    try:
+        c = json.loads(data)
+    except ValueError as exc:
         raise SealError("conversion_manifest_unreadable", src.parent.name) from exc
     if not isinstance(c, dict):
         raise SealError("conversion_manifest_unreadable", src.parent.name)
@@ -670,20 +784,35 @@ def rewritten_conversion_manifest(
     data_path = c.get("data_path")
     if data_path == str(old_root):
         c["data_path"] = str(new_root)
-        return c
+        return data, c
     if data_path is None or (pinned["linked"] and data_path == str(real.parent)):
-        return None
+        return data, None
     raise SealError("conversion_manifest_data_path_unexpected", src.parent.name)
+
+
+def rewritten_conversion_manifest(
+    src: Path, old_root: Path, new_root: Path, pinned: dict | None = None
+) -> dict | None:
+    """The mirrored conversion manifest is always an owned file (a link is read, never re-linked).
+
+    Its source is read once and verified on those bytes (D29-CONVERSION-RACE): the file it resolves
+    to must have the sha256 pinned at plan time, and a ``derived_from`` binding (always required of a
+    root's own, non-linked manifest) must still match its source. Only ``data_path`` may change: the
+    current root's path is re-pointed to the new root; a linked source manifest that names its own
+    directory keeps it. Returns the new content, or None when the content is unchanged."""
+    return _conversion_decision(
+        src, old_root, new_root, pinned or manifest_source(src)
+    )[1]
 
 
 def write_conversion_manifest(
     src: Path, dest: Path, old_root: Path, new_root: Path, pinned: dict
 ) -> None:
-    content = rewritten_conversion_manifest(src, old_root, new_root, pinned)
+    """Write exactly the verified bytes (or their parsed rewrite): never a second read of the source."""
+    data, content = _conversion_decision(src, old_root, new_root, pinned)
     if content is None:
-        shutil.copyfile(pinned["source"], dest)
-        if sha256_file(dest) != pinned["sha256"]:
-            raise SealError("conversion_manifest_source_changed", src.parent.name)
+        with open(dest, "xb") as fh:
+            fh.write(data)
     else:
         write_json(dest, content)
 
@@ -823,10 +952,65 @@ def refusal_marker(target: Path) -> Path:
     return target.parent / f".{target.name}{REFUSAL_SUFFIX}"
 
 
-def verify_installed(
-    root: Path, in_root_sha: str, *, root_writable_ok: bool = False
-) -> None:
-    left = [e for e in writable_entries(root) if not (root_writable_ok and e == ".")]
+def pending_marker(target: Path) -> Path:
+    """Written durably BEFORE the rename and removed only after the external PASS receipt: a final name
+    with this marker beside it is unpublished (a crash between the two) and every consumer refuses it."""
+    return target.parent / f".{target.name}{PENDING_SUFFIX}"
+
+
+def _fsync_dir(path: Path) -> None:
+    fd = os.open(path, os.O_RDONLY)
+    try:
+        os.fsync(fd)
+    finally:
+        os.close(fd)
+
+
+def _noreplace_primitive():
+    """(name, call) for an atomic no-replace rename on this platform, or None."""
+    try:
+        libc = ctypes.CDLL(None, use_errno=True)
+        if sys.platform.startswith("linux"):
+            fn = libc.renameat2  # glibc >= 2.28
+            fn.argtypes = [
+                ctypes.c_int,
+                ctypes.c_char_p,
+                ctypes.c_int,
+                ctypes.c_char_p,
+                ctypes.c_uint,
+            ]
+            return "renameat2", lambda a, b: fn(
+                -100, a, -100, b, 1
+            )  # AT_FDCWD, RENAME_NOREPLACE
+        if sys.platform == "darwin":
+            fn = libc.renamex_np
+            fn.argtypes = [ctypes.c_char_p, ctypes.c_char_p, ctypes.c_uint]
+            return "renamex_np", lambda a, b: fn(a, b, 0x4)  # RENAME_EXCL
+    except AttributeError:
+        return None
+    return None
+
+
+def rename_noreplace(src: Path, dst: Path) -> str:
+    """Atomically rename ``src`` to ``dst`` only if ``dst`` does not exist (D29-NOREPLACE): an existing
+    target, even an empty directory created a moment earlier, is target_exists; without the primitive
+    the publish is refused (rename_noreplace_unavailable), never done with a replacing rename."""
+    prim = _noreplace_primitive()
+    if prim is None:
+        raise SealError("rename_noreplace_unavailable", sys.platform)
+    name, call = prim
+    if call(os.fsencode(src), os.fsencode(dst)) != 0:
+        err = ctypes.get_errno()
+        if err == errno.EEXIST or (err == errno.ENOTEMPTY and dst.exists()):
+            raise SealError("target_exists", str(dst))
+        if err in (errno.ENOSYS, errno.EINVAL, errno.ENOTSUP, errno.EOPNOTSUPP):
+            raise SealError("rename_noreplace_unavailable", f"{name} errno={err}")
+        raise OSError(err, os.strerror(err), str(src))
+    return name
+
+
+def verify_installed(root: Path, in_root_sha: str) -> None:
+    left = writable_entries(root)
     if left:
         raise SealError("root_not_read_only", f"{root.name}: {len(left)} writable")
     if sha256_file(root / IN_ROOT_RECEIPT) != in_root_sha:
@@ -834,23 +1018,37 @@ def verify_installed(
 
 
 def install(staging: Path, target: Path, in_root_receipt: dict) -> dict:
-    """Steps 6a-6d: in-root receipt last, ro, every check that can run before the rename, atomic rename,
-    ro root, verify again. A failure after the rename leaves a persistent refusal marker, and the final
-    name is never accepted without its bound in-root receipt (D26-INSTALL)."""
+    """Publish a staged root (D29-PUBLISH): the in-root receipt is the last content step; the WHOLE
+    tree, root included, is made read-only and verified BEFORE the final name exists; a durable pending
+    marker is written; then one atomic no-replace rename. The final name is never visible writable or
+    unverified. The caller writes the external receipt and then commit_install() removes the pending
+    marker; until then (a crash in between included) every consumer refuses the root. A failure after
+    the rename leaves a persistent refusal marker as well."""
     if (
         not isinstance(in_root_receipt, dict)
         or in_root_receipt.get("verdict") != "PASS"
     ):
         raise SealError("in_root_receipt_missing", target.name)
-    for p in (target, refusal_marker(target)):
+    for p in (target, refusal_marker(target), pending_marker(target)):
         if p.exists() or p.is_symlink():
             raise SealError("target_exists", str(p))
     in_root_sha = write_json(staging / IN_ROOT_RECEIPT, in_root_receipt)
-    make_read_only(staging, include_root=False)
-    verify_installed(staging, in_root_sha, root_writable_ok=True)
-    os.rename(staging, target)
+    make_read_only(staging, include_root=True)
+    verify_installed(staging, in_root_sha)
     try:
-        make_read_only(target, include_root=True)
+        fd = os.open(
+            pending_marker(target), os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o444
+        )
+    except FileExistsError as exc:
+        raise SealError("target_exists", str(pending_marker(target))) from exc
+    with os.fdopen(fd, "w") as fh:
+        json.dump({"root": str(target), "verdict": "PENDING"}, fh)
+        fh.flush()
+        os.fsync(fh.fileno())
+    _fsync_dir(target.parent)
+    primitive = rename_noreplace(staging, target)
+    _fsync_dir(target.parent)
+    try:
         verify_installed(target, in_root_sha)
     except (SealError, OSError) as exc:
         reason = exc.reason if isinstance(exc, SealError) else type(exc).__name__
@@ -863,7 +1061,14 @@ def install(staging: Path, target: Path, in_root_receipt: dict) -> dict:
         "root": str(target),
         "read_only_verified": True,
         "in_root_receipt_sha256": in_root_sha,
+        "rename": primitive,
     }
+
+
+def commit_install(target: Path) -> None:
+    """The commit: remove the pending marker once the external PASS receipt is durable."""
+    pending_marker(target).unlink()
+    _fsync_dir(target.parent)
 
 
 def accept_root(root: Path, external: Path, seal_sha: str, build: str, db: str) -> dict:
@@ -888,6 +1093,8 @@ def accept_root(root: Path, external: Path, seal_sha: str, build: str, db: str) 
         raise SealError("receipt_unbound", external.name)
     if refusal_marker(root).exists() or refusal_marker(root).is_symlink():
         raise SealError("root_refused", root.name)
+    if pending_marker(root).exists() or pending_marker(root).is_symlink():
+        raise SealError("root_pending", root.name)
     if (
         not (root / IN_ROOT_RECEIPT).is_file()
         or sha256_file(root / IN_ROOT_RECEIPT) != bound
@@ -927,6 +1134,7 @@ def build_env(seal: Seal, db: str, code: Path) -> dict:
         "PYTHONDONTWRITEBYTECODE": "1",
         "SEAL_CLONE": str(code),
         "SEAL_SHA": seal.full,
+        "SEAL_SITE_PACKAGES": site_packages(seal.cfg["python"]),
         # a private bytecode cache: no build reads another build's (or the checkout's) cached bytecode
         "PYTHONPYCACHEPREFIX": str(scr / "pycache"),
         "OMP_NUM_THREADS": t,
@@ -1206,10 +1414,7 @@ def run_db(seal: Seal, db: str, plan: dict, code: Path) -> None:
             unit = f"seal-{seal.s9}-{seal.mode}-{db}-{table}".replace("_", "-")
             origin_out = out / f"origin_{db}_{table}.json"
             argv = [
-                seal.cfg["python"],
-                "-c",
-                BUILDER_BOOT,
-                str(code / BUILDER_REL),
+                *builder_argv(seal.cfg["python"], code / BUILDER_REL),
                 "--data-path",
                 str(staging),
                 "--database",
@@ -1255,6 +1460,12 @@ def run_db(seal: Seal, db: str, plan: dict, code: Path) -> None:
             rec.update(wall_seconds=wall, peak_rss_kb=peak)
             receipt["tables"][table] = rec
         verify_checkout(code, seal.full)
+        # read-only first, then every remaining check runs on the frozen tree (D29-PUBLISH)
+        make_read_only(staging, include_root=False)
+        for table, rec in receipt["tables"].items():
+            manifest = staging / f"{table}_bucket" / "_BUCKET_MANIFEST.json"
+            if sha256_file(manifest) != rec.get("manifest_sha256"):
+                raise SealError("bucket_manifest_changed_after_qc", table)
         scan_json = out / f"{db}_footer_scan.json"
         rc, _ = confined_run(
             seal,
@@ -1305,6 +1516,7 @@ def run_db(seal: Seal, db: str, plan: dict, code: Path) -> None:
         receipt["install"] = installed
         receipt["verdict"] = "PASS"
         write_json(out / f"receipt_{db}.json", receipt)
+        commit_install(target)
         seal.set_status(db, "PASS", str(target))
         seal.log(f"{db} PASS -> {target}")
     except SealError as exc:
@@ -1374,6 +1586,7 @@ def assemble_farm(seal: Seal, db: str, plan: dict, bucket_root: Path) -> None:
     installed = install(staging, farm, record)
     record["install"] = installed
     write_json(seal.work / seal.mode / f"receipt_{db}_farm.json", record)
+    commit_install(farm)
     seal.set_status(db, "PASS", f"{bucket_root} farm={farm}")
     seal.log(f"{db} farm PASS -> {farm} ({len(names)} entries)")
 
@@ -1501,6 +1714,7 @@ def probe(seal: Seal) -> list[tuple[str, str]]:
         "EASYICU_DUCKDB_TEMP_DIR": str(base / "spill"),
         "SEAL_CLONE": str(code),
         "SEAL_SHA": seal.full,
+        "SEAL_SITE_PACKAGES": site_packages(seal.cfg["python"]),
     }
     for scheme, table, extra in (
         ("hash", "probe_hash", ["--key", "itemid", "--modulus", "4"]),
@@ -1514,10 +1728,7 @@ def probe(seal: Seal) -> list[tuple[str, str]]:
             continue
         origin_out = base / f"origin_{table}.json"
         cmd = [
-            seal.cfg["python"],
-            "-c",
-            BUILDER_BOOT,
-            str(code / BUILDER_REL),
+            *builder_argv(seal.cfg["python"], code / BUILDER_REL),
             "--data-path",
             str(data),
             "--table",

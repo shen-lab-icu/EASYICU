@@ -14,7 +14,8 @@ Exit 0 = all ok, 1 = at least one failure (listed under `failures` with a typed 
 
 Containment (the seal tool's contract, shared): every directory and file reached -- following links --
 must resolve inside ROOT or an --allowed-root; anything else is a `path_escapes_allowed_roots` failure
-and is not read. Each real directory is visited once (link loops end).
+and is not read (bucket metadata included). Loop protection is the set of real directories on the
+current walk path, so every logical path of an alias is scanned (each real file's footer is read once).
 
   python footer_scan.py ROOT --out scan.json [--buckets-only] [--allowed-root DIR ...]
 """
@@ -62,30 +63,44 @@ def _inside(path, roots) -> bool:
 
 
 def _parquet_files(root: Path, buckets_only: bool, allowed, failures: list):
-    seen: set[str] = set()
-    for dirpath, dirnames, filenames in os.walk(root, followlinks=True):
-        rel_dir = Path(dirpath).relative_to(root)
-        real = os.path.realpath(dirpath)
-        if not _inside(dirpath, allowed):
+    """Every logical *.parquet path under ROOT, links followed. Loop protection is the set of real
+    directories on the CURRENT walk path (a link back to an ancestor ends there), so a legitimate alias
+    -- a second link to the same directory -- is walked under its own logical path too (D29-FOOTER-ALIAS)."""
+    root = Path(root)
+    stack = [(root, frozenset())]
+    while stack:
+        directory, ancestors = stack.pop()
+        rel_dir = directory.relative_to(root)
+        if not _inside(directory, allowed):
             failures.append(
                 {"path": rel_dir.as_posix(), "reason": "path_escapes_allowed_roots"}
             )
-            dirnames[:] = []
             continue
-        if (
-            real in seen
-        ):  # a link loop or a second link to the same directory: visited once
-            dirnames[:] = []
+        real = os.path.realpath(directory)
+        if real in ancestors:  # a link loop: this directory is already on the walk path
             continue
-        seen.add(real)
-        dirnames[:] = sorted(d for d in dirnames if not d.startswith("."))
-        if buckets_only and (
+        try:
+            entries = sorted(os.scandir(directory), key=lambda e: e.name)
+        except OSError as exc:
+            failures.append(
+                {
+                    "path": rel_dir.as_posix(),
+                    "reason": f"directory_unreadable:{type(exc).__name__}",
+                }
+            )
+            continue
+        subdirs = [
+            e.name
+            for e in entries
+            if not e.name.startswith(".") and e.is_dir(follow_symlinks=True)
+        ]
+        skip_files = buckets_only and (
             not rel_dir.parts or not rel_dir.parts[0].endswith("_bucket")
-        ):
-            continue
-        for name in sorted(filenames):
+        )
+        for entry in [] if skip_files else entries:
+            name = entry.name
             if name.endswith(".parquet") and not name.startswith("."):
-                path = Path(dirpath) / name
+                path = directory / name
                 if not _inside(path, allowed):
                     failures.append(
                         {
@@ -94,7 +109,12 @@ def _parquet_files(root: Path, buckets_only: bool, allowed, failures: list):
                         }
                     )
                     continue
+                if path.is_dir():
+                    continue
                 yield path
+        here = ancestors | {real}
+        for name in reversed(subdirs):
+            stack.append((directory / name, here))
 
 
 def scan(root: Path, buckets_only: bool = False, allowed_roots=()) -> dict:
@@ -103,10 +123,14 @@ def scan(root: Path, buckets_only: bool = False, allowed_roots=()) -> dict:
     rows_total = 0
     footer_rows: dict[str, int] = {}
     allowed = [root, *allowed_roots]
+    footers: dict[str, tuple[int | None, str | None]] = {}  # read once per real file
     for path in _parquet_files(root, buckets_only, allowed, failures):
         files += 1
         rel = path.relative_to(root).as_posix()
-        n, err = _footer(path)
+        real = os.path.realpath(path)
+        if real not in footers:
+            footers[real] = _footer(path)
+        n, err = footers[real]
         if err:
             failures.append({"path": rel, "reason": err})
             continue
@@ -117,6 +141,22 @@ def scan(root: Path, buckets_only: bool = False, allowed_roots=()) -> dict:
         p for p in root.iterdir() if p.is_dir() and p.name.endswith("_bucket")
     ):
         mpath = bucket / "_BUCKET_MANIFEST.json"
+        receipt = bucket / "_BUCKET_BUILD_RECEIPT.json"
+        escaped = [
+            m
+            for m in (bucket, mpath, receipt)
+            if m.exists() and not _inside(m, allowed)
+        ]
+        if (
+            escaped
+        ):  # metadata is read only from inside the allowed roots, like the parts
+            failures.append(
+                {
+                    "path": escaped[0].relative_to(root).as_posix(),
+                    "reason": "path_escapes_allowed_roots",
+                }
+            )
+            continue
         if not mpath.is_file():
             failures.append({"path": bucket.name, "reason": "bucket_manifest_missing"})
             continue
@@ -149,7 +189,6 @@ def scan(root: Path, buckets_only: bool = False, allowed_roots=()) -> dict:
             "complete_marker": (bucket / "_COMPLETE").is_file(),
             "float_fidelity_recorded": "float_fidelity" in manifest,
         }
-        receipt = bucket / "_BUCKET_BUILD_RECEIPT.json"
         if receipt.is_file():
             rec["rows_receipt"] = json.loads(receipt.read_text()).get("rows")
         for name, items in (

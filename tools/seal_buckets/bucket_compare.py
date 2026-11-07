@@ -8,11 +8,15 @@ v3 = v2 plus a sub-label: a DIFFERS part whose only differences are +0.0/-0.0 fl
 row-group min/max statistics) is labelled SIGNED_ZERO_ONLY, with the flip count. It is NOT a pass:
 the verdict stays DIFFERS (bit-exact rule) and the exit code stays 1.
 
-Before anything is compared, each side is validated against its OWN installation: manifest, build
-receipt and _COMPLETE present; the parts on disk equal the manifest inventory (a part missing on both
-sides is a StorageIntegrityError, never IDENTICAL); every listed part is a contained regular file with its
-inventory size and footer row count; the inventory total equals the build receipt's rows. The first
-containment finding (a path leading out of its root) stops the run before any manifest is read.
+Before anything is compared, each side is validated against its OWN installation with the full bucket
+storage contract of src/easyicu/storage_layout.py (ported, so this tool stays easyicu-free; a parity test
+runs both on the same installs): schema, scheme/key/hash/builder fields, EVERY bucket directory the
+modulus implies and every variable partition with its bucket directories (empty ones included),
+canonical part paths, each listed part a real file of its inventory size, footer rows and key types,
+the on-disk part set equal to the inventory, and the derived_from sources; then the inventory total must
+equal the build receipt's rows. Any violation is INVALID (a part or an empty directory missing on both
+sides is never IDENTICAL). The first containment finding (a path leading out of its root) stops the run
+before any manifest is read.
 
 usage: bucket_compare.py CURRENT_BUCKET NEW_BUCKET --out RESULT.json [--seal-sha SHA]
 exit:  0 every part IDENTICAL (bytes) and no containment finding; 1 anything else (LOGICALLY_IDENTICAL,
@@ -41,9 +45,10 @@ import filecmp
 import hashlib
 import json
 import math
+import numbers
 import os
 import sys
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 
 import pyarrow as pa
 import pyarrow.compute as pc
@@ -53,63 +58,407 @@ TOOL_SHA256 = hashlib.sha256(Path(__file__).read_bytes()).hexdigest()
 
 
 class StorageIntegrityError(Exception):
-    """A bucket contradicts its own inventory or receipt; ``reason`` is the stable code."""
+    """A bucket contradicts its own contract, inventory or receipt; ``reason`` is the stable code."""
 
     def __init__(self, reason: str, root: Path, detail: str = ""):
         super().__init__(f"{reason}: {root}{' ' + detail if detail else ''}")
         self.reason, self.root, self.detail = reason, root, detail
 
 
-def validate_own_inventory(root: Path) -> dict:
-    """Validate one bucket against its own manifest inventory and build receipt; returns the manifest."""
-    for name in ("_BUCKET_MANIFEST.json", "_BUCKET_BUILD_RECEIPT.json", "_COMPLETE"):
-        if not (root / name).is_file() or not _contained(root / name, root):
-            raise StorageIntegrityError("bucket_install_incomplete", root, name)
+# ---- the bucket storage contract, ported from src/easyicu/storage_layout.py (read_bucket_contract and
+# _read_variable_contract, allow_legacy=False, no cache) so this tool stays easyicu-free. The two must
+# not diverge: tests/core/test_seal_bucket_round3.py runs both on the same synthetic installs and requires
+# the same accept/refuse decision and reason code.
+SCHEMA = "easyicu.bucket_storage/1"
+ORDINAL = "_easyicu_source_ordinal"
+VARIABLE_SCHEME = "variable_stay_range"
+PARTITION_PREFIX = "var_id="
+INTEGER_TYPES = frozenset(
+    {
+        "TINYINT",
+        "SMALLINT",
+        "INTEGER",
+        "BIGINT",
+        "UTINYINT",
+        "USMALLINT",
+        "UINTEGER",
+        "UBIGINT",
+    }
+)
+KEY_TYPES = INTEGER_TYPES | {"VARCHAR", "FLOAT", "DOUBLE"}
+_SHA256_HEX = frozenset("0123456789abcdef")
+
+
+class _Invalid(ValueError):
+    """A malformed field: reported as bucket_manifest_invalid, like the resolver's generic catch."""
+
+
+def _matching_values(values, key_type: str) -> bool:
+    if key_type == "VARCHAR":
+        return all(isinstance(v, str) for v in values)
+    if key_type in INTEGER_TYPES:
+        return all(
+            isinstance(v, numbers.Integral) and not isinstance(v, bool) for v in values
+        )
+    return all(
+        isinstance(v, numbers.Real)
+        and not isinstance(v, (numbers.Integral, bool))
+        and math.isfinite(v)
+        for v in values
+    )
+
+
+def _positive_int(value) -> bool:
+    return isinstance(value, int) and not isinstance(value, bool) and value > 0
+
+
+def _is_power_of_two(value) -> bool:
+    return _positive_int(value) and value & (value - 1) == 0
+
+
+def _arrow_key_type(kind) -> str:
+    if pa.types.is_dictionary(kind):
+        kind = kind.value_type
+    integers = {
+        pa.int8(): "TINYINT",
+        pa.int16(): "SMALLINT",
+        pa.int32(): "INTEGER",
+        pa.int64(): "BIGINT",
+        pa.uint8(): "UTINYINT",
+        pa.uint16(): "USMALLINT",
+        pa.uint32(): "UINTEGER",
+        pa.uint64(): "UBIGINT",
+    }
+    if kind in integers:
+        return integers[kind]
+    if pa.types.is_string(kind) or pa.types.is_large_string(kind):
+        return "VARCHAR"
+    return {pa.float32(): "FLOAT", pa.float64(): "DOUBLE"}.get(kind, "unsupported")
+
+
+def _sie(reason: str, root: Path, detail: str = "") -> StorageIntegrityError:
+    return StorageIntegrityError(reason, root, detail)
+
+
+def _hash_spec() -> dict:
+    import duckdb  # the hash contract names the duckdb version that placed the keys
+
+    return {"name": "duckdb.hash", "duckdb_version": duckdb.__version__}
+
+
+def _check_derived_from(root: Path, manifest: dict) -> None:
+    if "derived_from" not in manifest:
+        return
+    derived = manifest["derived_from"]
+    files = derived.get("files") if isinstance(derived, dict) else None
+    if not isinstance(derived, dict) or not isinstance(derived.get("table"), str):
+        raise _sie("bucket_derived_from_invalid", root)
+    if not isinstance(files, list) or not files:
+        raise _sie("bucket_derived_from_invalid", root)
+    for entry in files:
+        digest = entry.get("sha256") if isinstance(entry, dict) else None
+        if (
+            not isinstance(entry, dict)
+            or not isinstance(entry.get("path"), str)
+            or not isinstance(entry.get("size"), int)
+            or isinstance(entry.get("size"), bool)
+            or entry["size"] < 0
+            or not isinstance(entry.get("mtime_ns"), int)
+            or not isinstance(digest, str)
+            or len(digest) != 64
+            or not set(digest) <= _SHA256_HEX
+        ):
+            raise _sie("bucket_derived_from_invalid", root)
+
+
+def _verify_sources(root: Path, manifest: dict) -> None:
+    derived = manifest.get("derived_from")
+    if derived is None:
+        return
+    for entry in derived["files"]:
+        relative = PurePosixPath(entry["path"])
+        if relative.is_absolute() or not relative.parts or ".." in relative.parts:
+            raise _sie("bucket_derived_from_invalid", root)
+        source = root.parent.joinpath(*relative.parts)
+        try:
+            st = source.stat()
+        except OSError as exc:
+            raise _sie(
+                "bucket_derived_from_source_missing", root, entry["path"]
+            ) from exc
+        if st.st_size != entry["size"] or st.st_mtime_ns != entry["mtime_ns"]:
+            raise _sie("bucket_derived_from_source_changed", root, entry["path"])
+
+
+def _check_part(root: Path, path: Path, entry: dict, columns, sort, order) -> None:
+    """One listed part: a real file of its inventory size and footer rows, with the key columns typed."""
+    if any(
+        not isinstance(entry[k], int) or isinstance(entry[k], bool) or entry[k] < 0
+        for k in ("size", "row_count")
+    ):
+        raise _sie("bucket_inventory_mismatch", root, entry["relative_path"])
+    if not path.is_file() or path.stat().st_size != entry["size"]:
+        raise _sie("bucket_inventory_mismatch", root, entry["relative_path"])
+    parquet = pq.ParquetFile(path)
+    if parquet.metadata.num_rows != entry["row_count"]:
+        raise _sie("bucket_inventory_mismatch", root, entry["relative_path"])
+    schema = parquet.schema_arrow
+    for column, kind in columns:
+        if (
+            column not in schema.names
+            or _arrow_key_type(schema.field(column).type) != kind
+        ):
+            raise _sie("bucket_key_type_mismatch", root, entry["relative_path"])
+    if any(k not in schema.names for k in sort) or (
+        order and schema.field(order).type != pa.int64()
+    ):
+        raise _sie("bucket_manifest_invalid", root, entry["relative_path"])
+
+
+def _hash_or_range(root: Path, manifest: dict) -> None:
+    scheme, key, kind = (manifest[k] for k in ("scheme", "key_column", "key_type"))
+    if (
+        scheme not in {"hash", "range"}
+        or not isinstance(key, str)
+        or not key
+        or kind not in KEY_TYPES
+    ):
+        raise _Invalid("unsupported key or scheme")
+    breaks = manifest.get("range_breakpoints", [])
+    if scheme == "hash":
+        count = manifest["modulus"]
+        if not _positive_int(count):
+            raise _sie("bucket_modulus_mismatch", root)
+        if manifest["hash"] != _hash_spec():
+            raise _sie("bucket_hash_mismatch", root)
+    else:
+        if (
+            not isinstance(breaks, list)
+            or not _matching_values(breaks, kind)
+            or any(a >= b for a, b in zip(breaks, breaks[1:]))
+        ):
+            raise _Invalid("invalid range breakpoints")
+        count = len(breaks) + 1
+    sort, order = manifest["sort_keys"], manifest["source_order"]
+    if (
+        not isinstance(sort, list)
+        or any(not isinstance(k, str) for k in sort)
+        or order not in {None, ORDINAL}
+        or (order and (not sort or sort[-1] != order))
+        or not _positive_int(manifest["row_group_target"])
+        or not isinstance(manifest["builder_version"], str)
+        or not manifest["builder_version"]
+    ):
+        raise _Invalid("invalid builder contract")
+    # every bucket directory the modulus implies, empty ones included (D29-EMPTY-STRUCT)
+    dirs = {d.name for d in root.glob("bucket_id=*") if d.is_dir()}
+    if dirs != {f"bucket_id={i}" for i in range(count)}:
+        raise _sie("bucket_modulus_mismatch", root, "bucket directories")
+    inventory = manifest["inventory"]
+    if not isinstance(inventory, list) or not inventory:
+        raise _Invalid("missing inventory")
+    seen = set()
+    for entry in inventory:
+        if not isinstance(entry, dict):
+            raise _sie("bucket_inventory_mismatch", root)
+        relative = entry["relative_path"]
+        if not isinstance(relative, str):
+            raise _sie("bucket_inventory_mismatch", root)
+        parts = PurePosixPath(relative).parts
+        if (
+            len(parts) != 2
+            or not parts[0].startswith("bucket_id=")
+            or not parts[1].endswith(".parquet")
+            or parts[1].startswith(".")
+        ):
+            raise _sie("bucket_inventory_mismatch", root, relative)
+        try:
+            bid = int(parts[0].split("=", 1)[1])
+        except ValueError as exc:
+            raise _sie("bucket_inventory_mismatch", root, relative) from exc
+        if parts[0] != f"bucket_id={bid}" or not 0 <= bid < count:
+            raise _sie("bucket_modulus_mismatch", root, relative)
+        path = root.joinpath(*parts)
+        if path.is_symlink() or path.parent.is_symlink() or path in seen:
+            raise _sie("bucket_inventory_mismatch", root, relative)
+        _check_part(root, path, entry, [(key, kind)], sort, order)
+        seen.add(path)
+    actual = {p for p in root.rglob("*.parquet") if not p.name.startswith(".")}
+    if actual != seen:
+        raise _sie("bucket_inventory_mismatch", root, "parts on disk != inventory")
+
+
+def _variable(root: Path, manifest: dict) -> None:
+    key, kind = manifest["key_column"], manifest["key_type"]
+    stay, stay_kind = manifest["stay_column"], manifest["stay_key_type"]
+    count = manifest["modulus"]
+    if (
+        not isinstance(key, str)
+        or not key
+        or kind not in KEY_TYPES
+        or not isinstance(stay, str)
+        or not stay
+        or stay_kind not in KEY_TYPES
+        or stay.casefold() == key.casefold()
+    ):
+        raise _Invalid("unsupported key or stay column")
+    if not _is_power_of_two(count):
+        raise _sie("bucket_modulus_mismatch", root)
+    breaks = manifest["stay_breakpoints"]
+    if (
+        not isinstance(breaks, list)
+        or len(breaks) != count - 1
+        or not _matching_values(breaks, stay_kind)
+        or any(a > b for a, b in zip(breaks, breaks[1:]))
+    ):
+        raise _sie("bucket_modulus_mismatch", root)
+    sort, order = manifest["sort_keys"], manifest["source_order"]
+    if (
+        not isinstance(sort, list)
+        or any(not isinstance(k, str) for k in sort)
+        or order != ORDINAL
+        or not sort
+        or sort[-1] != order
+        or not _positive_int(manifest["row_group_target"])
+        or not isinstance(manifest["builder_version"], str)
+        or not manifest["builder_version"]
+    ):
+        raise _Invalid("invalid builder contract")
+    secondary_columns = manifest.get("secondary_keys", [])
+    if not isinstance(secondary_columns, list) or any(
+        not isinstance(c, str) or not c for c in secondary_columns
+    ):
+        raise _Invalid("invalid secondary keys")
+    raw = manifest["partitions"]
+    if not isinstance(raw, list) or not raw:
+        raise _Invalid("missing partitions")
+    moduli, seen_values = [], set()
+    for index, entry in enumerate(raw):
+        if not isinstance(entry, dict):
+            raise _sie("bucket_partition_invalid", root)
+        if entry["id"] != index or not _is_power_of_two(entry["modulus"]):
+            raise _sie("bucket_partition_invalid", root)
+        if count % entry["modulus"]:
+            raise _sie("bucket_modulus_mismatch", root)
+        value = entry["value"]
+        if value is not None and not _matching_values((value,), kind):
+            raise _Invalid("partition value does not match the key type")
+        marker = ("null",) if value is None else ("value", value)
+        if marker in seen_values:
+            raise _sie("bucket_partition_invalid", root)
+        seen_values.add(marker)
+        secondary = entry.get("secondary", {})
+        if (
+            not isinstance(secondary, dict)
+            or set(secondary) != set(secondary_columns)
+            or any(
+                not isinstance(v, list) or any(isinstance(x, (list, dict)) for x in v)
+                for v in secondary.values()
+            )
+        ):
+            raise _sie("bucket_partition_invalid", root)
+        moduli.append(entry["modulus"])
+    # every partition and every bucket directory inside it, empty ones included (D29-EMPTY-STRUCT)
+    expected = {f"{PARTITION_PREFIX}{i}" for i in range(len(moduli))}
+    actual_dirs = {d.name for d in root.glob(f"{PARTITION_PREFIX}*") if d.is_dir()}
+    if expected - actual_dirs:
+        raise _sie("bucket_partition_missing", root)
+    if actual_dirs - expected:
+        raise _sie("bucket_partition_extra", root)
+    if any(d.is_dir() for d in root.glob("bucket_id=*")):
+        raise _sie("bucket_partition_extra", root, "bucket_id at the top level")
+    for pid, modulus in enumerate(moduli):
+        directory = root / f"{PARTITION_PREFIX}{pid}"
+        if directory.is_symlink():
+            raise _sie("bucket_inventory_mismatch", root, directory.name)
+        buckets = {d.name for d in directory.iterdir() if d.is_dir()}
+        if buckets != {f"bucket_id={b}" for b in range(modulus)}:
+            raise _sie("bucket_modulus_mismatch", root, directory.name)
+    inventory = manifest["inventory"]
+    if not isinstance(inventory, list) or not inventory:
+        raise _Invalid("missing inventory")
+    seen: set[Path] = set()
+    for entry in inventory:
+        if not isinstance(entry, dict):
+            raise _sie("bucket_inventory_mismatch", root)
+        relative = entry["relative_path"]
+        parts = PurePosixPath(relative).parts if isinstance(relative, str) else ()
+        if (
+            len(parts) != 3
+            or not parts[0].startswith(PARTITION_PREFIX)
+            or not parts[1].startswith("bucket_id=")
+            or not parts[2].endswith(".parquet")
+            or parts[2].startswith(".")
+        ):
+            raise _sie("bucket_inventory_mismatch", root, str(relative))
+        try:
+            pid = int(parts[0][len(PARTITION_PREFIX) :])
+            bucket = int(parts[1].split("=", 1)[1])
+        except ValueError as exc:
+            raise _sie("bucket_inventory_mismatch", root, relative) from exc
+        if (
+            parts[0] != f"{PARTITION_PREFIX}{pid}"
+            or parts[1] != f"bucket_id={bucket}"
+            or not 0 <= pid < len(moduli)
+        ):
+            raise _sie("bucket_inventory_mismatch", root, relative)
+        if not 0 <= bucket < moduli[pid]:
+            raise _sie("bucket_modulus_mismatch", root, relative)
+        path = root.joinpath(*parts)
+        if path.is_symlink() or path.parent.is_symlink() or path in seen:
+            raise _sie("bucket_inventory_mismatch", root, relative)
+        _check_part(root, path, entry, [(key, kind), (stay, stay_kind)], sort, order)
+        seen.add(path)
+    actual = {p for p in root.rglob("*.parquet") if not p.name.startswith(".")}
+    if actual != seen:
+        raise _sie("bucket_inventory_mismatch", root, "parts on disk != inventory")
+
+
+def validate_contract(root: Path) -> dict:
+    """The resolver's full contract on one bucket: manifest, _COMPLETE, schema, every partition and
+    bucket directory (empty ones included), canonical part paths, footer rows, key types, the on-disk
+    part set and the derived_from sources. Returns the manifest."""
+    if not (root / "_BUCKET_MANIFEST.json").is_file():
+        raise _sie("bucket_manifest_missing", root)
+    if not (root / "_COMPLETE").is_file():
+        raise _sie("bucket_incomplete", root)
     try:
-        manifest = json.loads((root / "_BUCKET_MANIFEST.json").read_text())
+        manifest = json.loads(
+            (root / "_BUCKET_MANIFEST.json").read_text(encoding="utf-8")
+        )
+        if not isinstance(manifest, dict) or manifest.get("schema") != SCHEMA:
+            raise _Invalid(
+                "not a bucket_storage/1 manifest"
+            )  # no legacy layouts in a seal
+        _check_derived_from(root, manifest)
+        if manifest.get("scheme") == VARIABLE_SCHEME:
+            _variable(root, manifest)
+        else:
+            _hash_or_range(root, manifest)
+        _verify_sources(root, manifest)
+        return manifest
+    except StorageIntegrityError:
+        raise
+    except (OSError, KeyError, TypeError, ValueError, AttributeError) as exc:
+        raise _sie("bucket_manifest_invalid", root, type(exc).__name__) from exc
+
+
+def validate_own_inventory(root: Path) -> dict:
+    """The full contract, then this tool's receipt rules: every metadata file is contained, and the
+    inventory total equals the build receipt's rows. Returns the manifest."""
+    for name in ("_BUCKET_MANIFEST.json", "_BUCKET_BUILD_RECEIPT.json", "_COMPLETE"):
+        if (root / name).exists() and not _contained(root / name, root):
+            raise _sie("bucket_install_incomplete", root, name)
+    manifest = validate_contract(root)
+    try:
         receipt = json.loads((root / "_BUCKET_BUILD_RECEIPT.json").read_text())
     except (OSError, ValueError) as exc:
-        raise StorageIntegrityError(
-            "bucket_manifest_invalid", root, type(exc).__name__
+        raise _sie(
+            "bucket_install_incomplete", root, "_BUCKET_BUILD_RECEIPT.json"
         ) from exc
-    inventory = manifest.get("inventory") if isinstance(manifest, dict) else None
-    if (
-        not isinstance(inventory, list)
-        or not inventory
-        or not isinstance(receipt, dict)
-    ):
-        raise StorageIntegrityError("bucket_manifest_invalid", root, "inventory")
-    listed, total = set(), 0
-    for entry in inventory:
-        rel = entry.get("relative_path") if isinstance(entry, dict) else None
-        count, size = (entry or {}).get("row_count"), (entry or {}).get("size")
-        if (
-            not isinstance(rel, str)
-            or rel in listed
-            or not isinstance(count, int)
-            or not isinstance(size, int)
-        ):
-            raise StorageIntegrityError("bucket_inventory_mismatch", root, str(rel))
-        path = root / rel
-        if path.is_symlink() or not _contained(path, root) or not path.is_file():
-            raise StorageIntegrityError("bucket_part_missing", root, rel)
-        if path.stat().st_size != size:
-            raise StorageIntegrityError("bucket_part_size_mismatch", root, rel)
-        if pq.read_metadata(path).num_rows != count:
-            raise StorageIntegrityError("bucket_part_rows_mismatch", root, rel)
-        listed.add(rel)
-        total += count
-    on_disk = {
-        p.relative_to(root).as_posix()
-        for p in root.rglob("*.parquet")
-        if not p.name.startswith(".")
-    }
-    if on_disk != listed:
-        raise StorageIntegrityError(
-            "bucket_inventory_mismatch", root, "parts on disk != inventory"
-        )
-    if receipt.get("rows") != total:
-        raise StorageIntegrityError("bucket_rows_vs_receipt", root)
+    total = sum(e["row_count"] for e in manifest["inventory"])
+    if not isinstance(receipt, dict) or receipt.get("rows") != total:
+        raise _sie("bucket_rows_vs_receipt", root)
     return manifest
 
 

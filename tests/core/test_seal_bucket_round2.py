@@ -86,7 +86,8 @@ def test_a_part_missing_on_both_sides_is_an_integrity_failure_not_identical(tmp_
     out = json.loads((tmp_path / "c.json").read_text())
     assert result.returncode == 1
     assert out["verdict"] == "INVALID"
-    assert out["integrity"]["reason"] == "bucket_part_missing"
+    assert out["integrity"]["reason"] == "bucket_inventory_mismatch"
+    assert out["integrity"]["detail"] == "bucket_id=1/part.parquet"
 
 
 def test_compare_accepts_roots_only_through_bound_in_root_and_farm_receipts(world):
@@ -344,15 +345,18 @@ def test_the_builder_import_origin_is_asserted_and_recorded(
         assert origin["path"] == os.path.realpath(
             code / "src" / "easyicu" / "__init__.py"
         )
-    # a decoy easyicu ahead of the clone's src is refused, typed
+    # a decoy easyicu ahead of the clone's src cannot win (the boot sets the path explicitly), and a
+    # foreign easyicu submodule loaded by any other means is refused, typed (D29-BOOT-HOOK)
     decoy = tmp_path / "decoy" / "src"
     (decoy / "easyicu").mkdir(parents=True)
     (decoy / "easyicu" / "__init__.py").write_text("")
+    (decoy / "easyicu" / "storage_layout.py").write_text("FLAG = 'foreign'\n")
     real_env = sr.build_env
 
     def decoyed(seal, db, code):
         env = real_env(seal, db, code)
         env["PYTHONPATH"] = f"{decoy}{os.pathsep}{env['PYTHONPATH']}"
+        env["FAKE_PRELOAD"] = str(decoy / "easyicu" / "storage_layout.py")
         return env
 
     monkeypatch.setattr(sr, "build_env", decoyed)
@@ -361,9 +365,11 @@ def test_the_builder_import_origin_is_asserted_and_recorded(
     assert "sic FAILED builder_import_origin_mismatch" in out
     failed = json.loads((_work(world, "build2") / "receipt_sic.json").read_text())
     assert failed["verdict"] == "FAILED"
-    assert failed["import_origin"]["medication"]["path"] == os.path.realpath(
-        decoy / "easyicu" / "__init__.py"
+    origin = failed["import_origin"]["medication"]
+    assert origin["path"] == os.path.realpath(
+        _work(world, "build2") / "code" / "src" / "easyicu" / "__init__.py"
     )
+    assert origin["mismatched"] == ["easyicu.storage_layout"]
     assert not _target(world, "sic_cur", "build2").exists()
 
 

@@ -20,11 +20,13 @@ import numpy as np
 import pyarrow as pa
 import pyarrow.parquet as pq
 
+ORDINAL = "_easyicu_source_ordinal"
+
 FAKE_BUILDER = r'''#!/usr/bin/env python3
 """Fake bucket builder for seal-tool tests (contract mark: bucket_float_fidelity_mismatch)."""
 import argparse, hashlib, json, os, subprocess, sys, time
 from pathlib import Path
-import numpy as np, pyarrow as pa, pyarrow.parquet as pq
+import duckdb, numpy as np, pyarrow as pa, pyarrow.parquet as pq
 
 MODE = "@MODE@"
 ORDINAL = "_easyicu_source_ordinal"
@@ -36,6 +38,11 @@ for flag in ("--data-path", "--database", "--table", "--key", "--stay-key", "--s
     ap.add_argument(flag)
 ap.add_argument("--modulus", "--bucket-count", type=int, default=2)
 a = ap.parse_args()
+if os.environ.get("FAKE_PRELOAD"):  # stands for any start-up hook that preloads a foreign submodule
+    import importlib.util
+    spec = importlib.util.spec_from_file_location("easyicu.storage_layout", os.environ["FAKE_PRELOAD"])
+    sys.modules["easyicu.storage_layout"] = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(sys.modules["easyicu.storage_layout"])
 if MODE == "fail":
     print("FloatFidelityError: bucket_float_fidelity_mismatch: column 'x'", file=sys.stderr)
     sys.exit(1)
@@ -51,16 +58,31 @@ if target.exists() or tmp.exists():
 tmp.mkdir()
 keys = t.column(key).to_numpy(zero_copy_only=False)
 inventory = []
-for b in range(mod):
-    part = t.filter(pa.array(keys % mod == b))
-    (tmp / f"bucket_id={b}").mkdir()
+variable = (a.scheme or "hash") == "variable_stay_range"
+
+
+def write_part(part, rel):
+    (tmp / rel).mkdir(parents=True)
     if part.num_rows:
         if MODE == "nondeterministic":
             part = part.replace_schema_metadata({"built_at_ns": str(time.time_ns())})
-        path = tmp / f"bucket_id={b}" / "part.parquet"
+        path = tmp / rel / "part.parquet"
         pq.write_table(part, path, use_dictionary=False)
-        inventory.append({"relative_path": f"bucket_id={b}/part.parquet", "row_count": part.num_rows,
+        inventory.append({"relative_path": f"{rel}/part.parquet", "row_count": part.num_rows,
                           "size": path.stat().st_size})
+
+
+partitions = []
+if variable:  # one partition per key value, two stay ranges (stay <= 10 | stay > 10) in each
+    stays = t.column(a.stay_key).to_numpy(zero_copy_only=False)
+    for pid, value in enumerate(sorted(set(keys.tolist()))):
+        partitions.append({"id": pid, "value": int(value), "modulus": 2, "secondary": {}})
+        for b in range(2):
+            mask = (keys == value) & ((stays > 10) == bool(b))
+            write_part(t.filter(pa.array(mask)), f"var_id={pid}/bucket_id={b}")
+else:
+    for b in range(mod):
+        write_part(t.filter(pa.array(keys % mod == b)), f"bucket_id={b}")
 schema = [[f.name, DUCK.get(str(f.type), str(f.type).upper())] for f in t.schema if f.name != ORDINAL]
 floats = [c for c, k in schema if k in ("DOUBLE", "FLOAT")]
 columns = {}
@@ -77,14 +99,21 @@ dirty = bool(subprocess.run(["git", "status", "--porcelain", "--untracked-files=
                             capture_output=True, text=True).stdout.strip())
 code = None if MODE == "no_builder_code" else {"source": "git", "commit": commit, "dirty": dirty}
 sort = ([s for s in a.sort_keys.split(",")] if a.sort_keys else [key]) + [ORDINAL]
+types = dict(schema)
 manifest = {"schema": "easyicu.bucket_storage/1", "scheme": a.scheme or "hash", "key_column": key,
-            "modulus": a.modulus, "row_group_target": int(a.row_group_target or 131072), "sort_keys": sort,
-            "source_order": ORDINAL, "inventory": inventory, "float_fidelity": fidelity,
+            "key_type": types[key], "builder_version": "easyicu.bucket_builder/2",
+            "modulus": 2 if variable else mod, "row_group_target": int(a.row_group_target or 131072),
+            "sort_keys": sort, "source_order": ORDINAL, "inventory": inventory, "float_fidelity": fidelity,
             "derived_from": {"table": table, "files": [{"path": str(f.relative_to(data)),
-                                                        "sha256": hashlib.sha256(f.read_bytes()).hexdigest()}
+                                                        "sha256": hashlib.sha256(f.read_bytes()).hexdigest(),
+                                                        "size": f.stat().st_size,
+                                                        "mtime_ns": f.stat().st_mtime_ns}
                                                        for f in files]}}
-if a.stay_key:
-    manifest["stay_column"] = a.stay_key
+if variable:
+    manifest.update(stay_column=a.stay_key, stay_key_type=types[a.stay_key], stay_breakpoints=[10],
+                    secondary_keys=[], partitions=partitions)
+else:
+    manifest["hash"] = {"name": "duckdb.hash", "duckdb_version": duckdb.__version__}
 if code is not None:
     manifest["builder_code"] = code
 rows = t.num_rows + (1 if MODE == "bad_rows" else 0)
@@ -339,17 +368,23 @@ def make_writable(path: Path) -> None:
 
 
 def make_bucket(root: Path, rows: int = 40) -> Path:
-    """A minimal two-part bucket whose manifest inventory, build receipt and _COMPLETE agree."""
+    """A two-part hash bucket satisfying the full storage contract (src/easyicu/storage_layout.py):
+    manifest, receipt and _COMPLETE agree, and derived_from binds a source file beside it."""
+    import duckdb
+
     bucket = root / "t_bucket"
+    source = root / "t" / "1.parquet"
+    source.parent.mkdir(parents=True, exist_ok=True)
+    pq.write_table(pa.table({"k": pa.array([1], pa.int64())}), source)
     inventory = []
     for b in range(2):
         (bucket / f"bucket_id={b}").mkdir(parents=True)
+        n = np.arange(rows // 2)
         table = pa.table(
             {
-                "k": pa.array(np.arange(rows // 2) * 2 + b, pa.int64()),
-                "v": pa.array(
-                    np.where(np.arange(rows // 2) % 3 == 0, -0.0, 1.5), pa.float64()
-                ),
+                "k": pa.array(n * 2 + b, pa.int64()),
+                "v": pa.array(np.where(n % 3 == 0, -0.0, 1.5), pa.float64()),
+                ORDINAL: pa.array(n, pa.int64()),
             }
         )
         path = bucket / f"bucket_id={b}" / "part.parquet"
@@ -361,12 +396,33 @@ def make_bucket(root: Path, rows: int = 40) -> Path:
                 "size": path.stat().st_size,
             }
         )
-    derived = {"files": [{"path": "t/1.parquet", "sha256": "0" * 64}]}
-    (bucket / "_BUCKET_MANIFEST.json").write_text(
-        json.dumps(
-            {"inventory": inventory, "float_fidelity": {}, "derived_from": derived}
-        )
-    )
+    st = source.stat()
+    manifest = {
+        "schema": "easyicu.bucket_storage/1",
+        "scheme": "hash",
+        "key_column": "k",
+        "key_type": "BIGINT",
+        "modulus": 2,
+        "hash": {"name": "duckdb.hash", "duckdb_version": duckdb.__version__},
+        "row_group_target": 131072,
+        "builder_version": "easyicu.bucket_builder/2",
+        "sort_keys": ["k", ORDINAL],
+        "source_order": ORDINAL,
+        "inventory": inventory,
+        "float_fidelity": {},
+        "derived_from": {
+            "table": "t",
+            "files": [
+                {
+                    "path": "t/1.parquet",
+                    "sha256": _sha(source),
+                    "size": st.st_size,
+                    "mtime_ns": st.st_mtime_ns,
+                }
+            ],
+        },
+    }
+    (bucket / "_BUCKET_MANIFEST.json").write_text(json.dumps(manifest))
     (bucket / "_BUCKET_BUILD_RECEIPT.json").write_text(json.dumps({"rows": rows}))
     (bucket / "_COMPLETE").write_text("complete\n")
     return bucket

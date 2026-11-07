@@ -12,47 +12,20 @@ import subprocess
 import sys
 from pathlib import Path
 
-import numpy as np
-import pyarrow as pa
 import pyarrow.parquet as pq
 
+from tests.support.seal_buckets import make_bucket
 from tools.seal_buckets import bucket_compare, footer_scan, negzero_table
 
 TOOLS = Path(footer_scan.__file__).parent
 
 
 def _bucket(root: Path, rows: int = 40, receipt_rows: int | None = None) -> Path:
-    bucket = root / "t_bucket"
-    inventory = []
-    for b in range(2):
-        (bucket / f"bucket_id={b}").mkdir(parents=True)
-        table = pa.table(
-            {
-                "k": pa.array(np.arange(rows // 2) * 2 + b, pa.int64()),
-                "v": pa.array(
-                    np.where(np.arange(rows // 2) % 3 == 0, -0.0, 1.5), pa.float64()
-                ),
-            }
+    bucket = make_bucket(root, rows)
+    if receipt_rows is not None:
+        (bucket / "_BUCKET_BUILD_RECEIPT.json").write_text(
+            json.dumps({"rows": receipt_rows})
         )
-        path = bucket / f"bucket_id={b}" / "part.parquet"
-        pq.write_table(table, path, use_dictionary=False)
-        inventory.append(
-            {
-                "relative_path": f"bucket_id={b}/part.parquet",
-                "row_count": rows // 2,
-                "size": path.stat().st_size,
-            }
-        )
-    derived = {"files": [{"path": "t/1.parquet", "sha256": "0" * 64}]}
-    (bucket / "_BUCKET_MANIFEST.json").write_text(
-        json.dumps(
-            {"inventory": inventory, "float_fidelity": {}, "derived_from": derived}
-        )
-    )
-    (bucket / "_BUCKET_BUILD_RECEIPT.json").write_text(
-        json.dumps({"rows": rows if receipt_rows is None else receipt_rows})
-    )
-    (bucket / "_COMPLETE").write_text("complete\n")
     return bucket
 
 
@@ -170,7 +143,11 @@ def test_compare_exit_codes_distinguish_usage_from_findings(tmp_path):
     )
     out = json.loads((tmp_path / "c.json").read_text())
     assert result.returncode == 1 and out["verdict"] == "INVALID"
-    assert out["integrity"]["reason"] == "bucket_part_size_mismatch"
+    assert out["integrity"] == {
+        "root": str(b),
+        "reason": "bucket_inventory_mismatch",
+        "detail": "bucket_id=0/part.parquet",
+    }
 
 
 def _receipt(
