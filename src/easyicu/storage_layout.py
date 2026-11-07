@@ -486,12 +486,11 @@ def _verify_bucket_sources(root: Path, manifest: dict) -> None:
     derived = manifest.get("derived_from")
     if derived is None:
         return
-    base = root.parent
     for entry in derived["files"]:
         relative = PurePosixPath(entry["path"])
         if relative.is_absolute() or not relative.parts or ".." in relative.parts:
             raise BucketLayoutError("bucket_derived_from_invalid", root)
-        source = base.joinpath(*relative.parts)
+        source = resolve_derived_from_source(entry["path"], bucket_root=root)
         try:
             stat = source.stat()
         except OSError as exc:
@@ -812,6 +811,19 @@ def _derived_binding(path: Path, manifest: dict) -> dict | None:
     return {"path": source, "sha256": digest}
 
 
+def resolve_derived_from_source(source: str, *, bucket_root: Path | None = None) -> Path:
+    """Resolve provenance exactly as the storage readers do on this layout.
+
+    Conversion-manifest ``derived_from.path`` uses Path(source), including its
+    cwd-relative semantics. Bucket ``derived_from.files`` is relative to the
+    bucket's installation. Keep both anchor decisions here so the publication
+    gate and readers share future changes to the storage binding contract.
+    """
+    if bucket_root is None:
+        return Path(source)
+    return bucket_root.parent.joinpath(*PurePosixPath(source).parts)
+
+
 def _check_derived_from(path: Path, derived: dict | None) -> None:
     """A manifest derived from another (a symlink farm's) must match its source.
 
@@ -821,7 +833,7 @@ def _check_derived_from(path: Path, derived: dict | None) -> None:
     """
     if derived is None:
         return
-    source = Path(derived["path"])
+    source = resolve_derived_from_source(derived["path"])
     try:
         stat = source.stat()
         key = (str(source), stat.st_size, stat.st_mtime_ns)

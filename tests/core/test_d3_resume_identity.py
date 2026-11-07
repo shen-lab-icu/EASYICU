@@ -14,6 +14,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import os
 
 import pandas as pd
 import pytest
@@ -100,13 +101,22 @@ def test_a_value_affecting_parameter_starts_fresh(tmp_path, monkeypatch, source,
     ]
 
 
-def test_an_edited_source_starts_fresh(tmp_path, monkeypatch, source):
+@pytest.mark.parametrize("change", ["rewrite", "touch"])
+def test_an_edited_source_refuses_resume_and_preserves_parts(tmp_path, monkeypatch, source, change):
+    from easyicu.storage_seal_publication import SealPublicationError, UNACCEPTED
+
     out = _interrupted(tmp_path, monkeypatch, _kwargs(source))
-    (source / "table.parquet").write_bytes(b"synthetic, rebuilt")
-    info, extracted = _resumed(out, monkeypatch, _kwargs(source))
-    assert extracted == STAYS
-    [event] = info["stream_resume_events"]
-    assert event["changed"] == ["source_identity_sha256"]
+    table = source / "table.parquet"
+    if change == "rewrite":
+        table.write_bytes(b"synthetic, rebuilt")
+    else:
+        info = table.stat()
+        os.utime(table, ns=(info.st_atime_ns, info.st_mtime_ns + 1_000_000_000))
+    before = {path.name: path.read_bytes() for path in out.iterdir()}
+    with pytest.raises(SealPublicationError) as caught:
+        _resumed(out, monkeypatch, _kwargs(source))
+    assert caught.value.reason == UNACCEPTED
+    assert {path.name: path.read_bytes() for path in out.iterdir()} == before
 
 
 def test_another_installation_refuses_resume_and_preserves_parts(tmp_path, monkeypatch, source):

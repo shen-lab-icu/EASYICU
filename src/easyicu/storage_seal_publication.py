@@ -38,6 +38,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
+from . import storage_layout
 from .storage_layout import MANIFEST, StorageIntegrityError
 
 # The seal tool's names (tools/seal_buckets/seal_rebuild.py, review-r13sealtool
@@ -75,6 +76,8 @@ class SealPublicationClosure:
 
     Every directory on a configured or linked path is a possible install.
     Counting these candidates avoids guessing install boundaries from names.
+    The digest binds configured roots, link/provenance edges and final file
+    stat identities as well as those directory candidates and marker states.
     """
 
     sha256: str
@@ -128,14 +131,23 @@ def assert_roots_published(roots) -> SealPublicationClosure:
     Directory realpaths deduplicate cycles. Missing legacy paths retain their
     existing read-time handling; an unreadable closure fails closed.
     """
-    pending = deque(Path(p) for p in roots if p is not None)
+    metadata_names = (MANIFEST, "conversion_manifest.json", IN_ROOT_RECEIPT)
+    configured = {Path(p) for p in roots if p is not None}
+    configured = {p if p.is_absolute() else Path.cwd() / p for p in configured}
+    # Role travels with the edge: a derived_from.path target is metadata even
+    # when its basename is arbitrary; derived_from.files is always path-only.
+    pending = deque((p, p.name in metadata_names) for p in sorted(configured))
     checked: set[Path] = set()
     installs: set[Path] = set()
     visited: set[Path] = set()
-    metadata: set[Path] = set()
+    metadata: set[tuple[int, int]] = set()
     metadata_directories: set[Path] = set()
-    links: set[Path] = set()
-    metadata_names = {MANIFEST, "conversion_manifest.json", IN_ROOT_RECEIPT}
+    links: set[tuple[str, str, str]] = set()
+    files: dict[Path, tuple[int, int, int, int]] = {}
+    provenance: set[tuple[str, str, str, str]] = set()
+
+    def record_file(path: Path, info: os.stat_result) -> None:
+        files[path] = (info.st_dev, info.st_ino, info.st_size, info.st_mtime_ns)
 
     def check(path: Path) -> None:
         if path in checked:
@@ -171,27 +183,29 @@ def assert_roots_published(roots) -> SealPublicationClosure:
                 for name in metadata_names:
                     candidate_metadata = current / name
                     if os.path.lexists(candidate_metadata):
-                        pending.append(candidate_metadata)
+                        pending.append((candidate_metadata, True))
             part = parts.popleft()
             if part == "..":
                 current = current.parent
                 continue
             candidate = current / part
             try:
-                mode = candidate.lstat().st_mode
+                info = candidate.lstat()
             except FileNotFoundError:
                 # Check a not-yet-installed final name too (rename pending).
                 check(candidate)
                 return None
-            if stat.S_ISLNK(mode):
+            if stat.S_ISLNK(info.st_mode):
                 check(candidate)
-                links.add(candidate)
                 state = (candidate, tuple(parts))
                 hops += 1
                 if state in chain or hops > 256:
                     raise SealPublicationError(UNACCEPTED, candidate, "link cycle")
                 chain.add(state)
-                target = Path(os.readlink(candidate))
+                raw = os.readlink(candidate)
+                target = Path(raw)
+                edge_target = target if target.is_absolute() else current / target
+                links.add((str(candidate), raw, str(edge_target)))
                 if target.is_absolute():
                     current = Path(target.anchor)
                     target_parts = target.parts[1:]
@@ -200,15 +214,20 @@ def assert_roots_published(roots) -> SealPublicationClosure:
                 parts.extendleft(reversed(target_parts))
             else:
                 current = candidate
+                if stat.S_ISREG(info.st_mode):
+                    record_file(current, info)
         if current.is_dir():
             check(current)
             installs.add(current)
         return current
 
     def enqueue_metadata(path: Path) -> None:
-        if path in metadata:
+        info = path.stat()
+        identity = (info.st_dev, info.st_ino)
+        if identity in metadata:
             return
-        metadata.add(path)
+        metadata.add(identity)
+        record_file(path, info)
         try:
             payload = json.loads(path.read_text(encoding="utf-8"))
         except (ValueError, UnicodeError):
@@ -216,65 +235,81 @@ def assert_roots_published(roots) -> SealPublicationClosure:
             return
         if not isinstance(payload, dict):
             return
-        targets = []
-        cwd_targets = []
+
+        def enqueue(raw: str, target: Path, role: str, *, is_metadata: bool) -> None:
+            provenance.add((str(path), role, raw, str(target)))
+            pending.append((target, is_metadata))
+
         derived = payload.get("derived_from")
         if isinstance(derived, dict):
             if isinstance(derived.get("path"), str):
-                targets.append((path.parent, derived["path"]))
-                cwd_targets.append(derived["path"])
-            for entry in (
+                enqueue(
+                    derived["path"],
+                    storage_layout.resolve_derived_from_source(derived["path"]),
+                    "derived_from.path", is_metadata=True,
+                )
+            for index, entry in enumerate(
                 derived.get("files", [])
                 if isinstance(derived.get("files"), list)
                 else []
             ):
                 if isinstance(entry, dict) and isinstance(entry.get("path"), str):
-                    targets.append((path.parent.parent, entry["path"]))
+                    enqueue(
+                        entry["path"],
+                        storage_layout.resolve_derived_from_source(
+                            entry["path"], bucket_root=path.parent,
+                        ),
+                        f"derived_from.files[{index}]", is_metadata=False,
+                    )
         bucket_links = payload.get("bucket_links")
         if isinstance(bucket_links, dict):
-            for target in bucket_links.values():
+            for name, target in bucket_links.items():
                 if isinstance(target, str):
-                    targets.append((path.parent, target))
-                    cwd_targets.append(target)
-        for base, raw in targets:
-            target = Path(raw)
-            pending.append(target if target.is_absolute() else base / target)
-        # Conversion-manifest and formal farm readers use Path(raw) directly.
-        # Cover that legacy cwd binding as well as portable metadata-relative
-        # paths. Bucket derived_from.files remain relative to the install.
-        pending.extend(Path(raw) for raw in cwd_targets if not Path(raw).is_absolute())
+                    # Formal farm receipt readers use Path(raw) from cwd.
+                    enqueue(target, Path(target), f"bucket_links.{name}", is_metadata=False)
 
     path = Path(".")
     try:
         while pending:
-            requested = pending.popleft()
+            requested, is_metadata = pending.popleft()
             path = resolve(requested)
             if path is None:
                 continue
             if not path.is_dir():
                 # External file targets bring their containing install into
                 # the closure, including its other links and metadata.
-                pending.append(path.parent)
-                if requested.name in metadata_names or path.name in metadata_names:
+                pending.append((path.parent, False))
+                if is_metadata:
                     enqueue_metadata(path)
                 continue
             if path in visited:
                 continue
             visited.add(path)
             with os.scandir(path) as entries:
-                for entry in entries:
+                for entry in sorted(entries, key=lambda entry: entry.name):
                     child = path / entry.name
                     if entry.is_symlink() or entry.is_dir(follow_symlinks=False):
-                        pending.append(child)
-                    elif entry.name in metadata_names:
-                        enqueue_metadata(child)
+                        pending.append((child, entry.name in metadata_names))
+                    else:
+                        info = entry.stat(follow_symlinks=False)
+                        if stat.S_ISREG(info.st_mode):
+                            record_file(child, info)
+                            if entry.name in metadata_names:
+                                pending.append((child, True))
     except OSError as exc:
         raise SealPublicationError(
             UNACCEPTED, path or Path("."), "cannot inspect publication closure"
         ) from exc
     # Marker state is explicit in the canonical identity. A marked closure
     # raises above and can never become an accepted start identity.
-    records = [[str(p), False, False] for p in sorted(installs)]
+    records = {
+        "schema_version": "easyicu.seal_publication_closure/2",
+        "roots": [str(p) for p in sorted(configured)],
+        "installs": [[str(p), False, False] for p in sorted(installs)],
+        "links": sorted(links),
+        "files": [[str(p), *identity] for p, identity in sorted(files.items())],
+        "provenance": sorted(provenance),
+    }
     digest = hashlib.sha256(
         json.dumps(records, separators=(",", ":")).encode("utf-8")
     ).hexdigest()
