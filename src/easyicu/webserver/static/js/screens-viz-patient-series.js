@@ -217,6 +217,7 @@
       structurally_unavailable: ['unsupported', hT(helpers, 'unsupported for source', '该数据源不支持')],
       not_materialized: ['metadata-only', hT(helpers, 'not materialized', '未物化')],
       materialized_unknown: ['unknown', hT(helpers, 'materialized · verify on load', '已物化 · 加载核验')],
+      member_unreadable: ['unavailable', hT(helpers, 'export file unreadable · re-extract', '导出文件不可读 · 请重新提取')],
     };
     const match = rows[status];
     if (match) return { cssClass: match[0], label: match[1] };

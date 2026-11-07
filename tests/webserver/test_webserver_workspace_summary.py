@@ -3819,7 +3819,9 @@ def test_cohort_review_skips_large_time_indexed_sofa_for_interactive_summary(
     original_read_csv = pd.read_csv
 
     def guarded_read_csv(*args, **kwargs):
-        if "sofa2_score" in str(args[0]):
+        # The header probe (nrows=0) is metadata; any row read is refused. The
+        # inventory used to swallow this guard's error and list no columns.
+        if "sofa2_score" in str(args[0]) and kwargs.get("nrows") != 0:
             raise AssertionError(f"large SOFA module should be deferred: {args[0]}")
         return original_read_csv(*args, **kwargs)
 

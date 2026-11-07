@@ -150,3 +150,72 @@ def test_the_contract_list_has_no_stale_entries():
     )
     assert not stale, f"remove entries that no longer read data or now call a gate: {stale}"
     assert {category for category, _ in READER_CONTRACTS.values()} <= {"raw-source", "not-export"}
+
+
+# --- member integrity (r13exportsha) -----------------------------------------
+
+INTEGRITY_CALLS = frozenset({"verify_member_integrity", "require_member_digest",
+                             "verify_package_members", "_verify_export_member"})
+
+#: Package owners that open export members for screens, intake or tools. Each
+#: must compare the member with its manifest record (size + SHA-256).
+INTEGRITY_OWNERS = (
+    "src/easyicu/research_agent/intake/export_package.py",
+    "src/easyicu/io/export_plausibility.py",
+    "src/easyicu/webserver/dataio.py",
+    "src/easyicu/webserver/agent_outputs.py",
+    "src/easyicu/webserver/export_download.py",
+    "src/easyicu/webserver/ideas/mining.py",
+    "src/easyicu/webserver/patient_drilldown/coverage.py",
+    "src/easyicu/webserver/catalog.py",
+)
+
+#: Formal / release tools keep their own full (unmemoised) parquet_sha256 check.
+FORMAL_SHA_CHECKS = {
+    "scripts/releases/EX-A01_seal_full6_release.py": "parquet_sha256",
+    "scripts/releases/EX-A03_refresh_selected_modules.py": "parquet_sha256",
+    "tools/reextract_native_export_v2.py": "parquet_sha256",
+    "src/easyicu/api/derivation_context.py": "parquet_sha256",
+}
+
+#: Publication-gated tool readers that do not yet compare member digests. A
+#: follow-up may route them through verify_member_integrity; new tools may not
+#: join this list without review.
+INTEGRITY_PENDING_TOOLS = frozenset({
+    "tools/audit_extraction_coverage.py",
+    "tools/build_discovery_universe.py",
+    "tools/materialize_e3_miiv_kdigo_gradient.py",
+    "tools/run_idea_mining_longitudinal_discovery.py",
+    "tools/run_idea_mining_real_discovery.py",
+    "tools/run_idea_mining_s6_validation_harness.py",
+    "tools/verify_aumc_ventilator_sources.py",
+    "scripts/mine_discovery_gpt54.py",
+    "scripts/figures/QC-A01_cross_database_distributions.py",
+    "scripts/figures/QC-A02_easyicu_cross_database_reliability_audit.py",
+})
+
+
+def test_member_owners_compare_each_member_with_its_manifest_record():
+    missing = sorted(
+        path for path in INTEGRITY_OWNERS
+        if not (_call_names(ast.parse((REPO / path).read_text(encoding="utf-8")))
+                & INTEGRITY_CALLS)
+    )
+    assert not missing, f"export member readers without the integrity check: {missing}"
+
+
+def test_formal_tools_keep_their_own_full_digest_check():
+    for path, needle in FORMAL_SHA_CHECKS.items():
+        assert needle in (REPO / path).read_text(encoding="utf-8"), path
+
+
+def test_every_gated_tool_reader_verifies_members_or_is_listed_pending():
+    readers = _scan()
+    unverified = {
+        path for path, (gated, text) in readers.items()
+        if gated and path not in FORMAL_SHA_CHECKS
+        and not (_call_names(ast.parse(text)) & INTEGRITY_CALLS)
+    }
+    assert unverified <= INTEGRITY_PENDING_TOOLS, sorted(unverified - INTEGRITY_PENDING_TOOLS)
+    stale = sorted(INTEGRITY_PENDING_TOOLS - unverified)
+    assert not stale, f"now verified or gone; remove from INTEGRITY_PENDING_TOOLS: {stale}"

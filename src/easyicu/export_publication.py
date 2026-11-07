@@ -289,3 +289,253 @@ def require_published_native_export(export_dir: Union[str, Path]) -> Path:
             path=root,
         )
     return root / NATIVE_MANIFEST
+
+
+# --- member integrity ----------------------------------------------------------
+#
+# A published manifest records each module file's size and SHA-256
+# (``parquet_bytes``/``parquet_sha256`` from extraction, ``bytes``/``sha256``
+# from the web writer). Readers that consume a member call
+# :func:`verify_member_integrity` (or, when they already hashed the bytes,
+# :func:`require_member_digest`) so a truncated, corrupted or replaced file is
+# refused instead of read. Formal release tools (EX-A01, EX-A03,
+# reextract_native_export_v2, derivation_context) keep their own full check.
+#
+# Limits, stated plainly:
+# * Cost: a member is hashed once per process per stat identity
+#   ``(realpath, size, mtime_ns, ctime_ns, ino, dev)`` (``_DIGEST_MEMO``).
+#   ctime cannot be set from userland, so any in-place rewrite changes the key;
+#   a file changed within 2 s of its hash is never memoised (``_RACY_WINDOW_NS``)
+#   because a coarse kernel clock can give a same-tick rewrite the same ctime.
+#   The memo is a convenience, not a formal check: someone able to forge stat
+#   fields (root, a filesystem without ctime, a raw block write) can make a
+#   changed file reuse an old digest. Formal paths re-hash every time.
+#   Drop the memo by making ``_member_sha256`` call ``_hash_file`` directly.
+# * A legacy or pre-digest manifest that records no digest for any member
+#   cannot be compared (``INTEGRITY_UNRECORDED``; older full exports even list
+#   only part of their files). Readers still refuse an unreadable member. As
+#   soon as a manifest records one digest, every consumed member must be listed
+#   with one.
+
+INTEGRITY_FAILED_CODE = "export_member_integrity_failed"
+UNREADABLE_CODE = "export_member_unreadable"
+
+REASON_MEMBER_UNRECORDED = "member_not_in_manifest"
+REASON_DIGEST_UNRECORDED = "member_digest_not_recorded"
+REASON_SIZE_MISMATCH = "member_size_mismatch"
+REASON_SHA256_MISMATCH = "member_sha256_mismatch"
+REASON_MANIFEST_UNREADABLE = "manifest_unreadable"
+
+INTEGRITY_VERIFIED = "verified"
+INTEGRITY_UNRECORDED = "unrecorded_legacy_manifest"
+
+_DIGEST_KEYS = (("parquet_sha256", "parquet_bytes"), ("sha256", "bytes"))
+_DIGEST_MEMO: dict[tuple, str] = {}
+_DIGEST_MEMO_LIMIT = 4096
+
+
+class ExportMemberIntegrityError(ValueError):
+    """A consumed export member does not match its published manifest record."""
+
+    code = INTEGRITY_FAILED_CODE
+
+    def __init__(self, message: str, *, reason: str, path: Union[str, Path],
+                 member: str) -> None:
+        super().__init__(message)
+        self.reason = reason
+        self.path = str(path)
+        self.member = member
+
+
+class ExportMemberUnreadableError(ValueError):
+    """A published export member cannot be read (the cause is chained)."""
+
+    code = UNREADABLE_CODE
+
+    def __init__(self, message: str, *, path: Union[str, Path], member: str = "") -> None:
+        super().__init__(message)
+        self.path = str(path)
+        self.member = member or Path(path).name
+
+
+def member_unreadable(path: Union[str, Path], exc: BaseException) -> ExportMemberUnreadableError:
+    """The typed error a reader raises (``from exc``) when a member cannot be read."""
+
+    return ExportMemberUnreadableError(
+        f"export member cannot be read: {Path(path).name} ({type(exc).__name__})", path=path
+    )
+
+
+def _hash_file(path: Path) -> str:
+    import hashlib
+
+    digest = hashlib.sha256()
+    with path.open("rb") as handle:
+        while chunk := handle.read(1024 * 1024):
+            digest.update(chunk)
+    return digest.hexdigest()
+
+
+#: A file changed within this window of its hash is not memoised ("racily
+#: clean", as in git's index): kernels stamp ctime from a coarse clock, so a
+#: rewrite in the same tick can keep the same stat key.
+_RACY_WINDOW_NS = 2_000_000_000
+
+
+def _member_sha256(path: Path) -> str:
+    import time
+
+    stat = path.stat()
+    key = (str(path.resolve()), stat.st_size, stat.st_mtime_ns, stat.st_ctime_ns,
+           stat.st_ino, stat.st_dev)
+    cached = _DIGEST_MEMO.get(key)
+    if cached is not None:
+        return cached
+    started_ns = time.time_ns()
+    digest = _hash_file(path)
+    if max(stat.st_mtime_ns, stat.st_ctime_ns) < started_ns - _RACY_WINDOW_NS:
+        if len(_DIGEST_MEMO) >= _DIGEST_MEMO_LIMIT:
+            _DIGEST_MEMO.clear()
+        _DIGEST_MEMO[key] = digest
+    return digest
+
+
+def member_digest_record(path: Union[str, Path]) -> dict:
+    """The ``sha256``/``bytes`` a writer records for one freshly written member."""
+
+    target = Path(path)
+    return {"sha256": _hash_file(target), "bytes": target.stat().st_size}
+
+
+def clear_integrity_memo() -> None:
+    _DIGEST_MEMO.clear()
+
+
+def recorded_member_digest(entry: object) -> tuple[str, int | None] | None:
+    """The ``(sha256, size)`` a manifest entry records, or ``None``."""
+
+    if not isinstance(entry, dict):
+        return None
+    for sha_key, size_key in _DIGEST_KEYS:
+        sha = entry.get(sha_key)
+        if isinstance(sha, str) and sha:
+            size = entry.get(size_key)
+            return sha, size if isinstance(size, int) and not isinstance(size, bool) else None
+    return None
+
+
+def manifest_member_entries(manifest: object) -> list[dict]:
+    """Every member record of a native or legacy manifest (``file`` keyed)."""
+
+    if not isinstance(manifest, dict):
+        return []
+    entries: list[dict] = []
+    for key in ("files", "modules", "exported_files"):
+        values = manifest.get(key)
+        if not isinstance(values, list):
+            continue
+        for value in values:
+            if isinstance(value, dict) and value.get("file"):
+                entries.append(value)
+            elif isinstance(value, str) and value:
+                entries.append({"file": value})
+    return entries
+
+
+def require_member_digest(entries: Iterable[dict], member: str, *, sha256: str,
+                          size: int, path: Union[str, Path]) -> str:
+    """Compare already-computed bytes facts with the manifest record of ``member``."""
+
+    entries = list(entries)
+    relative = Path(member).as_posix()
+    entry = next((e for e in entries if Path(str(e.get("file"))).as_posix() == relative), None)
+    records_digests = any(recorded_member_digest(e) is not None for e in entries)
+    if not records_digests:
+        # A legacy or pre-digest manifest (older full exports list only part
+        # of their files): nothing to compare. Readers still refuse an
+        # unreadable member through ExportMemberUnreadableError.
+        return INTEGRITY_UNRECORDED
+    if entry is None:
+        raise ExportMemberIntegrityError(
+            f"{relative} is not listed in the export manifest",
+            reason=REASON_MEMBER_UNRECORDED, path=path, member=relative,
+        )
+    recorded = recorded_member_digest(entry)
+    if recorded is None:
+        raise ExportMemberIntegrityError(
+            f"the export manifest records no digest for {relative}",
+            reason=REASON_DIGEST_UNRECORDED, path=path, member=relative,
+        )
+    expected_sha, expected_size = recorded
+    if expected_size is not None and expected_size != size:
+        raise ExportMemberIntegrityError(
+            f"{relative} is {size} bytes; the manifest records {expected_size}",
+            reason=REASON_SIZE_MISMATCH, path=path, member=relative,
+        )
+    if expected_sha != sha256:
+        raise ExportMemberIntegrityError(
+            f"{relative} does not match the SHA-256 its export manifest records",
+            reason=REASON_SHA256_MISMATCH, path=path, member=relative,
+        )
+    return INTEGRITY_VERIFIED
+
+
+def load_published_manifest(package_root: Union[str, Path]) -> dict:
+    """The parsed root manifest of a published export (marker refused)."""
+
+    import json
+
+    manifest_path = require_published_export_package(package_root)
+    try:
+        payload = json.loads(manifest_path.read_text(encoding="utf-8"))
+    except (OSError, UnicodeDecodeError, ValueError) as exc:
+        raise ExportMemberIntegrityError(
+            f"{manifest_path.name} cannot be read", reason=REASON_MANIFEST_UNREADABLE,
+            path=manifest_path, member=manifest_path.name,
+        ) from exc
+    if not isinstance(payload, dict):
+        raise ExportMemberIntegrityError(
+            f"{manifest_path.name} is not an object", reason=REASON_MANIFEST_UNREADABLE,
+            path=manifest_path, member=manifest_path.name,
+        )
+    return payload
+
+
+def verify_member_integrity(package_root: Union[str, Path], member: Union[str, Path],
+                            *, manifest: dict | None = None) -> str:
+    """Refuse a consumed member whose size or SHA-256 differs from the manifest.
+
+    ``member`` is the file path or its path relative to ``package_root``.
+    Returns :data:`INTEGRITY_VERIFIED`, or :data:`INTEGRITY_UNRECORDED` for a
+    manifest that records no digests at all. Memoised per stat identity.
+    """
+
+    root = Path(package_root)
+    payload = manifest if manifest is not None else load_published_manifest(root)
+    candidate = Path(member)
+    path = candidate if candidate.is_absolute() else root / candidate
+    try:
+        relative = path.resolve().relative_to(root.resolve()).as_posix()
+    except ValueError:
+        relative = candidate.as_posix()
+    try:
+        size = path.stat().st_size
+    except OSError as exc:
+        raise member_unreadable(path, exc) from exc
+    entries = manifest_member_entries(payload)
+    # Cheap size refusal first; hash only when the record has a digest.
+    entry = next((e for e in entries if Path(str(e.get("file"))).as_posix() == relative), None)
+    recorded = recorded_member_digest(entry) if entry is not None else None
+    sha = _member_sha256(path) if recorded is not None and (
+        recorded[1] is None or recorded[1] == size) else ""
+    return require_member_digest(entries, relative, sha256=sha, size=size, path=path)
+
+
+def verify_package_members(package_root: Union[str, Path], members: Iterable[Union[str, Path]],
+                           *, manifest: dict | None = None) -> dict:
+    """Verify several members against one manifest read; returns the manifest."""
+
+    payload = manifest if manifest is not None else load_published_manifest(package_root)
+    for member in members:
+        verify_member_integrity(package_root, member, manifest=payload)
+    return payload

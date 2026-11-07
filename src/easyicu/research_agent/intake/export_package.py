@@ -25,6 +25,7 @@ from types import MappingProxyType
 from typing import (
     Any,
     BinaryIO,
+    Callable,
     Dict,
     Iterator,
     Mapping,
@@ -74,8 +75,14 @@ from easyicu.concept.metadata_sidecar import (
     read_content_addressed_sidecar,
 )
 from easyicu.export_publication import (
+    INTEGRITY_FAILED_CODE,
+    UNREADABLE_CODE,
+    ExportMemberIntegrityError,
+    ExportMemberUnreadableError,
     NativeExportUnpublishedError,
+    require_member_digest,
     require_no_in_progress_marker,
+    verify_member_integrity,
 )
 from easyicu.database_config import ID_COLUMNS as HOST_DATABASE_ID_COLUMNS
 from easyicu.database_config import END_TIME_COLUMNS as HOST_DATABASE_END_TIME_COLUMNS
@@ -774,7 +781,18 @@ def _validated_columns(values: Sequence[object], *, path: Path) -> Tuple[str, ..
     return columns
 
 
-def _schema_for_file(path: Path, file_format: str) -> tuple[
+def _member_integrity_error(exc: ExportMemberIntegrityError) -> ExportPackageError:
+    return ExportPackageError(
+        f"{exc} ({exc.reason})", code=INTEGRITY_FAILED_CODE, member=exc.member
+    )
+
+
+def _schema_for_file(
+    path: Path,
+    file_format: str,
+    *,
+    verify_identity: Optional[Callable[[FileIdentity], None]] = None,
+) -> tuple[
     Tuple[str, ...],
     int | None,
     Optional[str],
@@ -783,6 +801,10 @@ def _schema_for_file(path: Path, file_format: str) -> tuple[
 ]:
     retained = _RetainedVerifiedSnapshot.capture(path, member=path.name)
     try:
+        if verify_identity is not None:
+            # The snapshot's bytes were just hashed: compare them with the
+            # manifest record before any parser touches them.
+            verify_identity(retained.identity)
         with retained.reader() as snapshot:
             if file_format == "parquet":
                 parquet_file = pq.ParquetFile(snapshot)
@@ -1622,8 +1644,17 @@ def _open_export_package_impl(
                 f"manifest format {manifest_format!r} conflicts with {path.name!r}",
                 code="manifest_format_mismatch",
             )
+        def _verify_identity(identity: FileIdentity, *, _relative: str = relative_path,
+                             _path: Path = path) -> None:
+            try:
+                require_member_digest(
+                    entries, _relative, sha256=identity.sha256, size=identity.size, path=_path
+                )
+            except ExportMemberIntegrityError as exc:
+                raise _member_integrity_error(exc) from exc
+
         columns, physical_rows, excel_sheet, identity, retained_snapshot = (
-            _schema_for_file(path, file_format)
+            _schema_for_file(path, file_format, verify_identity=_verify_identity)
         )
         _build_snapshots.append(retained_snapshot)
         declared_rows_raw = entry.get("rows")
@@ -1868,8 +1899,9 @@ def inspect_export_layout(
     """Metadata-only scan, NOT sealed execution or scientific authority.
 
     Reuse intake's manifest selection, inventory and path rules, but inspect
-    only headers/Parquet footers. Do not copy/hash whole patient tables merely
-    to populate a folder-picker readiness badge. Execution must still use
+    only headers/Parquet footers. Each member's size and SHA-256 are checked
+    against the manifest through ``verify_member_integrity`` (hashed once per
+    process per file identity, not per call). Execution must still use
     ``open_export_package`` with its complete content-bound checks. Run binding
     additionally requests the temporal authority through ``require_time_window``.
     """
@@ -1908,6 +1940,13 @@ def inspect_export_layout(
         rows = entry.get("rows")
         if rows is not None and (isinstance(rows, bool) or not isinstance(rows, int) or rows < 0):
             raise ExportPackageError("invalid row count", code="manifest_row_count_invalid")
+        try:
+            # Size first, then a memoised SHA-256 (once per process per file).
+            verify_member_integrity(root, path, manifest={"files": entries})
+        except ExportMemberIntegrityError as exc:
+            raise _member_integrity_error(exc) from exc
+        except ExportMemberUnreadableError as exc:
+            raise ExportPackageError(str(exc), code=UNREADABLE_CODE, member=exc.member) from exc
         if fmt == "parquet":
             with pq.ParquetFile(path) as parquet:
                 columns = _validated_columns(parquet.schema.names, path=path)

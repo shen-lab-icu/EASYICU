@@ -16,7 +16,7 @@ from typing import Any
 
 from easyicu.concept.catalog import CONCEPT_DICTIONARY, CONCEPT_GROUPS_INTERNAL
 from easyicu.concept.export_metadata import metadata_definition_for_concept
-from easyicu.export_publication import require_published_native_export
+from easyicu.export_publication import require_published_native_export, verify_member_integrity
 from easyicu.resources import load_dictionary
 from easyicu.scores.sofa2_aggregate import SOFA2_COMPONENT_NAMES
 
@@ -173,6 +173,8 @@ def _views(connection, root: Path, dictionary) -> dict[str, dict]:
         if not path.is_relative_to(root) or path.suffix != ".parquet" or path in seen:
             raise ValueError("invalid parquet member")
         seen.add(path)
+        # Refuse a truncated, corrupted or replaced member before DuckDB reads it.
+        verify_member_integrity(root, path, manifest=manifest)
         grouped.setdefault(item["module"], []).append(str(path))
     modules = {}
     for index, (module, paths) in enumerate(sorted(grouped.items())):

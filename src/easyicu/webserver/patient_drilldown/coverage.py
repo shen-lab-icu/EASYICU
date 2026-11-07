@@ -20,6 +20,12 @@ import threading
 from typing import Any, Dict, Iterable, Mapping
 
 from easyicu.concept import catalog as concept_catalog
+from easyicu.export_publication import (
+    ExportMemberIntegrityError,
+    ExportMemberUnreadableError,
+    member_unreadable,
+    verify_member_integrity,
+)
 from easyicu.webserver import review_labels
 from easyicu.webserver.source_cache_identity import source_file_identity
 
@@ -125,7 +131,11 @@ def _build_feature_coverage(
         item = files_by_module.get(module)
         columns = [str(value) for value in ((item or {}).get("columns") or [])]
         time_column = next((name for name in TIME_COLUMNS if name in columns), None)
-        stats = _column_stats(root, item, concept_ids) if item else {}
+        member_error = None
+        try:
+            stats = _column_stats(root, item, concept_ids) if item else {}
+        except (ExportMemberIntegrityError, ExportMemberUnreadableError) as exc:
+            stats, member_error = {}, exc
         features: list[Dict[str, Any]] = []
         for concept_id in concept_ids:
             metadata = concept_catalog.CONCEPT_DICTIONARY.get(concept_id) or ()
@@ -142,6 +152,9 @@ def _build_feature_coverage(
             elif not materialized:
                 status = "not_materialized"
                 reason_code = "feature_not_materialized"
+            elif member_error is not None:
+                status = "member_unreadable"
+                reason_code = str(member_error.code)
             elif non_null_count is None:
                 status = "materialized_unknown"
                 reason_code = "column_statistics_unavailable"
@@ -198,6 +211,11 @@ def _build_feature_coverage(
                 "rows": int((item or {}).get("rows") or 0),
                 "time_column": time_column,
                 "summary": _feature_summary(features),
+                "member_error": (
+                    {"code": member_error.code, "reason": getattr(member_error, "reason", None)}
+                    if member_error is not None
+                    else None
+                ),
                 "features": features,
             }
         )
@@ -238,6 +256,9 @@ def _feature_summary(features: Iterable[Mapping[str, Any]]) -> Dict[str, int]:
         ),
         "materialized_unknown": sum(
             row.get("status") == "materialized_unknown" for row in rows
+        ),
+        "member_unreadable": sum(
+            row.get("status") == "member_unreadable" for row in rows
         ),
         "trajectory_candidates": sum(
             bool(row.get("trajectory_candidate")) for row in rows
@@ -281,6 +302,7 @@ def _column_stats(
         import pyarrow.parquet as pq
         import pyarrow.types as pat
 
+        verify_member_integrity(root, path)
         parquet = pq.ParquetFile(path)
         schema = parquet.schema_arrow
         index_by_name = {name: index for index, name in enumerate(schema.names)}
@@ -312,8 +334,11 @@ def _column_stats(
                 ),
             }
         return out
-    except Exception:
-        return {}
+    except (ExportMemberIntegrityError, ExportMemberUnreadableError):
+        raise
+    except Exception as exc:
+        # A damaged member is reported, never shown as "verify on load".
+        raise member_unreadable(path, exc) from exc
 
 
 def _source_signature(

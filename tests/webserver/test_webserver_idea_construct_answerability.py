@@ -48,6 +48,12 @@ def _export(
                 "rows": rows,
             }
         )
+    # A published export carries its root manifest; mining compares each member
+    # with it before sampling (B-SHA-UNVERIFIED).
+    (root / "_manifest.json").write_text(
+        json.dumps({"database": "miiv", "format": "csv", "files": file_rows}),
+        encoding="utf-8",
+    )
     source = {
         "id": "real-clinical-export",
         "label": "Clinical export",

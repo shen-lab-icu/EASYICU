@@ -93,7 +93,13 @@ def test_public_metadata_member_name_and_its_failure_remain_readable(tmp_path):
 def test_http_adapter_preserves_real_manifest_diagnostic_before_launch(tmp_path, monkeypatch):
     export = _write_pipeline_export(tmp_path / "export")
     (export / "_manifest.json").write_text("{not-json")
-    assert dataio.describe_export_source(str(export))["ok"] is True
+    # The folder summary refuses members it cannot compare with a manifest
+    # (it used to read them as if published); the launch path below must
+    # still report intake's own diagnostic.
+    described = dataio.describe_export_source(str(export))
+    assert (described["ok"], described["error"], described["reason"]) == (
+        False, "export_member_integrity_failed", "manifest_unreadable",
+    )
     study = {
         "id": "intake-diagnostic-study",
         "revision": 1,

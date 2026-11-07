@@ -46,13 +46,18 @@ from easyicu.databases import normalize_database_key
 from easyicu.export_publication import (
     REASON_IN_PROGRESS,
     UNPUBLISHED_CODE,
+    ExportMemberIntegrityError,
+    ExportMemberUnreadableError,
     NativeExportUnpublishedError,
     SourceReceiptInvalidError,
     begin_native_export,
     finish_native_export,
     folder_unpublished_reason,
+    member_digest_record,
+    member_unreadable,
     require_published_export_package,
     unpublished_reason,
+    verify_member_integrity,
 )
 from easyicu.outcome_availability import structural_outcome_unavailability
 from easyicu.scores.aki_profiles import renal_bundle_column_unavailability
@@ -431,6 +436,35 @@ def _peek_columns(path: Path, table: str) -> List[str]:
         except Exception:
             return []
     return []
+
+
+def _member_refusal(exc: Exception) -> Dict[str, Any]:
+    """A visible refusal for a damaged or unreadable export member."""
+    return {
+        "ok": False, "error": exc.code, "reason": getattr(exc, "reason", exc.code),
+        "member": getattr(exc, "member", ""), "path": str(Path(exc.path).parent),
+        "ready": False,
+        "privacy": {"raw_rows_read": False, "patient_identifiers_returned": False},
+    }
+
+
+def _refuse_damaged_members(function):
+    """Dict-returning entry points answer ``{ok: False, error: <code>}``.
+
+    A truncated, corrupted or replaced export member (``export_member_unreadable``
+    / ``export_member_integrity_failed``) becomes a visible refusal the screens
+    already render, never an empty table, a zero count or an HTTP 500.
+    """
+    import functools
+
+    @functools.wraps(function)
+    def wrapper(*args, **kwargs):
+        try:
+            return function(*args, **kwargs)
+        except (ExportMemberIntegrityError, ExportMemberUnreadableError) as exc:
+            return _member_refusal(exc)
+
+    return wrapper
 
 
 def scan_path(raw_path: str, source_hint: Optional[str] = None) -> Dict[str, Any]:
@@ -2200,6 +2234,7 @@ def _resolve_export_cohort(
     }
 
 
+@_refuse_damaged_members
 def preview_export_cohort(
     data_path: str,
     database: str,
@@ -2440,6 +2475,7 @@ def resolve_registered_export_binding(
     }
 
 
+@_refuse_damaged_members
 def preview_registered_export_icd_cohort(
     export_path: str,
     database: str,
@@ -2959,6 +2995,7 @@ def make_export_runner(
                                 "concepts": len(module_concepts),
                                 "concept_ids": list(module_concepts),
                                 "rows": rows,
+                                **member_digest_record(out / fname),
                             }
                         )
                         written[-1]["column_metadata_columns"] = list(binding.columns)
@@ -2992,6 +3029,7 @@ def make_export_runner(
                             "concepts": len(module_concepts),
                             "concept_ids": list(module_concepts),
                             "rows": rows,
+                            **member_digest_record(out / fname),
                         }
                     )
                     written[-1]["column_metadata_columns"] = list(binding.columns)
@@ -3172,6 +3210,7 @@ def make_export_runner(
     return runner
 
 
+@_refuse_damaged_members
 def summarize_export_workspace(raw_path: str) -> Dict[str, Any]:
     """Summarise an EasyICU module-export folder for visualization screens.
 
@@ -3371,6 +3410,7 @@ def summarize_export_workspace(raw_path: str) -> Dict[str, Any]:
     }
 
 
+@_refuse_damaged_members
 def summarize_crossdb_workspaces(raw_paths: List[str]) -> Dict[str, Any]:
     """Summarise two or more local export folders for Cross-DB preview.
 
@@ -3588,6 +3628,7 @@ def _crossdb_compatibility_gate(
     }
 
 
+@_refuse_damaged_members
 def describe_export_source(raw_path: str) -> Dict[str, Any]:
     """Return a compact registry-safe description of an export folder.
 
@@ -3646,6 +3687,7 @@ def describe_export_source(raw_path: str) -> Dict[str, Any]:
     }
 
 
+@_refuse_damaged_members
 def describe_source_tables(raw_path: str, *, planning_metadata_only: bool = False) -> Dict[str, Any]:
     """The tables and modules of a source folder, reading no table's rows.
 
@@ -4006,6 +4048,7 @@ def _export_file_inventory(
         f.get("file"): f for f in _manifest_file_entries(manifest) if f.get("file")
     }
     out: List[Dict[str, Any]] = []
+    is_export = any((path / name).is_file() for name in _MODULE_MANIFESTS)
     for f in sorted(path.iterdir(), key=lambda p: p.name):
         require_path(f, instance_owned=True)
         if (
@@ -4017,6 +4060,11 @@ def _export_file_inventory(
             continue
         if f.suffix.lower() not in {".csv", ".parquet", ".xlsx"}:
             continue
+        if is_export:
+            # Size + SHA-256 against the published manifest (memoised per file).
+            # A converted source folder has no export manifest: its tables are
+            # governed by the source contract, not by export publication.
+            verify_member_integrity(path, f, manifest=manifest or None)
         meta = dict(manifest_files.get(f.name, {}))
         if "file" not in meta:
             meta["file"] = f.name
@@ -4218,6 +4266,7 @@ def read_export_projection(
     """
 
     require_published_export_package(Path(path).parent)
+    verify_member_integrity(Path(path).parent, Path(path))
     return _read_export_projection(
         path,
         columns=columns,
@@ -4255,41 +4304,39 @@ def _read_export_frame_duckdb(
 
 
 def _read_columns(path: Path) -> List[str]:
+    """Header of one data file; an unreadable file raises, never reads as empty."""
+    suffix = path.suffix.lower()
+    if suffix not in {".csv", ".xlsx", ".parquet"}:
+        return []
     try:
         import pandas as pd
 
-        suffix = path.suffix.lower()
         if suffix == ".csv":
             return list(pd.read_csv(path, nrows=0).columns)
         if suffix == ".xlsx":
             return list(pd.read_excel(path, nrows=0).columns)
-        if suffix == ".parquet":
-            try:
-                import pyarrow.parquet as pq
+        import pyarrow.parquet as pq
 
-                return list(pq.ParquetFile(path).schema_arrow.names)
-            except Exception:
-                return list(pd.read_parquet(path).columns)
-    except Exception:
-        return []
-    return []
+        return list(pq.ParquetFile(path).schema_arrow.names)
+    except Exception as exc:
+        raise member_unreadable(path, exc) from exc
 
 
 def _count_rows(path: Path) -> int:
+    """Row count of one data file; an unreadable file raises, never counts 0."""
     try:
         if path.suffix.lower() == ".csv":
             with path.open("rb") as fh:
                 return max(sum(1 for _ in fh) - 1, 0)
         if path.suffix.lower() == ".parquet":
-            try:
-                import pyarrow.parquet as pq
+            import pyarrow.parquet as pq
 
-                return int(pq.ParquetFile(path).metadata.num_rows)
-            except Exception:
-                pass
+            return int(pq.ParquetFile(path).metadata.num_rows)
         return int(_read_export_frame(path).shape[0])
-    except Exception:
-        return 0
+    except ExportMemberUnreadableError:
+        raise
+    except Exception as exc:
+        raise member_unreadable(path, exc) from exc
 
 
 def _read_stay_ids(
@@ -4298,8 +4345,10 @@ def _read_stay_ids(
 ) -> Optional[set[str]]:
     try:
         frame = _read_stay_id_frame(path, stay_ids=stay_ids)
-    except Exception:
-        return None
+    except ExportMemberUnreadableError:
+        raise
+    except Exception as exc:
+        raise member_unreadable(path, exc) from exc
     if "stay_id" not in frame.columns:
         return None
     return {sid for sid in frame["stay_id"].map(entity_id_contract.normalize_entity_id).dropna().astype(str) if sid}
@@ -4506,8 +4555,10 @@ def _cohort_total_rows(
 def _count_matching_stay_rows(path: Path, stay_ids: set[str]) -> int:
     try:
         frame = _read_stay_id_frame(path, stay_ids=stay_ids)
-    except Exception:
-        return 0
+    except ExportMemberUnreadableError:
+        raise
+    except Exception as exc:
+        raise member_unreadable(path, exc) from exc
     if "stay_id" not in frame.columns:
         return 0
     return int(frame["stay_id"].map(entity_id_contract.normalize_entity_id).isin(stay_ids).sum())

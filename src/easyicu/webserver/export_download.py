@@ -17,8 +17,11 @@ from typing import Any, Mapping, Optional
 
 from easyicu.export_publication import (
     UNPUBLISHED_CODE,
+    ExportMemberIntegrityError,
+    ExportMemberUnreadableError,
     NativeExportUnpublishedError,
     require_published_native_export,
+    verify_member_integrity,
 )
 from easyicu.webserver import sources, state_paths
 from easyicu.webserver.hosted import require_instance_path, require_path
@@ -170,6 +173,19 @@ def prepare_registered_export_bundle(
         )
 
     files = _manifest_files(root, manifest)
+    # Never zip a module file that differs from what the manifest published.
+    for row in manifest.get("files") or []:
+        if not (isinstance(row, Mapping) and row.get("file")):
+            continue
+        try:
+            verify_member_integrity(root, str(row["file"]), manifest=dict(manifest))
+        except (ExportMemberIntegrityError, ExportMemberUnreadableError) as exc:
+            raise ExportDownloadError(
+                exc.code,
+                "An export file no longer matches its published manifest "
+                f"({exc.member}); re-run the extraction before downloading.",
+                status_code=409,
+            ) from exc
     source_bytes = sum(path.stat().st_size for path in files)
     if source_bytes > max_source_bytes:
         raise ExportDownloadError(

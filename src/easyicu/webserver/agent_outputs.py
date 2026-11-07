@@ -263,8 +263,12 @@ def _load_context(export_path: str, source: Dict[str, Any]) -> Dict[str, Any]:
     # export (an interrupted extraction or web export).
     from easyicu.api.extraction import EXTRACT_MODULES
     from easyicu.export_publication import (
+        ExportMemberUnreadableError,
         NativeExportUnpublishedError,
         folder_unpublished_reason,
+        load_published_manifest,
+        member_unreadable,
+        verify_member_integrity,
     )
 
     reason = folder_unpublished_reason(root, module_names=EXTRACT_MODULES)
@@ -273,6 +277,7 @@ def _load_context(export_path: str, source: Dict[str, Any]) -> Dict[str, Any]:
             f"{root} is an unpublished export ({reason})", reason=reason, path=root
         )
     files = [f for f in source.get("files", []) if isinstance(f, dict)]
+    manifest = load_published_manifest(root)
     entries: List[Tuple[str, Path, Dict[str, Any]]] = []
     for meta in files:
         module = str(meta.get("module") or "")
@@ -280,8 +285,11 @@ def _load_context(export_path: str, source: Dict[str, Any]) -> Dict[str, Any]:
         if not module or not file_name:
             continue
         path = root / file_name
-        if not path.exists() or not path.is_file():
-            continue
+        # A listed module that is missing, damaged or replaced is refused,
+        # never dropped from the analysis (no silent module loss).
+        if not path.is_file():
+            raise member_unreadable(path, FileNotFoundError(file_name))
+        verify_member_integrity(root, path, manifest=manifest)
         entries.append((module, path, meta))
 
     id_entry = next((entry for entry in entries if entry[0] == "demographics"), None)
@@ -299,8 +307,10 @@ def _load_context(export_path: str, source: Dict[str, Any]) -> Dict[str, Any]:
     if id_entry is not None:
         try:
             id_frame = dataio._read_stay_id_frame(id_entry[1])
-        except Exception:
-            id_frame = None
+        except ExportMemberUnreadableError:
+            raise
+        except Exception as exc:
+            raise member_unreadable(id_entry[1], exc) from exc
         if (
             id_frame is not None
             and not getattr(id_frame, "empty", True)
@@ -330,8 +340,10 @@ def _load_context(export_path: str, source: Dict[str, Any]) -> Dict[str, Any]:
                 columns=columns,
                 stay_ids=entity_set,
             )
-        except Exception:
-            continue
+        except ExportMemberUnreadableError:
+            raise
+        except Exception as exc:
+            raise member_unreadable(path, exc) from exc
         if (
             frame is None
             or getattr(frame, "empty", True)
