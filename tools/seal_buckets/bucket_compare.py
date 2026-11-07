@@ -54,7 +54,12 @@ import pyarrow as pa
 import pyarrow.compute as pc
 import pyarrow.parquet as pq
 
-TOOL_SHA256 = hashlib.sha256(Path(__file__).read_bytes()).hexdigest()
+# seal_rebuild.py executes this module from verified bytes (no __file__); the CLI run hashes its file.
+TOOL_SHA256 = (
+    hashlib.sha256(Path(__file__).read_bytes()).hexdigest()
+    if "__file__" in globals()
+    else None
+)
 
 
 class StorageIntegrityError(Exception):

@@ -92,11 +92,13 @@ Operator runbook (there is no automatic resume; a refused root stays refused unt
   2. Check both receipts: the in-root <target>/_SEAL_BUILD_RECEIPT.json (verdict PASS, seal_sha, build,
      db) and the external $WORK_ROOT/seal_<sha9>/<build>/receipt_<db>.json (verdict PASS, no failure,
      install.read_only_verified, install.in_root_receipt_sha256 == sha256 of the in-root receipt).
-  3. COMMIT only when the target carries a pending marker, no refusal marker, and both receipts pass
-     every acceptance check: operator_commit() re-runs accept_root (pending aside), removes the pending
-     marker and accepts the root again (one line; arguments: tool, target, external receipt, seal sha,
-     build, db):
-python3 -I -c 'import runpy,sys;from pathlib import Path;m=runpy.run_path(sys.argv[1]);print(m["operator_commit"](Path(sys.argv[2]),Path(sys.argv[3]),*sys.argv[4:])["verdict"])' tools/seal_buckets/seal_rebuild.py TARGET RECEIPT SHA BUILD DB
+  3. COMMIT only when the target carries a pending marker, no refusal marker, and both receipts pass:
+       seal_rebuild.sh SHA build1|build2 --operator-commit DB [--farm] [--config CONFIG.json]
+     It takes the same two run locks as a seal run of that SHA and mode (refused while a run or a
+     seal-<sha9>-<mode>-* scope is alive), re-runs the full verification (acceptance with the pending
+     marker allowed; the exact bucket set, each manifest against QC, the full bucket contract from the
+     sealed validator, sources, totals, the link closure; for a farm, its links and the bucket root it
+     depends on) and only then removes the pending marker. Any failure writes the refusal marker.
   4. REMOVE in every other case (a refusal marker, a FAILED, missing or mismatched receipt): the target
      and its markers are deleted by the operator (make the tree writable first), then the run is
      repeated. The tool never commits a refused root and never removes anything on its own.
@@ -110,7 +112,6 @@ import errno
 import fcntl
 import glob
 import hashlib
-import importlib.util
 import json
 import os
 import re
@@ -121,6 +122,7 @@ import subprocess
 import sys
 import threading
 import time
+import types
 import uuid
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
@@ -143,6 +145,11 @@ ADOPTION_RECEIPT = "_BUCKET_ADOPTION_RECEIPT.json"
 SOURCE_ORDINAL = "_easyicu_source_ordinal"
 FORBIDDEN_CORES = ((5, 105), (146, 179), (224, 1 << 20))
 ORIGIN_EXIT = 97
+# The bucket contract validator is executed only from sealed bytes: the seal clone's git object at the
+# seal SHA (or, for a standalone acceptance, this tool's sibling file), and only when those bytes hash to
+# this pin (tests/core/test_seal_bucket_round4.py keeps it equal to the file). Never imported.
+VALIDATOR_REL = "tools/seal_buckets/bucket_compare.py"
+VALIDATOR_SHA256 = "c929431016a5e37316a8c6abb291a2ec06dde903ce00b9406f0a90c0c1a0db6a"
 # Launches the seal clone's builder like `python <builder>` (sys.path[0] = scripts/), under `python -I -S`:
 # no PYTHONPATH, no current directory and no site hook (sitecustomize, usercustomize, .pth) can add code.
 # The boot's first statements (only the builtin sys module is touched) reset sys.path to the standard
@@ -472,6 +479,12 @@ class Seal:
 
     def verdict(self, db: str) -> str:
         return self.status.get(db, ("FAILED", ""))[0]
+
+    def validator(self) -> Validator:
+        """The contract validator from the seal SHA's git object (cached per run)."""
+        if getattr(self, "_validator", None) is None:
+            self._validator = load_validator_from_git(self.gitd, self.full)
+        return self._validator
 
     # ---- builder checks
     def check_builder_mark(self) -> None:
@@ -983,26 +996,140 @@ def writable_entries(root: Path) -> list[str]:
     return out
 
 
-_CONTRACT = None
+class Validator:
+    """bucket_compare.validate_contract compiled and executed from ONE verified byte buffer."""
+
+    def __init__(self, data: bytes, source: str):
+        digest = hashlib.sha256(data).hexdigest()
+        if digest != VALIDATOR_SHA256:
+            raise SealError("validator_unpinned", f"{source} sha256={digest[:12]}")
+        module = types.ModuleType("seal_bucket_contract")
+        code = compile(data, f"<sealed {VALIDATOR_REL} {source}>", "exec")
+        exec(code, module.__dict__)  # noqa: S102 - only the pinned, verified byte buffer
+        self.module = module
+        self.fingerprint = {"path": VALIDATOR_REL, "source": source, "sha256": digest}
+
+    def check(self, bucket: Path, table: str) -> None:
+        try:
+            self.module.validate_contract(bucket)
+        except self.module.StorageIntegrityError as exc:
+            raise SealError(
+                "bucket_contract_invalid",
+                f"{table}: {exc.reason} {exc.detail}".rstrip(),
+            ) from exc
 
 
-def check_bucket_contract(bucket: Path, table: str) -> None:
-    """bucket_compare.validate_contract (the resolver's contract, ported; easyicu-free) on one new
-    bucket: a violation is bucket_contract_invalid with the contract's own reason."""
-    global _CONTRACT
-    if _CONTRACT is None:
-        spec = importlib.util.spec_from_file_location(
-            "seal_bucket_contract", Path(__file__).with_name("bucket_compare.py")
-        )
-        module = importlib.util.module_from_spec(spec)
-        spec.loader.exec_module(module)
-        _CONTRACT = module
+def load_validator_from_git(git_dir: str, sha: str) -> Validator:
+    """The validator as committed at the seal SHA: a regular blob (a link is refused), its bytes."""
+    tree = git(["ls-tree", sha, "--", VALIDATOR_REL], git_dir=git_dir).split()
+    if len(tree) < 3 or tree[0] not in ("100644", "100755") or tree[1] != "blob":
+        raise SealError("validator_not_a_file", f"{sha[:9]}:{VALIDATOR_REL}")
+    done = subprocess.run(
+        ["git", "--git-dir", git_dir, "cat-file", "blob", tree[2]], capture_output=True
+    )
+    if done.returncode != 0:
+        raise SealError("git_failed", f"cat-file {VALIDATOR_REL}")
+    return Validator(done.stdout, f"git:{sha[:9]}")
+
+
+def load_validator_local() -> Validator:
+    """For a standalone acceptance (no seal clone): this tool's sibling file, a regular non-link file,
+    read once; the same pin applies."""
+    path = Path(__file__).with_name("bucket_compare.py")
     try:
-        _CONTRACT.validate_contract(bucket)
-    except _CONTRACT.StorageIntegrityError as exc:
-        raise SealError(
-            "bucket_contract_invalid", f"{table}: {exc.reason} {exc.detail}".rstrip()
-        ) from exc
+        st = os.lstat(path)
+    except OSError as exc:
+        raise SealError("validator_not_a_file", str(path)) from exc
+    if not stat.S_ISREG(st.st_mode):
+        raise SealError("validator_not_a_file", str(path))
+    return Validator(path.read_bytes(), "local")
+
+
+def check_bucket_contract(bucket: Path, table: str, validator: Validator) -> None:
+    """The resolver's full contract (bucket_compare, ported; easyicu-free) on one bucket, run from the
+    sealed validator: a violation is bucket_contract_invalid with the contract's own reason."""
+    validator.check(bucket, table)
+
+
+def bucket_set(root: Path, tables) -> dict:
+    """The exact final bucket set an in-root receipt binds: per table, the manifest sha256, every
+    directory and every file (with its size) under the bucket."""
+    out = {}
+    for table in tables:
+        bucket = root / f"{table}_bucket"
+        if bucket.is_symlink() or not bucket.is_dir():
+            raise SealError("bucket_set_changed", f"{table}: not a directory")
+        dirs, files = [], []
+        for dirpath, dirnames, filenames in os.walk(bucket, followlinks=False):
+            rel = os.path.relpath(dirpath, bucket)
+            dirs.extend(os.path.normpath(os.path.join(rel, d)) for d in dirnames)
+            for name in filenames:
+                path = os.path.join(dirpath, name)
+                files.append(
+                    [os.path.normpath(os.path.join(rel, name)), os.lstat(path).st_size]
+                )
+        out[table] = {
+            "manifest_sha256": sha256_file(bucket / "_BUCKET_MANIFEST.json"),
+            "dirs": sorted(dirs),
+            "files": sorted(files),
+        }
+    return out
+
+
+def verify_final_set(
+    root: Path, inner: dict, validator: Validator, allowed_roots=None
+) -> None:
+    """THE re-verification of an installed root's exact final set, shared by install (on the frozen
+    staging tree and again on the final name), commit_install, accept_root and operator_commit:
+      * a bucket root: the bucket set equals the in-root bucket_set (manifest sha256, every dir and file),
+        each manifest is the one QC recorded, each bucket passes the full contract (parts, footers, key
+        types, derived_from sources) and its inventory totals equal the QC rows/parts;
+      * a farm: its entries and bucket links are the recorded ones, its conversion manifest is the one
+        recorded, and the bucket root it links to is published (no marker) and passes this check itself;
+      * with allowed_roots: the link closure of the whole root stays inside them."""
+    if inner.get("schema", "").startswith("lead_r13.seal_farm_receipt"):
+        names = sorted(n for n in os.listdir(root) if n != IN_ROOT_RECEIPT)
+        if names != sorted(inner.get("entries") or []):
+            raise SealError("farm_entries_changed", root.name)
+        for name, link in (inner.get("bucket_links") or {}).items():
+            if not (root / name).is_symlink() or os.readlink(root / name) != link:
+                raise SealError("farm_link_changed", name)
+        manifest = root / CONVERSION_MANIFEST
+        recorded = inner.get("conversion_manifest_sha256")
+        if (sha256_file(manifest) if manifest.is_file() else None) != recorded:
+            raise SealError("farm_conversion_manifest_changed", root.name)
+        bucket_root = Path(inner["bucket_root"])
+        for marker in (pending_marker(bucket_root), refusal_marker(bucket_root)):
+            if marker.exists() or marker.is_symlink():
+                raise SealError("farm_dependency_unpublished", bucket_root.name)
+        try:
+            dependency = json.loads((bucket_root / IN_ROOT_RECEIPT).read_text())
+        except (OSError, ValueError) as exc:
+            raise SealError("farm_dependency_unpublished", bucket_root.name) from exc
+        if dependency.get("verdict") != "PASS" or writable_entries(bucket_root):
+            raise SealError("farm_dependency_unpublished", bucket_root.name)
+        verify_final_set(bucket_root, dependency, validator, allowed_roots)
+    else:
+        tables = inner.get("tables") or {}
+        recorded = inner.get("bucket_set")
+        if not tables or not isinstance(recorded, dict) or set(recorded) != set(tables):
+            raise SealError("bucket_set_missing", root.name)
+        actual = bucket_set(root, sorted(tables))
+        for table, rec in sorted(tables.items()):
+            if actual[table] != recorded[table]:
+                raise SealError("bucket_set_changed", table)
+            if recorded[table]["manifest_sha256"] != rec.get("manifest_sha256"):
+                raise SealError("bucket_manifest_changed_after_qc", table)
+            check_bucket_contract(root / f"{table}_bucket", table, validator)
+            inventory = json.loads(
+                (root / f"{table}_bucket" / "_BUCKET_MANIFEST.json").read_text()
+            )["inventory"]
+            if sum(e["row_count"] for e in inventory) != rec.get("rows") or len(
+                inventory
+            ) != rec.get("parts"):
+                raise SealError("bucket_totals_vs_qc", table)
+    if allowed_roots is not None:
+        check_links(root, allowed_roots)
 
 
 def refusal_marker(target: Path) -> Path:
@@ -1075,13 +1202,15 @@ def verify_installed(root: Path, in_root_sha: str) -> None:
         raise SealError("in_root_receipt_changed", root.name)
 
 
-def install(staging: Path, target: Path, in_root_receipt: dict) -> dict:
+def install(staging: Path, target: Path, in_root_receipt: dict, verify=None) -> dict:
     """Publish a staged root (D29-PUBLISH): the in-root receipt is the last content step; the WHOLE
     tree, root included, is made read-only and verified BEFORE the final name exists; a durable pending
     marker is written; then one atomic no-replace rename. The final name is never visible writable or
     unverified. The caller writes the external receipt and then commit_install() removes the pending
     marker; until then (a crash in between included) every consumer refuses the root. A failure after
-    the rename leaves a persistent refusal marker as well."""
+    the rename leaves a persistent refusal marker as well. ``verify`` (verify_final_set bound to the
+    receipt) runs on the frozen staging tree -- root included -- before the pending marker and the
+    rename, and again on the final name (D34-PUBLISH-SWAP)."""
     if (
         not isinstance(in_root_receipt, dict)
         or in_root_receipt.get("verdict") != "PASS"
@@ -1093,6 +1222,8 @@ def install(staging: Path, target: Path, in_root_receipt: dict) -> dict:
     in_root_sha = write_json(staging / IN_ROOT_RECEIPT, in_root_receipt)
     make_read_only(staging, include_root=True)
     verify_installed(staging, in_root_sha)
+    if verify is not None:
+        verify(staging)
     try:
         fd = os.open(
             pending_marker(target), os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o444
@@ -1108,6 +1239,8 @@ def install(staging: Path, target: Path, in_root_receipt: dict) -> dict:
     _fsync_dir(target.parent)
     try:
         verify_installed(target, in_root_sha)
+        if verify is not None:
+            verify(target)
     except (SealError, OSError) as exc:
         reason = exc.reason if isinstance(exc, SealError) else type(exc).__name__
         write_json(
@@ -1123,19 +1256,94 @@ def install(staging: Path, target: Path, in_root_receipt: dict) -> dict:
     }
 
 
+def scope_alive(seal: "Seal") -> bool:
+    """Any systemd scope of this SHA and mode still loaded (confine=systemd only)."""
+    if seal.cfg.get("confine") != "systemd":
+        return False
+    done = subprocess.run(
+        [
+            "systemctl",
+            "--user",
+            "list-units",
+            "--all",
+            "--no-legend",
+            "--plain",
+            f"seal-{seal.s9}-{seal.mode}-*",
+        ],
+        capture_output=True,
+        text=True,
+    )
+    return done.returncode != 0 or bool(done.stdout.strip())
+
+
 def operator_commit(
-    target: Path, external: Path, seal_sha: str, build: str, db: str
+    cfg: dict, sha: str, mode: str, db: str, *, farm: bool = False
 ) -> dict:
-    """Runbook step 3: commit a pending root only when every acceptance check passes (pending aside)."""
-    if not pending_marker(target).is_file():
-        raise SealError("root_not_pending", target.name)
-    accept_root(target, external, seal_sha, build, db, allow_pending=True)
-    commit_install(target)
-    return accept_root(target, external, seal_sha, build, db)
+    """Runbook step 3. Under the SAME two non-blocking run locks as a seal run of this SHA and mode
+    (held throughout; a live run or scope is refused), the pending root named by the config is fully
+    re-verified -- acceptance (pending aside) and verify_final_set with the sealed validator and the link
+    closure -- and only then committed. Any failure writes the refusal marker with its reason."""
+    if mode not in ("build1", "build2"):
+        raise SealError("operator_mode_invalid", mode)
+    seal = Seal(cfg, sha, mode, False, [db], {})
+    locks = acquire_run_lock(seal)
+    try:
+        if scope_alive(seal):
+            raise SealError("seal_scope_alive", f"{seal.s9} {mode}")
+        target = seal.farm_target(db) if farm else seal.target(db)
+        if target is None:
+            raise SealError("operator_no_farm", db)
+        external = seal.work / mode / f"receipt_{db}{'_farm' if farm else ''}.json"
+        if not pending_marker(target).is_file():
+            raise SealError("root_not_pending", target.name)
+        validator = seal.validator()
+        allowed = cfg["allowed_roots"]
+        try:
+            accept_root(
+                target,
+                external,
+                seal.full,
+                mode,
+                db,
+                allow_pending=True,
+                validator=validator,
+                allowed_roots=allowed,
+            )
+            commit_install(target, validator, allowed)
+        except SealError as exc:
+            if not refusal_marker(target).exists():
+                write_json(
+                    refusal_marker(target),
+                    {
+                        "root": str(target),
+                        "verdict": "REFUSED",
+                        "reason": exc.reason,
+                        "detail": exc.detail,
+                        "by": "operator_commit",
+                    },
+                )
+            raise
+        return accept_root(
+            target,
+            external,
+            seal.full,
+            mode,
+            db,
+            validator=validator,
+            allowed_roots=allowed,
+        )
+    finally:
+        locks.close()
 
 
-def commit_install(target: Path) -> None:
-    """The commit: remove the pending marker once the external PASS receipt is durable."""
+def commit_install(target: Path, validator: Validator, allowed_roots=None) -> None:
+    """The commit: the exact final set is re-verified on the final name, then the pending marker is
+    removed (it stays on any failure)."""
+    try:
+        inner = json.loads((target / IN_ROOT_RECEIPT).read_text())
+    except (OSError, ValueError) as exc:
+        raise SealError("in_root_receipt_changed", target.name) from exc
+    verify_final_set(target, inner, validator, allowed_roots)
     pending_marker(target).unlink()
     _fsync_dir(target.parent)
 
@@ -1148,6 +1356,8 @@ def accept_root(
     db: str,
     *,
     allow_pending: bool = False,
+    validator: "Validator | None" = None,
+    allowed_roots=None,
 ) -> dict:
     """The acceptance gate for an installed root: a verified external PASS receipt, no refusal marker,
     no pending marker (only operator_commit passes allow_pending), the in-root receipt bound by sha256
@@ -1190,6 +1400,7 @@ def accept_root(
         raise SealError("in_root_receipt_not_pass", root.name)
     if writable_entries(root):
         raise SealError("root_not_read_only", root.name)
+    verify_final_set(root, inner, validator or load_validator_local(), allowed_roots)
     return inner
 
 
@@ -1592,15 +1803,31 @@ def run_db(seal: Seal, db: str, plan: dict, code: Path) -> None:
                 raise SealError("footer_totals_vs_receipt", table)
         # the full bucket storage contract, as every reader and the comparator enforce it, on the
         # frozen tree before anything is published (delta29t (b))
+        validator = seal.validator()
+        receipt["validator"] = validator.fingerprint
         for table in receipt["tables"]:
-            check_bucket_contract(staging / f"{table}_bucket", table)
+            check_bucket_contract(staging / f"{table}_bucket", table, validator)
+        # the exact final bucket set the in-root receipt binds; each manifest must still be QC's
+        receipt["bucket_set"] = bucket_set(staging, sorted(receipt["tables"]))
+        for table, rec in receipt["tables"].items():
+            if (
+                receipt["bucket_set"][table]["manifest_sha256"]
+                != rec["manifest_sha256"]
+            ):
+                raise SealError("bucket_manifest_changed_after_qc", table)
         receipt["links"] = plan["links"]
         in_root = dict(receipt, verdict="PASS")
-        installed = install(staging, target, in_root)
+        allowed = seal.cfg["allowed_roots"]
+        installed = install(
+            staging,
+            target,
+            in_root,
+            verify=lambda root: verify_final_set(root, in_root, validator, allowed),
+        )
         receipt["install"] = installed
         receipt["verdict"] = "PASS"
         write_json(out / f"receipt_{db}.json", receipt)
-        commit_install(target)
+        commit_install(target, validator, allowed)
         seal.set_status(db, "PASS", str(target))
         seal.log(f"{db} PASS -> {target}")
     except SealError as exc:
@@ -1667,10 +1894,17 @@ def assemble_farm(seal: Seal, db: str, plan: dict, bucket_root: Path) -> None:
         "verdict": "PASS",
     }
     # the farm carries its own in-root receipt; a bucket root's _COMPLETE never stands for the farm
-    installed = install(staging, farm, record)
+    validator, allowed = seal.validator(), seal.cfg["allowed_roots"]
+    record["validator"] = validator.fingerprint
+    installed = install(
+        staging,
+        farm,
+        record,
+        verify=lambda root: verify_final_set(root, record, validator, allowed),
+    )
     record["install"] = installed
     write_json(seal.work / seal.mode / f"receipt_{db}_farm.json", record)
-    commit_install(farm)
+    commit_install(farm, validator, allowed)
     seal.set_status(db, "PASS", f"{bucket_root} farm={farm}")
     seal.log(f"{db} farm PASS -> {farm} ({len(names)} entries)")
 
@@ -1688,7 +1922,15 @@ def compare_db(seal: Seal, db: str) -> None:
             if not p.is_file():
                 raise SealError("compare_missing_build", f"{mode}:{db}")
             # the root is accepted only through its bound in-root receipt (D26-INSTALL, D26-COMPARE-SET)
-            inner = accept_root(root, p, seal.full, mode, db)
+            inner = accept_root(
+                root,
+                p,
+                seal.full,
+                mode,
+                db,
+                validator=seal.validator(),
+                allowed_roots=seal.cfg["allowed_roots"],
+            )
             for t, _ in spec["tables"]:
                 rec = (inner.get("tables") or {}).get(t) or {}
                 manifest = root / f"{t}_bucket" / "_BUCKET_MANIFEST.json"
@@ -1711,6 +1953,8 @@ def compare_db(seal: Seal, db: str) -> None:
                 seal.full,
                 "build1",
                 db,
+                validator=seal.validator(),
+                allowed_roots=seal.cfg["allowed_roots"],
             )
         if seal.dry_run:
             seal.set_status(db, "DRY_RUN_OK")
@@ -1876,7 +2120,29 @@ def main(argv: list[str] | None = None) -> int:
     )
     ap.add_argument("--dry-run", action="store_true")
     ap.add_argument("--probe", action="store_true")
+    ap.add_argument(
+        "--operator-commit",
+        metavar="DB",
+        help="runbook step 3: commit DB's pending root of this SHA and mode (build1|build2)",
+    )
+    ap.add_argument(
+        "--farm", action="store_true", help="with --operator-commit: the farm"
+    )
     args = ap.parse_args(argv)
+    if args.operator_commit:
+        try:
+            inner = operator_commit(
+                load_config(args.config),
+                args.sha,
+                args.mode,
+                args.operator_commit,
+                farm=args.farm,
+            )
+        except SealError as exc:
+            print(f"{args.operator_commit} FAILED {exc.reason} {exc.detail}".rstrip())
+            return 1
+        print(f"{args.operator_commit} COMMITTED {inner['verdict']}")
+        return 0
     if args.probe and not args.dry_run:
         ap.error("--probe needs --dry-run")
     # (verdict, line) pairs; success is decided from verdicts only (D26-EXIT)

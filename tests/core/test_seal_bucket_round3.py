@@ -307,8 +307,21 @@ def test_a_crash_right_after_the_rename_leaves_a_read_only_root_refused_as_pendi
     tmp_path,
 ):
     staging, target = tmp_path / ".root.seal_staging", tmp_path / "root"
-    make_bucket(staging)
-    inner = {"verdict": "PASS", "seal_sha": "f" * 40, "build": "build1", "db": "sic"}
+    bucket = make_bucket(staging)
+    inner = {
+        "verdict": "PASS",
+        "seal_sha": "f" * 40,
+        "build": "build1",
+        "db": "sic",
+        "tables": {
+            "t": {
+                "manifest_sha256": sr.sha256_file(bucket / "_BUCKET_MANIFEST.json"),
+                "rows": 40,
+                "parts": 2,
+            }
+        },
+        "bucket_set": sr.bucket_set(staging, ["t"]),
+    }
     body = (
         "real = sr.rename_noreplace\n"
         "def crash(a, b):\n    real(a, b)\n    os._exit(79)\n"
@@ -337,57 +350,10 @@ def test_a_crash_right_after_the_rename_leaves_a_read_only_root_refused_as_pendi
     )
     with pytest.raises(sr.SealError, match="root_pending"):
         sr.accept_root(target, external, "f" * 40, "build1", "sic")
-    sr.commit_install(target)
+    sr.commit_install(target, sr.load_validator_local())
     assert (
         sr.accept_root(target, external, "f" * 40, "build1", "sic")["verdict"] == "PASS"
     )
-    make_writable(target)
-
-
-def test_the_operator_runbook_is_in_help_and_commit_only_accepts_a_clean_pending_root(
-    tmp_path,
-):
-    """Supervisor ruling (c): no auto-resume; --help carries the runbook, and operator_commit commits a
-    pending root only when every acceptance check passes -- never a refused or a non-pending root."""
-    help_text = _tool("seal_rebuild.py", "--help").stdout
-    for needle in (
-        "Operator runbook",
-        ".seal_PENDING",
-        ".seal_REFUSED",
-        "operator_commit",
-        "REMOVE",
-    ):
-        assert needle in help_text, needle
-    sha = "f" * 40
-    inner = {"verdict": "PASS", "seal_sha": sha, "build": "build1", "db": "sic"}
-    target = tmp_path / "root"
-    staging = tmp_path / ".root.seal_staging"
-    make_bucket(staging)
-    installed = sr.install(staging, target, inner)  # renamed, pending, never committed
-    external = tmp_path / "receipt.json"
-    external.write_text(json.dumps(dict(inner, install=installed)))
-    with pytest.raises(sr.SealError, match="receipt_not_pass"):
-        sr.operator_commit(
-            target, external, sha, "build2", "sic"
-        )  # a mismatched receipt
-    assert sr.pending_marker(target).is_file()
-    sr.refusal_marker(target).write_text("{}")
-    with pytest.raises(sr.SealError, match="root_refused"):
-        sr.operator_commit(target, external, sha, "build1", "sic")
-    sr.refusal_marker(target).unlink()
-    # the runbook's own command line commits it
-    line = next(x for x in help_text.splitlines() if x.startswith("python3 -I -c "))
-    done = subprocess.run(
-        [sys.executable, "-I", "-c", line.split("'")[1], str(TOOLS / "seal_rebuild.py")]
-        + [str(target), str(external), sha, "build1", "sic"],
-        capture_output=True,
-        text=True,
-    )
-    assert done.returncode == 0 and done.stdout.strip() == "PASS", done.stderr
-    assert not sr.pending_marker(target).exists()
-    assert sr.accept_root(target, external, sha, "build1", "sic")["verdict"] == "PASS"
-    with pytest.raises(sr.SealError, match="root_not_pending"):
-        sr.operator_commit(target, external, sha, "build1", "sic")
     make_writable(target)
 
 

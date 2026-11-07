@@ -172,6 +172,16 @@ def make_mirror(root: Path, mode: str = "ok", mark: bool = True) -> tuple[Path, 
     if not mark:
         text = text.replace("bucket_float_fidelity_mismatch", "no_float_check")
     (repo / "scripts" / "build_itemid_bucket_cache.py").write_text(text)
+    # the seal clone carries the real contract validator; seal_rebuild executes it from this git object
+    (repo / "tools" / "seal_buckets").mkdir(parents=True)
+    (repo / "tools" / "seal_buckets" / "bucket_compare.py").write_bytes(
+        (
+            Path(__file__).resolve().parents[2]
+            / "tools"
+            / "seal_buckets"
+            / "bucket_compare.py"
+        ).read_bytes()
+    )
     _git(["init", "-q"], repo)
     _git(["add", "-A"], repo)
     _git(["commit", "-q", "-m", "synthetic builder"], repo)
