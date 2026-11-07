@@ -71,7 +71,10 @@ def _casefold_children(root: Path) -> dict[str, tuple[Path, ...]]:
 
 def peek_table_columns(path: Path, table: str) -> set[str]:
     """Read a prepared table schema without loading its rows."""
+    from ..storage_seal_publication import assert_roots_published
 
+    # Identity discovery may precede the loader or extraction entry point.
+    assert_roots_published([path])
     path_children = _casefold_children(path)
     roots = (
         path,

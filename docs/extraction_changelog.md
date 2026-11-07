@@ -26,6 +26,51 @@ deferred to it are compared against `2786ea872` there.
 - TODO(d5fixB): bucket source-set and source-root checks
   (B-SOURCE-SET, B-ROOT).
 
+## 2026-11-07 — primary seal publication gate at run start [r13_slgate]
+
+Every configured data root must pass a full publication-closure walk before
+cohort discovery, raw web cohort reads, datasource construction or stream
+ledger acceptance. Base-loader path/schema discovery and reused API loaders
+also gate their supplied or bound roots before reading. The walk follows
+every symlink hop (including intermediate farms), all subroots and table
+directories/files, and `derived_from` and `bucket_links` targets. It uses
+directory metadata and provenance JSON only. Relative recorded paths cover
+both metadata-relative and legacy reader cwd
+bindings (`derived_from.files` retain their install-relative binding).
+It never opens table contents or schemas. A dangling marker link counts.
+Either marker raises `SealPublicationError` before the first data read. The
+existing read-time checks remain as defense in depth, and the function-level
+`formal=True` receipt APIs retain their signatures and acceptance rules.
+Read-time ancestor checks also reach the true install above `icu/`, `hosp/`
+or any deeper table directory, even for legacy installs without a manifest.
+Bootstrap ID selection and schema detection gate their roots independently,
+since callers can invoke them before constructing a loader. The reviewed
+concept, special-score and KDIGO exception handlers preserve
+`StorageIntegrityError` rather than translating it into an ordinary failure.
+
+The start identity is the SHA-256 of canonical JSON containing sorted directory
+realpaths and their PENDING/REFUSED booleans. Every directory encountered,
+including path ancestors, is treated as an install candidate so that install
+boundaries are never inferred from naming conventions. Native manifest
+`runtime_provenance.seal_publication_closure` records the digest and walk
+counts. Each stream ledger records `seal_publication_closure_sha256` at its
+original start. Resume reruns the gate before reading order/part files and
+refuses a missing or different original digest with
+`SealPublicationError(reason="bucket_install_unaccepted")`; it preserves the
+ledger and parts rather than silently restarting with different inputs.
+The full native-v2 launcher gates all sources before accepting completed
+exports or dispatching workers, preserving source symlink spellings for that
+walk. Its run manifest records the same closure facts in `runtime_provenance`;
+launcher resume reruns the walk and rejects a missing or different start digest.
+
+**Seal-flow invariant (B41-CACHE).** An accepted install is read-only and never
+returns to PENDING. A REFUSED marker is written only on a NEW install before
+acceptance. Installs are never modified in place. Thus mid-run marker changes,
+including a late REFUSED after a cache was filled, are non-blocking review
+items under this protocol. The CACHE regression documents this invariant and
+the existing read-time defense; it does not introduce cache invalidation.
+Healthy unmarked roots retain their existing reading behavior.
+
 ## 2026-11-07 — readers refuse a bucket installation the seal tool has not published [lead-r13, branch `r13slpub`]
 
 **Rule.** The seal tool writes `.<install>.seal_PENDING` beside an installation

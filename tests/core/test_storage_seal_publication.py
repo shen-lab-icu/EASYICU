@@ -444,7 +444,8 @@ def test_the_fast_id_scan_refuses_the_csv_of_a_marked_install(tmp_path):
     loader = SimpleNamespace(datasource=_policy_source("mimic", install))
     assert _build_fast_scan_expr(loader, "services")
     _mark(install, ".seal_PENDING")
-    loader = SimpleNamespace(datasource=_policy_source("mimic", install))
+    # Construction is gated too; retain the existing source to exercise the
+    # independent read-time defense.
     _refused(lambda: _build_fast_scan_expr(loader, "services"))
 
 

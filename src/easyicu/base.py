@@ -73,9 +73,27 @@ class BaseICULoader:
             verbose: Enable verbose logging
         """
         self.verbose = verbose
+        from .storage_seal_publication import (
+            assert_roots_published,
+            configured_publication_roots,
+        )
+
+        # Identity/path discovery can inspect schemas before the datasource
+        # exists. Gate the supplied root before either discovery step.
+        assert_roots_published([data_path])
         # 检测数据库类型 - 如果用户没有指定，先尝试从路径推断
         self.database = self._detect_database(database, data_path)
+        config = load_data_sources().get(self.database)
+        if config is not None and data_path is not None:
+            assert_roots_published(configured_publication_roots(config, data_path))
         self.data_path = self._setup_data_path(data_path, self.database)
+        # Default paths are resolved without reading schemas. Their gate must
+        # precede even the converter's readiness check.
+        assert_roots_published(
+            configured_publication_roots(config, self.data_path)
+            if config is not None
+            else [self.data_path]
+        )
         self._dict_path = dict_path
         self._use_sofa2 = use_sofa2
 

@@ -132,6 +132,10 @@ def _load_unique_ids(file_path: Path, column: str, limit: int) -> List[int]:
     return ids
 
 def _load_ids_for_database(database: str, data_path: Path, limit: int) -> List[int]:
+    from ..storage_seal_publication import assert_roots_published
+
+    # Bootstrap callers can request IDs before constructing a datasource.
+    assert_roots_published([data_path])
     if database == "aumc":
         return _load_unique_ids(data_path / "admissions.parquet", "admissionid", limit)
     if database == "hirid":

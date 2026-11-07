@@ -6,7 +6,9 @@ beside the final name, then it renames the read-only staging tree onto that
 name. It removes the marker only after the external PASS receipt is durable.
 A root whose post-rename verification failed keeps a refusal marker,
 ``.<install>.seal_REFUSED``. A final name with either marker beside it is not
-a published installation, and every reader refuses it, at read time.
+a published installation. The primary gate walks the complete configured
+install closure before a run or datasource starts; read-time checks remain
+as defense in depth.
 
 ``formal=True`` adds the acceptance half. The installation must carry the
 seal tool's in-root receipt ``_SEAL_BUILD_RECEIPT.json`` with verdict
@@ -30,6 +32,9 @@ from __future__ import annotations
 import hashlib
 import json
 import os
+import stat
+from collections import deque
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
@@ -64,21 +69,265 @@ class SealPublicationError(StorageIntegrityError):
         )
 
 
-def _installs(root: Path) -> list[Path]:
-    """The installation as given, its realpath, and the realpath of ``root``'s parent.
+@dataclass(frozen=True)
+class SealPublicationClosure:
+    """Start-time publication identity; walking never opens table contents.
 
-    The last one is the installation a symlinked bucket (a farm entry) really
-    belongs to.
+    Every directory on a configured or linked path is a possible install.
+    Counting these candidates avoids guessing install boundaries from names.
     """
-    given = root.parent
+
+    sha256: str
+    install_count: int
+    link_hops: int
+    marker_hits: int = 0
+
+    def to_dict(self) -> dict:
+        return {
+            "sha256": self.sha256,
+            "install_count": self.install_count,
+            "link_hops": self.link_hops,
+            "marker_hits": self.marker_hits,
+        }
+
+
+def configured_publication_roots(
+    config, base_path=None, table_sources=None
+) -> list[Path]:
+    """Include external configured files/datasets and registered Path loaders."""
+    base = Path(base_path) if base_path is not None else Path.cwd()
+    roots = [base] if base_path is not None else []
+    for table in config.tables.values():
+        paths = [entry.get("path") or entry.get("file") for entry in table.files]
+        if table.dataset is not None:
+            paths.append(table.dataset.path)
+        for raw in paths:
+            if raw:
+                path = Path(raw)
+                if not path.is_absolute():
+                    path = base / path
+                # The container covers every expansion of a configured glob.
+                while any(c in str(path) for c in "*?["):
+                    path = path.parent
+                roots.append(path)
+    roots.extend(
+        Path(raw)
+        for raw in (table_sources or {}).values()
+        if isinstance(raw, (str, Path))
+    )
+    return roots
+
+
+def assert_roots_published(roots) -> SealPublicationClosure:
+    """Gate the full install closure before a run, datasource or resume reads.
+
+    Resolve symlinks component by component, including intermediate farms and
+    ancestors of file targets. Walk all subdirectories, even unused tables.
+    Only directory entries, lstat/readlink and publication/provenance JSON are
+    read. No table file, schema, receipt hash or data hash is opened here.
+    Directory realpaths deduplicate cycles. Missing legacy paths retain their
+    existing read-time handling; an unreadable closure fails closed.
+    """
+    pending = deque(Path(p) for p in roots if p is not None)
+    checked: set[Path] = set()
+    installs: set[Path] = set()
+    visited: set[Path] = set()
+    metadata: set[Path] = set()
+    metadata_directories: set[Path] = set()
+    links: set[Path] = set()
+    metadata_names = {MANIFEST, "conversion_manifest.json", IN_ROOT_RECEIPT}
+
+    def check(path: Path) -> None:
+        if path in checked:
+            return
+        for suffix, reason in (
+            (REFUSAL_SUFFIX, REFUSED),
+            (PENDING_SUFFIX, UNPUBLISHED),
+        ):
+            try:
+                _marker(path, suffix).lstat()
+            except FileNotFoundError:
+                pass
+            else:
+                raise SealPublicationError(reason, path)
+        checked.add(path)
+
+    def resolve(path: Path) -> Path | None:
+        # Do not normpath before following links: link/.. refers to the
+        # target's parent, and collapsing it would skip intermediate farms.
+        if not path.is_absolute():
+            path = Path.cwd() / path
+        parts = deque(path.parts[1:])
+        current = Path(path.anchor)
+        chain: set[tuple[Path, tuple[str, ...]]] = set()
+        hops = 0
+        while parts:
+            check(current)
+            installs.add(current)
+            # A linked table may enter an install below its root. Its parent
+            # receipts can bind further installs even outside this subtree.
+            if current not in metadata_directories:
+                metadata_directories.add(current)
+                for name in metadata_names:
+                    candidate_metadata = current / name
+                    if os.path.lexists(candidate_metadata):
+                        pending.append(candidate_metadata)
+            part = parts.popleft()
+            if part == "..":
+                current = current.parent
+                continue
+            candidate = current / part
+            try:
+                mode = candidate.lstat().st_mode
+            except FileNotFoundError:
+                # Check a not-yet-installed final name too (rename pending).
+                check(candidate)
+                return None
+            if stat.S_ISLNK(mode):
+                check(candidate)
+                links.add(candidate)
+                state = (candidate, tuple(parts))
+                hops += 1
+                if state in chain or hops > 256:
+                    raise SealPublicationError(UNACCEPTED, candidate, "link cycle")
+                chain.add(state)
+                target = Path(os.readlink(candidate))
+                if target.is_absolute():
+                    current = Path(target.anchor)
+                    target_parts = target.parts[1:]
+                else:
+                    target_parts = target.parts
+                parts.extendleft(reversed(target_parts))
+            else:
+                current = candidate
+        if current.is_dir():
+            check(current)
+            installs.add(current)
+        return current
+
+    def enqueue_metadata(path: Path) -> None:
+        if path in metadata:
+            return
+        metadata.add(path)
+        try:
+            payload = json.loads(path.read_text(encoding="utf-8"))
+        except (ValueError, UnicodeError):
+            # Layout validation remains the read owner's responsibility.
+            return
+        if not isinstance(payload, dict):
+            return
+        targets = []
+        cwd_targets = []
+        derived = payload.get("derived_from")
+        if isinstance(derived, dict):
+            if isinstance(derived.get("path"), str):
+                targets.append((path.parent, derived["path"]))
+                cwd_targets.append(derived["path"])
+            for entry in (
+                derived.get("files", [])
+                if isinstance(derived.get("files"), list)
+                else []
+            ):
+                if isinstance(entry, dict) and isinstance(entry.get("path"), str):
+                    targets.append((path.parent.parent, entry["path"]))
+        bucket_links = payload.get("bucket_links")
+        if isinstance(bucket_links, dict):
+            for target in bucket_links.values():
+                if isinstance(target, str):
+                    targets.append((path.parent, target))
+                    cwd_targets.append(target)
+        for base, raw in targets:
+            target = Path(raw)
+            pending.append(target if target.is_absolute() else base / target)
+        # Conversion-manifest and formal farm readers use Path(raw) directly.
+        # Cover that legacy cwd binding as well as portable metadata-relative
+        # paths. Bucket derived_from.files remain relative to the install.
+        pending.extend(Path(raw) for raw in cwd_targets if not Path(raw).is_absolute())
+
+    path = Path(".")
+    try:
+        while pending:
+            requested = pending.popleft()
+            path = resolve(requested)
+            if path is None:
+                continue
+            if not path.is_dir():
+                # External file targets bring their containing install into
+                # the closure, including its other links and metadata.
+                pending.append(path.parent)
+                if requested.name in metadata_names or path.name in metadata_names:
+                    enqueue_metadata(path)
+                continue
+            if path in visited:
+                continue
+            visited.add(path)
+            with os.scandir(path) as entries:
+                for entry in entries:
+                    child = path / entry.name
+                    if entry.is_symlink() or entry.is_dir(follow_symlinks=False):
+                        pending.append(child)
+                    elif entry.name in metadata_names:
+                        enqueue_metadata(child)
+    except OSError as exc:
+        raise SealPublicationError(
+            UNACCEPTED, path or Path("."), "cannot inspect publication closure"
+        ) from exc
+    # Marker state is explicit in the canonical identity. A marked closure
+    # raises above and can never become an accepted start identity.
+    records = [[str(p), False, False] for p in sorted(installs)]
+    digest = hashlib.sha256(
+        json.dumps(records, separators=(",", ":")).encode("utf-8")
+    ).hexdigest()
+    return SealPublicationClosure(digest, len(installs), len(links))
+
+
+def _installs(root: Path) -> list[Path]:
+    """All possible install ancestors on every hop, without opening tables.
+
+    A table may be arbitrarily nested below the conversion manifest/receipt,
+    including MIMIC-IV's icu/ and hosp/. Checking the full ancestor chain also
+    covers legacy installs with neither metadata file and intermediate farms.
+    Do not resolve the whole path at once: that loses intermediate links.
+    """
+    if not root.is_absolute():
+        root = Path.cwd() / root
+    parts = deque(root.parts[1:])
+    current = Path(root.anchor)
     out: list[Path] = []
-    for path in (
-        given,
-        Path(os.path.realpath(given)),
-        Path(os.path.realpath(root)).parent,
-    ):
-        if path not in out:
+    seen: set[Path] = set()
+    chain: set[tuple[Path, tuple[str, ...]]] = set()
+    hops = 0
+
+    def add(path):
+        if path not in seen:
+            seen.add(path)
             out.append(path)
+
+    while parts:
+        add(current)
+        part = parts.popleft()
+        if part == "..":
+            current = current.parent
+            continue
+        candidate = current / part
+        if candidate.is_symlink():
+            add(candidate)
+            state = (candidate, tuple(parts))
+            hops += 1
+            if state in chain or hops > 256:
+                raise SealPublicationError(UNACCEPTED, candidate, "link cycle")
+            chain.add(state)
+            target = Path(os.readlink(candidate))
+            if target.is_absolute():
+                current = Path(target.anchor)
+                target_parts = target.parts[1:]
+            else:
+                target_parts = target.parts
+            parts.extendleft(reversed(target_parts))
+        else:
+            current = candidate
+    if current.is_dir():
+        add(current)
     return out
 
 

@@ -1250,7 +1250,10 @@ def validate_concept_layouts(source, dictionary, names: Iterable[str]) -> None:
 
 
 def enumerate_parquet_files(directory: Path) -> list[str]:
+    from .storage_seal_publication import assert_seal_published  # cycle
+
     root = Path(directory)
+    assert_seal_published(root, formal=False)
     if not root.exists():
         return []
     if (
@@ -1269,9 +1272,6 @@ def enumerate_parquet_files(directory: Path) -> list[str]:
                 return enumerate_parquet_files(flat)
             raise
     else:
-        from .storage_seal_publication import assert_seal_published  # cycle
-
-        assert_seal_published(root, formal=False)
         paths = sorted(p for p in root.rglob("*.parquet") if not p.name.startswith("."))
     return [p.as_posix() for p in paths]
 

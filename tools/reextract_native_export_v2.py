@@ -1,8 +1,9 @@
 #!/usr/bin/env python3
 """Run one resumable, provenance-locked six-database native-v2 extraction.
 
-The controller never imports EasyICU.  Every database is extracted by a new
-Python interpreter whose ``PYTHONPATH`` is pinned to this checkout's ``src``
+The controller uses EasyICU's read-only storage gate before accepting a run.
+Every database is extracted by a new Python interpreter whose ``PYTHONPATH``
+is pinned to this checkout's ``src``
 directory.  A database is published under ``exports/<database>`` only after
 all 19 Parquet files and their native manifest have been verified.
 """
@@ -316,7 +317,9 @@ def _parse_key_value(
 def _resolve_data_paths(args: argparse.Namespace) -> dict[str, str]:
     paths: dict[str, Path] = {}
     if args.data_root is not None:
-        root = Path(args.data_root).expanduser().resolve()
+        # Preserve link spellings until the publication gate has followed
+        # every intermediate farm. Whole-path resolve() loses those installs.
+        root = Path(args.data_root).expanduser().absolute()
         paths.update(
             {
                 database: root / DATABASE_DIRECTORY_NAMES[database]
@@ -340,7 +343,7 @@ def _resolve_data_paths(args: argparse.Namespace) -> dict[str, str]:
         allowed_keys=DATABASE_ORDER,
     )
     paths.update(
-        {database: Path(value).expanduser().resolve() for database, value in overrides.items()}
+        {database: Path(value).expanduser().absolute() for database, value in overrides.items()}
     )
     resolved: dict[str, str] = {}
     for database in args.databases:
@@ -354,6 +357,29 @@ def _resolve_data_paths(args: argparse.Namespace) -> dict[str, str]:
             raise ExtractionRunError(f"source data directory missing for {database}: {path}")
         resolved[database] = str(path)
     return resolved
+
+
+def _source_publication_closure(data_paths: Mapping[str, str]) -> dict[str, Any]:
+    """Gate all configured sources before cohort reads or export reuse."""
+    if str(SOURCE_ROOT) not in sys.path:
+        sys.path.insert(0, str(SOURCE_ROOT))
+    import easyicu
+    from easyicu.resources import load_data_sources
+    from easyicu.storage_seal_publication import (
+        assert_roots_published,
+        configured_publication_roots,
+    )
+
+    if Path(easyicu.__file__).resolve().parent != (SOURCE_ROOT / "easyicu").resolve():
+        raise ExtractionRunError("publication gate imported a different EasyICU checkout")
+    configs = load_data_sources()
+    roots = []
+    for database, path in data_paths.items():
+        config = configs.get(database)
+        roots.extend(
+            configured_publication_roots(config, path) if config is not None else [path]
+        )
+    return assert_roots_published(roots).to_dict()
 
 
 def _resolve_batch_overrides(values: Sequence[str]) -> dict[str, int]:
@@ -1548,6 +1574,7 @@ def _load_resume_manifest(
     batch_overrides: Mapping[str, int] | None = None,
     module_batch_overrides: Mapping[str, Mapping[str, int]] | None = None,
 ) -> dict[str, Any]:
+    closure = _source_publication_closure(data_paths)
     manifest = _read_json_object(run_root / "run_manifest.json", label="run manifest")
     if manifest.get("schema_version") != RUN_SCHEMA_VERSION:
         raise ExtractionRunError("resume root has an unsupported run manifest")
@@ -1583,6 +1610,14 @@ def _load_resume_manifest(
     }
     if scheduler.get("module_batch_overrides", {}) != expected_module_overrides:
         raise ExtractionRunError("resume module batch overrides differ from original run")
+    original = (manifest.get("runtime_provenance") or {}).get("seal_publication_closure")
+    if not isinstance(original, dict) or original.get("sha256") != closure["sha256"]:
+        from easyicu.storage_seal_publication import SealPublicationError, UNACCEPTED
+
+        raise SealPublicationError(
+            UNACCEPTED, run_root,
+            "resume source publication closure differs or was not recorded at start",
+        )
     return manifest
 
 
@@ -1815,6 +1850,7 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
     psutil_module, monitoring = _load_psutil(args.resource_policy)
     memory = _detect_effective_memory(psutil_module)
     data_paths = _resolve_data_paths(args)
+    publication_closure = _source_publication_closure(data_paths)
     batch_overrides = _resolve_batch_overrides(args.database_batch_size)
     module_batch_overrides = _resolve_module_batch_overrides(
         args.module_batch_size
@@ -1868,6 +1904,9 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
             batch_overrides=batch_overrides,
             module_batch_overrides=module_batch_overrides,
         )
+        manifest["runtime_provenance"] = {
+            "seal_publication_closure": publication_closure,
+        }
 
     pending = _pending_databases(
         manifest=manifest,

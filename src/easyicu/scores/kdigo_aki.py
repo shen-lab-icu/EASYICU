@@ -37,6 +37,8 @@ import pandas as pd
 import numpy as np
 import logging
 
+from easyicu.storage_layout import StorageIntegrityError
+
 from easyicu.utils.thresholds import REL_EPS, ge, le, lt
 from easyicu.urine_weight_linkage import (
     ConflictingKeyedWeightError,
@@ -1760,6 +1762,8 @@ def load_kdigo_aki(
                 if clock is not None:
                     frame = frame.rename(columns={clock: "charttime"})
             return frame
+        except StorageIntegrityError:
+            raise
         except Exception as exc:
             raise KDIGOComponentLoadError(
                 component=concept,

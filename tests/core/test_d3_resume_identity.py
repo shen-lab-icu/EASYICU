@@ -6,8 +6,8 @@ read from another installation, with other code or dictionaries, or with
 other value-affecting load parameters was resumed as if it were this run's.
 The identity now binds the source installation, the code and dictionary
 digests and every load parameter except the execution ones (batch size,
-workers). A changed binding starts fresh and records why. Synthetic rows
-only.
+workers). A changed publication closure refuses resume and preserves its
+parts; other changed bindings start fresh and record why. Synthetic rows only.
 """
 
 from __future__ import annotations
@@ -109,15 +109,21 @@ def test_an_edited_source_starts_fresh(tmp_path, monkeypatch, source):
     assert event["changed"] == ["source_identity_sha256"]
 
 
-def test_another_installation_starts_fresh(tmp_path, monkeypatch, source):
+def test_another_installation_refuses_resume_and_preserves_parts(tmp_path, monkeypatch, source):
+    from easyicu.storage_seal_publication import SealPublicationError, UNACCEPTED
+
     out = _interrupted(tmp_path, monkeypatch, _kwargs(source))
     other = tmp_path / "other"
     other.mkdir()
     (other / "conversion_manifest.json").write_text(json.dumps({"tables": {}}))
-    info, extracted = _resumed(out, monkeypatch, _kwargs(other))
-    assert extracted == STAYS
-    [event] = info["stream_resume_events"]
-    assert event["changed"] == ["load_params_sha256", "source_identity_sha256"]
+    ledger = out / ".test_module.stream_ledger.json"
+    before = ledger.read_bytes()
+    parts = set(out.glob("*.parquet"))
+    with pytest.raises(SealPublicationError) as caught:
+        _resumed(out, monkeypatch, _kwargs(other))
+    assert caught.value.reason == UNACCEPTED
+    assert ledger.read_bytes() == before
+    assert set(out.glob("*.parquet")) == parts
 
 
 def test_other_code_or_dictionaries_start_fresh(tmp_path, monkeypatch, source):

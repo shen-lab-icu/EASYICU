@@ -4,7 +4,11 @@ from __future__ import annotations
 
 from easyicu.runtime import duckdb_spill
 from . import storage_layout
-from .storage_seal_publication import assert_source_published
+from .storage_seal_publication import (
+    assert_roots_published,
+    assert_source_published,
+    configured_publication_roots,
+)
 import enum
 from contextlib import contextmanager, nullcontext
 from dataclasses import dataclass, field, replace
@@ -624,6 +628,9 @@ class ICUDataSource:
         self.config = config
         self.base_path = Path(base_path) if base_path else None
         self._table_sources: MutableMapping[str, Any] = dict(table_sources or {})
+        self.seal_publication_closure = assert_roots_published(
+            configured_publication_roots(config, self.base_path, self._table_sources)
+        ).to_dict()
         self.default_format = default_format
         self.registry = registry
         self._dataset_sources: Dict[str, DatasetOptions] = {
@@ -647,6 +654,11 @@ class ICUDataSource:
 
     def register_table_source(self, table: str, source: Any) -> None:
         """Register a callable/file path used to load ``table``."""
+        self.seal_publication_closure = assert_roots_published(
+            configured_publication_roots(
+                self.config, self.base_path, {**self._table_sources, table: source}
+            )
+        ).to_dict()
         self._table_sources[table] = source
 
     def cache_source_identity(self, cache_dir: Path) -> Optional[str]:

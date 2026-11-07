@@ -1552,6 +1552,8 @@ class ConceptResolver:
                     
                 if verbose:
                     if DEBUG_MODE: print(f"   🔗 加载 ID 映射表: {len(self._id_mapping_cache)} 条记录")
+            except StorageIntegrityError:
+                raise
             except Exception as e:
                 if verbose:
                     print(f"   ⚠️  无法加载 icustays 进行 ID 转换: {e}")
@@ -2184,7 +2186,10 @@ class ConceptResolver:
                                 len(covered_names),
                                 len(names),
                             )
-                except (DuckDBQueryInterrupted, UndeclaredUnitError, SourceBoundsAuditError):
+                except (
+                    DuckDBQueryInterrupted, StorageIntegrityError,
+                    UndeclaredUnitError, SourceBoundsAuditError,
+                ):
                     # A declared-unit refusal (e.g. an invalid FiO2 unit)
                     # keeps its type and reason, as on the single-concept owner.
                     raise
@@ -2710,6 +2715,8 @@ class ConceptResolver:
                             )
                             if sub_result is not None:
                                 tables[sub_name] = sub_result
+                        except StorageIntegrityError:
+                            raise
                         except Exception as e:
                             # A callback run without one of its inputs would
                             # publish a partial or empty concept.
@@ -6759,6 +6766,8 @@ class ConceptResolver:
                 )
                 self._aumc_admissions_cache = admission_times
             return admission_times
+        except StorageIntegrityError:
+            raise
         except Exception as exc:
             raise ValueError(
                 "AUMC time alignment requires admissions.admittedat"
@@ -6871,6 +6880,8 @@ class ConceptResolver:
                         how="left",
                         validate="many_to_one",
                     )
+                except StorageIntegrityError:
+                    raise
                 except Exception as exc:
                     raise ConceptError(
                         f"{db_name} time alignment failed while loading "
@@ -7210,6 +7221,8 @@ class ConceptResolver:
                             how="left",
                             validate="many_to_one",
                         )
+                    except StorageIntegrityError:
+                        raise
                     except Exception as exc:
                         raise ValueError(
                             "SICdb raw time alignment requires cases.ICUOffset"
@@ -7901,6 +7914,8 @@ class ConceptResolver:
                 set_dur_var_unit(data, dur_unit)
             
         except ConceptError:
+            raise
+        except StorageIntegrityError:
             raise
         except Exception as exc:
             # Alignment is a data-semantics step, not best-effort: every
