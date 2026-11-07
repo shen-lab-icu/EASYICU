@@ -890,7 +890,13 @@ def qc_bucket(bucket: Path, full: str, current_bucket: Path | None = None) -> di
     # Formal roots are built, never adopted: an adopted legacy cache has no source ordinal.
     if (bucket / ADOPTION_RECEIPT).exists() or m.get("source_order") != SOURCE_ORDINAL:
         findings.append("adopted_bucket_not_formal")
-    if ff is not None and ff.get("rows") != r.get("rows"):
+    # Older builder records omit rows only for a table with no float columns.
+    # Verify that claim against the receipt's source schema; an empty fidelity
+    # record alone cannot exempt a float table from exact row-count binding.
+    vacuous_fidelity = (
+        ff is not None and ff.get("columns") == {} and bool(schema) and not floats
+    )
+    if ff is not None and not vacuous_fidelity and ff.get("rows") != r.get("rows"):
         findings.append("float_fidelity_rows_vs_receipt")
     inventory = m.get("inventory") or []
     rows = r.get("rows")
