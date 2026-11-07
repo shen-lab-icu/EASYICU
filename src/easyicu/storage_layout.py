@@ -875,8 +875,8 @@ def _listdir(directory: Path) -> list:
 
 
 def _table_keys(source, table: str) -> set:
-    """The table name and a single configured file's stem, casefolded."""
-    keys = {table.casefold()}
+    """The table name and a single configured file's stem, as spelled."""
+    keys = {table}
     try:
         entries = [
             entry.get("path") or entry.get("file")
@@ -891,7 +891,7 @@ def _table_keys(source, table: str) -> set:
             if name.casefold().endswith(suffix):
                 name = name[: -len(suffix)]
                 break
-        keys.add(name.casefold())
+        keys.add(name)
     return keys
 
 
@@ -935,9 +935,10 @@ def match_table_entries(source, table: str, *, subdirectories: bool = False) -> 
     hardlink with the same dev and inode) count once.
     """
     base = Path(source.base_path)
-    keys = _table_keys(source, table)
+    spelled = _table_keys(source, table)
+    keys = {k.casefold() for k in spelled}
     wanted = {k + suffix for k in keys for suffix in _SOURCE_SUFFIXES}
-    canonical = {table + suffix for suffix in _SOURCE_SUFFIXES}
+    canonical = {k + suffix for k in spelled for suffix in _SOURCE_SUFFIXES}
     roots, found = [base], []
     for name in _listdir(base):
         if name.casefold() in {"icu", "hosp"}:
