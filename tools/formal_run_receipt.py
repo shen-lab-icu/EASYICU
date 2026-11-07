@@ -52,16 +52,16 @@ exited. It binds the run to the sealed code and to its inputs:
   else ``layout_deviation``;
 * the code carries no working-tree diff: the code identity's and the native
   manifest's ``diff_sha256`` are copied and must be null;
-* every formal tool script the run executes is the seal tree's: this tool,
-  its approved allowlist (``tools/formal_declared_absent.json``), the
-  wrapper that started it (the nearest ancestor shell's script, read through
-  its open descriptor) and the drivers it ran from its own directory
-  (``bench_local.py``, ``inputs_bench_local.py``; unchanged since the run
-  started) must each hash to the git blob at the sealed commit (wrapper and
-  drivers under ``tools/formal/``), else ``formal_tool_script_mismatch``; a
-  module file there that shadows an importable module is
-  ``formal_tool_script_shadowed``; the sha256s are recorded
-  (``tool_scripts``);
+* copy-then-exec: the run executed only staged copies of the sealed tool
+  set (``tools/formal/FORMAL_TOOLS.json``: the wrapper, the boot, both
+  drivers, memgate.py, this tool and its allowlist). ``.formal_tools`` in
+  the run root holds exactly those copies, read-only, each equal to the
+  seal tree's blob and to the sha the wrapper staged, and this tool runs as
+  its copy, else ``formal_tool_script_mismatch`` (``tool_scripts``); every
+  Python step ran under the staged boot (``python -S -P formal_boot.py``)
+  with easyicu from the clone's src at the seal, duckdb/pyarrow from the
+  named site-packages and nothing from elsewhere (``import_origin``; this
+  step checked live), else ``formal_import_origin_mismatch``;
 * REQUIRED_LAYOUT.json and the approved allowlist are parsed rejecting a
   duplicate key at any level (``receipt_input_duplicate_key``); names are
   deduplicated by casefold;
@@ -76,7 +76,7 @@ Anything else stops with a :class:`ReceiptError` reason code; nothing is
 papered over. The tool reads inputs and outputs only (it never writes under
 an input root) and prints no rows.
 
-Usage (bench7.sh calls it with the sealed worktree's ``src`` on PYTHONPATH)::
+Usage (bench7v3f.sh runs its staged copy under the staged boot, ``formal_boot.py``)::
 
     formal_run_receipt.py --run-root R --sealed-sha SHA --scratch S \\
         --started-at EPOCH [--param KEY=VALUE ...] DB:DIR:CORES [...]
@@ -90,6 +90,7 @@ import json
 import os
 import re
 import shutil
+import stat
 import subprocess
 import sys
 import time
@@ -252,50 +253,19 @@ def sealed_code_identity(sealed_sha: str) -> Dict[str, Any]:
     }
 
 
-# Formal tool scripts and where the seal tree holds them; the wrapper lives
-# under tools/formal/ by its own file name.
-RECEIPT_SEAL_PATH = "tools/formal_run_receipt.py"
-APPROVED_SEAL_PATH = "tools/formal_declared_absent.json"
-WRAPPER_SEAL_DIR = "tools/formal"
-# The Python drivers the wrapper runs from its own directory, by role:
-# bench_local.py is the extraction itself, inputs_bench_local.py the input
-# snapshot step. memgate.py, which the wrapper and bench_local.py also run, is
-# left out on purpose: it only decides when a job may start (memory admission)
-# and reads or writes no input, output, snapshot or receipt.
-WRAPPER_DRIVERS = (("extraction_driver", "bench_local.py"),
-                   ("snapshot_driver", "inputs_bench_local.py"))
-_SCRIPT_FD = 255  # bash keeps the script it is reading open on this descriptor
-_PROC = Path("/proc")
-
-
-def executing_wrapper() -> tuple[str, bytes, os.stat_result]:
-    """The wrapper script that started this process, its bytes and its stat.
-
-    The nearest ancestor process holding a regular file open as its script
-    (bash's descriptor 255; a ``( ... )`` subshell does not keep it) is the
-    wrapper. Its bytes are read through that descriptor, so a file replaced
-    on disk after the shell opened it still hashes as what ran. No such
-    ancestor (or no /proc) is ``formal_tool_script_unidentified``.
-    """
-    pid = os.getppid()
-    seen = set()
-    while pid > 1 and pid not in seen:
-        seen.add(pid)
-        fd = _PROC / str(pid) / "fd" / str(_SCRIPT_FD)
-        try:
-            target = os.readlink(fd)
-            if os.path.isabs(target) and fd.is_file():
-                return target, fd.read_bytes(), os.stat(fd)
-        except OSError:
-            pass
-        try:
-            stat = (_PROC / str(pid) / "stat").read_text()
-            pid = int(stat.rsplit(")", 1)[1].split()[1])
-        except (OSError, ValueError, IndexError):
-            break
-    raise ReceiptError("formal_tool_script_unidentified",
-                       "no ancestor shell holds the formal wrapper script open; a formal "
-                       "receipt is written only by its wrapper")
+# Formal tool execution identity (delta32p ruling: copy-then-exec). The
+# wrapper stages every tool of the sealed manifest by content into the run's
+# private FORMAL_TOOLS_DIR before anything runs, records their sha256 in
+# STAGED_FILE, and executes only those copies, every Python one under the
+# staged boot (tools/formal/formal_boot.py). The receipt is itself a staged
+# copy. Nothing here looks at processes, links or timestamps.
+TOOLS_MANIFEST_SEAL_PATH = "tools/formal/FORMAL_TOOLS.json"
+TOOLS_MANIFEST_SCHEMA = "easyicu.formal_tools/1"
+FORMAL_TOOLS_DIR = ".formal_tools"
+STAGED_FILE = "FORMAL_TOOLS.staged"
+IMPORT_ORIGIN_FILE = "IMPORT_ORIGIN.json"
+INPUT_STEPS = ("snapshot", "verify")
+BOOT_LIVE_MODULE = "formal_boot_live"
 
 
 def _seal_blob(repo: Path, sealed_sha: str, seal_path: str) -> Optional[bytes]:
@@ -320,119 +290,184 @@ def _seal_tree_root(code: Mapping[str, Any]) -> Path:
     return Path(done.stdout.strip())
 
 
-def _stat_identity(stat: os.stat_result) -> tuple:
-    # The storage binding's stat identity: utime restores mtime, not ctime.
-    return (stat.st_size, stat.st_mtime_ns, stat.st_ctime_ns, stat.st_ino, stat.st_dev)
-
-
-def _unchanged_since_start(role: str, path: str, stat: os.stat_result,
-                           started_ns: int) -> None:
-    if max(stat.st_mtime_ns, stat.st_ctime_ns) >= started_ns:
-        raise ReceiptError(
-            "formal_tool_script_mismatch",
-            f"the {role} script changed after the run started, so its bytes now are not "
-            "proven to be the bytes it ran", role=role, path=path,
-            reason="changed_after_run_start")
-
-
-def _driver_bytes(role: str, path: Path, started_ns: int) -> bytes:
-    """A driver's bytes, hashed now and proven to be the bytes the run executed.
-
-    A Python driver has exited before the receipt runs and holds no file
-    open, so it is read from the wrapper's directory, where the wrapper ran
-    it. Its stat identity must not move while it is read, and its ctime (which
-    utime cannot restore) must predate the run's start: then these bytes were
-    on disk for the whole run.
-    """
-    try:
-        before = os.stat(path)
-        data = path.read_bytes()
-        after = os.stat(path)
-    except FileNotFoundError as exc:
-        raise ReceiptError("formal_tool_script_unidentified",
-                           f"the {role} {path.name} is not beside the wrapper",
-                           role=role, path=str(path)) from exc
-    if _stat_identity(before) != _stat_identity(after):
-        raise ReceiptError("formal_tool_script_mismatch", f"the {role} changed while hashed",
-                           role=role, path=str(path), reason="changed_while_hashed")
-    _unchanged_since_start(role, str(path), after, started_ns)
-    return data
-
-
-def _refuse_shadowing(directory: Path) -> None:
-    """A driver runs with its own directory first on sys.path: a module file
-    there that shadows the standard library or an installed module would run
-    unverified, as part of the extraction. Any such file is a stop."""
-    import importlib.machinery
-
-    own = os.path.realpath(Path(__file__).parent)
-    search = [p for p in sys.path if os.path.realpath(p or ".") != own]
-    names = set()
-    for entry in os.listdir(directory):
-        if entry.endswith(".py"):
-            names.add(entry[:-3])
-        elif (directory / entry / "__init__.py").is_file():
-            names.add(entry)
-    shadowing = sorted(
-        n for n in names
-        if n in sys.stdlib_module_names or n in sys.builtin_module_names
-        or importlib.machinery.PathFinder.find_spec(n, search) is not None)
-    if shadowing:
-        raise ReceiptError("formal_tool_script_shadowed",
-                           f"the wrapper's directory shadows {len(shadowing)} module(s) the "
-                           "drivers may import: " + ", ".join(shadowing),
-                           directory=str(directory), modules=shadowing)
-
-
-def formal_tool_scripts(sealed_sha: str, code: Mapping[str, Any], approved_sha256: str,
-                        started_at: Optional[float]) -> List[Dict[str, Any]]:
-    """Every formal tool script this run executes must be the seal tree's blob.
-
-    The receipt tool itself (this file, as loaded), its approved allowlist
-    (``approved_sha256``: the bytes the receipt parsed), the wrapper that
-    started it (read through the descriptor its shell holds) and the drivers
-    the wrapper ran from its own directory (:data:`WRAPPER_DRIVERS`; see
-    :func:`_driver_bytes`). The wrapper and the drivers must not have changed
-    since ``started_at`` (the wrapper's start, epoch seconds). Returns their
-    records; any difference, or a script the seal tree does not hold, is
-    ``formal_tool_script_mismatch``.
-    """
-    if started_at is None:
+def sealed_tool_manifest(repo: Path, sealed_sha: str) -> List[Dict[str, str]]:
+    """The sealed manifest's tools [{name, path, sha256}], each equal to its blob at the seal."""
+    raw = _seal_blob(repo, sealed_sha, TOOLS_MANIFEST_SEAL_PATH)
+    if raw is None:
         raise ReceiptError("formal_tool_script_unverifiable",
-                           "the run's start time is unknown, so no driver can be proven "
-                           "unchanged during the run")
-    started_ns = int(float(started_at)) * 1_000_000_000  # the wrapper's whole-second start
-    repo = _seal_tree_root(code)
-    wrapper_path, wrapper_bytes, wrapper_stat = executing_wrapper()
-    _unchanged_since_start("wrapper", wrapper_path, wrapper_stat, started_ns)
-    wrapper_file = Path(wrapper_path.removesuffix(" (deleted)"))
-    wrapper_name = wrapper_file.name
-    _refuse_shadowing(wrapper_file.parent)
-    drivers = [(role, str(wrapper_file.parent / name), f"{WRAPPER_SEAL_DIR}/{name}",
-                hashlib.sha256(_driver_bytes(role, wrapper_file.parent / name,
-                                             started_ns)).hexdigest())
-               for role, name in WRAPPER_DRIVERS]
-    scripts = [
-        ("receipt", str(Path(__file__).resolve()), RECEIPT_SEAL_PATH,
-         sha256_file(Path(__file__).resolve())),
-        ("approved_declared_absent", str(APPROVED_DECLARED_ABSENT_FILE.resolve()),
-         APPROVED_SEAL_PATH, approved_sha256),
-        ("wrapper", wrapper_path, f"{WRAPPER_SEAL_DIR}/{wrapper_name}",
-         hashlib.sha256(wrapper_bytes).hexdigest()),
-        *drivers,
-    ]
-    records = []
-    for role, path, seal_path, digest in scripts:
-        blob = _seal_blob(repo, sealed_sha, seal_path)
+                           f"the seal tree has no {TOOLS_MANIFEST_SEAL_PATH}", sealed_sha=sealed_sha)
+    payload = _parse_json_object(raw, Path(TOOLS_MANIFEST_SEAL_PATH), TOOLS_MANIFEST_SEAL_PATH,
+                                 unique_keys=True)
+    tools = payload.get("tools")
+    names = [t.get("name") for t in tools if isinstance(t, dict)] if isinstance(tools, list) else []
+    if payload.get("schema") != TOOLS_MANIFEST_SCHEMA or not names or len(names) != len(tools) or (
+            len(set(names)) != len(names)) or not all(
+            isinstance(t.get(k), str) and t[k] for t in tools for k in ("name", "path", "sha256")) or (
+            any("/" in n or n in {".", ".."} for n in names)) or (
+            "formal_run_receipt.py" not in names or "formal_boot.py" not in names):
+        raise ReceiptError("receipt_input_malformed",
+                           f"{TOOLS_MANIFEST_SEAL_PATH} is not a {TOOLS_MANIFEST_SCHEMA} manifest",
+                           input=TOOLS_MANIFEST_SEAL_PATH)
+    for tool in tools:
+        blob = _seal_blob(repo, sealed_sha, tool["path"])
         seal_digest = None if blob is None else hashlib.sha256(blob).hexdigest()
-        if seal_digest != digest:
-            raise ReceiptError(
-                "formal_tool_script_mismatch",
-                f"the {role} script the run executed is not the seal tree's {seal_path}",
-                role=role, path=path, seal_path=seal_path, sha256=digest,
-                seal_sha256=seal_digest, sealed_sha=sealed_sha)
-        records.append({"role": role, "path": path, "seal_path": seal_path, "sha256": digest})
+        if seal_digest != tool["sha256"]:
+            raise ReceiptError("formal_tool_script_mismatch",
+                               f"the sealed manifest's {tool['name']} is not the seal tree's "
+                               f"{tool['path']}", role=tool["name"], reason="manifest_not_seal",
+                               seal_path=tool["path"], sha256=tool["sha256"],
+                               seal_sha256=seal_digest)
+    return [{k: t[k] for k in ("name", "path", "sha256")} for t in tools]
+
+
+def _staged_record(run_root: Path) -> Dict[str, str]:
+    path = run_root / STAGED_FILE
+    try:
+        lines = path.read_text(encoding="utf-8").splitlines()
+    except OSError as exc:
+        raise ReceiptError("formal_tools_not_staged", f"the run root has no {STAGED_FILE}",
+                           path=str(path)) from exc
+    staged: Dict[str, str] = {}
+    for line in lines:
+        digest, _, name = line.partition("  ")
+        if not re.fullmatch(r"[0-9a-f]{64}", digest) or not name or name in staged:
+            raise ReceiptError("receipt_input_malformed", f"{STAGED_FILE} is malformed",
+                               input=STAGED_FILE)
+        staged[name] = digest
+    return staged
+
+
+def formal_tool_scripts(sealed_sha: str, code: Mapping[str, Any], run_root: Path,
+                        approved_sha256: str) -> List[Dict[str, Any]]:
+    """Every formal tool the run executed was a staged copy equal to the seal.
+
+    ``<run_root>/.formal_tools`` must be a real, read-only directory holding
+    exactly the sealed manifest's tools (no other entry: no ``.pyc``, no
+    ``__pycache__``), each a regular read-only file with one link whose
+    sha256 equals the manifest's, the seal tree's blob and the sha the
+    wrapper recorded when it staged it (``FORMAL_TOOLS.staged``), so the
+    copies are unchanged at the end. This receipt must be running as the
+    staged copy, and the allowlist it parsed (``approved_sha256``) must be
+    the staged one. Returns one record per tool; any difference is
+    ``formal_tool_script_mismatch`` (``reason`` says which).
+    """
+    repo = _seal_tree_root(code)
+    tools = sealed_tool_manifest(repo, sealed_sha)
+    root = Path(run_root)
+    folder = root / FORMAL_TOOLS_DIR
+    try:
+        info = os.lstat(folder)
+    except OSError as exc:
+        raise ReceiptError("formal_tools_not_staged", f"the run root has no {FORMAL_TOOLS_DIR}",
+                           path=str(folder)) from exc
+    if not stat.S_ISDIR(info.st_mode) or info.st_mode & 0o222 or (
+            os.path.realpath(folder) != os.path.join(os.path.realpath(root), FORMAL_TOOLS_DIR)):
+        raise ReceiptError("formal_tools_dir_invalid",
+                           f"{FORMAL_TOOLS_DIR} must be a real read-only directory of the run root",
+                           path=str(folder))
+    names = {t["name"] for t in tools}
+    present = set(os.listdir(folder))
+    if present != names:
+        raise ReceiptError("formal_tools_dir_unexpected",
+                           f"{FORMAL_TOOLS_DIR} does not hold exactly the sealed tools",
+                           path=str(folder), unexpected=sorted(present - names),
+                           missing=sorted(names - present))
+    staged = _staged_record(root)
+    records = []
+    for tool in tools:
+        name, copy = tool["name"], folder / tool["name"]
+        entry = os.lstat(copy)
+        if not stat.S_ISREG(entry.st_mode) or entry.st_nlink != 1 or entry.st_mode & 0o222:
+            raise ReceiptError("formal_tool_script_mismatch",
+                               f"the staged {name} is not a single-link read-only regular file",
+                               role=name, path=str(copy), reason="not_a_staged_copy")
+        digest = sha256_file(copy)
+        if not digest == tool["sha256"] == staged.get(name):
+            raise ReceiptError("formal_tool_script_mismatch",
+                               f"the staged {name} is not the sealed {tool['path']} it was "
+                               "staged as", role=name, path=str(copy), seal_path=tool["path"],
+                               sha256=digest, seal_sha256=tool["sha256"],
+                               staged_sha256=staged.get(name),
+                               reason="changed_since_staged" if staged.get(name) == tool["sha256"]
+                               else "staged_not_seal")
+        records.append({"name": name, "seal_path": tool["path"], "path": str(copy),
+                        "sha256": digest})
+    if set(staged) != names:
+        raise ReceiptError("formal_tool_script_mismatch",
+                           f"{STAGED_FILE} does not list exactly the sealed tools",
+                           reason="staged_set_differs", staged=sorted(staged))
+    running = Path(__file__).resolve()
+    if running != (folder / "formal_run_receipt.py").resolve():
+        raise ReceiptError("formal_tool_script_mismatch",
+                           "the receipt is not running as the run's staged copy",
+                           role="formal_run_receipt.py", path=str(running), reason="not_staged")
+    if APPROVED_DECLARED_ABSENT_FILE.resolve().parent != folder.resolve() or (
+            approved_sha256 != staged.get(APPROVED_DECLARED_ABSENT_FILE.name)):
+        raise ReceiptError("formal_tool_script_mismatch",
+                           "the approved allowlist the receipt read is not the staged copy",
+                           role=APPROVED_DECLARED_ABSENT_FILE.name, reason="not_staged")
     return records
+
+
+def _origin_ok(record: Any, sealed_sha: str, src: str, tools: str, script: str) -> bool:
+    return (
+        isinstance(record, dict) and record.get("complete") is True
+        and record.get("mismatched") == [] and record.get("head") == sealed_sha
+        and record.get("src") == src and record.get("tools") == tools
+        and isinstance(record.get("path"), str) and record["path"].startswith(src + os.sep)
+        and record.get("script") == os.path.join(tools, script)
+    )
+
+
+def formal_import_origins(run_root: Path, sealed_sha: str, code: Mapping[str, Any],
+                          databases: Iterable[str]) -> Dict[str, Any]:
+    """Every Python step ran under the staged boot with clean import origins.
+
+    The boot's records: each database's extraction (``<db>/IMPORT_ORIGIN.json``,
+    script ``bench_local.py``) and both input-snapshot steps
+    (``IMPORT_ORIGIN.inputs_<step>.json``, ``inputs_bench_local.py``) must be
+    complete, at the sealed HEAD, with easyicu from the clone's src and no
+    mismatched module. The receipt's own step is checked live through the
+    boot (``formal_boot_live``) before RUN_RECEIPT.json is written; outside
+    the boot it is ``formal_boot_missing``.
+    """
+    root = Path(run_root)
+    src = os.path.realpath(Path(code["import_path"]).parent)
+    tools = os.path.realpath(root / FORMAL_TOOLS_DIR)
+    steps = {f"extract:{db}": (root / db / IMPORT_ORIGIN_FILE, "bench_local.py")
+             for db in databases}
+    steps.update({f"inputs:{step}": (root / f"IMPORT_ORIGIN.inputs_{step}.json",
+                                     "inputs_bench_local.py") for step in INPUT_STEPS})
+    out: Dict[str, Any] = {}
+    for step, (path, script) in steps.items():
+        try:
+            record = json.loads(path.read_text(encoding="utf-8"))
+        except (OSError, ValueError) as exc:
+            raise ReceiptError("formal_import_origin_missing",
+                               f"{step} left no readable import-origin record", step=step,
+                               path=str(path)) from exc
+        if not _origin_ok(record, sealed_sha, src, tools, script):
+            raise ReceiptError("formal_import_origin_mismatch",
+                               f"{step} did not run as the staged {script} under the boot with "
+                               "clean import origins", step=step,
+                               mismatched=record.get("mismatched") if isinstance(record, dict)
+                               else None)
+        out[step] = {"path": str(path), "sha256": sha256_file(path),
+                     "modules": len(record.get("modules") or {})}
+    live = sys.modules.get(BOOT_LIVE_MODULE)
+    if live is None:
+        raise ReceiptError("formal_boot_missing",
+                           "the receipt is not running under the staged boot")
+    mismatched = live.check()
+    record = live.record
+    if mismatched or not _origin_ok({**record, "complete": True}, sealed_sha, src, tools,
+                                    "formal_run_receipt.py"):
+        raise ReceiptError("formal_import_origin_mismatch",
+                           "the receipt step's import origins are not clean", step="receipt",
+                           mismatched=list(mismatched))
+    out["receipt"] = {"live": True, "modules": len(record.get("modules") or {})}
+    return out
+
 
 
 def _canonical(value: Any) -> Any:
@@ -1305,7 +1340,7 @@ def build_run_receipt(
     code = sealed_code_identity(sealed_sha)
     approved = approved_declared_absent()
     approved_sha = approved[1]
-    tool_scripts = formal_tool_scripts(sealed_sha, code, approved_sha, started_at)
+    tool_scripts = formal_tool_scripts(sealed_sha, code, run_root, approved_sha)
     pre, post, snapshot_files = _snapshots(run_root)
     required, required_sha = load_required_layout(
         run_root, [spec.split(":", 2)[0] for spec in specs], approved)
@@ -1325,6 +1360,8 @@ def build_run_receipt(
             raise ReceiptError("receipt_input_malformed", f"{db}: {type(exc).__name__}: {exc}",
                                database=db) from exc
         databases[db] = section
+    # Last: every Python step ran as a staged copy under the boot (this one checked live).
+    import_origin = formal_import_origins(run_root, sealed_sha, code, list(databases))
     finished = time.time()
     peaks = [s["cgroup_peak_gib"] for s in databases.values() if s.get("cgroup_peak_gib") is not None]
     return {
@@ -1333,6 +1370,7 @@ def build_run_receipt(
         "easyicu_version": code.get("version"),
         "code_identity": code,
         "tool_scripts": tool_scripts,
+        "import_origin": import_origin,
         "input_snapshot": snapshot_files,
         "required_layout": {"path": str((run_root / REQUIRED_LAYOUT_FILE).resolve()),
                             "sha256": required_sha, "complete": True,

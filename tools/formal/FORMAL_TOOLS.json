@@ -1,0 +1,41 @@
+{
+  "schema": "easyicu.formal_tools/1",
+  "note": "The formal tool set (delta32p copy-then-exec): the wrapper stages each by content from the sealed tree into the run's .formal_tools and executes only those copies; the receipt verifies them against the seal. memgate.py is included (admission only). Keep each sha256 equal to its file (tests/core/test_r13_formal_run_receipt.py).",
+  "tools": [
+    {
+      "name": "bench7v3f.sh",
+      "path": "tools/formal/bench7v3f.sh",
+      "sha256": "63b5f3573d99c2561f7798a1c00f1899e7ed1909992247c1b2f6164023da6854"
+    },
+    {
+      "name": "formal_boot.py",
+      "path": "tools/formal/formal_boot.py",
+      "sha256": "141b43be268cdb573b47067dc5f4e876ed49d887369a79ccaccd60c68345aea4"
+    },
+    {
+      "name": "bench_local.py",
+      "path": "tools/formal/bench_local.py",
+      "sha256": "523190f23d9703e3d7377604f3389f9e3e1a1adf71c1934668c78891486ff6a9"
+    },
+    {
+      "name": "inputs_bench_local.py",
+      "path": "tools/formal/inputs_bench_local.py",
+      "sha256": "f06eca62a1fbac7695c3abc4f4f51dfc27bda27eee4348148480cf0c1503e1ca"
+    },
+    {
+      "name": "memgate.py",
+      "path": "tools/formal/memgate.py",
+      "sha256": "5a86ade410ec74babb077a447996df2113fa73132b467193cb13d3d212c8f23e"
+    },
+    {
+      "name": "formal_run_receipt.py",
+      "path": "tools/formal_run_receipt.py",
+      "sha256": "b5a66538cea25e8d9fe110c6b1bebe644a856e0b6996f7e57500934bfb5e3904"
+    },
+    {
+      "name": "formal_declared_absent.json",
+      "path": "tools/formal_declared_absent.json",
+      "sha256": "4ae6bc7bbc1b4b8cb05b44181a0382fbe0f2bfb60f01176ecfb02437d46429d6"
+    }
+  ]
+}

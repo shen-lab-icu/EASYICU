@@ -94,9 +94,9 @@ after the run: `easyicu.formal_inputs` takes it
 (`src/easyicu/formal_inputs.py:374` `take_snapshot`, `:383` `verify_snapshot`;
 a file whose stat identity moves while it is hashed is refused, `:307`
 `_hash`), and the formal receipt requires both snapshots to agree
-(`tools/formal_run_receipt.py:1049` `_snapshot_section`,
+(`tools/formal_run_receipt.py:1176` `_snapshot_section`,
 `input_changed_during_run`) and binds every consumed file to its snapshot
-sha256 (`tools/formal_run_receipt.py:572` `_consumed`,
+sha256 (`tools/formal_run_receipt.py:699` `_consumed`,
 `storage_consumed_outside_snapshot`). A non-formal run's content identity is
 the stat identity above.
 
