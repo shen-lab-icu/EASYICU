@@ -77,8 +77,8 @@ jobs:
 
       - name: Run conversion and extraction portability regressions
         run: |
-          pytest -q -m "" tests/core/test_arrow_converter.py tests/core/test_converter_optimizations.py tests/core/test_data_converter_hirid.py tests/core/test_derived_concept_callbacks.py tests/core/test_concept_outcome_fail_closed.py tests/core/test_extract_chunk_cap.py tests/core/test_extract_module_grouping.py
-          pytest -q -m "" tests/core/test_cross_layer_safety_regressions.py -k "p0_2_known_source_end_before_start_is_quarantined or p0_2_corrupt_duration_fails_closed"
+          pytest -q -rs -m "" tests/core/test_arrow_converter.py tests/core/test_converter_optimizations.py tests/core/test_data_converter_hirid.py tests/core/test_derived_concept_callbacks.py tests/core/test_concept_outcome_fail_closed.py tests/core/test_extract_chunk_cap.py tests/core/test_extract_module_grouping.py
+          pytest -q -rs -m "" tests/core/test_cross_layer_safety_regressions.py -k "p0_2_known_source_end_before_start_is_quarantined or p0_2_corrupt_duration_fails_closed"
 
   test:
     name: tests (py${{ matrix.python-version }}, ${{ matrix.shard }}/5)
@@ -161,7 +161,7 @@ jobs:
           # Exercise fail-closed backend selection without development overrides.
           # Kept serial and unfiltered: it asserts on runner selection itself.
           mkdir -p ci-receipts
-          pytest tests/research_agent/execution/test_runner.py -q -m "" --junitxml=ci-receipts/runner-results.xml
+          pytest tests/research_agent/execution/test_runner.py -q -rs -m "" --junitxml=ci-receipts/runner-results.xml
 
       - name: Run test suite shard
         run: |
@@ -172,7 +172,7 @@ jobs:
           # cores -- pytest-xdist was a declared dev dep that no workflow used.
           EASYICU_TEST_RUNNER_KIND=subprocess \
           EASYICU_ALLOW_UNSAFE_HOST_FALLBACK=1 \
-            python -m pytest -q -m "" -n auto --dist loadfile \
+            python -m pytest -q -rs -m "" -n auto --dist loadfile \
               --ignore=tests/research_agent/execution/test_runner.py \
               -p tests.support.ci_shard --ci-shard=${{ matrix.shard }}/5 \
               -p tests.support.figure2_versioned_ci --figure2-current-v4 \

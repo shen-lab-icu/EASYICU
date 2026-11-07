@@ -68,7 +68,9 @@ def test_ci_runs_the_manifest_unfiltered_and_preserves_candidate_receipts() -> N
     run = critical["run"]
     assert "-k " not in run
     assert "--collect-only" in run and "--junitxml=" in run
-    assert run.count('pytest "${critical_tests[@]}" -q -m ""') == 2
+    # The same selection is collected and then run; the run also prints skip reasons.
+    assert run.count('pytest "${critical_tests[@]}" -q -m "" --collect-only') == 1
+    assert run.count('pytest "${critical_tests[@]}" -q -rs -m "" --junitxml=') == 1
     assert 'test "${#critical_tests[@]}" -gt 0' in run
     assert any("pip freeze --all" in step.get("run", "") for step in steps)
     assert any("git rev-parse HEAD" in step.get("run", "") for step in steps)

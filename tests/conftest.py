@@ -50,6 +50,7 @@ for path in (REPO_ROOT, SRC_ROOT):
         sys.path.insert(0, str(path))
 
 from tests.support.pytest_state import PYTEST_EASYICU_HOME as _PYTEST_EASYICU_HOME  # noqa: E402
+from tests.support import required_in_ci_guard as _required_in_ci_guard  # noqa: E402
 
 
 @lru_cache(maxsize=None)
@@ -74,19 +75,45 @@ def _optional_extra_for_test(module_path: Path) -> str | None:
     return None
 
 
-def pytest_ignore_collect(collection_path: Path, config) -> bool | None:
-    """Do not import test owners whose declared optional runtime is absent."""
+def _optional_omission(module_path: Path) -> tuple[str, tuple[str, ...]] | None:
+    """The optional extra and its missing packages when this test owner is not collected."""
 
-    extra = _optional_extra_for_test(collection_path)
+    extra = _optional_extra_for_test(module_path)
     if extra is None:
         return None
     missing = _missing_optional_packages(extra)
-    if missing:
-        omitted = getattr(config, "_easyicu_omitted_optional_extras", {})
-        omitted[extra] = missing
-        config._easyicu_omitted_optional_extras = omitted
-        return True
-    return None
+    return (extra, missing) if missing else None
+
+
+def pytest_ignore_collect(collection_path: Path, config) -> bool | None:
+    """Do not import test owners whose declared optional runtime is absent."""
+
+    omission = _optional_omission(collection_path)
+    if omission is None:
+        return None
+    extra, missing = omission
+    omitted = getattr(config, "_easyicu_omitted_optional_extras", {})
+    omitted[extra] = missing
+    config._easyicu_omitted_optional_extras = omitted
+    return True
+
+
+# Required-in-CI files (tests/support/required_in_ci.py) must not be skipped or
+# left uncollected on GitHub Actions; the guard fails the session if they are.
+def pytest_configure(config):
+    _required_in_ci_guard.configure(config, omitted=_optional_omission)
+
+
+def pytest_collectreport(report):
+    _required_in_ci_guard.record(report)
+
+
+def pytest_runtest_logreport(report):
+    _required_in_ci_guard.record(report)
+
+
+def pytest_sessionfinish(session, exitstatus):
+    _required_in_ci_guard.finish(session)
 
 
 def pytest_report_header(config) -> str | None:
