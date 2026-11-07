@@ -125,6 +125,8 @@ def main() -> None:
             or record["mismatched"]:
         print("import_origin_mismatch (before the script)", file=sys.stderr)
         sys.exit(ORIGIN_EXIT)
+    # A spawned worker (a fresh interpreter) checks its own origin against this.
+    os.environ["FORMAL_BOOT_SRC"] = src
     live = types.ModuleType("formal_boot_live")
     live.check, live.record = check, record
     sys.modules["formal_boot_live"] = live

@@ -1,21 +1,21 @@
 {
   "schema": "easyicu.formal_tools/1",
-  "note": "The formal tool set (delta32p copy-then-exec): the wrapper stages each by content from the sealed tree into the run's .formal_tools and executes only those copies; the receipt verifies them against the seal. memgate.py is included (admission only). Keep each sha256 equal to its file (tests/core/test_r13_formal_run_receipt.py).",
+  "note": "The formal tool set (delta32p copy-then-exec): the wrapper stages each by content from the sealed tree into the run's .formal_tools and executes only those copies; the receipt verifies them against the seal. memgate.py is included (admission only). The extraction driver is v2_bench_local.py; bench_local.py (v1) stays byte-pinned and is not in the set. Keep each sha256 equal to its file (tests/core/test_r13_formal_run_receipt.py).",
   "tools": [
     {
       "name": "bench7v3f.sh",
       "path": "tools/formal/bench7v3f.sh",
-      "sha256": "39ad0eb57febc39e398bfb9879e747c1181952f8dcce63ecaaa8f386420c4d13"
+      "sha256": "b03338a5b76ea8d40b2e7db86de65c0815740192f3f8a13bb9cf9e8b375f8fe3"
     },
     {
       "name": "formal_boot.py",
       "path": "tools/formal/formal_boot.py",
-      "sha256": "b99ffed7cf7d0f09b5178ba4326e75a1893d4ee1686ce67efed572727a6947e5"
+      "sha256": "9d4607c5c4242f9aa220e648a0f0a5af366fdd134fc2806709d88fa320a4e85d"
     },
     {
-      "name": "bench_local.py",
-      "path": "tools/formal/bench_local.py",
-      "sha256": "523190f23d9703e3d7377604f3389f9e3e1a1adf71c1934668c78891486ff6a9"
+      "name": "v2_bench_local.py",
+      "path": "tools/formal/v2_bench_local.py",
+      "sha256": "304c9d06d19802048e39aca310d6cfdf73aec9d84bb9d5e716f38bd6df22ecb7"
     },
     {
       "name": "inputs_bench_local.py",
@@ -30,7 +30,7 @@
     {
       "name": "formal_run_receipt.py",
       "path": "tools/formal_run_receipt.py",
-      "sha256": "f4c1b831239e581054101d4e18303b3b90c86c9b5b1694560f8d9c8602c9e838"
+      "sha256": "28981aa05025ee6148f9f5a750d33e5012d76c76f768a0d958535d91e7706504"
     },
     {
       "name": "formal_declared_absent.json",

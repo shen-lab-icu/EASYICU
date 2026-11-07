@@ -70,6 +70,38 @@ including a late REFUSED after a cache was filled, are non-blocking review
 items under this protocol. The CACHE regression documents this invariant and
 the existing read-time defense; it does not introduce cache invalidation.
 Healthy unmarked roots retain their existing reading behavior.
+A formal run executes only staged copies of the sealed tool set
+(`tools/formal/FORMAL_TOOLS.json`: the wrapper `bench7v3f.sh`, the boot
+`formal_boot.py`, the drivers `v2_bench_local.py` and `inputs_bench_local.py`,
+`memgate.py`, the receipt tool and its allowlist). The wrapper copies each by
+content from the sealed commit into the run's read-only `.formal_tools`,
+checks it against the manifest before anything runs, and runs every Python
+step under the boot (`python -I -S -P`, the import path cut to stdlib first,
+then the staged tools, the clone's src and the named site-packages; any
+module from elsewhere is exit 97). The receipt refuses unless the staged set
+equals the seal and is unchanged (`formal_tool_script_mismatch`,
+`formal_tools_dir_unexpected`) and every step's import origins are clean
+(`formal_import_origin_mismatch`); a refused receipt makes the run invalid
+(`RUN_INVALID`, non-zero exit). `REQUIRED_LAYOUT.json` and the
+approved allowlist refuse a duplicate key at any level
+(`receipt_input_duplicate_key`), and their db/table names are deduplicated by
+casefold.
+
+The receipt first validates the native manifest's complete `storage_reads`
+set (`formal_read_set_unknown` for an unresolved root, table or layout;
+`storage_reads_missing` for the absent key). Every distinct `bucket_*`
+layout path must pass `assert_seal_published(..., formal=True)` and is
+recorded in `seal_checks`; a flat/CSV-only set (HiRID) passes with no seal
+calls. CareVue farm links require the real installation's matching receipt.
+Publication failures retain their `SealPublicationError.reason` refusal code.
+
+The new sealed extraction driver `v2_bench_local.py` runs memgate under the
+boot too, and records a raised extraction exception's root type, reason and
+cause/context chain for the receipt. Its spawned workers verify their own
+EasyICU source and actual isolated/no-site flags before work, writing origin
+records that the receipt checks along with memgate's record. The original
+`bench_local.py` stays byte-identical and leaves the formal tool set.
+Exceptions already converted to strings by extraction remain untyped.
 
 ## 2026-11-07 — readers refuse a bucket installation the seal tool has not published [lead-r13, branch `r13slpub`]
 

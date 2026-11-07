@@ -38,6 +38,10 @@ exited. It binds the run to the sealed code and to its inputs:
   (``storage_layout_unrecorded``) and every read in it is checked against the
   snapshot (flat under this input; bucket installations, manifests and
   ``derived_from`` sources as snapshotted);
+* a known native read set before any publication check; each distinct
+  ``bucket_*`` layout path must pass ``assert_seal_published(..., formal=True)``
+  (``seal_checks``), retaining the seal refusal reason; flat/CSV-only sets
+  require no seal calls;
 * no storage fallback: a formal run that read through one is
   ``storage_fallback_in_formal_run`` (with counts per reason);
 * no declared table read as empty for want of a physical source unless the
@@ -58,10 +62,11 @@ exited. It binds the run to the sealed code and to its inputs:
   the run root holds exactly those copies, read-only, each equal to the
   seal tree's blob and to the sha the wrapper staged, and this tool runs as
   its copy, else ``formal_tool_script_mismatch`` (``tool_scripts``); every
-  Python step ran under the staged boot (``python -S -P formal_boot.py``)
+  Python step ran under the staged boot (``python -I -S -P formal_boot.py``)
   with easyicu from the clone's src at the seal, duckdb/pyarrow from the
   named site-packages and nothing from elsewhere (``import_origin``; this
-  step checked live), else ``formal_import_origin_mismatch``;
+  step checked live), else ``formal_import_origin_mismatch``; the v2 driver's
+  memgate and spawned workers supply their own origin records;
 * REQUIRED_LAYOUT.json and the approved allowlist are parsed rejecting a
   duplicate key at any level (``receipt_input_duplicate_key``); names are
   deduplicated by casefold;
@@ -265,6 +270,8 @@ FORMAL_TOOLS_DIR = ".formal_tools"
 STAGED_FILE = "FORMAL_TOOLS.staged"
 IMPORT_ORIGIN_FILE = "IMPORT_ORIGIN.json"
 INPUT_STEPS = ("snapshot", "verify")
+EXTRACTION_DRIVER = "v2_bench_local.py"  # bench_local.py (v1) stays byte-pinned and unused
+WORKER_ORIGIN_DIR = "worker_origin"
 BOOT_LIVE_MODULE = "formal_boot_live"
 
 
@@ -422,12 +429,39 @@ def _origin_ok(record: Any, sealed_sha: str, src: str, tools: str, script: str,
     )
 
 
+def _worker_origins(db: str, folder: Path, src: str) -> Dict[str, Any]:
+    """Each spawned extraction worker's own origin record (the driver checks it
+    at worker start: easyicu from the clone's src, interpreter flags isolated
+    and no_site, else the worker exits 97). Spawn is the extractor's default
+    start method; a forked or in-process run leaves none (count 0)."""
+    records = sorted(folder.glob("*.json")) if folder.is_dir() else []
+    bad = []
+    for path in records:
+        try:
+            record = json.loads(path.read_text(encoding="utf-8"))
+        except (OSError, ValueError):
+            record = None
+        if not (isinstance(record, dict) and record.get("ok") is True
+                and record.get("src") == src and record.get("isolated")
+                and record.get("no_site") and record.get("safe_path")
+                and os.path.realpath(str(record.get("easyicu", ""))).startswith(src + os.sep)):
+            bad.append(path.name)
+    if bad:
+        raise ReceiptError("formal_import_origin_mismatch",
+                           f"{db}: {len(bad)} extraction worker(s) started outside the boot's "
+                           "origins", step=f"workers:{db}", workers=bad[:20])
+    return {"workers": len(records)}
+
+
 def formal_import_origins(run_root: Path, sealed_sha: str, code: Mapping[str, Any],
                           databases: Iterable[str]) -> Dict[str, Any]:
     """Every Python step ran under the staged boot with clean import origins.
 
     The boot's records: each database's extraction (``<db>/IMPORT_ORIGIN.json``,
-    script ``bench_local.py``) and both input-snapshot steps
+    script ``v2_bench_local.py``), its admission check
+    (``<db>/IMPORT_ORIGIN.memgate.json``, ``memgate.py``, run by the driver
+    under the boot), its spawned workers (``<db>/worker_origin/*.json``) and
+    both input-snapshot steps
     (``IMPORT_ORIGIN.inputs_<step>.json``, ``inputs_bench_local.py``) must be
     complete, at the sealed HEAD, with easyicu from the clone's src, no
     mismatched module and a temp dir inside the run root (never /tmp). The receipt's own step is checked live through the
@@ -435,11 +469,14 @@ def formal_import_origins(run_root: Path, sealed_sha: str, code: Mapping[str, An
     the boot it is ``formal_boot_missing``.
     """
     root = Path(run_root)
+    databases = tuple(databases)
     src = os.path.realpath(Path(code["import_path"]).parent)
     tools = os.path.realpath(root / FORMAL_TOOLS_DIR)
     run_real = os.path.realpath(root)
-    steps = {f"extract:{db}": (root / db / IMPORT_ORIGIN_FILE, "bench_local.py")
+    steps = {f"extract:{db}": (root / db / IMPORT_ORIGIN_FILE, EXTRACTION_DRIVER)
              for db in databases}
+    steps.update({f"memgate:{db}": (root / db / "IMPORT_ORIGIN.memgate.json", "memgate.py")
+                  for db in databases})
     steps.update({f"inputs:{step}": (root / f"IMPORT_ORIGIN.inputs_{step}.json",
                                      "inputs_bench_local.py") for step in INPUT_STEPS})
     out: Dict[str, Any] = {}
@@ -458,6 +495,8 @@ def formal_import_origins(run_root: Path, sealed_sha: str, code: Mapping[str, An
                                else None)
         out[step] = {"path": str(path), "sha256": sha256_file(path),
                      "modules": len(record.get("modules") or {})}
+    for db in databases:
+        out[f"workers:{db}"] = _worker_origins(db, root / db / WORKER_ORIGIN_DIR, src)
     live = sys.modules.get(BOOT_LIVE_MODULE)
     if live is None:
         raise ReceiptError("formal_boot_missing",
@@ -649,6 +688,54 @@ def _refuse_unused_installation(db: str, table: Any, realpath: Any,
         raise ReceiptError("storage_read_unvalidated_installation",
                            f"{db} {table} was read from a bucket installation the snapshot "
                            "listed as unused (never validated)", database=db, table=table)
+
+
+_READ_LAYOUT = re.compile(r"flat|csv|bucket_[a-z][a-z0-9_]*")
+
+
+def _formal_read_set(db: str, reads: Any) -> None:
+    """The native manifest's read set must be known before any seal check.
+
+    Every ``storage_reads`` entry names its root, its layout directory and a
+    known layout (``flat``, ``csv`` or ``bucket_<scheme>``); anything else is
+    ``formal_read_set_unknown`` (fail closed). A missing key is
+    ``storage_reads_missing`` (checked by the caller).
+    """
+    bad = []
+    for entry in reads if isinstance(reads, list) else [None]:
+        if not isinstance(entry, dict) or not isinstance(entry.get("layout"), str) or (
+                _READ_LAYOUT.fullmatch(entry["layout"]) is None) or not all(
+                isinstance(entry.get(k), str) and entry[k] not in ("", "None")
+                for k in ("root", "layout_path", "table")):
+            bad.append(entry.get("table") if isinstance(entry, dict) else None)
+    if bad:
+        raise ReceiptError("formal_read_set_unknown",
+                           f"{db} read set has {len(bad)} entries with no known layout or "
+                           "root", database=db, tables=sorted(map(str, bad)))
+
+
+def _seal_published(db: str, reads: List[Dict[str, Any]]) -> List[Dict[str, str]]:
+    """Every bucket read was served from an installation the seal tool published
+    and accepted (``assert_seal_published(<bucket dir>, formal=True)``: PASS
+    receipt, the bucket's manifest bound to it, a CareVue farm link followed to
+    its realpath install's receipt). A flat or CSV read needs no seal check (an
+    all-flat read set, HiRID's, makes none). A refusal keeps the seal module's
+    reason as its code."""
+    from easyicu.storage_seal_publication import SealPublicationError, assert_seal_published
+
+    checked: Dict[str, Dict[str, str]] = {}
+    for entry in reads:
+        if not entry["layout"].startswith("bucket_") or entry["layout_path"] in checked:
+            continue
+        try:
+            assert_seal_published(Path(entry["layout_path"]), formal=True)
+        except SealPublicationError as exc:
+            raise ReceiptError(exc.reason, f"{db} {entry['table']}: {exc}", database=db,
+                               table=entry["table"], path=entry["layout_path"],
+                               seal_reason=exc.reason) from exc
+        checked[entry["layout_path"]] = {"table": entry["table"],
+                                         "layout_path": entry["layout_path"]}
+    return list(checked.values())
 
 
 def _storage_reads(db: str, reads: List[Dict[str, Any]],
@@ -1234,7 +1321,14 @@ def _database_section(run_root: Path, db: str, input_dir: str, cores: str,
         raise ReceiptError("database_run_failed", f"{db} exited {exit_status}", database=db)
     summary = load_json_object(out / "summary.json", f"{db} summary.json")
     if summary.get("exception") or summary.get("errors") or summary.get("worker_failures"):
-        raise ReceiptError("database_run_reported_errors", f"{db} reported errors", database=db)
+        # The driver records the root cause of a failed step (the end of its
+        # __cause__/__context__ chain), so an error re-typed by a broad handler
+        # still shows its own type and reason here.
+        root = summary.get("exception_root") if isinstance(summary.get("exception_root"),
+                                                           dict) else {}
+        raise ReceiptError("database_run_reported_errors", f"{db} reported errors", database=db,
+                           root_type=root.get("type"), root_reason=root.get("reason"),
+                           chain=root.get("chain"))
     section.update({
         "wall_seconds": summary.get("secs"),
         "cgroup_memory_max": summary.get("cgroup_memory_max"),
@@ -1284,6 +1378,8 @@ def _database_section(run_root: Path, db: str, input_dir: str, cores: str,
     pre, post = snapshots if snapshots is not None else _snapshots(run_root)[:2]
     section["input_snapshot"] = _snapshot_section(db, input_dir, pre, post)
     before = pre["databases"][db]
+    _formal_read_set(db, manifest["storage_reads"])
+    section["seal_checks"] = _seal_published(db, manifest["storage_reads"])
     section["storage_reads"] = _storage_reads(db, list(manifest["storage_reads"]), before)
     section["storage_consumed"] = _consumed(db, input_dir, manifest.get("storage_consumed"),
                                             before)

@@ -13,10 +13,12 @@
 # no script dir or cwd on sys.path, the path cut to stdlib before any import; the
 # import path is the staged tools + the clone's src + stdlib + the named venv site-packages; after
 # the step every easyicu.* module must be under the clone's src, every duckdb/pyarrow module under
-# that site-packages and every tool module under .formal_tools, else exit 97). The dir .formal_tools
+# that site-packages and every tool module under .formal_tools, else exit 97). The extraction driver
+# is v2_bench_local.py (bench_local.py v1 stays byte-pinned and unused): it runs memgate.py under the
+# boot too, records a failed step's root-cause exception and has each spawned worker check its origin. The dir .formal_tools
 # itself is made read-only after the copies, so nothing can be renamed in. Each step's record is
 # IMPORT_ORIGIN*.json in the run root (per database: $R/<db>/IMPORT_ORIGIN.json). memgate.py is a
-# staged tool too (admission only; run as a plain staged copy, it reads no input or output).
+# staged tool too (admission only; the driver runs it under the boot).
 # Temp files: nothing is written to /tmp. Stage 1 creates $R/.tmp (TMPDIR, JOBLIB_TEMP_FOLDER for the
 # wrapper and its admission calls); each step gets its own TMPDIR/JOBLIB_TEMP_FOLDER (and DuckDB
 # temp_directory) under $R: <db>/tmp and <db>/spill, .inputs_tmp_<step>, .receipt_scratch/tmp.
@@ -292,7 +294,7 @@ for spec in "$@"; do
   ( exec 9>&-; W=$R/$db; mkdir -p "$W/home" "$W/spill" "$W/tmp"; cd "$W" || exit 1
     timeout ${BENCH_TIMEOUT:-5h} systemd-run --user --scope -q -p MemoryMax=${BENCH_MEMMAX:-14G} -p MemorySwapMax=0 env -i HOME=$HOME PATH=/usr/bin:/bin \
       BENCH_GATED=1 BENCH_BATCH=${BENCH_BATCH:-} BENCH_MODULES=${BENCH_MODULES:-} ${BENCH_DUCKMEM:+EASYICU_DUCKDB_MEMORY_LIMIT=$BENCH_DUCKMEM} EASYICU_HOME=$W/home EASYICU_DUCKDB_TEMP_DIR=$W/spill TMPDIR=$W/tmp JOBLIB_TEMP_FOLDER=$W/tmp \
-      "${CAP[@]}" "${TENV[@]}" taskset -c "$cores" "${BOOT[@]}" "$W/IMPORT_ORIGIN.json" "$FT/bench_local.py" "$db" "$dir" "$W" "$MODE" > "$W/run.log" 2>&1
+      "${CAP[@]}" "${TENV[@]}" taskset -c "$cores" "${BOOT[@]}" "$W/IMPORT_ORIGIN.json" "$FT/v2_bench_local.py" "$db" "$dir" "$W" "$MODE" > "$W/run.log" 2>&1
     echo "$db exit=$?" >> "$R/status"; rm -rf "${W:?}/spill" ) &
   sleep 20  # let the scope start so the next spec sees its cores as busy
   sleep 70; exec 9>&-  # let RSS show before the next admission

@@ -43,7 +43,7 @@ INSTALLED = {  # sha256 of the installed server copies these were committed from
     "inputs_bench_local.py": "f06eca62a1fbac7695c3abc4f4f51dfc27bda27eee4348148480cf0c1503e1ca",
     "memgate.py": "5a86ade410ec74babb077a447996df2113fa73132b467193cb13d3d212c8f23e",
 }
-TOOL_SET = {"bench7v3f.sh", "formal_boot.py", "bench_local.py", "inputs_bench_local.py",
+TOOL_SET = {"bench7v3f.sh", "formal_boot.py", "v2_bench_local.py", "inputs_bench_local.py",
             "memgate.py", "formal_run_receipt.py", "formal_declared_absent.json"}
 
 
@@ -192,18 +192,18 @@ def test_the_identity_reads_no_process_tree(staged, monkeypatch):
 
 def test_a_staged_driver_swapped_for_a_link_is_refused(staged, tmp_path):
     # B32-DRIVER-LINK: a link to the very same bytes is still not the staged copy.
-    elsewhere = tmp_path / "bench_local.py"
-    elsewhere.write_bytes((staged.folder / "bench_local.py").read_bytes())
+    elsewhere = tmp_path / "v2_bench_local.py"
+    elsewhere.write_bytes((staged.folder / "v2_bench_local.py").read_bytes())
     with _writable(staged.folder):
-        (staged.folder / "bench_local.py").unlink()
-        os.symlink(elsewhere, staged.folder / "bench_local.py")
+        (staged.folder / "v2_bench_local.py").unlink()
+        os.symlink(elsewhere, staged.folder / "v2_bench_local.py")
 
     error = _refused(staged, "formal_tool_script_mismatch", "not_a_staged_copy")
-    assert error.details["role"] == "bench_local.py"
+    assert error.details["role"] == "v2_bench_local.py"
 
 
 def test_a_hard_linked_staged_copy_is_refused(staged, tmp_path):
-    os.link(staged.folder / "bench_local.py", tmp_path / "alias.py")
+    os.link(staged.folder / "v2_bench_local.py", tmp_path / "alias.py")
 
     _refused(staged, "formal_tool_script_mismatch", "not_a_staged_copy")
 
@@ -230,7 +230,7 @@ def test_a_writable_tools_dir_is_refused(staged):
         os.chmod(staged.folder, 0o500)
 
 
-@pytest.mark.parametrize("extra", ["bench_local.pyc", "json.pyc", "__pycache__", "json.py"])
+@pytest.mark.parametrize("extra", ["v2_bench_local.pyc", "json.pyc", "__pycache__", "json.py"])
 def test_anything_beside_the_staged_tools_is_refused(staged, extra):
     # B32-SHADOW: a sourceless .pyc, a cache dir or a shadow module next to the copies.
     with _writable(staged.folder):
@@ -243,7 +243,7 @@ def test_anything_beside_the_staged_tools_is_refused(staged, extra):
     assert error.details["unexpected"] == [extra]
 
 
-@pytest.mark.parametrize("name", ["bench_local.py", "memgate.py", "formal_boot.py"])
+@pytest.mark.parametrize("name", ["v2_bench_local.py", "memgate.py", "formal_boot.py"])
 def test_a_staged_tool_removed_before_the_receipt_is_refused(staged, name):
     # B32-SHADOW (removed .py): the copies must still all be there at the end.
     with _writable(staged.folder):
@@ -254,7 +254,7 @@ def test_a_staged_tool_removed_before_the_receipt_is_refused(staged, name):
 
 
 def test_a_staged_copy_changed_after_staging_is_refused(staged):
-    copy = staged.folder / "bench_local.py"
+    copy = staged.folder / "v2_bench_local.py"
     data = copy.read_bytes()
     with _writable(staged.folder):
         copy.unlink()
@@ -269,7 +269,7 @@ def test_a_staged_record_that_is_not_the_seal_is_refused(staged):
     record = staged.run / "FORMAL_TOOLS.staged"
     os.chmod(record, 0o644)
     lines = record.read_text().splitlines()
-    lines = [("0" * 64 + "  bench_local.py") if line.endswith("  bench_local.py") else line
+    lines = [("0" * 64 + "  v2_bench_local.py") if line.endswith("  v2_bench_local.py") else line
              for line in lines]
     record.write_text("\n".join(lines) + "\n")
 
@@ -475,7 +475,7 @@ def _boot(b, script: str, body: str, *, sha: str | None = None, site: str | None
 
 
 def test_the_boot_runs_a_staged_script_with_clean_origins(boot_env):
-    done = _boot(boot_env, "bench_local.py",
+    done = _boot(boot_env, "v2_bench_local.py",
                  "import sys, json, easyicu, pyarrow\nassert sys.argv[1:] == ['a1']\nsys.exit(5)\n")
 
     record = json.loads(boot_env.out.read_text())
@@ -483,7 +483,7 @@ def test_the_boot_runs_a_staged_script_with_clean_origins(boot_env):
     assert record["complete"] is True and record["mismatched"] == []
     assert record["head"] == boot_env.sha
     assert record["path"] == os.path.realpath(boot_env.clone / "src" / "easyicu" / "__init__.py")
-    assert record["script"] == str(boot_env.tools / "bench_local.py")
+    assert record["script"] == str(boot_env.tools / "v2_bench_local.py")
     assert all(f.startswith(_site() + os.sep) for n, f in record["modules"].items()
                if n.split(".")[0] == "pyarrow" and f)
 
@@ -493,7 +493,7 @@ def test_a_module_from_outside_the_four_roots_is_exit_97(boot_env):
     evil.mkdir()
     (evil / "evil_mod.py").write_text("X = 1\n")
 
-    done = _boot(boot_env, "bench_local.py",
+    done = _boot(boot_env, "v2_bench_local.py",
                  f"import sys\nsys.path.append({str(evil)!r})\nimport evil_mod\n")
 
     assert done.returncode == 97
@@ -507,7 +507,7 @@ def test_a_sourceless_pyc_in_the_tools_dir_is_exit_97(boot_env):
 
     py_compile.compile(str(stub), cfile=str(boot_env.tools / "shadowmod.pyc"))
 
-    done = _boot(boot_env, "bench_local.py", "import shadowmod\n")
+    done = _boot(boot_env, "v2_bench_local.py", "import shadowmod\n")
 
     assert done.returncode == 97
     assert "shadowmod" in json.loads(boot_env.out.read_text())["mismatched"]
@@ -520,7 +520,7 @@ def test_a_stdlib_shadow_in_the_cwd_never_runs(boot_env):
     (cwd / "json.py").write_text("raise SystemExit(42)\n")
     (cwd / "decimal.py").write_text("raise SystemExit(43)\n")
 
-    done = _boot(boot_env, "bench_local.py", "import json, decimal\n", cwd=cwd)
+    done = _boot(boot_env, "v2_bench_local.py", "import json, decimal\n", cwd=cwd)
 
     assert done.returncode == 0, done.stderr
     record = json.loads(boot_env.out.read_text())
@@ -537,7 +537,7 @@ def test_a_pythonpath_site_shadow_never_runs(boot_env):
     env = {"PATH": os.environ["PATH"], "PYTHONPATH": str(shadow),
            "PYTHONSTARTUP": str(shadow / "startup.py")}
 
-    done = _boot(boot_env, "bench_local.py", "import json, pyarrow\n", env=env)
+    done = _boot(boot_env, "v2_bench_local.py", "import json, pyarrow\n", env=env)
 
     assert done.returncode == 0, done.stderr
     assert str(shadow) not in json.dumps(json.loads(boot_env.out.read_text())["sys_path"])
@@ -548,7 +548,7 @@ def test_no_pth_line_of_the_named_site_packages_runs(boot_env):
     site.mkdir()
     (site / "zz_hook.pth").write_text("import os; os.environ['PTH_RAN'] = '1'\n")
 
-    done = _boot(boot_env, "bench_local.py",
+    done = _boot(boot_env, "v2_bench_local.py",
                  "import os, sys\nsys.exit(1 if os.environ.get('PTH_RAN') else 0)\n",
                  site=str(site))
 
@@ -557,7 +557,7 @@ def test_no_pth_line_of_the_named_site_packages_runs(boot_env):
 
 def test_a_script_outside_the_tools_dir_is_exit_97_before_it_runs(boot_env):
     marker = boot_env.tmp / "ran"
-    done = _boot(boot_env, "bench_local.py", f"open({str(marker)!r}, 'w').close()\n",
+    done = _boot(boot_env, "v2_bench_local.py", f"open({str(marker)!r}, 'w').close()\n",
                  place=boot_env.tmp)
 
     assert done.returncode == 97 and not marker.exists()
@@ -566,17 +566,17 @@ def test_a_script_outside_the_tools_dir_is_exit_97_before_it_runs(boot_env):
 def test_a_linked_script_in_the_tools_dir_is_exit_97(boot_env):
     real = boot_env.tmp / "real.py"
     real.write_text("pass\n")
-    os.symlink(real, boot_env.tools / "bench_local.py")
+    os.symlink(real, boot_env.tools / "v2_bench_local.py")
     argv = [sys.executable, "-I", "-S", "-P", str(boot_env.tools / "formal_boot.py"),
             str(boot_env.tools), str(boot_env.clone), boot_env.sha, _site(), str(boot_env.out),
-            str(boot_env.tools / "bench_local.py")]
+            str(boot_env.tools / "v2_bench_local.py")]
 
     env = {"PATH": os.environ["PATH"], "TMPDIR": str(boot_env.tmpdir)}
     assert subprocess.run(argv, capture_output=True, env=env).returncode == 97
 
 
 def test_a_clone_not_at_the_seal_is_exit_97(boot_env):
-    done = _boot(boot_env, "bench_local.py", "pass\n", sha="0" * 40)
+    done = _boot(boot_env, "v2_bench_local.py", "pass\n", sha="0" * 40)
 
     assert done.returncode == 97
 
@@ -601,7 +601,8 @@ def origins(tmp_path, monkeypatch):
     def write(step_path: Path, script: str, **change):
         step_path.write_text(json.dumps(_origin(run, tools, src, sha, script, **change)))
 
-    write(run / "sic" / "IMPORT_ORIGIN.json", "bench_local.py")
+    write(run / "sic" / "IMPORT_ORIGIN.json", "v2_bench_local.py")
+    write(run / "sic" / "IMPORT_ORIGIN.memgate.json", "memgate.py")
     for step in ("snapshot", "verify"):
         write(run / f"IMPORT_ORIGIN.inputs_{step}.json", "inputs_bench_local.py")
     live = types.SimpleNamespace(check=lambda: [],
@@ -615,7 +616,9 @@ def origins(tmp_path, monkeypatch):
 def test_clean_step_records_and_a_clean_live_receipt_pass(origins):
     out = receipt.formal_import_origins(origins.run, origins.sha, origins.code, ["sic"])
 
-    assert set(out) == {"extract:sic", "inputs:snapshot", "inputs:verify", "receipt"}
+    assert set(out) == {"extract:sic", "memgate:sic", "workers:sic",
+                        "inputs:snapshot", "inputs:verify", "receipt"}
+    assert out["workers:sic"] == {"workers": 0}
 
 
 @pytest.mark.parametrize("change,code", [
@@ -631,7 +634,7 @@ def test_a_step_without_clean_origins_refuses_the_receipt(origins, change, code)
     if change == "missing":
         path.unlink()
     else:
-        origins.write(path, "memgate.py" if change == "other_script" else "bench_local.py",
+        origins.write(path, "memgate.py" if change == "other_script" else "v2_bench_local.py",
                       **{"mismatched": {"mismatched": ["evil_mod"]},
                          "incomplete": {"complete": False},
                          "other_head": {"head": "d" * 40},
@@ -658,7 +661,7 @@ def test_a_receipt_outside_the_boot_or_with_unclean_origins_is_refused(origins, 
 
 def test_the_boot_refuses_to_run_without_a_private_tmpdir(boot_env):
     marker = boot_env.tmp / "ran"
-    target = boot_env.tools / "bench_local.py"
+    target = boot_env.tools / "v2_bench_local.py"
     target.write_text(f"open({str(marker)!r}, 'w').close()\n")
     argv = [sys.executable, "-I", "-S", "-P", str(boot_env.tools / "formal_boot.py"),
             str(boot_env.tools), str(boot_env.clone), boot_env.sha, _site(), str(boot_env.out),
@@ -668,8 +671,170 @@ def test_the_boot_refuses_to_run_without_a_private_tmpdir(boot_env):
     assert done.returncode == 97 and "formal_tmpdir_unset" in done.stderr and not marker.exists()
 
 
+# Item 4: the new driver, memgate boot and actual spawn startup.
+
+def _driver():
+    spec = importlib.util.spec_from_file_location("formal_driver_v2", FORMAL / "v2_bench_local.py")
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+
+@pytest.mark.parametrize("link", ["cause", "context", "cycle"])
+def test_v2_records_the_typed_root_of_a_wrapped_failure(link):
+    driver = _driver()
+    from easyicu.concept.errors import ConceptError
+    from easyicu.storage_seal_publication import SealPublicationError
+
+    seal = SealPublicationError("bucket_install_unaccepted", Path("synthetic"))
+    wrapped = ConceptError("synthetic wrapper")
+    if link == "context":
+        wrapped.__context__ = seal
+    else:
+        wrapped.__cause__ = seal
+        # An explicit cause has priority over an unrelated implicit context.
+        wrapped.__context__ = ValueError("ignored context")
+        if link == "cycle":
+            seal.__context__ = wrapped
+    root = driver.exception_root(wrapped)
+
+    assert root == {"type": "easyicu.storage_seal_publication.SealPublicationError",
+                    "reason": "bucket_install_unaccepted",
+                    "chain": ["ConceptError", "SealPublicationError"]}
+    assert json.loads(json.dumps(root)) == root
+
+
+def test_v2_requires_the_boot_before_any_extraction(monkeypatch):
+    monkeypatch.delitem(sys.modules, "formal_boot_live", raising=False)
+    with pytest.raises(SystemExit) as error:
+        _driver().main()
+    assert error.value.code == 97
+
+
+_SPAWN_EXTRACTION = b'''
+import json
+import os
+import sys
+from pathlib import Path
+from multiprocessing import get_context
+EXTRACT_MODULE_ORDER = ["synthetic"]
+def _get_all_patient_ids(*args):
+    raise AssertionError("full mode must not read IDs")
+def work(out):
+    Path(out, "child.json").write_text(json.dumps({"sys_path": sys.path,
+        "isolated": sys.flags.isolated, "no_site": sys.flags.no_site,
+        "safe_path": sys.flags.safe_path}))
+def extract_database(db, *, output_dir, **kwargs):
+    out = Path(output_dir).parent
+    proc = get_context("spawn").Process(target=work, args=(str(out),))
+    proc.start()
+    proc.join(30)
+    if proc.is_alive():
+        proc.terminate()
+        proc.join()
+        raise AssertionError("spawn child timed out")
+    (out / "child_exit.json").write_text(json.dumps(proc.exitcode))
+    return {"errors": [], "worker_failures": [] if proc.exitcode == 0 else [proc.exitcode]}
+'''
+
+
+def _spawn_driver(b, flags, *, wrong_src=False):
+    # Actual v2 main under the boot, with a synthetic extraction that starts a
+    # real child. The admission stub still checks the boot's live origins.
+    api = b.clone / "src" / "easyicu" / "api"
+    api.mkdir()
+    (api / "__init__.py").write_text("from .extraction import extract_database\n")
+    (api / "extraction.py").write_bytes(_SPAWN_EXTRACTION)
+    _git(b.clone, "add", ".")
+    _git(b.clone, "-c", "user.name=t", "-c", "user.email=t@t", "commit", "-q", "-m", "spawn stub")
+    b.sha = _git(b.clone, "rev-parse", "HEAD")
+    driver = b.tools / "v2_bench_local.py"
+    source = (FORMAL / driver.name).read_text()
+    if wrong_src:
+        source = source.replace("    _worker_origin()",
+                                "    os.environ['FORMAL_BOOT_SRC'] = '/wrong/src'\n"
+                                "    _worker_origin()")
+    driver.write_text(source)
+    (b.tools / "memgate.py").write_text(
+        "import sys, easyicu\n"
+        "assert sys.flags.isolated and sys.flags.no_site and sys.flags.safe_path\n"
+        "assert sys.argv[1:] == ['self', 'full']\n"
+        "assert sys.modules['formal_boot_live'].record['path'] == easyicu.__file__\n")
+    cpus = sorted(os.sched_getaffinity(0))
+    env = {"PATH": os.environ["PATH"], "TMPDIR": str(b.tmpdir),
+           "JOBLIB_TEMP_FOLDER": str(b.tmpdir), "EASYICU_DUCKDB_TEMP_DIR": str(b.tmpdir),
+           "BENCH_SEG": f"{min(cpus)}-{max(cpus)}", "BENCH_NC": str(len(cpus)),
+           **dict.fromkeys(("OMP_NUM_THREADS", "POLARS_MAX_THREADS", "RAYON_NUM_THREADS",
+                            "OPENBLAS_NUM_THREADS"), str(len(cpus)))}
+    argv = [sys.executable, *flags, str(b.tools / "formal_boot.py"), str(b.tools),
+            str(b.clone), b.sha, _site(), str(b.out), str(driver), "synthetic", str(b.tmp),
+            str(b.tmp), "full"]
+    return subprocess.run(argv, capture_output=True, text=True, env=env, cwd=b.tmp, timeout=60)
+
+
+@pytest.mark.parametrize("flags,wrong_src,expected", [
+    (["-I", "-S", "-P"], False, 0),
+    (["-S", "-P"], False, 97),
+    (["-I", "-S", "-P"], True, 97),
+])
+def test_real_spawn_workers_assert_their_own_origins(boot_env, flags, wrong_src, expected):
+    b = boot_env
+    done = _spawn_driver(b, flags, wrong_src=wrong_src)
+
+    assert done.returncode == 0, done.stderr
+    assert json.loads((b.tmp / "child_exit.json").read_text()) == expected
+    records = list((b.tmp / "worker_origin").glob("*.json"))
+    assert len(records) == 1
+    worker = json.loads(records[0].read_text())
+    assert worker["ok"] is (expected == 0)
+    assert worker["isolated"] == int("-I" in flags) and worker["no_site"] == 1
+    assert worker["safe_path"] and worker["sys_path"][0] == str(b.tools)
+    assert worker["easyicu"] == str(b.clone / "src" / "easyicu" / "__init__.py")
+    if expected == 0:
+        child = json.loads((b.tmp / "child.json").read_text())
+        assert child["sys_path"][0] == str(b.tools) and child["isolated"] and child["no_site"]
+        assert receipt._worker_origins("synthetic", b.tmp / "worker_origin",
+                                        str(b.clone / "src")) == {"workers": 1}
+    else:
+        assert not (b.tmp / "child.json").exists()  # target never ran
+        with pytest.raises(receipt.ReceiptError) as error:
+            receipt._worker_origins("synthetic", b.tmp / "worker_origin", str(b.clone / "src"))
+        assert error.value.details["step"] == "workers:synthetic"
+    memgate = json.loads((b.tmp / "IMPORT_ORIGIN.memgate.json").read_text())
+    assert memgate["complete"] and memgate["mismatched"] == []
+    assert memgate["head"] == b.sha and memgate["script"] == str(b.tools / "memgate.py")
+
+
+@pytest.mark.parametrize("change", ["missing", "mismatched", "incomplete"])
+def test_memgate_requires_its_own_complete_boot_record(origins, change):
+    path = origins.run / "sic" / "IMPORT_ORIGIN.memgate.json"
+    if change == "missing":
+        path.unlink()
+    else:
+        origins.write(path, "memgate.py", **({"mismatched": ["evil"]} if change == "mismatched"
+                                            else {"complete": False}))
+    with pytest.raises(receipt.ReceiptError) as error:
+        receipt.formal_import_origins(origins.run, origins.sha, origins.code, ["sic"])
+    assert error.value.details["step"] == "memgate:sic"
+
+
+@pytest.mark.parametrize("change", [{"ok": False}, {"src": "/wrong/src"}, {"isolated": 0},
+                                    {"no_site": 0}, {"safe_path": False},
+                                    {"easyicu": "/wrong/easyicu/__init__.py"}, None])
+def test_the_receipt_refuses_bad_worker_records(origins, change):
+    folder = origins.run / "sic" / "worker_origin"
+    folder.mkdir()
+    record = {"ok": True, "src": str(origins.src), "easyicu": str(origins.src / "easyicu/x.py"),
+              "isolated": 1, "no_site": 1, "safe_path": True, **(change or {})}
+    (folder / "123.json").write_text("{" if change is None else json.dumps(record))
+    with pytest.raises(receipt.ReceiptError) as error:
+        receipt.formal_import_origins(origins.run, origins.sha, origins.code, ["sic"])
+    assert error.value.code == "formal_import_origin_mismatch"
+    assert error.value.details["step"] == "workers:sic"
+
+
 def test_the_boot_records_the_temp_dir_in_use(boot_env):
-    done = _boot(boot_env, "bench_local.py", "import tempfile\ntempfile.mkstemp()\n")
+    done = _boot(boot_env, "v2_bench_local.py", "import tempfile\ntempfile.mkstemp()\n")
 
     assert done.returncode == 0, done.stderr
     assert json.loads(boot_env.out.read_text())["tmpdir"] == os.path.realpath(boot_env.tmpdir)
@@ -707,7 +872,7 @@ def test_a_sourceless_pyc_imported_as_mp_main_is_still_exit_97(boot_env):
     stub = boot_env.tmp / "stub.py"
     stub.write_text("X = 1\n")
     py_compile.compile(str(stub), cfile=str(boot_env.tools / "stub.pyc"))
-    done = _boot(boot_env, "bench_local.py",
+    done = _boot(boot_env, "v2_bench_local.py",
                  "import sys, importlib\nsys.modules['__mp_main__'] = importlib.import_module('stub')\n")
 
     assert done.returncode == 97
