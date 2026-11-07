@@ -197,7 +197,7 @@ def test_reader_and_gate_use_storage_layout_source_resolver(tmp_path, monkeypatc
     assert calls and set(calls) == expected_calls
     calls.clear()
     publication.assert_roots_published([install])
-    assert calls and set(calls) == {(expected_raw, expected_bucket, expected_source_root)}
+    assert calls and set(calls) == expected_calls
 
 
 @pytest.mark.parametrize("basename", ["provenance.json", "arbitrary.parquet"])

@@ -160,6 +160,10 @@ def _check_derived_from(root: Path, manifest: dict) -> None:
         raise _sie("bucket_derived_from_invalid", root)
     if not isinstance(files, list) or not files:
         raise _sie("bucket_derived_from_invalid", root)
+    if "source_root" in derived and (
+        not isinstance(derived["source_root"], str) or not derived["source_root"]
+    ):
+        raise _sie("bucket_derived_from_invalid", root)
     for entry in files:
         digest = entry.get("sha256") if isinstance(entry, dict) else None
         if (
@@ -183,6 +187,12 @@ def _verify_sources(root: Path, manifest: dict) -> None:
     # A farm links a bucket without exposing its flat sources. Resolve the verified bucket first;
     # its physical installation, rather than the logical farm, owns the relative source names.
     install = root.resolve(strict=True).parent
+    # Independent sealed port of storage_layout.resolve_derived_from_source;
+    # keep the no-EasyICU-import contract and test parity through farm links.
+    recorded = derived.get("source_root")
+    if recorded is not None:
+        base = Path(recorded)
+        install = base if base.is_absolute() else install / base
     for entry in derived["files"]:
         relative = PurePosixPath(entry["path"])
         if relative.is_absolute() or not relative.parts or ".." in relative.parts:

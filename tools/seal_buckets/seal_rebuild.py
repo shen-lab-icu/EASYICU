@@ -218,7 +218,7 @@ SEALED_TOOLS = (
     VALIDATOR_REL,
 )
 HELPER_TOOLS = ("tools/seal_buckets/footer_scan.py", VALIDATOR_REL)
-VALIDATOR_SHA256 = "db2245c29fc5379e760904403da6e5a0151f73395ed08221d08b535900698f2d"
+VALIDATOR_SHA256 = "6656b78a87cd5729986a31f28fcfc708df2967279973904af2b51861e5ae8549"
 # Launches the seal clone's builder like `python <builder>` (sys.path[0] = scripts/), under `python -I -S`:
 # no PYTHONPATH, no current directory and no site hook (sitecustomize, usercustomize, .pth) can add code.
 # The boot's first statements (only the builtin sys module is touched) reset sys.path to the standard
@@ -1437,6 +1437,14 @@ def farm_bucket_sources(bucket: Path) -> tuple[dict, dict]:
     files = derived.get("files") if isinstance(derived, dict) else None
     if not isinstance(files, list) or not files:
         raise SealError("bucket_derived_from_invalid", name)
+    source_root = derived.get("source_root")
+    if "source_root" in derived and (not isinstance(source_root, str) or not source_root):
+        raise SealError("bucket_derived_from_invalid", name)
+    # Same source_root contract as the reader and the independent sealed validator.
+    source_base = physical.parent
+    if source_root is not None:
+        recorded = Path(source_root)
+        source_base = recorded if recorded.is_absolute() else source_base / recorded
     for entry in files:
         if (
             not isinstance(entry, dict)
@@ -1457,7 +1465,7 @@ def farm_bucket_sources(bucket: Path) -> tuple[dict, dict]:
         relative = PurePosixPath(entry["path"])
         if relative.is_absolute() or not relative.parts or ".." in relative.parts:
             raise SealError("bucket_derived_from_invalid", name)
-        source = physical.parent.joinpath(*relative.parts)
+        source = source_base.joinpath(*relative.parts)
         try:
             source_stat = source.stat()
             if not stat.S_ISREG(source_stat.st_mode):

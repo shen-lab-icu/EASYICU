@@ -269,7 +269,7 @@ def _publication_closure(
             installs.add(current)
         return current
 
-    def enqueue_metadata(path: Path, bucket_root: Path) -> None:
+    def enqueue_metadata(path: Path, bucket_root: Path, *, bucket_manifest: bool) -> None:
         info = path.stat()
         identity = (info.st_dev, info.st_ino)
         record_file(path, info)
@@ -298,6 +298,22 @@ def _publication_closure(
                     derived["path"],
                     storage_layout.resolve_derived_from_source(derived["path"]),
                     "derived_from.path", is_metadata=True,
+                )
+            if isinstance(derived.get("files"), list) and (
+                bucket_manifest or "source_root" in derived
+            ):
+                source_root = storage_layout.resolve_derived_from_source(
+                    ".", bucket_root=bucket_root,
+                    source_root=derived.get("source_root"),
+                )
+                # The source installation owns its conversion manifest and
+                # configuration boundary. Visit it before opening any metadata
+                # there, including through an external or linked source_root.
+                enqueue(str(source_root), source_root, "derived_from.source_root", is_metadata=False)
+                enqueue(
+                    str(source_root / "conversion_manifest.json"),
+                    source_root / "conversion_manifest.json",
+                    "derived_from.source_manifest", is_metadata=True,
                 )
             for index, entry in enumerate(
                 derived.get("files", [])
@@ -344,7 +360,7 @@ def _publication_closure(
                     anchor = requested.parent
                     if not anchor.is_absolute():
                         anchor = Path.cwd() / anchor
-                    enqueue_metadata(path, anchor)
+                    enqueue_metadata(path, anchor, bucket_manifest=requested.name == MANIFEST)
                 continue
             if path in visited:
                 continue

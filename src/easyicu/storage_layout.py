@@ -1381,7 +1381,7 @@ def resolve_derived_from_source(
 
     Conversion-manifest ``derived_from.path`` uses Path(source), including its
     cwd-relative semantics. Bucket ``derived_from.files`` is relative to the
-    bucket's logical parent when no source_root was recorded. A recorded
+    bucket's physical parent when no source_root was recorded. A recorded
     source_root is absolute or relative to the bucket's resolved parent,
     preserving the out-of-tree builder contract. Keep every anchor decision
     here so the publication gate and readers share future binding changes.
@@ -1389,7 +1389,7 @@ def resolve_derived_from_source(
     if bucket_root is None:
         return Path(source)
     if source_root is None:
-        base = bucket_root.parent
+        base = bucket_root.resolve().parent
     elif PurePosixPath(source_root).is_absolute():
         base = Path(source_root)
     else:

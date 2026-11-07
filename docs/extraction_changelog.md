@@ -7,6 +7,15 @@ answers is in brackets.
 lead-r13 (0.2.0) is validated on SICdb 1.0.8, the default release, and
 remains compatible with SICdb 1.0.6 (the release is detected from the schema).
 
+## 2026-11-07 — one physical derived-source anchor and complete source-root closure [B64-SOURCE-ROOT]
+
+Readers and publication gates resolve bucket provenance at the physical bucket
+installation, honoring absolute, relative and linked `source_root` bindings.
+The start gate visits the actual source root and its conversion manifest,
+refusing PENDING/REFUSED roots and input-contained configuration before opening
+their metadata. Bucket source-set, stat and inventory checks remain strict.
+Clinical values and row selection are unchanged.
+
 ## 2026-11-07 — restore strict MIMIC-III CSV dispatch [lead-r13, B-D56-STRICT-CSV]
 
 - Correct an **unreleased regression** introduced by `7f72fd643`: the shared owner selected `CHARTEVENTS.csv` but bypassed its strict parser. The owner still determines CSV eligibility; a selected MIMIC-III chartevents CSV with an item selector now uses the strict reader, preserving item filtering, declared-schema validation of unselected columns, and numeric-looking VALUE as text.
