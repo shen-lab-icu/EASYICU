@@ -10,7 +10,7 @@
     {
       "name": "formal_boot.py",
       "path": "tools/formal/formal_boot.py",
-      "sha256": "bebbcbbd8a4c83f376f9a07f4575a259e2519e8d3898d4869479a386008aa560"
+      "sha256": "b99ffed7cf7d0f09b5178ba4326e75a1893d4ee1686ce67efed572727a6947e5"
     },
     {
       "name": "bench_local.py",

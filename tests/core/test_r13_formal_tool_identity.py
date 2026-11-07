@@ -689,3 +689,25 @@ def test_every_isolated_step_of_the_wrapper_sets_a_private_tmpdir():
                  "TMPDIR=$RS/tmp JOBLIB_TEMP_FOLDER=$RS/tmp",
                  'export TMPDIR=$R/.tmp JOBLIB_TEMP_FOLDER=$R/.tmp'):
         assert step in body
+
+
+def test_a_script_that_imports_multiprocessing_keeps_clean_origins(boot_env):
+    # Smoke run A (32b034cc5): importing multiprocessing aliases the running
+    # __main__ (the staged script) as __mp_main__; that alias is not a mismatch.
+    done = _boot(boot_env, "inputs_bench_local.py",
+                 "import multiprocessing, sys\nassert '__mp_main__' in sys.modules\n")
+
+    assert done.returncode == 0, done.stderr
+    assert json.loads(boot_env.out.read_text())["mismatched"] == []
+
+
+def test_a_sourceless_pyc_imported_as_mp_main_is_still_exit_97(boot_env):
+    import py_compile
+
+    stub = boot_env.tmp / "stub.py"
+    stub.write_text("X = 1\n")
+    py_compile.compile(str(stub), cfile=str(boot_env.tools / "stub.pyc"))
+    done = _boot(boot_env, "bench_local.py",
+                 "import sys, importlib\nsys.modules['__mp_main__'] = importlib.import_module('stub')\n")
+
+    assert done.returncode == 97

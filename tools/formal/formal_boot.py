@@ -90,10 +90,11 @@ def main() -> None:
                     bad.append(name)
             elif f is not None and under(f, [tools]):
                 # From TOOLS only a staged tool's own source (never a .pyc or another file),
-                # under its own name or as __main__ (this boot, the script).
+                # under its own name or as __main__ (this boot, the script) or __mp_main__
+                # (importing multiprocessing aliases the running __main__ under that name).
                 stem = os.path.basename(f)[:-3] if f.endswith(".py") else None
                 if stem not in tool_names or f != os.path.join(tools, stem + ".py") or (
-                        top not in (stem, "__main__")):
+                        top not in (stem, "__main__", "__mp_main__")):
                     bad.append(name)
             elif top in tool_names or (f is not None and not under(f, allowed)):
                 bad.append(name)
