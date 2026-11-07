@@ -11,6 +11,10 @@ exited. It binds the run to the sealed code and to its inputs:
   exit status, wall time, cgroup and process-tree peaks, the native manifest
   sha256 and its commit, and per table actually read the layout used with
   any fallback reason (``storage_reads``, from the storage owner's run log);
+* required-present ``dict_overlay``: null for main runs, otherwise the launch
+  {path (realpath), sha256, size} from the boot, matched by every extraction
+  step and worker, including certified discarded retries. ``--validate-dict-overlay
+  RUN_RECEIPT.json`` rechecks this binding and explicitly states a missing file;
 * the inputs did not change: ``INPUT_SNAPSHOT.json`` (taken before any job,
   ``easyicu.formal_inputs``) and ``INPUT_SNAPSHOT_POST.json`` (the same set
   hashed after every job exited) must exist and agree per database: each is
@@ -275,6 +279,61 @@ WORKER_ORIGIN_DIR = "worker_origin"
 BOOT_LIVE_MODULE = "formal_boot_live"
 
 
+def validate_dict_overlay(receipt: Mapping[str, Any]) -> Dict[str, Any]:
+    """Validate the required-present overlay field and, when available, its current bytes.
+
+    Missing files are stated explicitly for archived receipts; receipt creation requires
+    a verified file. The recorded object remains exactly {path, sha256, size}.
+    """
+    if "dict_overlay" not in receipt:
+        raise ReceiptError("dict_overlay_missing", "receipt requires dict_overlay (null or object)")
+    overlay = receipt["dict_overlay"]
+    if overlay is None:
+        return {"dict_overlay": None, "file_status": "not_configured"}
+    if (not isinstance(overlay, dict) or set(overlay) != {"path", "sha256", "size"}
+            or not isinstance(overlay["path"], str) or not os.path.isabs(overlay["path"])
+            or not isinstance(overlay["sha256"], str)
+            or re.fullmatch(r"[0-9a-f]{64}", overlay["sha256"]) is None
+            or type(overlay["size"]) is not int or overlay["size"] < 0):
+        raise ReceiptError("dict_overlay_malformed", "invalid dictionary overlay binding")
+    path = Path(overlay["path"])
+    try:
+        info = path.stat()
+    except FileNotFoundError:
+        return {"dict_overlay": overlay, "file_status": "missing",
+                "message": "dictionary overlay file does not exist; sha256 was not rechecked"}
+    except OSError as exc:
+        raise ReceiptError("dict_overlay_unavailable", "cannot inspect dictionary overlay") from exc
+    if not stat.S_ISREG(info.st_mode) or str(path.resolve()) != overlay["path"]:
+        raise ReceiptError("dict_overlay_not_regular", "overlay must resolve to its regular file")
+    # Nonblocking open also refuses a concurrent replacement with a special file.
+    try:
+        fd = os.open(path, os.O_RDONLY | os.O_NONBLOCK)
+        with os.fdopen(fd, "rb") as fh:
+            if not stat.S_ISREG(os.fstat(fh.fileno()).st_mode):
+                raise ReceiptError("dict_overlay_not_regular", "overlay is not a regular file")
+            digest, size = hashlib.sha256(), 0
+            for block in iter(lambda: fh.read(1 << 20), b""):
+                digest.update(block)
+                size += len(block)
+    except OSError as exc:
+        raise ReceiptError("dict_overlay_unavailable", "cannot read dictionary overlay") from exc
+    if digest.hexdigest() != overlay["sha256"] or size != overlay["size"]:
+        raise ReceiptError("dict_overlay_changed", "dictionary overlay differs from launch bytes")
+    return {"dict_overlay": overlay, "file_status": "verified"}
+
+
+def _dict_overlay(run_root: Path) -> Optional[Dict[str, Any]]:
+    path = run_root / "DICT_OVERLAY.json"
+    if not path.exists():
+        return None
+    overlay = load_json_object(path, "dictionary overlay binding")
+    status = validate_dict_overlay({"dict_overlay": overlay})
+    if status["file_status"] != "verified":
+        raise ReceiptError("dict_overlay_changed", "dictionary overlay disappeared after launch")
+    return overlay
+
+
 def _seal_blob(repo: Path, sealed_sha: str, seal_path: str) -> Optional[bytes]:
     """The file at ``seal_path`` in the sealed commit's tree, or None if it has none."""
     try:
@@ -503,7 +562,7 @@ def _aborted_retried(record: dict, manifest: dict, completed: list, export: Path
 
 
 def _worker_origins(db: str, folder: Path, src: str, sealed_sha: str,
-                    tools: str, root: str) -> Dict[str, Any]:
+                    tools: str, root: str, dict_overlay=None) -> Dict[str, Any]:
     """Bind every full check, reconciling only certified discarded retries.
 
     Workers check their modules both before and after their target. A run
@@ -522,6 +581,12 @@ def _worker_origins(db: str, folder: Path, src: str, sealed_sha: str,
         except (OSError, ValueError):
             record = None
         loaded.append((path, record))
+    if dict_overlay is not None and any(
+            not isinstance(record, dict) or record.get("dict_overlay") != dict_overlay
+            or record.get("reason", "").startswith("dict_overlay_")
+            for _, record in loaded):
+        raise ReceiptError("dict_overlay_worker_mismatch",
+                           f"{db}: worker dictionary check does not match launch binding")
 
     def clean(record):
         return (isinstance(record, dict) and type(record.get("complete")) is bool
@@ -586,6 +651,7 @@ def formal_import_origins(run_root: Path, sealed_sha: str, code: Mapping[str, An
     src = os.path.realpath(Path(code["import_path"]).parent)
     tools = os.path.realpath(root / FORMAL_TOOLS_DIR)
     run_real = os.path.realpath(root)
+    dict_overlay = _dict_overlay(root)
     steps = {f"extract:{db}": (root / db / IMPORT_ORIGIN_FILE, EXTRACTION_DRIVER)
              for db in databases}
     steps.update({f"memgate:{db}": (root / db / "IMPORT_ORIGIN.memgate.json", "memgate.py")
@@ -609,11 +675,15 @@ def formal_import_origins(run_root: Path, sealed_sha: str, code: Mapping[str, An
                                "clean import origins", step=step,
                                mismatched=record.get("mismatched") if isinstance(record, dict)
                                else None)
+        if step.startswith("extract:") and dict_overlay is not None and (
+                record.get("dict_overlay") != dict_overlay):
+            raise ReceiptError("dict_overlay_worker_mismatch",
+                               f"{step}: extraction dictionary differs from launch binding")
         out[step] = {"path": str(path), "sha256": sha256_file(path),
                      "modules": len(record.get("modules") or {})}
     for db in databases:
         out[f"workers:{db}"] = _worker_origins(db, root / db / WORKER_ORIGIN_DIR, src,
-                                               sealed_sha, tools, run_real)
+                                               sealed_sha, tools, run_real, dict_overlay)
     live = sys.modules.get(BOOT_LIVE_MODULE)
     if live is None:
         raise ReceiptError("formal_boot_missing",
@@ -1579,10 +1649,27 @@ def build_run_receipt(
         databases[db] = section
     # Last: every Python step ran as a staged copy under the boot (this one checked live).
     import_origin = formal_import_origins(run_root, sealed_sha, code, list(databases))
+    dict_overlay = _dict_overlay(run_root)
+    configured = (parameters or {}).get("dict_overlay_path")
+    if (configured is not None) != (dict_overlay is not None) or (
+            dict_overlay is not None and os.path.realpath(configured) != dict_overlay["path"]):
+        raise ReceiptError("dict_overlay_config_mismatch",
+                           "wrapper dictionary configuration and launch binding disagree")
+    ignored = (parameters or {}).get("dict_overlay_caller_env_ignored")
+    extra = {}
+    if ignored is not None:
+        names = ignored.split(",")
+        if not names or len(set(names)) != len(names) or not set(names) <= {
+                "EASYICU_DICT_PATH", "EASYICU_DICT_DIR"}:
+            raise ReceiptError("dict_overlay_config_mismatch", "invalid ignored variable names")
+        extra = {"dict_overlay_caller_env_ignored": True,
+                 "dict_overlay_caller_env_ignored_names": names}
     finished = time.time()
     peaks = [s["cgroup_peak_gib"] for s in databases.values() if s.get("cgroup_peak_gib") is not None]
     return {
         "schema_version": RECEIPT_SCHEMA,
+        "dict_overlay": dict_overlay,
+        **extra,
         "sealed_sha": sealed_sha,
         "easyicu_version": code.get("version"),
         "code_identity": code,
@@ -1602,6 +1689,8 @@ def build_run_receipt(
 
 
 def write_run_receipt(run_root: Path, receipt: Mapping[str, Any]) -> Path:
+    if validate_dict_overlay(receipt)["file_status"] == "missing":
+        raise ReceiptError("dict_overlay_changed", "dictionary overlay disappeared before publication")
     target = Path(run_root) / RECEIPT_FILE
     if target.exists():
         raise ReceiptError("run_receipt_exists", "RUN_RECEIPT.json is written once")
@@ -1612,6 +1701,18 @@ def write_run_receipt(run_root: Path, receipt: Mapping[str, Any]) -> Path:
 
 
 def main(argv: Optional[List[str]] = None) -> int:
+    args_in = sys.argv[1:] if argv is None else argv
+    if args_in[:1] == ["--validate-dict-overlay"]:
+        validator = argparse.ArgumentParser(description="Recheck a receipt's dictionary overlay")
+        validator.add_argument("--validate-dict-overlay", required=True, type=Path)
+        args = validator.parse_args(args_in)
+        try:
+            result = validate_dict_overlay(load_json_object(args.validate_dict_overlay, "receipt"))
+        except ReceiptError as error:
+            sys.stderr.write(json.dumps({"code": error.code, "message": str(error)}) + "\n")
+            return 2
+        print(json.dumps(result, sort_keys=True))
+        return 0
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     parser.add_argument("--run-root", required=True, type=Path)
     parser.add_argument("--sealed-sha", required=True)

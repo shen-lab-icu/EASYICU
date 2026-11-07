@@ -77,6 +77,9 @@
 # Each database runs in its own scope: MemoryMax=${BENCH_MEMMAX:-14G}, no swap, pinned cores.
 # BENCH_THREADS=auto leaves EasyICU worker/engine-thread env unset (product defaults);
 # otherwise engine threads = BENCH_THREADS and workers = BENCH_WORKERS (default = threads).
+# BENCH_DICT_PATH, when explicitly set, selects one receipt-bound dictionary overlay file.
+# Caller EASYICU_DICT_PATH/EASYICU_DICT_DIR are ignored; their names are receipted if set
+# without BENCH_DICT_PATH. Only extraction receives EASYICU_DICT_PATH; never DICT_DIR.
 # Server rules (peer, 2026-11-06): cores only inside 188-255 (never 5-104); every library
 # pool capped at the scope's core count; concurrent bench cores <= the segment width;
 # wait while load1 > _codex/LOAD_GATE; bench_local.py re-checks its affinity and exits.
@@ -126,14 +129,35 @@ site_packages() {  # the named venv's own site-packages (its .pth lines are neve
   [ -f "$venv/pyvenv.cfg" ] && [ ${#found[@]} = 1 ] && [ -d "${found[0]}" ] && echo "${found[0]}"; }
 finish_receipt() {  # finish_receipt RC: a refused receipt step invalidates the run (exit 3)
   if [ "$1" != 0 ]; then
-    echo "receipt_refused exit=$1" > "$R/RUN_INVALID"; echo DONE >> "$R/status"; exit 3; fi; }
+    [ -e "$R/RUN_INVALID" ] || echo "receipt_refused exit=$1" > "$R/RUN_INVALID"; echo DONE >> "$R/status"; exit 3; fi; }
 finish_run() {  # DONE, then exit non-zero when any database or step did not exit 0
   echo DONE >> "$R/status"
   if awk '/ exit=/ { split($0, a, " exit="); if (a[2] != "0") bad = 1 } END { exit !bad }' "$R/status"; then
     exit 1; fi
   exit 0; }
+configure_dictionary() {
+  # BENCH_DICT_PATH is an explicit launch setting, receipted with wrapper parameters.
+  # Caller EASYICU_DICT_* values are never used; DICT_DIR is never forwarded.
+  DENV=(); DPARAM=()
+  if [ "${BENCH_DICT_PATH+x}" = x ]; then
+    BOOT+=(--dict-overlay "$BENCH_DICT_PATH")
+    DENV=("EASYICU_DICT_PATH=$BENCH_DICT_PATH")
+    DPARAM+=(--param "dict_overlay_path=$BENCH_DICT_PATH")
+  else
+    local ignored=()
+    [ "${EASYICU_DICT_PATH+x}" = x ] && ignored+=(EASYICU_DICT_PATH)
+    [ "${EASYICU_DICT_DIR+x}" = x ] && ignored+=(EASYICU_DICT_DIR)
+    if [ ${#ignored[@]} != 0 ]; then
+      DPARAM+=(--param "dict_overlay_caller_env_ignored=$(IFS=,; echo "${ignored[*]}")")
+    fi
+  fi
+}
 [ "${BASH_SOURCE[0]}" = "$0" ] || return 0  # sourced (tests): the functions only
 START=$(date +%s)
+# Resolve relative launch settings against the launch cwd before cd/exec changes it.
+if [ "${BENCH_DICT_PATH+x}" = x ] && [ -n "$BENCH_DICT_PATH" ] && [[ "$BENCH_DICT_PATH" != /* ]]; then
+  BENCH_DICT_PATH="$PWD/$BENCH_DICT_PATH"
+fi
 TAG=$1; SHA=$2; MODE=$3; shift 3
 [[ "$SHA" =~ ^[0-9a-f]{40}$ ]] || { echo "refusing $SHA: bench7 needs the full 40-character commit" >&2; exit 2; }
 T=${BENCH_THREADS:-4}; WK=${BENCH_WORKERS:-$T}
@@ -184,6 +208,7 @@ verify_staged || { echo "formal_tool_changed" > "$R/RUN_INVALID"; exit 2; }
 export TMPDIR=$R/.tmp JOBLIB_TEMP_FOLDER=$R/.tmp
 SITE=$(site_packages) || { echo "site_packages_unresolved" > "$R/RUN_INVALID"; exit 2; }
 BOOT=("$PY" -I -S -P "$FT/formal_boot.py" "$FT" "$C" "$SHA" "$SITE")
+configure_dictionary
 echo "tag=$TAG sha=$SHA mode=$MODE threads=$T workers=$WK" > "$R/status"
 if [ "${BENCH_FORMAL_RECEIPT:-0}" = 1 ]; then
   RL=${BENCH_REQUIRED_LAYOUT:-}
@@ -253,7 +278,9 @@ inputs() {  # inputs <snapshot|verify> ARGS...: the sealed formal_inputs owner, 
   return $rc; }
 inputs snapshot --out "$R/INPUT_SNAPSHOT.json" "$@"; PRE=$?
 echo "inputs_pre exit=$PRE" >> "$R/status"
-if [ "$PRE" != 0 ]; then echo "inputs_pre_failed" > "$R/RUN_INVALID"; echo DONE >> "$R/status"; exit 1; fi
+if [ "$PRE" != 0 ]; then
+  [ -e "$R/RUN_INVALID" ] || echo "inputs_pre_failed" > "$R/RUN_INVALID"
+  echo DONE >> "$R/status"; exit 1; fi
 if [ "$T" = auto ]; then TENV=(); else
   TENV=(EASYICU_PARALLEL_MAX_WORKERS=$WK EASYICU_DUCKDB_THREADS=$T EASYICU_ARROW_THREADS=$T); fi
 busy_cores() {  # cores held by pinned bench processes; wrappers allowed on all cores are skipped
@@ -294,7 +321,7 @@ for spec in "$@"; do
   ( exec 9>&-; W=$R/$db; mkdir -p "$W/home" "$W/spill" "$W/tmp"; cd "$W" || exit 1
     timeout ${BENCH_TIMEOUT:-5h} systemd-run --user --scope -q -p MemoryMax=${BENCH_MEMMAX:-14G} -p MemorySwapMax=0 env -i HOME=$HOME PATH=/usr/bin:/bin \
       BENCH_GATED=1 BENCH_BATCH=${BENCH_BATCH:-} BENCH_MODULES=${BENCH_MODULES:-} ${BENCH_DUCKMEM:+EASYICU_DUCKDB_MEMORY_LIMIT=$BENCH_DUCKMEM} EASYICU_HOME=$W/home EASYICU_DUCKDB_TEMP_DIR=$W/spill TMPDIR=$W/tmp JOBLIB_TEMP_FOLDER=$W/tmp \
-      "${CAP[@]}" "${TENV[@]}" taskset -c "$cores" "${BOOT[@]}" "$W/IMPORT_ORIGIN.json" "$FT/v2_bench_local.py" "$db" "$dir" "$W" "$MODE" > "$W/run.log" 2>&1
+      "${CAP[@]}" "${TENV[@]}" "${DENV[@]}" taskset -c "$cores" "${BOOT[@]}" "$W/IMPORT_ORIGIN.json" "$FT/v2_bench_local.py" "$db" "$dir" "$W" "$MODE" > "$W/run.log" 2>&1
     echo "$db exit=$?" >> "$R/status"; rm -rf "${W:?}/spill" ) &
   sleep 20  # let the scope start so the next spec sees its cores as busy
   sleep 70; exec 9>&-  # let RSS show before the next admission
@@ -304,7 +331,8 @@ inputs verify --pre "$R/INPUT_SNAPSHOT.json" --out "$R/INPUT_SNAPSHOT_POST.json"
 echo "inputs_post exit=$POST" >> "$R/status"
 rm -rf "${R:?}/.inputs_home"
 if [ "$POST" != 0 ]; then
-  echo "inputs_changed_during_run" > "$R/RUN_INVALID"; echo DONE >> "$R/status"; exit 1; fi
+  [ -e "$R/RUN_INVALID" ] || echo "inputs_changed_during_run" > "$R/RUN_INVALID"
+  echo DONE >> "$R/status"; exit 1; fi
 if [ "${BENCH_FORMAL_RECEIPT:-0}" = 1 ]; then
   IFS=: read -r _db _dir RC <<< "$1"; RNC=$(( ${RC#*-} - ${RC%-*} + 1 ))
   RS=$R/.receipt_scratch; mkdir -p "$RS/home" "$RS/tmp" || exit 1
@@ -316,7 +344,7 @@ if [ "${BENCH_FORMAL_RECEIPT:-0}" = 1 ]; then
       taskset -c "$RC" "${BOOT[@]}" "$R/IMPORT_ORIGIN.receipt.json" "$FT/formal_run_receipt.py" --run-root "$R" --sealed-sha "$SHA" --scratch "$RS" \
       --started-at "$START" --param mode=$MODE --param threads=$T --param workers=$WK \
       --param memmax=${BENCH_MEMMAX:-14G} --param batch=${BENCH_BATCH:-default} \
-      --param modules=${BENCH_MODULES:-all} --param timeout=${BENCH_TIMEOUT:-5h} "$@" > "$R/receipt.log" 2>&1
+      --param modules=${BENCH_MODULES:-all} --param timeout=${BENCH_TIMEOUT:-5h} "${DPARAM[@]}" "$@" > "$R/receipt.log" 2>&1
     rc=$?; echo "receipt exit=$rc" >> "$R/status"; exit $rc ); RRC=$?
   rm -rf "${RS:?}/home"
   finish_receipt "$RRC"

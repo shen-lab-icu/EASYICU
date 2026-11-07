@@ -1,7 +1,11 @@
 """Boot for every Python step of a formal run (delta32p ruling; the BUILDER_BOOT pattern as
 corrected by delta34s).
 
-usage: python -I -S -P formal_boot.py TOOLS CLONE SHA SITE_PACKAGES ORIGIN_OUT SCRIPT [ARGS...]
+usage: python -I -S -P formal_boot.py TOOLS CLONE SHA SITE_PACKAGES [--dict-overlay PATH] ORIGIN_OUT SCRIPT [ARGS...]
+
+An explicitly configured overlay is bound once in the run's DICT_OVERLAY.json
+before the first snapshot. Later steps and every extraction worker compare its
+regular-file bytes with that launch binding (dict_overlay_changed, exit 97).
 
 The wrapper runs each formal Python tool (the extraction and snapshot
 drivers, the receipt) only as a staged copy in TOOLS (the run's
@@ -54,6 +58,65 @@ import types  # noqa: E402
 import uuid  # noqa: E402
 
 ORIGIN_EXIT = 97
+
+
+class DictOverlayError(ValueError):
+    """A formal dictionary input cannot be bound or no longer matches its binding."""
+
+    def __init__(self, reason):
+        super().__init__(reason)
+        self.reason = reason
+
+
+def dictionary_file(path):
+    """Resolve and hash a regular file without blocking on a FIFO or device."""
+    try:
+        real = os.path.realpath(path)
+        if not stat.S_ISREG(os.stat(real).st_mode):
+            raise DictOverlayError("dict_overlay_not_regular")
+        fd = os.open(real, os.O_RDONLY | os.O_NONBLOCK)
+        with os.fdopen(fd, "rb") as fh:
+            if not stat.S_ISREG(os.fstat(fh.fileno()).st_mode):
+                raise DictOverlayError("dict_overlay_not_regular")
+            digest, size = hashlib.sha256(), 0
+            for block in iter(lambda: fh.read(1 << 20), b""):
+                digest.update(block)
+                size += len(block)
+        return {"path": real, "sha256": digest.hexdigest(), "size": size}
+    except OSError as exc:
+        raise DictOverlayError("dict_overlay_unavailable") from exc
+
+
+def check_dictionary(expected):
+    try:
+        if dictionary_file(expected["path"]) == expected:
+            return
+    except DictOverlayError:
+        pass
+    raise DictOverlayError("dict_overlay_changed")
+
+
+def bind_dictionary(tools, path):
+    """The first wrapper step binds launch bytes; all subsequent steps reuse them."""
+    target = os.path.join(os.path.dirname(tools), "DICT_OVERLAY.json")
+    if os.path.exists(target):
+        with open(target, encoding="utf-8") as fh:
+            expected = json.load(fh)
+        if os.path.realpath(path) != expected["path"]:
+            raise DictOverlayError("dict_overlay_changed")
+        check_dictionary(expected)
+    else:
+        expected = dictionary_file(path)
+        with open(target, "x", encoding="utf-8") as fh:
+            json.dump(expected, fh, sort_keys=True)
+    return expected
+
+
+def refuse_dictionary(tools, error):
+    with open(os.path.join(os.path.dirname(tools), "RUN_INVALID"), "w",
+              encoding="utf-8") as fh:
+        fh.write(error.reason + "\n")
+    print(error.reason, file=sys.stderr, flush=True)
 
 
 def bind_private_temp():
@@ -145,6 +208,10 @@ def worker_origin(initial_ok):
             names = sealed_tool_names(record["tools"], context["clone"], record["sha"])
             import easyicu
             record["easyicu"] = record["path"] = os.path.realpath(easyicu.__file__)
+            if "dict_overlay" in record:
+                check_dictionary(record["dict_overlay"])
+                if os.environ.get("EASYICU_DICT_PATH") != record["dict_overlay"]["path"]:
+                    raise DictOverlayError("dict_overlay_changed")
             check_modules(record, names, context["allowed"])
             record["ok"] = bool(initial_ok and record["head"] == record["sha"] and (
                 record["isolated"] and record["no_site"] and record["safe_path"]) and (
@@ -152,6 +219,9 @@ def worker_origin(initial_ok):
         except Exception as exc:
             record["ok"] = False
             record["error"] = type(exc).__name__
+            if isinstance(exc, DictOverlayError):
+                record["reason"] = exc.reason
+                refuse_dictionary(record["tools"], exc)
         record["complete"] = complete
         with open(out, "w", encoding="utf-8") as fh:
             json.dump(record, fh, sort_keys=True)
@@ -165,6 +235,10 @@ def worker_origin(initial_ok):
 
 
 def main() -> None:
+    overlay_path = None
+    if len(sys.argv) > 6 and sys.argv[5] == "--dict-overlay":
+        overlay_path = sys.argv[6]
+        del sys.argv[5:7]
     if len(sys.argv) < 7:
         print("usage: formal_boot.py TOOLS CLONE SHA SITE_PACKAGES ORIGIN_OUT SCRIPT [ARGS...]",
               file=sys.stderr)
@@ -189,6 +263,20 @@ def main() -> None:
               "tmpdir": private,
               "sys_path": list(sys.path), "script": None, "path": None, "head": None,
               "modules": {}, "mismatched": [], "complete": False}
+    if overlay_path is not None:
+        try:
+            record["dict_overlay"] = bind_dictionary(tools, overlay_path)
+            # Only extraction receives the loader's environment input. Pin its realpath.
+            if os.path.basename(script) == "v2_bench_local.py":
+                if os.environ.get("EASYICU_DICT_PATH") != overlay_path:
+                    raise DictOverlayError("dict_overlay_config_mismatch")
+                os.environ["EASYICU_DICT_PATH"] = record["dict_overlay"]["path"]
+        except DictOverlayError as exc:
+            record["reason"] = exc.reason
+            with open(out, "w", encoding="utf-8") as fh:
+                json.dump(record, fh, sort_keys=True)
+            refuse_dictionary(tools, exc)
+            sys.exit(ORIGIN_EXIT)
 
     def check():
         return check_modules(record, tool_names, allowed)
