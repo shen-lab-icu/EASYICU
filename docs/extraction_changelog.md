@@ -26,6 +26,19 @@ deferred to it are compared against `2786ea872` there.
 - TODO(d5fixB): bucket source-set and source-root checks
   (B-SOURCE-SET, B-ROOT).
 
+## 2026-11-07 — `vent_ind` window durations take their declared unit [lead-r13, branch `r13srccfg_vent`]
+
+Fail-closed tightening; no value change. In `_callback_vent_ind`, a numeric
+WinTbl duration went through a unit-less `pd.to_timedelta`, which reads numbers
+as nanoseconds. That result is non-null, so the hours fallback never ran, and a
+3-hour window would have covered only its start hour. A numeric duration now
+takes the WinTbl's declared `dur_var` unit
+(`table.duration.duration_series_to_timedelta`). An undeclared numeric duration
+raises `DurationUnitUndeclaredError` (reason `duration_unit_undeclared`).
+Timedelta durations are unchanged. A trace on all six databases (300 stays
+each, `load_concepts(["vent_ind"])`) found 0 unit-less calls, so no extracted
+value moves.
+
 ## 2026-11-06 — eICU GCS sedation windows and the published `ett_gcs` grid [lead-r13, `432ddaf3c`, `80b1cb964`, `e70102c94`, `f9b45386c`, `b7509c080`, `e1d73cd7b`, `2c0579bd5`, `942bfcbfb`, `3e23c65d4`, `06f30f7b0`]
 
 **Rule.** GCS marks an hour as sedated (and imputes 15, ricu `sed_impute`)

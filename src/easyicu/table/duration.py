@@ -64,6 +64,12 @@ class DurationUnitError(ValueError):
     """Raised when a ``dur_var`` unit is required but cannot be determined."""
 
 
+class DurationUnitUndeclaredError(DurationUnitError):
+    """A numeric duration reached a consumer without a declared unit."""
+
+    reason_code = "duration_unit_undeclared"
+
+
 class DurationValueError(ValueError):
     """Raised when a ``dur_var`` value cannot be a real window duration."""
 
@@ -298,6 +304,41 @@ def _validate_hours(
     return hours
 
 
+def duration_series_to_timedelta(
+    values: pd.Series,
+    unit: Optional[str],
+    *,
+    column: str = "dur_var",
+    concept: Optional[str] = None,
+) -> pd.Series:
+    """Return a duration series as ``timedelta64`` using its declared unit.
+
+    A ``timedelta`` series is returned unchanged. A numeric series is scaled
+    by ``unit`` (seconds, minutes, hours or days); it never goes through a
+    unit-less ``pd.to_timedelta``, which reads numbers as nanoseconds. Without
+    a declared unit it raises :class:`DurationUnitUndeclaredError`. Values
+    are not validated here: callers keep their own window rules.
+    """
+
+    if pd.api.types.is_timedelta64_dtype(values):
+        return values
+    label = concept or "<unknown>"
+    if unit in _HOURS_PER_UNIT:
+        hours = pd.to_numeric(values, errors="coerce") * _HOURS_PER_UNIT[unit]
+        return pd.to_timedelta(hours, unit="h")
+    if unit == UNIT_TIMEDELTA:
+        raise DurationUnitError(
+            f"{column!r} for concept {label!r} declares unit 'timedelta' but "
+            "holds a numeric dtype; the producer must convert before the unit "
+            "is consumed"
+        )
+    raise DurationUnitUndeclaredError(
+        f"{column!r} for concept {label!r} is numeric with no declared unit "
+        f"(declared: {unit!r}); a number is not a duration until its unit is "
+        "declared, and EasyICU does not guess one"
+    )
+
+
 def resolve_dur_var_hours(
     frame: pd.DataFrame,
     *,
@@ -353,6 +394,7 @@ __all__ = [
     "VALID_DUR_VAR_UNITS",
     "STRICT_ENV_VAR",
     "DurationUnitError",
+    "DurationUnitUndeclaredError",
     "WindowContractError",
     "assert_window_contract",
     "strict_dur_var_units",
@@ -362,4 +404,5 @@ __all__ = [
     "combine_dur_var_units",
     "convert_dur_var_unit",
     "resolve_dur_var_hours",
+    "duration_series_to_timedelta",
 ]

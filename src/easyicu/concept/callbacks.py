@@ -5089,21 +5089,20 @@ def _callback_vent_ind(
         clean = base + pd.to_timedelta(numeric, unit="h")
         return clean, lambda values: (values - base).dt.total_seconds() / 3600.0
 
-    def _coerce_duration(series: pd.Series) -> pd.Series:
+    def _coerce_duration(series: pd.Series, unit: Optional[str] = None) -> pd.Series:
+        # A unit-less pd.to_timedelta reads numbers as nanoseconds, and the
+        # result is non-null, so no fallback ever corrected it.  Numbers take
+        # their declared unit; without one the window fails closed (typed,
+        # reason duration_unit_undeclared).  Timedeltas pass through.
+        from ..table.duration import duration_series_to_timedelta
+
         if pd.api.types.is_timedelta64_dtype(series):
             return series
-        try:
-            td_series = pd.to_timedelta(series, errors="coerce")
-            if td_series.notna().any():
-                return td_series
-        except Exception:  # fallback to numeric parsing
-            logger.debug(
-                "Failed to parse ventilation duration as timedelta; "
-                "falling back to numeric hours",
-                exc_info=True,
+        if pd.to_numeric(series, errors="coerce").notna().any():
+            return duration_series_to_timedelta(
+                series, unit, column=str(series.name or "dur_var"), concept="vent_ind"
             )
-        numeric = pd.to_numeric(series, errors="coerce")
-        return pd.to_timedelta(numeric, unit="h")
+        return pd.to_timedelta(series, errors="coerce")
 
     def _expand_windows(window_df: pd.DataFrame, revert_fn) -> ICUTable:
         if window_df.empty:
@@ -5321,8 +5320,12 @@ def _callback_vent_ind(
         start_hours = df["_start_hours"]
 
         dur_series: Optional[pd.Series] = None
+        dur_unit: Optional[str] = None
         if isinstance(mech, WinTbl) and mech.dur_var and mech.dur_var in df.columns:
+            from ..table.duration import get_dur_var_unit
+
             dur_series = df[mech.dur_var]
+            dur_unit = get_dur_var_unit(mech.data)
         else:
             # 🔥 首先检查 mech_vent_dur 列（MIMIC-IV mech_vent 使用这个列名）
             dur_col = next(
@@ -5355,7 +5358,7 @@ def _callback_vent_ind(
         if dur_series is None:
             dur_series = pd.Series(match_win, index=df.index)
 
-        dur_series = _coerce_duration(dur_series).fillna(match_win)
+        dur_series = _coerce_duration(dur_series, dur_unit).fillna(match_win)
 
         window_df = df[id_columns + ["_start_dt"]].copy()
         window_df["vent_dur_td"] = dur_series.values
