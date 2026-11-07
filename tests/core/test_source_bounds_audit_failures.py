@@ -97,8 +97,11 @@ def test_a_missing_isolated_hand_back_fails_the_module(tmp_path, monkeypatch):
         extraction, "_stream_batch_bounds_sidecar",
         lambda part: Path(part).with_name(f".{Path(part).name}.elsewhere.json"),
     )
-    with pytest.raises(SourceBoundsAuditError) as caught:
+    # r13mergeidx delta22m: a missing receipt is a typed batch failure (the
+    # module records it as its stream_failure), no longer an audit error
+    # wrapping a bare FileNotFoundError.
+    with pytest.raises(extraction.StreamBatchReceiptMissing) as caught:
         _stream(tmp_path, isolated=True)
-    assert "isolated_batch_hand_back" in caught.value.stage
-    assert isinstance(caught.value.__cause__, FileNotFoundError)
+    assert caught.value.sidecar_kind == "bounds"
+    assert caught.value.to_record()["failure_class"] == "batch_receipt_missing"
     assert not (tmp_path / "isolated" / "vitals.parquet").exists()

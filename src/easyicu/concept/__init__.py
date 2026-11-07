@@ -41,7 +41,13 @@ from .availability_signal import (
     table_availability,
 )
 from .data_source_contract import ConceptDataSourceStorage
-from .merge_time_index import declare_resolved_time_index, merge_index_name
+from .merge_time_index import (
+    batch_time_axis,
+    declare_resolved_time_index,
+    merge_index_name,
+    record_empty_index_fill,
+    validate_row_bearing_axes,
+)
 from ..utils import compat
 
 logger = logging.getLogger(__name__)
@@ -2565,7 +2571,9 @@ class ConceptResolver:
                     consume_sources=True,
                 )
             merged = self._ensure_requested_concept_columns(
-                self._merge_tables(tables),
+                self._merge_tables(
+                    tables, relative_axis=bool(align_to_admission and interval is not None)
+                ),
                 names,
                 materialize_missing=not defer_empty_columns_to_arrow,
                 value_dtypes=value_dtypes,
@@ -9479,12 +9487,19 @@ class ConceptResolver:
             return pd.to_timedelta(value, unit="d")
         raise ValueError(f"Unsupported interval unit '{unit}' in expression '{expression}'")
 
-    def _merge_tables(self, tables: Mapping[str, ICUTable]) -> pd.DataFrame:
+    def _merge_tables(
+        self, tables: Mapping[str, ICUTable], *, relative_axis: bool = False
+    ) -> pd.DataFrame:
         from ..table import WinTbl
         all_frames: list = []
         index_column: Optional[str] = None
         id_columns: Optional[List[str]] = None
+        validate_row_bearing_axes(tables)
         aligned_index = merge_index_name(tables)
+        slice_index, slice_index_dtype = batch_time_axis(
+            tables, aligned_index, relative_axis=relative_axis
+        )
+        aligned_index = aligned_index or slice_index
 
         for name, table in tables.items():
             frame = table.data.copy()
@@ -9495,6 +9510,16 @@ class ConceptResolver:
             if name == "urine24" and "urine24_est" in tables:
                 frame = frame.drop(columns=["urine24_est_available_at"], errors="ignore")
             table_index = table.index_var if isinstance(table, WinTbl) else table.index_column
+            if not table_index and len(frame) == 0 and slice_index_dtype is not None:
+                # An empty batch slice takes the batch's time axis; its raw
+                # native time column (never aligned) is not that axis.
+                frame = frame.drop(
+                    columns=[aligned_index, *(getattr(table, "time_columns", None) or [])],
+                    errors="ignore",
+                )
+                frame[aligned_index] = pd.Series(dtype=slice_index_dtype)
+                table_index = aligned_index
+                record_empty_index_fill(name)
             if table_index and table_index != aligned_index:
                 frame = frame.rename(columns={table_index: aligned_index})
                 table_index = aligned_index
