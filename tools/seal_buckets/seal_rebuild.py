@@ -62,7 +62,9 @@ the memgate admits it, then DBs run in parallel):
   5. footer_scan.py over the whole staging root; its per-bucket footer row totals must equal the QC rows;
   6. ORDER OF THE LAST STEPS (no partially installed root is ever visible under its final name):
        a. after the builds, everything under the staging root is made read-only; each bucket manifest
-          must still be the one QC recorded, then the footer scan runs on the frozen tree;
+          must still be the one QC recorded, then the footer scan runs on the frozen tree, and each new
+          bucket must satisfy the full storage contract (bucket_compare.validate_contract; otherwise
+          bucket_contract_invalid <table>: <contract reason>);
        b. the in-root receipt <root>/_SEAL_BUILD_RECEIPT.json is written as the LAST content step;
        c. the staging root itself is made read-only and the whole tree is verified (read-only, in-root
           receipt sha) -- the final name never exists writable or unverified;
@@ -90,6 +92,7 @@ import errno
 import fcntl
 import glob
 import hashlib
+import importlib.util
 import json
 import os
 import re
@@ -947,6 +950,28 @@ def writable_entries(root: Path) -> list[str]:
     return out
 
 
+_CONTRACT = None
+
+
+def check_bucket_contract(bucket: Path, table: str) -> None:
+    """bucket_compare.validate_contract (the resolver's contract, ported; easyicu-free) on one new
+    bucket: a violation is bucket_contract_invalid with the contract's own reason."""
+    global _CONTRACT
+    if _CONTRACT is None:
+        spec = importlib.util.spec_from_file_location(
+            "seal_bucket_contract", Path(__file__).with_name("bucket_compare.py")
+        )
+        module = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(module)
+        _CONTRACT = module
+    try:
+        _CONTRACT.validate_contract(bucket)
+    except _CONTRACT.StorageIntegrityError as exc:
+        raise SealError(
+            "bucket_contract_invalid", f"{table}: {exc.reason} {exc.detail}".rstrip()
+        ) from exc
+
+
 def refusal_marker(target: Path) -> Path:
     """A persistent refusal beside a final name whose post-rename verification failed."""
     return target.parent / f".{target.name}{REFUSAL_SUFFIX}"
@@ -1510,6 +1535,10 @@ def run_db(seal: Seal, db: str, plan: dict, code: Path) -> None:
                 or b.get("parts_on_disk_readable") != rec["parts"]
             ):
                 raise SealError("footer_totals_vs_receipt", table)
+        # the full bucket storage contract, as every reader and the comparator enforce it, on the
+        # frozen tree before anything is published (delta29t (b))
+        for table in receipt["tables"]:
+            check_bucket_contract(staging / f"{table}_bucket", table)
         receipt["links"] = plan["links"]
         in_root = dict(receipt, verdict="PASS")
         installed = install(staging, target, in_root)

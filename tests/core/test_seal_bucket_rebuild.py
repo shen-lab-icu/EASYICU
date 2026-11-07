@@ -106,6 +106,21 @@ def test_dry_run_probe_reports_a_builder_that_would_fail_qc(tmp_path, mode, reas
         make_writable(w["root"])
 
 
+def test_a_new_bucket_violating_the_storage_contract_is_never_published(tmp_path):
+    """delta29t (b): an empty extra bucket directory passes QC and the footer scan, but the reader
+    would refuse the layout; the publish path runs the full contract first."""
+    w = make_world(tmp_path / "w", mode="extra_empty_dir")
+    try:
+        result = _run(seal_args(w, "build1", "--only", "sic"))
+        assert result.returncode == 1
+        assert "sic FAILED bucket_contract_invalid" in result.stdout
+        assert "bucket_modulus_mismatch" in result.stdout
+        assert not _target(w, "sic_cur").exists()
+        assert not sr.pending_marker(_target(w, "sic_cur")).exists()
+    finally:
+        make_writable(w["root"])
+
+
 def test_unknown_sha_is_refused(world):
     result = _run(
         [*seal_args(world, "build1")[1:2], "--config", str(world["config"])][:0]

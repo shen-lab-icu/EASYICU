@@ -125,6 +125,8 @@ if code is not None:
 (tmp / "_BUCKET_BUILD_RECEIPT.json").write_text(json.dumps(receipt, sort_keys=True))
 (tmp / "_BUCKET_MANIFEST.json").write_text(json.dumps(manifest, sort_keys=True))
 (tmp / "_COMPLETE").write_text("complete\n")
+if MODE == "extra_empty_dir":  # a structural defect QC and the footer scan cannot see
+    (tmp / ("var_id=0" if variable else "") / "bucket_id=9").mkdir()
 os.replace(tmp, target)
 '''
 
