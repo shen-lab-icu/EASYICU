@@ -399,6 +399,8 @@ def _assert_float_fidelity(
     rows = max(4096, QC_BATCH_BYTES // width)
     source_cursor, target_cursor = con.cursor(), con.cursor()
     for cursor in (source_cursor, target_cursor):
+        # The source QC stream has no ORDER BY: its physical row sequence is
+        # checked in _source_batches, so this setting remains necessary here.
         cursor.execute("SET preserve_insertion_order=true")
     target = target_cursor.execute(
         f"SELECT {_identifier(ORDINAL)}, {', '.join(_identifier(c) for c in columns)} "
@@ -567,6 +569,39 @@ def _relation(files) -> str:
     )
 
 
+def _ordinal_relation(con, files) -> str:
+    """Assign the old filename/physical-row ordinal using only footer offsets.
+
+    Sort the *file names* in this connection, with the very same ORDER BY
+    filename used by the former row_number window. This avoids assuming a
+    Python/locale/natural sort is DuckDB's string order. Parquet num_rows spans
+    all row groups; an empty file advances the prefix by zero. file_row_number
+    is zero-based across row groups, so prefix + file_row_number is exactly
+    the former zero-based rank of (filename, file_row_number).
+    """
+    names = [str(p) for p in files]
+    ordered = con.execute(
+        "SELECT filename FROM unnest(?) AS files(filename) ORDER BY filename",
+        [names],
+    ).fetchall()
+    offsets, prefix = [], 0
+    for (filename,) in ordered:
+        offsets.append((filename, prefix))
+        prefix += pq.ParquetFile(filename).metadata.num_rows
+    con.execute(
+        "CREATE OR REPLACE TEMP TABLE _easyicu_source_offsets "
+        "(filename VARCHAR, prefix_rows BIGINT)"
+    )
+    con.executemany("INSERT INTO _easyicu_source_offsets VALUES (?, ?)", offsets)
+    paths = "[" + ",".join(_sql_string(p) for p in files) + "]"
+    return (
+        "(SELECT source.*, CAST(offsets.prefix_rows + source.file_row_number AS BIGINT) "
+        f"AS {_identifier(ORDINAL)} FROM read_parquet({paths}, filename=true, "
+        "file_row_number=true, union_by_name=true, hive_partitioning=false) source "
+        "JOIN _easyicu_source_offsets offsets ON source.filename = offsets.filename)"
+    )
+
+
 def _schema(con, relation: str) -> list[list[str]]:
     return [
         [str(row[0]), str(row[1])]
@@ -587,8 +622,9 @@ def _verify_bucket(con, path: Path, sort_keys: list[str], expected_rows: int) ->
     order = ",".join(_identifier(c) + " ASC NULLS LAST" for c in sort_keys)
     rows, disorder = con.execute(f"""
         SELECT count(*), count(*) FILTER (WHERE physical != expected) FROM (
-            SELECT row_number() OVER () physical,
-                   row_number() OVER (ORDER BY {order}) expected FROM {_relation([path])}
+            SELECT file_row_number + 1 physical,
+                   row_number() OVER (ORDER BY {order}) expected
+            FROM read_parquet({_sql_string(path)}, file_row_number=true, hive_partitioning=false)
         )
     """).fetchone()
     if rows != expected_rows or disorder:
@@ -789,6 +825,8 @@ def build_bucket_cache(
         with duckdb_spill.connection(
             config={"threads": threads, "memory_limit": memory_limit}
         ) as con:
+            # Keep the seal writer's ordered COPY/row-group assembly settings;
+            # only staging's ordinal assignment no longer depends on scan order.
             con.execute("SET preserve_insertion_order=true")
             source_relation = _relation(source_files)
             schema = _schema(con, source_relation)
@@ -867,13 +905,13 @@ def build_bucket_cache(
                 )
             # Multi-threaded PARTITION_BY is only a staging operation. Final
             # writes below each have their own ORDER BY and verification.
-            paths = "[" + ",".join(_sql_string(p) for p in source_files) + "]"
+            ordinal_relation = _ordinal_relation(con, source_files)
             staging = temporary / ".stage"
             con.execute(f"""COPY (
                 SELECT {",".join(_identifier(c) for c in columns)},
-                    CAST(row_number() OVER (ORDER BY filename, file_row_number) - 1 AS BIGINT) AS {_identifier(ORDINAL)},
+                    {_identifier(ORDINAL)},
                     {partition} AS _easyicu_bucket_id
-                FROM read_parquet({paths}, filename=true, file_row_number=true, union_by_name=true, hive_partitioning=false)
+                FROM {ordinal_relation}
             ) TO {_sql_string(staging)} ({_parquet_options(schema, "PARTITION_BY (_easyicu_bucket_id)")})""")
             for bid in range(count):
                 directory = temporary / f"bucket_id={bid}"
@@ -1148,19 +1186,14 @@ def build_variable_cache(
                 if breakpoints
                 else "0"
             )
-            paths = "[" + ",".join(_sql_string(p) for p in source_files) + "]"
+            ordinal_relation = _ordinal_relation(con, source_files)
             staging = temporary / ".stage"
             projected = ",".join("s." + _identifier(c) for c in columns)
             con.execute(f"""COPY (
                 SELECT {projected}, s.{_identifier(ORDINAL)},
                     m.pid AS _easyicu_partition_id,
                     ({stay_range}) // m.span AS _easyicu_bucket_id
-                FROM (
-                    SELECT *, CAST(row_number() OVER (ORDER BY filename, file_row_number) - 1 AS BIGINT)
-                        AS {_identifier(ORDINAL)}
-                    FROM read_parquet({paths}, filename=true, file_row_number=true,
-                                      union_by_name=true, hive_partitioning=false)
-                ) s
+                FROM {ordinal_relation} s
                 JOIN _easyicu_partitions m ON s.{_identifier(key)} IS NOT DISTINCT FROM m.value
             ) TO {_sql_string(staging)} ({_parquet_options(schema, "PARTITION_BY (_easyicu_partition_id)")})""")
             order = ",".join(_identifier(c) + " ASC NULLS LAST" for c in sort)
