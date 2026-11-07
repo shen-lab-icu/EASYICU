@@ -7,6 +7,7 @@ refusal (or the repaired behaviour). Synthetic installs only: no clinical data, 
 from __future__ import annotations
 
 import ast
+import builtins
 import json
 import os
 import shutil
@@ -173,6 +174,24 @@ MUTATIONS = {
             r, lambda m: m["derived_from"]["files"][0].update(sha256="x")
         ),
     ),
+    "inventory_duplicate_without_size": (  # NB-PARITY-ORDER: a combined defect, same reason
+        False,
+        lambda r: _edit_manifest(
+            r,
+            lambda m: m["inventory"].append(
+                {"relative_path": m["inventory"][0]["relative_path"], "row_count": 10}
+            ),
+        ),
+    ),
+    "variable_inventory_duplicate_without_size": (
+        True,
+        lambda r: _edit_manifest(
+            r,
+            lambda m: m["inventory"].append(
+                {"relative_path": m["inventory"][0]["relative_path"], "row_count": 10}
+            ),
+        ),
+    ),
     "derived_from_source_missing": (False, lambda r: (r.parent / "t.parquet").unlink()),
     "derived_from_source_changed": (
         False,
@@ -211,11 +230,23 @@ def test_the_comparator_and_the_resolver_decide_every_install_alike(tmp_path):
 LEGACY_ONLY = {"bucket_legacy_unverifiable": {"_legacy_manifest"}}
 
 
-def _resolver_reason_codes() -> dict[str, set[str]]:
+class UnsupportedReasonForm(AssertionError):
+    """A raise or constructor form the collector cannot read a literal reason code from."""
+
+
+def _resolver_reason_codes(
+    source: str | None = None,
+    entries=("read_bucket_contract", "_read_variable_contract"),
+) -> dict[str, set[str]]:
     """Every reason code read_bucket_contract and _read_variable_contract can raise, derived from the
     storage_layout source: string first arguments of StorageIntegrityError-family constructors in those
-    readers and every module function they (transitively) call. Code -> raising functions."""
-    tree = ast.parse(Path(sl.__file__).read_text())
+    readers and every module function they (transitively) call. Code -> raising functions.
+
+    Any form it cannot read a literal code from FAILS explicitly (never skipped): a family constructor
+    whose code is not a string literal (a variable, an f-string, none), a family constructor reached as
+    an attribute (module.Error(...)), an exception constructor imported from another module, or a raise
+    of anything but a call (``raise err``); a bare re-raise is fine."""
+    tree = ast.parse(source if source is not None else Path(sl.__file__).read_text())
     functions = {n.name: n for n in tree.body if isinstance(n, ast.FunctionDef)}
     errors = {"StorageIntegrityError"}
     classes = [n for n in tree.body if isinstance(n, ast.ClassDef)]
@@ -228,26 +259,102 @@ def _resolver_reason_codes() -> dict[str, set[str]]:
         if not more:
             break
         errors |= more
+    builtin_errors = {
+        n
+        for n in dir(builtins)
+        if isinstance(getattr(builtins, n), type)
+        and issubclass(getattr(builtins, n), BaseException)
+    }
     codes: dict[str, set[str]] = {}
-    todo, seen = ["read_bucket_contract", "_read_variable_contract"], set()
+    todo, seen = list(entries), set()
     while todo:
         name = todo.pop()
         if name in seen:
             continue
         seen.add(name)
         for node in ast.walk(functions[name]):
-            if not (isinstance(node, ast.Call) and isinstance(node.func, ast.Name)):
-                continue
-            if node.func.id in functions:
-                todo.append(node.func.id)
             if (
-                node.func.id in errors
-                and node.args
-                and isinstance(node.args[0], ast.Constant)
-                and isinstance(node.args[0].value, str)
+                isinstance(node, ast.Raise)
+                and node.exc is not None
+                and not isinstance(node.exc, ast.Call)
             ):
-                codes.setdefault(node.args[0].value, set()).add(name)
+                raise UnsupportedReasonForm(f"{name}: raise of a non-call")
+            if not isinstance(node, ast.Call):
+                continue
+            func = node.func
+            if isinstance(func, ast.Attribute) and (
+                func.attr in errors or func.attr.endswith("Error")
+            ):
+                raise UnsupportedReasonForm(
+                    f"{name}: attribute constructor {func.attr}"
+                )
+            if not isinstance(func, ast.Name):
+                continue
+            if func.id in functions:
+                todo.append(func.id)
+            if func.id in errors:
+                first = node.args[0] if node.args else None
+                if not (
+                    isinstance(first, ast.Constant) and isinstance(first.value, str)
+                ):
+                    raise UnsupportedReasonForm(
+                        f"{name}: non-literal code for {func.id}"
+                    )
+                codes.setdefault(first.value, set()).add(name)
+            elif func.id.endswith("Error") and func.id not in builtin_errors:
+                raise UnsupportedReasonForm(f"{name}: foreign constructor {func.id}")
     return codes
+
+
+_FAMILY = (
+    "class StorageIntegrityError(Exception):\n    pass\n"
+    "class BucketLayoutError(StorageIntegrityError):\n    pass\n"
+)
+
+
+@pytest.mark.parametrize(
+    "body",
+    [
+        "    code = 'bucket_x'\n    raise BucketLayoutError(code, root)\n",
+        "    raise BucketLayoutError(f'bucket_{root}', root)\n",
+        "    raise BucketLayoutError()\n",
+        "    raise errors.BucketLayoutError('bucket_x', root)\n",
+        "    raise OtherLayoutError('bucket_x', root)\n",
+        "    err = BucketLayoutError('bucket_x', root)\n    raise err\n",
+    ],
+    ids=[
+        "variable",
+        "f-string",
+        "no-code",
+        "attribute",
+        "cross-module",
+        "raise-variable",
+    ],
+)
+def test_the_reason_code_collector_fails_on_unsupported_forms(body):
+    source = (
+        "from elsewhere import OtherLayoutError, errors\n"
+        + _FAMILY
+        + "def _read_variable_contract(root):\n    raise BucketLayoutError('bucket_ok', root)\n"
+        + "def read_bucket_contract(root):\n"
+        + body
+    )
+    with pytest.raises(UnsupportedReasonForm):
+        _resolver_reason_codes(source)
+
+
+def test_the_reason_code_collector_reads_supported_forms():
+    source = _FAMILY + (
+        "def helper(root):\n    raise BucketLayoutError('bucket_helper', root) from None\n"
+        "def _read_variable_contract(root):\n    raise ValueError('internal')\n"
+        "def read_bucket_contract(root):\n"
+        "    try:\n        helper(root)\n    except BucketLayoutError:\n        raise\n"
+        "    raise BucketLayoutError('bucket_top', root)\n"
+    )
+    assert _resolver_reason_codes(source) == {
+        "bucket_helper": {"helper"},
+        "bucket_top": {"read_bucket_contract"},
+    }
 
 
 def test_every_resolver_reason_code_is_exercised_with_parity(tmp_path):

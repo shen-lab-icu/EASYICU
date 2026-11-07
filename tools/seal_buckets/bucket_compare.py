@@ -195,14 +195,17 @@ def _verify_sources(root: Path, manifest: dict) -> None:
             raise _sie("bucket_derived_from_source_changed", root, entry["path"])
 
 
-def _check_part(root: Path, path: Path, entry: dict, columns, sort, order) -> None:
-    """One listed part: a real file of its inventory size and footer rows, with the key columns typed."""
+def _check_part(
+    root: Path, path: Path, entry: dict, columns, sort, order, seen: set
+) -> None:
+    """One listed part, in the resolver's order: size/row_count types (a missing field is a manifest
+    defect), then a duplicate path, a non-file or a size mismatch, then footer rows and key types."""
     if any(
         not isinstance(entry[k], int) or isinstance(entry[k], bool) or entry[k] < 0
         for k in ("size", "row_count")
     ):
         raise _sie("bucket_inventory_mismatch", root, entry["relative_path"])
-    if not path.is_file() or path.stat().st_size != entry["size"]:
+    if path in seen or not path.is_file() or path.stat().st_size != entry["size"]:
         raise _sie("bucket_inventory_mismatch", root, entry["relative_path"])
     parquet = pq.ParquetFile(path)
     if parquet.metadata.num_rows != entry["row_count"]:
@@ -284,9 +287,9 @@ def _hash_or_range(root: Path, manifest: dict) -> None:
         if parts[0] != f"bucket_id={bid}" or not 0 <= bid < count:
             raise _sie("bucket_modulus_mismatch", root, relative)
         path = root.joinpath(*parts)
-        if path.is_symlink() or path.parent.is_symlink() or path in seen:
+        if path.is_symlink() or path.parent.is_symlink():
             raise _sie("bucket_inventory_mismatch", root, relative)
-        _check_part(root, path, entry, [(key, kind)], sort, order)
+        _check_part(root, path, entry, [(key, kind)], sort, order, seen)
         seen.add(path)
     actual = {p for p in root.rglob("*.parquet") if not p.name.startswith(".")}
     if actual != seen:
@@ -410,9 +413,11 @@ def _variable(root: Path, manifest: dict) -> None:
         if not 0 <= bucket < moduli[pid]:
             raise _sie("bucket_modulus_mismatch", root, relative)
         path = root.joinpath(*parts)
-        if path.is_symlink() or path.parent.is_symlink() or path in seen:
+        if path.is_symlink() or path.parent.is_symlink():
             raise _sie("bucket_inventory_mismatch", root, relative)
-        _check_part(root, path, entry, [(key, kind), (stay, stay_kind)], sort, order)
+        _check_part(
+            root, path, entry, [(key, kind), (stay, stay_kind)], sort, order, seen
+        )
         seen.add(path)
     actual = {p for p in root.rglob("*.parquet") if not p.name.startswith(".")}
     if actual != seen:

@@ -149,7 +149,7 @@ ORIGIN_EXIT = 97
 # seal SHA (or, for a standalone acceptance, this tool's sibling file), and only when those bytes hash to
 # this pin (tests/core/test_seal_bucket_round4.py keeps it equal to the file). Never imported.
 VALIDATOR_REL = "tools/seal_buckets/bucket_compare.py"
-VALIDATOR_SHA256 = "c929431016a5e37316a8c6abb291a2ec06dde903ce00b9406f0a90c0c1a0db6a"
+VALIDATOR_SHA256 = "9a90bf08c9b2bd3f443cfa17f3ae487e13f71f86838b3e9eb2b716945e48aa7e"
 # Launches the seal clone's builder like `python <builder>` (sys.path[0] = scripts/), under `python -I -S`:
 # no PYTHONPATH, no current directory and no site hook (sitecustomize, usercustomize, .pth) can add code.
 # The boot's first statements (only the builtin sys module is touched) reset sys.path to the standard
