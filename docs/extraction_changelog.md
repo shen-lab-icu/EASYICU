@@ -35,9 +35,17 @@ as nanoseconds. That result is non-null, so the hours fallback never ran, and a
 takes the WinTbl's declared `dur_var` unit
 (`table.duration.duration_series_to_timedelta`). An undeclared numeric duration
 raises `DurationUnitUndeclaredError` (reason `duration_unit_undeclared`).
-Timedelta durations are unchanged. A trace on all six databases (300 stays
-each, `load_concepts(["vent_ind"])`) found 0 unit-less calls, so no extracted
-value moves.
+Timedelta durations are unchanged.
+
+A trace of `load_concepts(["vent_ind"])` on `827ef57a6` (300 stays per database)
+found 0 calls to `_coerce_duration` on all six databases, so no extracted value
+moves. The trace confirmed it imported that tree, and a synthetic positive
+control did register the unit-less call.
+- MIIV, MIMIC-III CareVue and HiRID pass `mech_vent` as a WinTbl with a float
+  `dur_var` declared in hours. These windows take the WinTbl path
+  (`_windows_from_mech_as_wintbl`), or HiRID's bridge.
+- SICdb, AUMCdb and eICU pass hourly or point evidence: an ICUTable with no
+  duration column.
 
 ## 2026-11-06 — eICU GCS sedation windows and the published `ett_gcs` grid [lead-r13, `432ddaf3c`, `80b1cb964`, `e70102c94`, `f9b45386c`, `b7509c080`, `e1d73cd7b`, `2c0579bd5`, `942bfcbfb`, `3e23c65d4`, `06f30f7b0`]
 
