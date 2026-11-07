@@ -34,8 +34,9 @@ def _run(args, tool: Path = TOOL):
 
 
 @pytest.fixture
-def world(tmp_path):
+def world(tmp_path, monkeypatch):
     w = make_world(tmp_path / "w")
+    monkeypatch.setenv("SEAL_MIRROR", str(w["mirror"]))
     yield w
     make_writable(w["root"])
 
@@ -74,7 +75,8 @@ def test_publish_root_replacement_after_rebind(world, monkeypatch, tmp_path, cap
     monkeypatch.setattr(sr, "confined_run", swapping)
     assert sr.main(seal_args(world, "build1", "--only", "sic")) == 1
     out = capsys.readouterr().out
-    assert "sic FAILED bucket_manifest_changed_after_qc laboratory" in out
+    # The swap leaves an unregistered backup directory, now refused before manifest comparison.
+    assert "sic FAILED bucket_root_entries_mismatch" in out
     assert not _target(world).exists()
 
 
@@ -90,7 +92,7 @@ def test_a_swap_while_the_root_is_frozen_is_caught_before_the_rename(
 
     monkeypatch.setattr(sr, "make_read_only", swap_then_freeze)
     assert sr.main(seal_args(world, "build1", "--only", "sic")) == 1
-    assert "sic FAILED bucket_set_changed laboratory" in capsys.readouterr().out
+    assert "sic FAILED bucket_root_entries_mismatch" in capsys.readouterr().out
     assert (
         not _target(world).exists() and not sr.pending_marker(_target(world)).exists()
     )
@@ -110,7 +112,7 @@ def test_acceptance_re_verifies_the_exact_final_set(world, capsys):
     make_writable(target)
     _swap_in_modified_copy(target, "laboratory", target.parent / "_swap")
     sr.make_read_only(target, include_root=True)
-    with pytest.raises(sr.SealError, match="bucket_set_changed"):
+    with pytest.raises(sr.SealError, match="bucket_root_entries_mismatch"):
         sr.accept_root(target, external, world["sha"], "build1", "sic")
 
 
@@ -134,7 +136,10 @@ def test_publish_with_replaced_validator(tmp_path):
             seal_args(w, "build1", "--only", "sic"), tools / "seal_rebuild.py"
         )
         assert result.returncode == 1
-        assert "sic FAILED bucket_contract_invalid" in result.stdout
+        assert (
+            "all FAILED tool_not_sealed tools/seal_buckets/bucket_compare.py"
+            in result.stdout
+        )
         assert not _target(w).exists()
     finally:
         make_writable(w["root"])

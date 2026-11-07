@@ -22,8 +22,8 @@ The SHA must be the launcher's first argument. SEAL_MIRROR selects the git mirro
 mirror); SEAL_PYTHON selects the interpreter (default the server's EasyICU venv). The launcher extracts
 seal_rebuild.py, footer_scan.py and bucket_compare.py from regular blobs at that SHA into a fresh,
 read-only directory under SEAL_LAUNCH_ROOT (else TMPDIR, else /tmp), runs with -I -S, and removes the
-extraction on exit. Only no arguments or a lone -h/--help use the local tool for usage/help. Before
-taking run locks, the tool verifies its own bytes and footer scanner against the seal SHA
+extraction on exit. No arguments or a lone -h/--help print static shell usage. Before
+taking run locks, the tool verifies its own bytes and both helpers against the seal SHA
 (tool_not_sealed), then records their SHA256 fingerprints as `tool` in bucket and farm receipts.
 Under -S the interpreter's site-packages is added explicitly for the validator, without site hooks.
 
@@ -94,6 +94,17 @@ Writes: only new roots/staging under b6_root, b6_root/_scratch/seal_<sha9>/, and
 Never databases/, the CareVue view, or any current root. Receipts hold aggregates and paths only.
 
 Operator runbook (there is no automatic resume; a refused root stays refused until an operator acts):
+  Standalone acceptance also starts at the trusted shell entry, with the coordinator's full SHA:
+    seal_rebuild.sh SHA accept --accept-root ROOT --external-receipt RECEIPT
+      --accept-build build1|build2 --accept-db DB [--config CONFIG.json]
+  It extracts SR, the footer scanner and validator from regular Git blobs before Python runs.
+  Direct Python accept_root callers must name the same full SHA and trusted git_dir (or SEAL_MIRROR);
+  acceptance checks SR/footer bytes against Git, always loads the Git validator, and requires the
+  receipt's tool fingerprint. Neither a sibling validator nor a caller-supplied pin is a trust root.
+  All workload modes require a full SHA; no-SHA help is static shell usage only.
+  Footer scans and comparisons execute fresh SHA-checked copies of the same Git blobs under the
+  run's private work directory; executable siblings are never subprocess inputs. Reports must name
+  the expected tool digest, and a successful comparator must report IDENTICAL.
   1. Find the marker beside the target in b6_root: .<target>.seal_PENDING (renamed, never committed:
      a crash between the rename and the commit) or .<target>.seal_REFUSED (verification failed after
      the rename). First make sure no run of that SHA and mode is alive: no seal_rebuild process, no
@@ -101,16 +112,21 @@ Operator runbook (there is no automatic resume; a refused root stays refused unt
   2. Check both receipts: the in-root <target>/_SEAL_BUILD_RECEIPT.json (verdict PASS, seal_sha, build,
      db, tool) and the external $WORK_ROOT/seal_<sha9>/<build>/receipt_<db>.json (verdict PASS, no failure,
      install.read_only_verified, install.in_root_receipt_sha256 == sha256 of the in-root receipt).
-     The `tool` fingerprints must match seal_rebuild.py and footer_scan.py at the seal SHA; compare
+     The `tool` fingerprints must match SR, footer_scan.py and bucket_compare.py at the seal SHA; compare
      and operator commit refuse a missing or foreign fingerprint (receipt_tool_not_sealed).
+     Farm receipts also bind every logical path, its type, raw/resolved symlink target and target
+     identity (size, mtime_ns, inode, device; SHA256 for files <=64 KiB). Directory aliases are walked
+     separately. Acceptance refuses a replaced/moved source or changed link even inside allowed roots.
   3. COMMIT only when the target carries a pending marker, no refusal marker, and both receipts pass:
        seal_rebuild.sh SHA build1|build2 --operator-commit DB [--farm] [--config CONFIG.json]
      It takes the same two run locks as a seal run of that SHA and mode (refused while a run or a
      seal-<sha9>-<mode>-* scope is alive), re-runs the full verification (acceptance with the pending
      marker allowed; the exact bucket set, each manifest against QC, the full bucket contract from the
      sealed validator, sources, totals, the link closure, and the sealed tool fingerprint; for a farm,
-     its links and the bucket root it depends on) and only then removes the pending marker. Any failure
-     writes the refusal marker.
+     its links and the bucket root it depends on) and only then removes the pending marker. A target
+     verification failure writes the refusal marker; a missing or foreign external receipt cannot.
+     A farm belongs to build1: build2 --farm is refused before any target, lock or scope access.
+     Run/operator locks also cover each real target path; the farm's scope check uses its build1 owner.
   4. REMOVE in every other case (a refusal marker, a FAILED, missing or mismatched receipt): the target
      and its markers are deleted by the operator (make the tree writable first), then the run is
      repeated. The tool never commits a refused root and never removes anything on its own.
@@ -140,7 +156,8 @@ from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
 EXIT_OK, EXIT_FAIL, EXIT_USAGE = 0, 1, 2
-MODES = ("build1", "build2", "compare")
+MODES = ("build1", "build2", "compare", "accept")
+DEFAULT_MIRROR = "/home/zhuhb/easyicu_dev9/codex_ws/_mirror.git"
 BUILDER_REL = "scripts/build_itemid_bucket_cache.py"
 BUILDER_MARK = "bucket_float_fidelity_mismatch"
 FLOAT_TYPES = frozenset({"FLOAT", "DOUBLE", "REAL", "FLOAT4", "FLOAT8"})
@@ -158,16 +175,18 @@ SOURCE_ORDINAL = "_easyicu_source_ordinal"
 FORBIDDEN_CORES = ((5, 105), (146, 179), (224, 1 << 20))
 ORIGIN_EXIT = 97
 # The bucket contract validator is executed only from sealed bytes: the seal clone's git object at the
-# seal SHA (or, for a standalone acceptance, this tool's sibling file), and only when those bytes hash to
+# seal SHA (including standalone acceptance), and only when those bytes hash to
 # this pin (tests/core/test_seal_bucket_round4.py keeps it equal to the file). Never imported.
 VALIDATOR_REL = "tools/seal_buckets/bucket_compare.py"
-# This tool and the sibling it executes must be the seal SHA's own blobs, byte for byte: the launcher
+# This tool and its helpers must be the seal SHA's own blobs, byte for byte: the launcher
 # (seal_rebuild.sh) extracts them from the seal SHA into a fresh read-only directory, and every run (and
 # every acceptance) re-checks it, so the pin below cannot be swapped together with the tool.
 SEALED_TOOLS = (
     "tools/seal_buckets/seal_rebuild.py",
     "tools/seal_buckets/footer_scan.py",
+    VALIDATOR_REL,
 )
+HELPER_TOOLS = ("tools/seal_buckets/footer_scan.py", VALIDATOR_REL)
 VALIDATOR_SHA256 = "9a90bf08c9b2bd3f443cfa17f3ae487e13f71f86838b3e9eb2b716945e48aa7e"
 # Launches the seal clone's builder like `python <builder>` (sys.path[0] = scripts/), under `python -I -S`:
 # no PYTHONPATH, no current directory and no site hook (sitecustomize, usercustomize, .pth) can add code.
@@ -432,6 +451,8 @@ class Seal:
         cores: dict,
     ):
         self.cfg, self.mode, self.dry_run = cfg, mode, dry_run
+        if not re.fullmatch(r"[0-9a-f]{40}", sha):
+            raise SealError("seal_sha_unknown", sha)
         self.b6 = Path(cfg["b6_root"])
         self.gitd = git_dir_of(cfg["mirror"])
         try:
@@ -471,6 +492,8 @@ class Seal:
 
     def farm_target(self, db: str) -> Path | None:
         farm = self.cfg["dbs"][db].get("farm")
+        if farm and self.mode not in ("build1", "compare"):
+            raise SealError("operator_farm_mode_mismatch", self.mode)
         return self.b6 / f"{farm['name']}_s{self.s9}" if farm else None
 
     def staging(self, target: Path) -> Path:
@@ -510,6 +533,43 @@ class Seal:
         if getattr(self, "_validator", None) is None:
             self._validator = load_validator_from_git(self.gitd, self.full)
         return self._validator
+
+    def helper(self, rel: str) -> Path:
+        """Execute helpers only from checked Git bytes in this run's private directory.
+
+        The launch directory is only an origin check, never a subprocess source. Materialize once
+        under the run lock, then check the copy again at every use (including after a sibling swap).
+        """
+        if rel not in HELPER_TOOLS:
+            raise SealError("tool_not_sealed", rel)
+        fingerprints = self.tool()
+        with self.lock:
+            if getattr(self, "_helpers", None) is None:
+                directory = self.work / self.mode / f"sealed_tools_{self.token}"
+                assert_no_links_below(directory.parent, Path(self.cfg["work_root"]))
+                directory.mkdir(mode=0o700)
+                helpers = {}
+                for name in HELPER_TOOLS:
+                    data = sealed_blob(self.gitd, self.full, name, "tool_not_sealed")
+                    digest = hashlib.sha256(data).hexdigest()
+                    if digest != fingerprints[name] or (
+                        name == VALIDATOR_REL and digest != VALIDATOR_SHA256
+                    ):
+                        raise SealError("tool_not_sealed", name)
+                    path = directory / Path(name).name
+                    with path.open("xb") as fh:
+                        fh.write(data)
+                    path.chmod(0o444)
+                    helpers[name] = path
+                directory.chmod(0o555)
+                self._helpers = helpers
+            path = self._helpers[rel]
+            if (
+                not stat.S_ISREG(path.lstat().st_mode)
+                or sha256_file(path) != fingerprints[rel]
+            ):
+                raise SealError("tool_not_sealed", rel)
+            return path
 
     # ---- builder checks
     def check_builder_mark(self) -> None:
@@ -646,17 +706,35 @@ def acquire_run_lock(seal: "Seal") -> RunLocks:
     roots = [Path(seal.cfg["work_root"])]
     if not seal.dry_run:  # a dry run publishes nothing and writes nothing under b6_root
         roots.append(seal.b6)
+    paths = []
     for root in roots:
         root.mkdir(parents=True, exist_ok=True)
-        fh = open(root / f".seal_{seal.s9}_{seal.mode}.lock", "a")
+        paths.append(root / f".seal_{seal.s9}_{seal.mode}.lock")
+    if not seal.dry_run and seal.mode in ("build1", "build2"):
+        targets = {seal.target(db) for db in seal.dbs}
+        if seal.mode == "build1":
+            targets.update(
+                t for db in seal.dbs if (t := seal.farm_target(db)) is not None
+            )
+        # Different work roots, configs or lexical aliases for the same real target must share a
+        # lock. A farm's owner is always build1, so its scope query uses build1 as well.
+        paths.extend(target_lock_path(t) for t in sorted(targets))
+    for path in paths:
+        fh = open(path, "a")
         try:
             fcntl.flock(fh, fcntl.LOCK_EX | fcntl.LOCK_NB)
         except OSError as exc:
             fh.close()
             locks.close()
-            raise SealError("seal_run_locked", f"{seal.s9} {seal.mode} {root}") from exc
+            raise SealError("seal_run_locked", f"{seal.s9} {seal.mode} {path}") from exc
         locks.handles.append(fh)
     return locks
+
+
+def target_lock_path(target: Path) -> Path:
+    real = target.resolve()
+    key = hashlib.sha256(os.fsencode(real)).hexdigest()
+    return real.parent / f".seal_target_{key}.lock"
 
 
 def claim_scratch(scr: Path, base: Path, token: str) -> None:
@@ -1064,7 +1142,7 @@ def load_validator_from_git(git_dir: str, sha: str) -> Validator:
 
 
 def sealed_tool_fingerprint(git_dir: str, sha: str) -> dict:
-    """The running tool and its executed sibling must equal the seal SHA's blobs byte for byte
+    """The running tool and its helper originals must equal the seal SHA's blobs byte for byte
     (tool_not_sealed otherwise); returns {path: sha256} for the receipts."""
     out = {}
     for rel in SEALED_TOOLS:
@@ -1080,28 +1158,28 @@ def sealed_tool_fingerprint(git_dir: str, sha: str) -> dict:
     return out
 
 
-def load_validator_local() -> Validator:
-    """For a standalone acceptance (no seal clone): this tool's sibling file, a regular non-link file,
-    read once; the same pin applies."""
-    path = Path(__file__).with_name("bucket_compare.py")
-    try:
-        st = os.lstat(path)
-    except OSError as exc:
-        raise SealError("validator_not_a_file", str(path)) from exc
-    if not stat.S_ISREG(st.st_mode):
-        raise SealError("validator_not_a_file", str(path))
-    return Validator(path.read_bytes(), "local")
-
-
 def check_bucket_contract(bucket: Path, table: str, validator: Validator) -> None:
     """The resolver's full contract (bucket_compare, ported; easyicu-free) on one bucket, run from the
     sealed validator: a violation is bucket_contract_invalid with the contract's own reason."""
     validator.check(bucket, table)
 
 
-def bucket_set(root: Path, tables) -> dict:
+def bucket_set(root: Path, tables, *, links=None) -> dict:
     """The exact final bucket set an in-root receipt binds: per table, the manifest sha256, every
     directory and every file (with its size) under the bucket."""
+    if links is not None:
+        expected = (
+            {f"{t}_bucket" for t in tables}
+            | set(links)
+            | {
+                CONVERSION_MANIFEST,
+                IN_ROOT_RECEIPT,
+            }
+        )
+        # The in-root receipt is written by install, after this snapshot is taken.
+        actual = set(os.listdir(root)) | {IN_ROOT_RECEIPT}
+        if actual != expected:
+            raise SealError("bucket_root_entries_mismatch", root.name)
     out = {}
     for table in tables:
         bucket = root / f"{table}_bucket"
@@ -1131,11 +1209,25 @@ def verify_final_set(
     staging tree and again on the final name), commit_install, accept_root and operator_commit:
       * a bucket root: the bucket set equals the in-root bucket_set (manifest sha256, every dir and file),
         each manifest is the one QC recorded, each bucket passes the full contract (parts, footers, key
-        types, derived_from sources) and its inventory totals equal the QC rows/parts;
+        types, derived_from sources) and its inventory totals equal the QC rows/parts; the top-level
+        entries, conversion manifest digest and every logical source link match the pre-build snapshot;
       * a farm: its entries and bucket links are the recorded ones, its conversion manifest is the one
-        recorded, and the bucket root it links to is published (no marker) and passes this check itself;
+        recorded, every logical source identity matches, and the bucket root it links to is published
+        (no marker), carries its bound dependency receipt and passes this check itself;
       * with allowed_roots: the link closure of the whole root stays inside them."""
+    if (inner.get("validator") or {}).get("sha256") != VALIDATOR_SHA256 or (
+        validator.fingerprint["sha256"] != VALIDATOR_SHA256
+    ):
+        raise SealError("validator_unpinned", root.name)
     if inner.get("schema", "").startswith("lead_r13.seal_farm_receipt"):
+        if allowed_roots is not None:
+            check_links(root, allowed_roots)
+        try:
+            actual_links = link_set(root, {IN_ROOT_RECEIPT}, identities=True)
+        except OSError as exc:
+            raise SealError("farm_links_changed", root.name) from exc
+        if actual_links != inner.get("link_set"):
+            raise SealError("farm_links_changed", root.name)
         names = sorted(n for n in os.listdir(root) if n != IN_ROOT_RECEIPT)
         if names != sorted(inner.get("entries") or []):
             raise SealError("farm_entries_changed", root.name)
@@ -1151,18 +1243,31 @@ def verify_final_set(
             if marker.exists() or marker.is_symlink():
                 raise SealError("farm_dependency_unpublished", bucket_root.name)
         try:
-            dependency = json.loads((bucket_root / IN_ROOT_RECEIPT).read_text())
+            dependency_path = bucket_root / IN_ROOT_RECEIPT
+            dependency = json.loads(dependency_path.read_text())
         except (OSError, ValueError) as exc:
             raise SealError("farm_dependency_unpublished", bucket_root.name) from exc
         if dependency.get("verdict") != "PASS" or writable_entries(bucket_root):
             raise SealError("farm_dependency_unpublished", bucket_root.name)
+        if sha256_file(dependency_path) != inner.get("bucket_root_receipt_sha256"):
+            raise SealError("farm_dependency_changed", bucket_root.name)
         verify_final_set(bucket_root, dependency, validator, allowed_roots)
     else:
         tables = inner.get("tables") or {}
         recorded = inner.get("bucket_set")
         if not tables or not isinstance(recorded, dict) or set(recorded) != set(tables):
             raise SealError("bucket_set_missing", root.name)
-        actual = bucket_set(root, sorted(tables))
+        links = inner.get("links")
+        if not isinstance(links, list) or not (root / IN_ROOT_RECEIPT).is_file():
+            raise SealError("bucket_root_entries_mismatch", root.name)
+        actual = bucket_set(root, sorted(tables), links=links)
+        manifest = root / CONVERSION_MANIFEST
+        if (
+            manifest.is_symlink()
+            or not manifest.is_file()
+            or sha256_file(manifest) != inner.get("conversion_manifest_sha256")
+        ):
+            raise SealError("bucket_conversion_manifest_changed", root.name)
         for table, rec in sorted(tables.items()):
             if actual[table] != recorded[table]:
                 raise SealError("bucket_set_changed", table)
@@ -1176,6 +1281,17 @@ def verify_final_set(
                 inventory
             ) != rec.get("parts"):
                 raise SealError("bucket_totals_vs_qc", table)
+        # Preserve the contract's diagnostic for a missing derived_from source, then verify every
+        # other logical link (including raw spelling and aliases with identical source metadata).
+        skip = {f"{t}_bucket" for t in tables} | {CONVERSION_MANIFEST, IN_ROOT_RECEIPT}
+        try:
+            if allowed_roots is not None:
+                check_links(root, allowed_roots)
+            actual_links = link_set(root, skip, identities=True)
+        except OSError as exc:
+            raise SealError("bucket_links_changed", root.name) from exc
+        if actual_links != inner.get("link_set"):
+            raise SealError("bucket_links_changed", root.name)
     if allowed_roots is not None:
         check_links(root, allowed_roots)
 
@@ -1327,12 +1443,16 @@ def scope_alive(seal: "Seal") -> bool:
 def operator_commit(
     cfg: dict, sha: str, mode: str, db: str, *, farm: bool = False
 ) -> dict:
-    """Runbook step 3. Under the SAME two non-blocking run locks as a seal run of this SHA and mode
+    """Runbook step 3. Under the SAME non-blocking run and target locks as a seal run of this SHA and mode
     (held throughout; a live run or scope is refused), the pending root named by the config is fully
     re-verified -- acceptance (pending aside) and verify_final_set with the sealed validator and the link
-    closure -- and only then committed. Any failure writes the refusal marker with its reason."""
+    closure -- and only then committed. Owned target verification failures write a refusal marker."""
     if mode not in ("build1", "build2"):
         raise SealError("operator_mode_invalid", mode)
+    # The farm is built only by build1. Bind the requested target to its owner BEFORE taking locks,
+    # inspecting scopes/receipts/markers, or writing a refusal onto another build's target.
+    if farm and mode != "build1":
+        raise SealError("operator_farm_mode_mismatch", mode)
     seal = Seal(cfg, sha, mode, False, [db], {})
     seal.tool()  # the operator runs the sealed tool of this SHA, or nothing
     locks = acquire_run_lock(seal)
@@ -1343,6 +1463,19 @@ def operator_commit(
         if target is None:
             raise SealError("operator_no_farm", db)
         external = seal.work / mode / f"receipt_{db}{'_farm' if farm else ''}.json"
+        # A wrong/missing external receipt is an operator input error, not authority to mark a
+        # different root as refused. Establish target ownership before the refusal-writing block.
+        try:
+            owner = json.loads(external.read_text())
+        except (OSError, ValueError) as exc:
+            raise SealError("receipt_missing", external.name) from exc
+        if (
+            owner.get("seal_sha") != seal.full
+            or owner.get("build") != mode
+            or owner.get("db") != db
+            or (owner.get("install") or {}).get("root") != str(target)
+        ):
+            raise SealError("receipt_unbound", external.name)
         if not pending_marker(target).is_file():
             raise SealError("root_not_pending", target.name)
         validator = seal.validator()
@@ -1358,6 +1491,7 @@ def operator_commit(
                 validator=validator,
                 allowed_roots=allowed,
                 tool=seal.tool(),
+                git_dir=seal.gitd,
             )
             commit_install(target, validator, allowed)
         except SealError as exc:
@@ -1382,6 +1516,7 @@ def operator_commit(
             validator=validator,
             allowed_roots=allowed,
             tool=seal.tool(),
+            git_dir=seal.gitd,
         )
     finally:
         locks.close()
@@ -1410,10 +1545,23 @@ def accept_root(
     validator: "Validator | None" = None,
     allowed_roots=None,
     tool: dict | None = None,
+    git_dir: str | None = None,
 ) -> dict:
     """The acceptance gate for an installed root: a verified external PASS receipt, no refusal marker,
     no pending marker (only operator_commit passes allow_pending), the in-root receipt bound by sha256
-    and itself PASS for this SHA, build and DB, and a read-only tree. Returns the in-root receipt."""
+    and itself PASS for this SHA, build and DB, and a read-only tree. Returns the in-root receipt.
+
+    Standalone callers must supply the coordinator's full SHA and trusted git_dir (or SEAL_MIRROR).
+    Before reading any receipt or running a validator, bind this tool to that external Git anchor.
+    For execution from sealed bytes before even importing SR, use seal_rebuild.sh SHA accept.
+    Caller-provided fingerprints/validators never replace the Git trust root."""
+    if not re.fullmatch(r"[0-9a-f]{40}", seal_sha):
+        raise SealError("seal_sha_unknown", seal_sha)
+    gitd = git_dir or git_dir_of(os.environ.get("SEAL_MIRROR", DEFAULT_MIRROR))
+    expected_tool = sealed_tool_fingerprint(gitd, seal_sha)
+    # Read the validator from Git even if a caller supplies one. No sibling pin or caller object is
+    # authority for standalone acceptance; the pin comes from SR already bound to the given SHA.
+    validator = load_validator_from_git(gitd, seal_sha)
     try:
         ext = json.loads(external.read_text())
     except (OSError, ValueError) as exc:
@@ -1452,10 +1600,12 @@ def accept_root(
         raise SealError("in_root_receipt_not_pass", root.name)
     if writable_entries(root):
         raise SealError("root_not_read_only", root.name)
-    if tool is not None and inner.get("tool") != tool:
+    if inner.get("tool") != expected_tool or (
+        tool is not None and tool != expected_tool
+    ):
         # a root is accepted only as built by the sealed tool of this SHA
         raise SealError("receipt_tool_not_sealed", root.name)
-    verify_final_set(root, inner, validator or load_validator_local(), allowed_roots)
+    verify_final_set(root, inner, validator, allowed_roots)
     return inner
 
 
@@ -1651,7 +1801,7 @@ def plan_db(seal: Seal, db: str) -> dict:
     }
     if "farm" in spec:
         # the bucket root holds only the source entries of the rebuilt tables, same targets as the farm
-        keep = {n for t in tables for n in (f"{t}.parquet", t)}
+        keep = {n for t in tables for n in (f"{t}.parquet", t)} | {CONVERSION_MANIFEST}
         entries = [e for e in farm_entries(cur, set(), allowed) if e[1] in keep]
         if not entries:
             raise SealError("farm_source_missing", ",".join(tables))
@@ -1682,12 +1832,71 @@ def plan_db(seal: Seal, db: str) -> dict:
                 rewritten_conversion_manifest(
                     cur / CONVERSION_MANIFEST, cur, target, payload
                 )
-    plan["links"] = sorted(n for _, n, _ in plan["entries"])
+    if not any(kind == "manifest" for kind, _, _ in plan["entries"]):
+        raise SealError("conversion_manifest_missing", str(cur))
+    plan["links"] = sorted(n for _, n, _ in plan["entries"] if n != CONVERSION_MANIFEST)
     return plan
 
 
-def link_set(root: Path, skip: set[str]) -> dict[str, object]:
+def link_set(
+    root: Path, skip: set[str], *, identities: bool = False
+) -> dict[str, object]:
     """Entry names and link targets of a farm: {name: target | {file: target} | 'file'}."""
+    if identities:
+        # Preserve every LOGICAL alias (including descendants of directory links); only ancestor
+        # cycles stop recursion. Do not hash large sources: identity catches accidental replacement,
+        # while small files also get a full digest. No directory identity depends on staging's name.
+        out = {}
+        stack = [(root, frozenset())]
+        while stack:
+            directory, ancestors = stack.pop()
+            real = str(directory.resolve(strict=True))
+            if real in ancestors:
+                continue
+            for entry in sorted(os.scandir(directory), key=lambda e: e.name):
+                path = Path(entry.path)
+                if directory == root and entry.name in skip:
+                    continue
+                st = path.stat()
+                kind = (
+                    "link"
+                    if entry.is_symlink()
+                    else "directory"
+                    if entry.is_dir()
+                    else "file"
+                )
+                target_type = "directory" if stat.S_ISDIR(st.st_mode) else "file"
+                resolved = path.resolve(strict=True)
+                resolved_name = (
+                    "<root>/" + resolved.relative_to(root.resolve()).as_posix()
+                    if resolved.is_relative_to(root.resolve())
+                    else str(resolved)
+                )
+                record = {
+                    "type": kind,
+                    "target_type": target_type,
+                    "raw_target": os.readlink(path) if entry.is_symlink() else None,
+                    "resolved_target": resolved_name,
+                }
+                # Every logical path binds its target identity, directories included. The root
+                # itself is not an entry here, so install adding its receipt cannot change this.
+                record["identity"] = {
+                    "size": st.st_size,
+                    "mtime_ns": st.st_mtime_ns,
+                    "inode": st.st_ino,
+                    "device": st.st_dev,
+                }
+                if target_type == "file":
+                    if not stat.S_ISREG(st.st_mode):
+                        raise SealError(
+                            "farm_entry_not_regular", path.relative_to(root).as_posix()
+                        )
+                    if st.st_size <= 65536:
+                        record["identity"]["sha256"] = sha256_file(path)
+                out[path.relative_to(root).as_posix()] = record
+                if target_type == "directory":
+                    stack.append((path, ancestors | {real}))
+        return out
     out: dict[str, object] = {}
     for entry in sorted(os.scandir(root), key=lambda e: e.name):
         if entry.name in skip:
@@ -1756,6 +1965,16 @@ def run_db(seal: Seal, db: str, plan: dict, code: Path) -> None:
         (scr / "cwd").mkdir()
         materialize(plan["entries"], staging, cur, target)
         check_links(staging, seal.cfg["allowed_roots"])
+        receipt["links"] = plan["links"]
+        receipt["conversion_manifest_sha256"] = sha256_file(
+            staging / CONVERSION_MANIFEST
+        )
+        receipt["link_set"] = link_set(
+            staging,
+            {f"{t}_bucket" for t in plan["tables"]}
+            | {CONVERSION_MANIFEST, IN_ROOT_RECEIPT},
+            identities=True,
+        )
         for table, args in spec["tables"]:
             unit = f"seal-{seal.s9}-{seal.mode}-{db}-{table}".replace("_", "-")
             origin_out = out / f"origin_{db}_{table}.json"
@@ -1820,7 +2039,7 @@ def run_db(seal: Seal, db: str, plan: dict, code: Path) -> None:
             [
                 seal.cfg["python"],
                 "-I",
-                str(Path(__file__).with_name("footer_scan.py")),
+                str(seal.helper("tools/seal_buckets/footer_scan.py")),
                 str(staging),
                 "--out",
                 str(scan_json),
@@ -1839,6 +2058,12 @@ def run_db(seal: Seal, db: str, plan: dict, code: Path) -> None:
         if rc != 0:
             raise SealError("footer_scan_failed", db)
         scan = json.loads(scan_json.read_text())
+        if (
+            scan.get("ok") is not True
+            or scan.get("tool_sha256")
+            != seal.tool()["tools/seal_buckets/footer_scan.py"]
+        ):
+            raise SealError("footer_scan_unpinned", db)
         receipt["footer_scan"] = {
             k: scan[k]
             for k in (
@@ -1864,14 +2089,15 @@ def run_db(seal: Seal, db: str, plan: dict, code: Path) -> None:
         for table in receipt["tables"]:
             check_bucket_contract(staging / f"{table}_bucket", table, validator)
         # the exact final bucket set the in-root receipt binds; each manifest must still be QC's
-        receipt["bucket_set"] = bucket_set(staging, sorted(receipt["tables"]))
+        receipt["bucket_set"] = bucket_set(
+            staging, sorted(receipt["tables"]), links=receipt["links"]
+        )
         for table, rec in receipt["tables"].items():
             if (
                 receipt["bucket_set"][table]["manifest_sha256"]
                 != rec["manifest_sha256"]
             ):
                 raise SealError("bucket_manifest_changed_after_qc", table)
-        receipt["links"] = plan["links"]
         in_root = dict(receipt, verdict="PASS")
         allowed = seal.cfg["allowed_roots"]
         installed = install(
@@ -1943,6 +2169,7 @@ def assemble_farm(seal: Seal, db: str, plan: dict, bucket_root: Path) -> None:
         "entries": names,
         "bucket_links": links,
         "bucket_root": str(bucket_root),
+        "bucket_root_receipt_sha256": sha256_file(bucket_root / IN_ROOT_RECEIPT),
         "reference_check": plan.get("farm_reference"),
         "conversion_manifest_sha256": sha256_file(manifest)
         if manifest.is_file()
@@ -1953,6 +2180,7 @@ def assemble_farm(seal: Seal, db: str, plan: dict, bucket_root: Path) -> None:
     validator, allowed = seal.validator(), seal.cfg["allowed_roots"]
     record["validator"] = validator.fingerprint
     record["tool"] = seal.tool()
+    record["link_set"] = link_set(staging, {IN_ROOT_RECEIPT}, identities=True)
     installed = install(
         staging,
         farm,
@@ -1988,6 +2216,7 @@ def compare_db(seal: Seal, db: str) -> None:
                 validator=seal.validator(),
                 allowed_roots=seal.cfg["allowed_roots"],
                 tool=seal.tool(),
+                git_dir=seal.gitd,
             )
             for t, _ in spec["tables"]:
                 rec = (inner.get("tables") or {}).get(t) or {}
@@ -2014,6 +2243,7 @@ def compare_db(seal: Seal, db: str) -> None:
                 validator=seal.validator(),
                 allowed_roots=seal.cfg["allowed_roots"],
                 tool=seal.tool(),
+                git_dir=seal.gitd,
             )
         if seal.dry_run:
             seal.set_status(db, "DRY_RUN_OK")
@@ -2036,7 +2266,7 @@ def compare_db(seal: Seal, db: str) -> None:
                 [
                     seal.cfg["python"],
                     "-I",
-                    str(Path(__file__).with_name("bucket_compare.py")),
+                    str(seal.helper(VALIDATOR_REL)),
                     str(a / f"{t}_bucket"),
                     str(b / f"{t}_bucket"),
                     "--out",
@@ -2056,6 +2286,12 @@ def compare_db(seal: Seal, db: str) -> None:
             seal.log(f"{db} {t} build1-vs-build2 rc={rc} {verdicts[t]}")
             if rc != 0:
                 raise SealError("build1_vs_build2_differs", t)
+            report = json.loads((out / f"compare_{db}_{t}.json").read_text())
+            if (
+                report.get("verdict") != "IDENTICAL"
+                or report.get("tool_sha256") != VALIDATOR_SHA256
+            ):
+                raise SealError("compare_report_unpinned", t)
         seal.set_status(db, "IDENTICAL")
     except SealError as exc:
         seal.set_status(db, "FAILED", f"{exc.reason} {exc.detail}")
@@ -2179,6 +2415,10 @@ def main(argv: list[str] | None = None) -> int:
     )
     ap.add_argument("--dry-run", action="store_true")
     ap.add_argument("--probe", action="store_true")
+    ap.add_argument("--accept-root", type=Path)
+    ap.add_argument("--external-receipt", type=Path)
+    ap.add_argument("--accept-build", choices=("build1", "build2"))
+    ap.add_argument("--accept-db")
     ap.add_argument(
         "--operator-commit",
         metavar="DB",
@@ -2188,12 +2428,41 @@ def main(argv: list[str] | None = None) -> int:
         "--farm", action="store_true", help="with --operator-commit: the farm"
     )
     args = ap.parse_args(argv)
+    if args.mode == "accept" and (
+        not all(
+            (args.accept_root, args.external_receipt, args.accept_build, args.accept_db)
+        )
+        or args.operator_commit
+        or args.farm
+        or args.dry_run
+        or args.probe
+    ):
+        ap.error(
+            "accept needs --accept-root, --external-receipt, --accept-build and --accept-db"
+        )
     if (
         sys.flags.no_site
     ):  # launched -I -S: the validator's pyarrow/duckdb come from this venv only
         site = site_packages(sys.executable)
         if site not in sys.path:
             sys.path.append(site)
+    if args.mode == "accept":
+        try:
+            cfg = load_config(args.config)
+            inner = accept_root(
+                args.accept_root,
+                args.external_receipt,
+                args.sha,
+                args.accept_build,
+                args.accept_db,
+                git_dir=git_dir_of(cfg["mirror"]),
+                allowed_roots=cfg["allowed_roots"],
+            )
+        except SealError as exc:
+            print(f"{args.accept_db} FAILED {exc.reason} {exc.detail}".rstrip())
+            return 1
+        print(f"{args.accept_db} ACCEPTED {inner['verdict']}")
+        return 0
     if args.operator_commit:
         try:
             inner = operator_commit(

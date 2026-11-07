@@ -12,15 +12,21 @@
 # removed afterwards; the exit code is passed through: 0 every selected DB passed, 1 any typed failure,
 # 2 usage. Only `seal_rebuild.sh` (no arguments) and `--help` run without a seal SHA: usage, nothing else.
 set -euo pipefail
-here=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
 python=${SEAL_PYTHON:-/home/zhuhb/easyicu_dev9/venv311/bin/python}
 mirror=${SEAL_MIRROR:-/home/zhuhb/easyicu_dev9/codex_ws/_mirror.git}
 if [ "$#" -eq 0 ] || { [ "$#" -eq 1 ] && { [ "$1" = "-h" ] || [ "$1" = "--help" ]; }; }; then
-  exec "$python" -I -S "$here/seal_rebuild.py" "$@"
+  echo "usage: seal_rebuild.sh SEAL_SHA build1|build2|compare|accept [options] (full SHA first)"
+  echo "Use SEAL_SHA --help for the sealed tool's full help."
+  if [ "$#" -eq 0 ]; then exit 2; fi
+  exit 0
 fi
 case "$1" in
   -*) echo "usage: seal_rebuild.sh SEAL_SHA MODE [options] (the seal SHA comes first)" >&2; exit 2 ;;
 esac
+if [[ ! "$1" =~ ^[0-9a-f]{40}$ ]]; then
+  echo "all FAILED seal_sha_unknown $1 (full SHA required)"
+  exit 1
+fi
 gitd=$mirror
 if [ -d "$mirror/.git" ]; then gitd=$mirror/.git; fi
 if ! full=$(git --git-dir "$gitd" rev-parse --verify --quiet "$1^{commit}"); then

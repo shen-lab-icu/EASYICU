@@ -413,11 +413,24 @@ def _child(tmp_path: Path, body: str) -> subprocess.CompletedProcess:
 def test_a_crash_right_after_the_rename_leaves_a_read_only_root_refused_as_pending(
     tmp_path,
 ):
+    from tests.support.seal_buckets import make_mirror
+
+    mirror, sha = make_mirror(tmp_path)
     staging, target = tmp_path / ".root.seal_staging", tmp_path / "root"
     bucket = make_bucket(staging)
+    sr.write_json(staging / sr.CONVERSION_MANIFEST, {})
     inner = {
         "verdict": "PASS",
-        "seal_sha": "f" * 40,
+        "seal_sha": sha,
+        "tool": sr.sealed_tool_fingerprint(str(mirror), sha),
+        "validator": sr.load_validator_from_git(str(mirror), sha).fingerprint,
+        "conversion_manifest_sha256": sr.sha256_file(staging / sr.CONVERSION_MANIFEST),
+        "links": ["t"],
+        "link_set": sr.link_set(
+            staging,
+            {"t_bucket", sr.CONVERSION_MANIFEST, sr.IN_ROOT_RECEIPT},
+            identities=True,
+        ),
         "build": "build1",
         "db": "sic",
         "tables": {
@@ -456,10 +469,13 @@ def test_a_crash_right_after_the_rename_leaves_a_read_only_root_refused_as_pendi
         )
     )
     with pytest.raises(sr.SealError, match="root_pending"):
-        sr.accept_root(target, external, "f" * 40, "build1", "sic")
-    sr.commit_install(target, sr.load_validator_local())
+        sr.accept_root(target, external, sha, "build1", "sic", git_dir=str(mirror))
+    sr.commit_install(target, sr.load_validator_from_git(str(mirror), sha))
     assert (
-        sr.accept_root(target, external, "f" * 40, "build1", "sic")["verdict"] == "PASS"
+        sr.accept_root(target, external, sha, "build1", "sic", git_dir=str(mirror))[
+            "verdict"
+        ]
+        == "PASS"
     )
     make_writable(target)
 
@@ -520,6 +536,9 @@ def test_the_run_lock_holds_in_the_target_space_across_work_roots(tmp_path):
             s9="f" * 9,
             mode="build1",
             dry_run=False,
+            dbs=["synthetic"],
+            target=lambda db: b6 / "target",
+            farm_target=lambda db: None,
         )
 
     first = sr.acquire_run_lock(seal("work_a"))
