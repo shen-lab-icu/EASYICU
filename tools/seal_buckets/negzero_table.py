@@ -11,10 +11,17 @@ for the "before" column:  {"aumc/numericitems": {"value": 36052}, ...}.
 Prints a Markdown table. --build2 receipts are checked for an equal per-column profile (counts and sha256).
 Exit 0 only when every DB has a PASS receipt (pending allowed with --allow-pending) and every build2 profile
 is equal; 1 on any finding; 2 usage.
+
+Before any profile is compared: every receipt must be PASS with no failure, carry the build it claims
+(build1 for the positional receipts, build2 for --build2) and the same seal SHA as every other receipt; a DB
+may appear once per side; with --build2 the DB, table and float-column sets must be equal in both
+directions. Any violation is a finding (exit 1), never a skipped row.
 """
 
 from __future__ import annotations
 
+# Import contract: this tool never imports easyicu (pinned by tests/core/test_seal_bucket_round2.py), so
+# seal_rebuild.py may run it with `python -I`; it needs no seal-clone import origin.
 import argparse
 import json
 import sys
@@ -29,12 +36,46 @@ DB_LABEL = {
 }
 
 
-def load(paths):
+def load(paths, build: str, findings: list[str]) -> dict:
     out = {}
     for p in paths:
         r = json.loads(Path(p).read_text())
-        out[r["db"]] = r
+        db = r.get("db") if isinstance(r, dict) else None
+        if db is None:
+            findings.append(f"{p}: receipt_without_db")
+            continue
+        if db in out:
+            findings.append(f"{build}:{db}: duplicate_db")
+            continue
+        if r.get("verdict") != "PASS" or "failure" in r:
+            findings.append(f"{build}:{db}: receipt_not_pass")
+        if r.get("build") != build:
+            findings.append(f"{build}:{db}: build_identity_mismatch")
+        out[db] = r
     return out
+
+
+def _profile_keys(r: dict) -> dict:
+    return {
+        t: set((v or {}).get("float_fidelity") or {})
+        for t, v in (r.get("tables") or {}).items()
+    }
+
+
+def check_receipts(b1: dict, b2: dict, has_build2: bool, findings: list[str]) -> None:
+    shas = {r.get("seal_sha") for r in [*b1.values(), *b2.values()]}
+    if len(shas) != 1 or None in shas:
+        findings.append("seal_sha_differs_or_missing")
+    if has_build2:
+        if set(b1) != set(b2):
+            findings.append("db_sets_differ:" + ",".join(sorted(set(b1) ^ set(b2))))
+        for db in sorted(set(b1) & set(b2)):
+            k1, k2 = _profile_keys(b1[db]), _profile_keys(b2[db])
+            if set(k1) != set(k2):
+                findings.append(f"{db}: table_sets_differ")
+            for t in sorted(set(k1) & set(k2)):
+                if k1[t] != k2[t]:
+                    findings.append(f"{db}/{t}: column_sets_differ")
 
 
 def main() -> int:
@@ -44,7 +85,14 @@ def main() -> int:
     ap.add_argument("--build2", nargs="*", default=[])
     ap.add_argument("--allow-pending", action="store_true")
     a = ap.parse_args()
-    b1, b2 = load(a.receipts), load(a.build2)
+    findings: list[str] = []
+    b1 = load(a.receipts, "build1", findings)
+    b2 = load(a.build2, "build2", findings)
+    check_receipts(b1, b2, bool(a.build2), findings)
+    if findings:
+        for f in findings:
+            print(f"finding: {f}", file=sys.stderr)
+        return 1
     cur = json.loads(a.current.read_text()) if a.current else {}
     rows = [
         "| DB | table | float column | values | source −0.0 | seal bucket −0.0 | current bucket −0.0 | +0.0 | NaN | build2 profile |",

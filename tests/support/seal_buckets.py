@@ -133,6 +133,10 @@ def make_mirror(root: Path, mode: str = "ok", mark: bool = True) -> tuple[Path, 
     (repo / "scripts").mkdir(parents=True)
     (repo / "src").mkdir()
     (repo / "src" / "README").write_text("synthetic\n")
+    (repo / "src" / "easyicu").mkdir()
+    (repo / "src" / "easyicu" / "__init__.py").write_text(
+        '"""synthetic seal-clone package"""\n'
+    )
     text = FAKE_BUILDER.replace("@MODE@", mode)
     if not mark:
         text = text.replace("bucket_float_fidelity_mismatch", "no_float_check")
@@ -332,3 +336,37 @@ def make_writable(path: Path) -> None:
             p = os.path.join(dirpath, name)
             if not os.path.islink(p):
                 os.chmod(p, 0o600)
+
+
+def make_bucket(root: Path, rows: int = 40) -> Path:
+    """A minimal two-part bucket whose manifest inventory, build receipt and _COMPLETE agree."""
+    bucket = root / "t_bucket"
+    inventory = []
+    for b in range(2):
+        (bucket / f"bucket_id={b}").mkdir(parents=True)
+        table = pa.table(
+            {
+                "k": pa.array(np.arange(rows // 2) * 2 + b, pa.int64()),
+                "v": pa.array(
+                    np.where(np.arange(rows // 2) % 3 == 0, -0.0, 1.5), pa.float64()
+                ),
+            }
+        )
+        path = bucket / f"bucket_id={b}" / "part.parquet"
+        pq.write_table(table, path, use_dictionary=False)
+        inventory.append(
+            {
+                "relative_path": f"bucket_id={b}/part.parquet",
+                "row_count": rows // 2,
+                "size": path.stat().st_size,
+            }
+        )
+    derived = {"files": [{"path": "t/1.parquet", "sha256": "0" * 64}]}
+    (bucket / "_BUCKET_MANIFEST.json").write_text(
+        json.dumps(
+            {"inventory": inventory, "float_fidelity": {}, "derived_from": derived}
+        )
+    )
+    (bucket / "_BUCKET_BUILD_RECEIPT.json").write_text(json.dumps({"rows": rows}))
+    (bucket / "_COMPLETE").write_text("complete\n")
+    return bucket

@@ -8,6 +8,12 @@ v3 = v2 plus a sub-label: a DIFFERS part whose only differences are +0.0/-0.0 fl
 row-group min/max statistics) is labelled SIGNED_ZERO_ONLY, with the flip count. It is NOT a pass:
 the verdict stays DIFFERS (bit-exact rule) and the exit code stays 1.
 
+Before anything is compared, each side is validated against its OWN installation: manifest, build
+receipt and _COMPLETE present; the parts on disk equal the manifest inventory (a part missing on both
+sides is a StorageIntegrityError, never IDENTICAL); every listed part is a contained regular file with its
+inventory size and footer row count; the inventory total equals the build receipt's rows. The first
+containment finding (a path leading out of its root) stops the run before any manifest is read.
+
 usage: bucket_compare.py CURRENT_BUCKET NEW_BUCKET --out RESULT.json [--seal-sha SHA]
 exit:  0 every part IDENTICAL (bytes) and no containment finding; 1 anything else (LOGICALLY_IDENTICAL,
        DIFFERS, a path escaping its root); 2 usage error. The JSON keeps the full verdict.
@@ -28,6 +34,8 @@ partitions/stay breakpoints, derived_from source (path, sha256) sets.
 Output: counts and part paths only (no values, IDs or dates); includes this tool's own sha256.
 """
 
+# Import contract: this tool never imports easyicu (pinned by tests/core/test_seal_bucket_round2.py), so
+# seal_rebuild.py may run it with `python -I`; it needs no seal-clone import origin.
 import argparse
 import filecmp
 import hashlib
@@ -42,6 +50,67 @@ import pyarrow.compute as pc
 import pyarrow.parquet as pq
 
 TOOL_SHA256 = hashlib.sha256(Path(__file__).read_bytes()).hexdigest()
+
+
+class StorageIntegrityError(Exception):
+    """A bucket contradicts its own inventory or receipt; ``reason`` is the stable code."""
+
+    def __init__(self, reason: str, root: Path, detail: str = ""):
+        super().__init__(f"{reason}: {root}{' ' + detail if detail else ''}")
+        self.reason, self.root, self.detail = reason, root, detail
+
+
+def validate_own_inventory(root: Path) -> dict:
+    """Validate one bucket against its own manifest inventory and build receipt; returns the manifest."""
+    for name in ("_BUCKET_MANIFEST.json", "_BUCKET_BUILD_RECEIPT.json", "_COMPLETE"):
+        if not (root / name).is_file() or not _contained(root / name, root):
+            raise StorageIntegrityError("bucket_install_incomplete", root, name)
+    try:
+        manifest = json.loads((root / "_BUCKET_MANIFEST.json").read_text())
+        receipt = json.loads((root / "_BUCKET_BUILD_RECEIPT.json").read_text())
+    except (OSError, ValueError) as exc:
+        raise StorageIntegrityError(
+            "bucket_manifest_invalid", root, type(exc).__name__
+        ) from exc
+    inventory = manifest.get("inventory") if isinstance(manifest, dict) else None
+    if (
+        not isinstance(inventory, list)
+        or not inventory
+        or not isinstance(receipt, dict)
+    ):
+        raise StorageIntegrityError("bucket_manifest_invalid", root, "inventory")
+    listed, total = set(), 0
+    for entry in inventory:
+        rel = entry.get("relative_path") if isinstance(entry, dict) else None
+        count, size = (entry or {}).get("row_count"), (entry or {}).get("size")
+        if (
+            not isinstance(rel, str)
+            or rel in listed
+            or not isinstance(count, int)
+            or not isinstance(size, int)
+        ):
+            raise StorageIntegrityError("bucket_inventory_mismatch", root, str(rel))
+        path = root / rel
+        if path.is_symlink() or not _contained(path, root) or not path.is_file():
+            raise StorageIntegrityError("bucket_part_missing", root, rel)
+        if path.stat().st_size != size:
+            raise StorageIntegrityError("bucket_part_size_mismatch", root, rel)
+        if pq.read_metadata(path).num_rows != count:
+            raise StorageIntegrityError("bucket_part_rows_mismatch", root, rel)
+        listed.add(rel)
+        total += count
+    on_disk = {
+        p.relative_to(root).as_posix()
+        for p in root.rglob("*.parquet")
+        if not p.name.startswith(".")
+    }
+    if on_disk != listed:
+        raise StorageIntegrityError(
+            "bucket_inventory_mismatch", root, "parts on disk != inventory"
+        )
+    if receipt.get("rows") != total:
+        raise StorageIntegrityError("bucket_rows_vs_receipt", root)
+    return manifest
 
 
 def _float_bits(arr):
@@ -230,6 +299,23 @@ def _parts(root: Path, findings: list) -> list[str]:
     return sorted(out)
 
 
+def _refuse(out: Path, cur: Path, new: Path, verdict: str, **extra) -> None:
+    result = {
+        "tool": "bucket_compare.py",
+        "tool_sha256": TOOL_SHA256,
+        "current": str(cur),
+        "new": str(new),
+        "verdict": verdict,
+        "containment_findings": extra.pop("findings", []),
+        **extra,
+    }
+    out.write_text(json.dumps(result, indent=1, sort_keys=True, default=str) + "\n")
+    print(
+        f"verdict={verdict} {json.dumps(extra, sort_keys=True)} tool_sha256={TOOL_SHA256[:12]}"
+    )
+    sys.exit(1)
+
+
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("current", type=Path)
@@ -239,9 +325,11 @@ def main():
     args = ap.parse_args()
     cur, new = args.current, args.new
     findings = []
-    a, b = _parts(cur, findings), _parts(new, findings)
+    listed = {}
     for root in (cur, new):
-        if not _contained(root / "_BUCKET_MANIFEST.json", root):
+        # the first out-of-root finding stops the run: nothing further is read from either side
+        listed[root] = _parts(root, findings)
+        if not findings and not _contained(root / "_BUCKET_MANIFEST.json", root):
             findings.append(
                 {
                     "root": str(root),
@@ -249,6 +337,24 @@ def main():
                     "reason": "path_escapes_root",
                 }
             )
+        if findings:
+            _refuse(args.out, cur, new, "REFUSED", findings=findings)
+    for root in (cur, new):
+        try:
+            validate_own_inventory(root)
+        except StorageIntegrityError as exc:
+            _refuse(
+                args.out,
+                cur,
+                new,
+                "INVALID",
+                integrity={
+                    "root": str(root),
+                    "reason": exc.reason,
+                    "detail": exc.detail,
+                },
+            )
+    a, b = listed[cur], listed[new]
     parts = {}
     for n in sorted(set(a) | set(b)):
         if n in a and n in b:

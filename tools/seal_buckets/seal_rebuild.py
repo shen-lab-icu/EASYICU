@@ -19,12 +19,28 @@ Usage (entry point: seal_rebuild.sh; never launched without coordinator-assigned
              directory, applying the same strict QC (float fidelity, builder_code == SHA, clean).
 
 Exit codes: 0 every selected DB PASS (or DRY_RUN_OK / IDENTICAL), 1 any typed failure, 2 usage.
-Every failure is a typed reason in the status file and on stdout; nothing is swallowed.
+Every failure is a typed reason in the status file and on stdout; nothing is swallowed. The exit code is
+decided from structured verdicts only (never from status text); any untyped exception is a failure.
+One run per seal SHA and mode: an exclusive fcntl lock ($WORK_ROOT/.seal_<sha9>_<mode>.lock) is taken
+before planning; a second entry is refused (seal_run_locked).
+
+Review round 2 (delta26t) contracts:
+  * checkouts and scratch are created exclusively (an existing path or a link below the tool's roots is
+    refused); scratch carries this run's owner token and only owned scratch is removed;
+  * the builder runs as `python -c BUILDER_BOOT <builder>` with PYTHONPATH=<clone>/src: the boot asserts
+    that easyicu imports from that clone at the seal SHA (builder_import_origin_mismatch otherwise) and
+    the receipt records import_origin {path, head}; footer_scan/bucket_compare/negzero_table never import
+    easyicu;
+  * conversion_manifest.json is always an owned, re-verified copy (a link included), and every link --
+    and everything reachable through a directory link -- must stay inside the allowed roots;
+  * a failure after the rename leaves .<target>.seal_REFUSED and a FAILED receipt; compare (and any
+    acceptance) goes through accept_root: external PASS receipt, bound in-root receipt, no refusal,
+    read-only; CareVue also needs its farm's own in-root receipt.
 
 Per DB and build (order SIC -> eICU -> CareVue -> MIIV -> AUMC; each starts once its cores are free and
 the memgate admits it, then DBs run in parallel):
-  1. one clean clone of SEAL_SHA per build (build1 and build2 never share a checkout); HEAD must equal the
-     SHA and `git status --porcelain --untracked-files=all` must be empty, before AND after the builds;
+  1. one fresh clone of SEAL_SHA per build (build1 and build2 never share a checkout); HEAD must equal the
+     SHA and `git status --porcelain --untracked-files=all --ignored` must be empty, before AND after;
   2. a hidden staging root  b6_root/.<target>.seal_staging  (refused if it or the target exists):
      every entry of the current formal root except the rebuilt buckets, as symlinks (per-file links inside
      real dirs; every link target must resolve inside the allowed roots); conversion_manifest.json is
@@ -74,6 +90,7 @@ import subprocess
 import sys
 import threading
 import time
+import uuid
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
@@ -87,9 +104,37 @@ SKIP_RE = re.compile(
 )
 CONVERSION_MANIFEST = "conversion_manifest.json"
 IN_ROOT_RECEIPT = "_SEAL_BUILD_RECEIPT.json"
+REFUSAL_SUFFIX = ".seal_REFUSED"
+OWNER_TOKEN = ".seal_owner"
+OK_VERDICTS = frozenset({"PASS", "IDENTICAL", "DRY_RUN_OK"})
 ADOPTION_RECEIPT = "_BUCKET_ADOPTION_RECEIPT.json"
 SOURCE_ORDINAL = "_easyicu_source_ordinal"
 FORBIDDEN_CORES = ((5, 105), (146, 179), (224, 1 << 20))
+ORIGIN_EXIT = 97
+# Launches the seal clone's builder like `python <builder>` (sys.path[0] = scripts/), but only after
+# asserting that `easyicu` imports from that clone's src at the seal SHA: `python <clone>/scripts/x.py`
+# does not put src on sys.path, and a venv may carry an editable easyicu pointing at other code.
+BUILDER_BOOT = r"""
+import json, os, runpy, subprocess, sys
+clone, sha, out = os.environ["SEAL_CLONE"], os.environ["SEAL_SHA"], os.environ["SEAL_ORIGIN_OUT"]
+record = {"path": None, "head": None}
+try:
+    import easyicu
+    record["path"] = os.path.realpath(easyicu.__file__)
+    record["head"] = subprocess.run(["git", "rev-parse", "HEAD"], cwd=clone, capture_output=True,
+                                    text=True).stdout.strip()
+finally:
+    with open(out, "w") as fh:
+        json.dump(record, fh, sort_keys=True)
+src = os.path.realpath(os.path.join(clone, "src")) + os.sep
+if not (record["path"] or "").startswith(src) or record["head"] != sha:
+    print("builder_import_origin_mismatch", file=sys.stderr)
+    sys.exit(97)
+builder = sys.argv[1]
+sys.argv = sys.argv[1:]
+sys.path.insert(0, os.path.dirname(os.path.abspath(builder)))
+runpy.run_path(builder, run_name="__main__")
+"""
 
 _B6 = "/home/zhuhb/workspace/claude-ws/_data/b6_root"
 _BL = "/home/zhuhb/easyicu_dev9/demo_sources/bench_local"
@@ -302,7 +347,9 @@ class Seal:
         self.dbs = [d for d in cfg["order"] if not only or d in only]
         self.cores = cores
         self.lock = threading.Lock()
-        self.status: dict[str, str] = {}
+        # db -> (verdict, line): the exit code is decided from the verdict, never from line text
+        self.status: dict[str, tuple[str, str]] = {}
+        self.token = uuid.uuid4().hex
 
     # ---- naming
     def target(self, db: str, mode: str | None = None) -> Path:
@@ -336,9 +383,14 @@ class Seal:
                 with open(self.work / self.mode / "run.log", "a") as fh:
                     fh.write(line + "\n")
 
-    def set_status(self, db: str, line: str) -> None:
+    def set_status(self, db: str, verdict: str, detail: str = "") -> None:
+        if verdict not in OK_VERDICTS and verdict != "FAILED":
+            raise ValueError(f"unknown verdict {verdict!r}")
         with self.lock:
-            self.status[db] = line
+            self.status[db] = (verdict, f"{db} {verdict} {detail}".rstrip())
+
+    def verdict(self, db: str) -> str:
+        return self.status.get(db, ("FAILED", ""))[0]
 
     # ---- builder checks
     def check_builder_mark(self) -> None:
@@ -347,13 +399,19 @@ class Seal:
             raise SealError("builder_lacks_float_fidelity", self.s9)
 
     def prepare_checkout(self, code: Path) -> Path:
-        if not code.exists():
-            code.parent.mkdir(parents=True, exist_ok=True)
-            git(["clone", "-q", "--no-checkout", self.cfg["mirror"], str(code)])
-            git(
-                ["-c", "advice.detachedHead=false", "checkout", "-q", self.full],
-                cwd=code,
-            )
+        """A fresh checkout, created exclusively by this run: an existing path (a former checkout, a link
+        to another build's) is refused, never reused (D26-ISOLATION)."""
+        work_root = Path(self.cfg["work_root"])
+        code.parent.mkdir(parents=True, exist_ok=True)
+        assert_no_links_below(code.parent, work_root)
+        if code.exists() or code.is_symlink():
+            raise SealError("checkout_exists", str(code))
+        try:
+            code.mkdir()
+        except FileExistsError as exc:
+            raise SealError("checkout_exists", str(code)) from exc
+        git(["clone", "-q", "--no-checkout", self.cfg["mirror"], str(code)])
+        git(["-c", "advice.detachedHead=false", "checkout", "-q", self.full], cwd=code)
         verify_checkout(code, self.full)
         return code
 
@@ -364,8 +422,83 @@ def verify_checkout(code: Path, full: str) -> None:
     head = git(["rev-parse", "HEAD"], cwd=code).strip()
     if head != full:
         raise SealError("checkout_not_at_seal", head[:9])
-    if git(["status", "--porcelain", "--untracked-files=all"], cwd=code).strip():
+    # --ignored: an ignored execution artifact (bytecode, build output) is not clean either
+    if git(
+        ["status", "--porcelain", "--untracked-files=all", "--ignored"], cwd=code
+    ).strip():
         raise SealError("checkout_not_clean", str(code))
+
+
+def read_origin(path: Path) -> dict:
+    try:
+        rec = json.loads(path.read_text())
+    except (OSError, ValueError):
+        return {"path": None, "head": None}
+    return rec if isinstance(rec, dict) else {"path": None, "head": None}
+
+
+def origin_ok(origin: dict, code: Path, full: str) -> bool:
+    src = os.path.realpath(code / "src") + os.sep
+    return (
+        bool(origin.get("path"))
+        and str(origin["path"]).startswith(src)
+        and origin.get("head") == full
+    )
+
+
+def assert_no_links_below(path: Path, base: Path) -> None:
+    """``path`` and each ancestor below ``base`` must be a real directory or file, never a symlink."""
+    path, base = Path(os.path.abspath(path)), Path(os.path.abspath(base))
+    try:
+        rel = path.relative_to(base)
+    except ValueError as exc:
+        raise SealError("path_outside_tool_root", str(path)) from exc
+    cur = base
+    for part in rel.parts:
+        cur = cur / part
+        if cur.is_symlink():
+            raise SealError("path_is_link", str(cur))
+
+
+def acquire_run_lock(seal: "Seal"):
+    """Exclusive cross-process lock per seal SHA and mode, taken before planning (D26-CONCURRENCY).
+
+    Two entry points for the same SHA and mode would plan the same targets and scratch; the second is
+    refused instead of racing (it never waits, and never touches the first run's directories)."""
+    root = Path(seal.cfg["work_root"])
+    root.mkdir(parents=True, exist_ok=True)
+    fh = open(root / f".seal_{seal.s9}_{seal.mode}.lock", "a")
+    try:
+        fcntl.flock(fh, fcntl.LOCK_EX | fcntl.LOCK_NB)
+    except OSError as exc:
+        fh.close()
+        raise SealError("seal_run_locked", f"{seal.s9} {seal.mode}") from exc
+    return fh
+
+
+def claim_scratch(scr: Path, base: Path, token: str) -> None:
+    """Create a scratch directory exclusively and mark it with this run's ownership token."""
+    scr.parent.mkdir(parents=True, exist_ok=True)
+    assert_no_links_below(scr.parent, base)
+    try:
+        scr.mkdir()
+    except FileExistsError as exc:
+        raise SealError("scratch_exists", str(scr)) from exc
+    (scr / OWNER_TOKEN).write_text(token)
+
+
+def release_scratch(scr: Path, base: Path, token: str) -> None:
+    """Remove a scratch directory only when it carries this run's token (never another run's)."""
+    try:
+        owned = (
+            not scr.is_symlink()
+            and inside(scr, [base])
+            and (scr / OWNER_TOKEN).read_text() == token
+        )
+    except OSError:
+        owned = False
+    if owned:
+        shutil.rmtree(scr)
 
 
 # ----------------------------------------------------------------------------- parameters and QC
@@ -494,19 +627,65 @@ def qc_bucket(bucket: Path, full: str, current_bucket: Path | None = None) -> di
 
 
 # ----------------------------------------------------------------------------- roots: mirror, ro, install
-def rewritten_conversion_manifest(src: Path, old_root: Path, new_root: Path) -> dict:
-    c = json.loads(src.read_text())
-    d = c.get("derived_from") or {}
-    if d.get("path"):
-        if not Path(d["path"]).is_file() or sha256_file(Path(d["path"])) != d.get(
-            "sha256"
-        ):
+def manifest_source(src: Path) -> dict:
+    """Pin the conversion manifest's source at plan time: the file it resolves to and its sha256."""
+    real = Path(os.path.realpath(src))
+    if not real.is_file():
+        raise SealError("conversion_manifest_unreadable", src.parent.name)
+    return {
+        "source": str(real),
+        "sha256": sha256_file(real),
+        "linked": src.is_symlink(),
+    }
+
+
+def rewritten_conversion_manifest(
+    src: Path, old_root: Path, new_root: Path, pinned: dict | None = None
+) -> dict | None:
+    """The mirrored conversion manifest is always an owned file (a link is read, never re-linked).
+
+    Its source is verified first: the file it resolves to must still have the sha256 pinned at plan
+    time, and a ``derived_from`` binding (always required of a root's own, non-linked manifest) must
+    still match its source. Only ``data_path`` may change: the current root's path is re-pointed to
+    the new root; a linked source manifest that names its own directory keeps it. Returns the new
+    content, or None when the content is unchanged (the caller then copies the verified bytes)."""
+    pinned = pinned or manifest_source(src)
+    real = Path(pinned["source"])
+    if Path(os.path.realpath(src)) != real or sha256_file(real) != pinned["sha256"]:
+        raise SealError("conversion_manifest_source_changed", src.parent.name)
+    try:
+        c = json.loads(real.read_text())
+    except (OSError, ValueError) as exc:
+        raise SealError("conversion_manifest_unreadable", src.parent.name) from exc
+    if not isinstance(c, dict):
+        raise SealError("conversion_manifest_unreadable", src.parent.name)
+    d = c.get("derived_from")
+    if d is None and not pinned["linked"]:
+        raise SealError("conversion_manifest_unbound", src.parent.name)
+    if d is not None:
+        if not isinstance(d, dict) or not d.get("path") or not d.get("sha256"):
+            raise SealError("conversion_manifest_unbound", src.parent.name)
+        if not Path(d["path"]).is_file() or sha256_file(Path(d["path"])) != d["sha256"]:
             raise SealError("conversion_manifest_derived_from_changed", src.parent.name)
-    if c.get("data_path") not in (None, str(old_root)):
-        raise SealError("conversion_manifest_data_path_unexpected", src.parent.name)
-    if c.get("data_path") is not None:
+    data_path = c.get("data_path")
+    if data_path == str(old_root):
         c["data_path"] = str(new_root)
-    return c
+        return c
+    if data_path is None or (pinned["linked"] and data_path == str(real.parent)):
+        return None
+    raise SealError("conversion_manifest_data_path_unexpected", src.parent.name)
+
+
+def write_conversion_manifest(
+    src: Path, dest: Path, old_root: Path, new_root: Path, pinned: dict
+) -> None:
+    content = rewritten_conversion_manifest(src, old_root, new_root, pinned)
+    if content is None:
+        shutil.copyfile(pinned["source"], dest)
+        if sha256_file(dest) != pinned["sha256"]:
+            raise SealError("conversion_manifest_source_changed", src.parent.name)
+    else:
+        write_json(dest, content)
 
 
 def plan_entries(
@@ -520,11 +699,17 @@ def plan_entries(
         if name in skip_names or SKIP_RE.match(name):
             continue
         path = Path(entry.path)
+        if name == CONVERSION_MANIFEST:
+            # the reserved name is dispatched first, link or not: it is always copied and re-verified
+            plan.append(("manifest", name, manifest_source(path)))
+            continue
         if entry.is_symlink():
             if not path.exists():
                 raise SealError("mirror_link_dangling", name)
-            if not inside(path, allowed):
-                raise SealError("link_outside_allowed_roots", name)
+            try:
+                check_closure(path, allowed, "link_outside_allowed_roots")
+            except SealError as exc:
+                raise SealError("link_outside_allowed_roots", name) from exc
             plan.append(("link", name, os.readlink(path)))
         elif entry.is_dir():
             files = []
@@ -532,8 +717,12 @@ def plan_entries(
                 fp = Path(f.path)
                 if os.path.isdir(fp):
                     raise SealError("nested_dir_unsupported", f"{name}/{f.name}")
-                if not inside(fp, allowed):
-                    raise SealError("link_outside_allowed_roots", f"{name}/{f.name}")
+                try:
+                    check_closure(fp, allowed, "link_outside_allowed_roots")
+                except SealError as exc:
+                    raise SealError(
+                        "link_outside_allowed_roots", f"{name}/{f.name}"
+                    ) from exc
                 files.append(
                     (
                         f.name,
@@ -541,8 +730,6 @@ def plan_entries(
                     )
                 )
             plan.append(("dir", name, files))
-        elif name == CONVERSION_MANIFEST:
-            plan.append(("manifest", name, None))
         elif entry.is_file():
             if not inside(path, allowed):
                 raise SealError("link_outside_allowed_roots", name)
@@ -568,23 +755,43 @@ def materialize(
             for fname, target in payload:
                 os.symlink(target, staging / name / fname)
         else:
-            write_json(
-                staging / name,
-                rewritten_conversion_manifest(src_root / name, src_root, final),
+            write_conversion_manifest(
+                src_root / name, staging / name, src_root, final, payload
             )
     for name, target in (extra_links or {}).items():
         os.symlink(target, staging / name)
 
 
+def check_closure(path: str | Path, allowed, reason: str) -> None:
+    """``path`` and, when it resolves to a directory, every effective descendant (following links,
+    each real directory visited once) must exist and resolve inside the allowed roots."""
+    seen: set[str] = set()
+    stack = [str(path)]
+    while stack:
+        p = stack.pop()
+        if not os.path.exists(p) or not inside(p, allowed):
+            raise SealError(reason, str(p))
+        if os.path.isdir(p):
+            real = os.path.realpath(p)
+            if real in seen:
+                continue
+            seen.add(real)
+            stack.extend(e.path for e in os.scandir(p))
+
+
 def check_links(
     root: Path, allowed, reason: str = "link_outside_allowed_roots"
 ) -> None:
-    """Every symlink under ``root`` (files and directories) must resolve, inside the allowed roots."""
+    """Every symlink under ``root`` (files and directories) must resolve inside the allowed roots,
+    and so must everything reachable through a directory link."""
     for dirpath, dirnames, filenames in os.walk(root, followlinks=False):
         for name in [*dirnames, *filenames]:
             p = os.path.join(dirpath, name)
-            if os.path.islink(p) and (not os.path.exists(p) or not inside(p, allowed)):
-                raise SealError(reason, os.path.relpath(p, root))
+            if os.path.islink(p):
+                try:
+                    check_closure(p, allowed, reason)
+                except SealError as exc:
+                    raise SealError(reason, os.path.relpath(p, root)) from exc
 
 
 def make_read_only(root: Path, include_root: bool) -> None:
@@ -611,26 +818,93 @@ def writable_entries(root: Path) -> list[str]:
     return out
 
 
-def install(staging: Path, target: Path, in_root_receipt: dict | None) -> dict:
-    """Steps 6a-6d: in-root receipt last, ro, atomic rename, ro root, verify. Returns the install record."""
-    if target.exists() or target.is_symlink():
-        raise SealError("target_exists", str(target))
-    in_root_sha = None
-    if in_root_receipt is not None:
-        in_root_sha = write_json(staging / IN_ROOT_RECEIPT, in_root_receipt)
-    make_read_only(staging, include_root=False)
-    os.rename(staging, target)
-    make_read_only(target, include_root=True)
-    left = writable_entries(target)
+def refusal_marker(target: Path) -> Path:
+    """A persistent refusal beside a final name whose post-rename verification failed."""
+    return target.parent / f".{target.name}{REFUSAL_SUFFIX}"
+
+
+def verify_installed(
+    root: Path, in_root_sha: str, *, root_writable_ok: bool = False
+) -> None:
+    left = [e for e in writable_entries(root) if not (root_writable_ok and e == ".")]
     if left:
-        raise SealError("root_not_read_only", f"{target.name}: {len(left)} writable")
-    if in_root_sha is not None and sha256_file(target / IN_ROOT_RECEIPT) != in_root_sha:
-        raise SealError("in_root_receipt_changed", target.name)
+        raise SealError("root_not_read_only", f"{root.name}: {len(left)} writable")
+    if sha256_file(root / IN_ROOT_RECEIPT) != in_root_sha:
+        raise SealError("in_root_receipt_changed", root.name)
+
+
+def install(staging: Path, target: Path, in_root_receipt: dict) -> dict:
+    """Steps 6a-6d: in-root receipt last, ro, every check that can run before the rename, atomic rename,
+    ro root, verify again. A failure after the rename leaves a persistent refusal marker, and the final
+    name is never accepted without its bound in-root receipt (D26-INSTALL)."""
+    if (
+        not isinstance(in_root_receipt, dict)
+        or in_root_receipt.get("verdict") != "PASS"
+    ):
+        raise SealError("in_root_receipt_missing", target.name)
+    for p in (target, refusal_marker(target)):
+        if p.exists() or p.is_symlink():
+            raise SealError("target_exists", str(p))
+    in_root_sha = write_json(staging / IN_ROOT_RECEIPT, in_root_receipt)
+    make_read_only(staging, include_root=False)
+    verify_installed(staging, in_root_sha, root_writable_ok=True)
+    os.rename(staging, target)
+    try:
+        make_read_only(target, include_root=True)
+        verify_installed(target, in_root_sha)
+    except (SealError, OSError) as exc:
+        reason = exc.reason if isinstance(exc, SealError) else type(exc).__name__
+        write_json(
+            refusal_marker(target),
+            {"root": str(target), "verdict": "REFUSED", "reason": reason},
+        )
+        raise SealError("install_verify_failed", f"{target.name}: {reason}") from exc
     return {
         "root": str(target),
         "read_only_verified": True,
         "in_root_receipt_sha256": in_root_sha,
     }
+
+
+def accept_root(root: Path, external: Path, seal_sha: str, build: str, db: str) -> dict:
+    """The acceptance gate for an installed root: a verified external PASS receipt, no refusal marker,
+    the in-root receipt bound by sha256 and itself PASS for this SHA, build and DB, and a read-only tree.
+    Returns the in-root receipt."""
+    try:
+        ext = json.loads(external.read_text())
+    except (OSError, ValueError) as exc:
+        raise SealError("receipt_missing", str(external.name)) from exc
+    if (
+        not isinstance(ext, dict)
+        or ext.get("verdict") != "PASS"
+        or "failure" in ext
+        or ext.get("seal_sha") != seal_sha
+        or ext.get("build") != build
+        or ext.get("db") != db
+    ):
+        raise SealError("receipt_not_pass", external.name)
+    bound = (ext.get("install") or {}).get("in_root_receipt_sha256")
+    if not bound or ext["install"].get("read_only_verified") is not True:
+        raise SealError("receipt_unbound", external.name)
+    if refusal_marker(root).exists() or refusal_marker(root).is_symlink():
+        raise SealError("root_refused", root.name)
+    if (
+        not (root / IN_ROOT_RECEIPT).is_file()
+        or sha256_file(root / IN_ROOT_RECEIPT) != bound
+    ):
+        raise SealError("in_root_receipt_changed", root.name)
+    inner = json.loads((root / IN_ROOT_RECEIPT).read_text())
+    if (
+        inner.get("verdict") != "PASS"
+        or "failure" in inner
+        or inner.get("seal_sha") != seal_sha
+        or inner.get("build") != build
+        or inner.get("db") != db
+    ):
+        raise SealError("in_root_receipt_not_pass", root.name)
+    if writable_entries(root):
+        raise SealError("root_not_read_only", root.name)
+    return inner
 
 
 # ----------------------------------------------------------------------------- isolation and confinement
@@ -651,6 +925,10 @@ def build_env(seal: Seal, db: str, code: Path) -> dict:
         "PYTHONPATH": str(code / "src"),
         "PYTHONNOUSERSITE": "1",
         "PYTHONDONTWRITEBYTECODE": "1",
+        "SEAL_CLONE": str(code),
+        "SEAL_SHA": seal.full,
+        # a private bytecode cache: no build reads another build's (or the checkout's) cached bytecode
+        "PYTHONPYCACHEPREFIX": str(scr / "pycache"),
         "OMP_NUM_THREADS": t,
         "POLARS_MAX_THREADS": t,
         "RAYON_NUM_THREADS": t,
@@ -672,10 +950,19 @@ def foreign_paths(seal: Seal) -> list[str]:
 
 
 def check_isolation(env: dict, foreign: list[str]) -> None:
+    """No env value may name -- as text or after resolving links -- the other build's paths."""
+    real_foreign = [os.path.realpath(f) for f in foreign if f]
     for key, value in env.items():
         for f in foreign:
             if f and f in value:
                 raise SealError("build_env_crosses_builds", key)
+        for item in value.split(os.pathsep):
+            if not item.startswith("/"):
+                continue
+            real = os.path.realpath(item)
+            for rf in real_foreign:
+                if real == rf or real.startswith(rf.rstrip("/") + "/"):
+                    raise SealError("build_env_crosses_builds", key)
 
 
 def confined_run(
@@ -824,8 +1111,11 @@ def plan_db(seal: Seal, db: str) -> dict:
             plan["farm_entries"] = farm_entries(
                 cur, {f"{t}_bucket" for t in tables}, allowed
             )
-            if any(kind == "manifest" for kind, _, _ in plan["farm_entries"]):
-                rewritten_conversion_manifest(cur / CONVERSION_MANIFEST, cur, farm)
+            for kind, _, payload in plan["farm_entries"]:
+                if kind == "manifest":
+                    rewritten_conversion_manifest(
+                        cur / CONVERSION_MANIFEST, cur, farm, payload
+                    )
             reference = spec["farm"].get("reference")
             if reference:
                 plan["farm_reference"] = check_farm_reference(
@@ -834,8 +1124,11 @@ def plan_db(seal: Seal, db: str) -> dict:
             plan["farm"] = str(farm)
     else:
         plan["entries"] = plan_entries(cur, {f"{t}_bucket" for t in tables}, allowed)
-        if any(kind == "manifest" for kind, _, _ in plan["entries"]):
-            rewritten_conversion_manifest(cur / CONVERSION_MANIFEST, cur, target)
+        for kind, _, payload in plan["entries"]:
+            if kind == "manifest":
+                rewritten_conversion_manifest(
+                    cur / CONVERSION_MANIFEST, cur, target, payload
+                )
     plan["links"] = sorted(n for _, n, _ in plan["entries"])
     return plan
 
@@ -894,17 +1187,28 @@ def run_db(seal: Seal, db: str, plan: dict, code: Path) -> None:
         "tables": {},
     }
     out = seal.work / seal.mode
+    scr = seal.scratch_dir(seal.mode, db)
     try:
+        claim_scratch(scr, seal.b6, seal.token)
         env = build_env(seal, db, code)
         receipt["build_env_keys"] = sorted(env)
-        for key in ("HOME", "TMPDIR", "EASYICU_DUCKDB_TEMP_DIR", "XDG_CACHE_HOME"):
+        for key in (
+            "HOME",
+            "TMPDIR",
+            "EASYICU_DUCKDB_TEMP_DIR",
+            "XDG_CACHE_HOME",
+            "PYTHONPYCACHEPREFIX",
+        ):
             Path(env[key]).mkdir(parents=True, exist_ok=True)
         materialize(plan["entries"], staging, cur, target)
         check_links(staging, seal.cfg["allowed_roots"])
         for table, args in spec["tables"]:
             unit = f"seal-{seal.s9}-{seal.mode}-{db}-{table}".replace("_", "-")
+            origin_out = out / f"origin_{db}_{table}.json"
             argv = [
                 seal.cfg["python"],
+                "-c",
+                BUILDER_BOOT,
                 str(code / BUILDER_REL),
                 "--data-path",
                 str(staging),
@@ -923,7 +1227,7 @@ def run_db(seal: Seal, db: str, plan: dict, code: Path) -> None:
                 db,
                 unit,
                 argv,
-                env,
+                {**env, "SEAL_ORIGIN_OUT": str(origin_out)},
                 out / f"build_{db}_{table}.log",
                 staging,
                 spec["mem_gib"],
@@ -931,6 +1235,12 @@ def run_db(seal: Seal, db: str, plan: dict, code: Path) -> None:
             )
             wall = round(time.time() - t0, 1)
             seal.log(f"{db} {table} build rc={rc} wall={wall}s peak_kb={peak}")
+            origin = read_origin(origin_out)
+            receipt.setdefault("import_origin", {})[table] = origin
+            if rc == ORIGIN_EXIT or not origin_ok(origin, code, seal.full):
+                raise SealError(
+                    "builder_import_origin_mismatch", f"{table} {origin.get('path')}"
+                )
             if rc != 0:
                 text = (out / f"build_{db}_{table}.log").read_text(errors="replace")
                 reason = BUILDER_MARK if BUILDER_MARK in text else "builder_error"
@@ -957,6 +1267,11 @@ def run_db(seal: Seal, db: str, plan: dict, code: Path) -> None:
                 str(staging),
                 "--out",
                 str(scan_json),
+                *[
+                    arg
+                    for root in seal.cfg["allowed_roots"]
+                    for arg in ("--allowed-root", str(root))
+                ],
             ],
             env,
             out / f"{db}_footer_scan.txt",
@@ -985,27 +1300,31 @@ def run_db(seal: Seal, db: str, plan: dict, code: Path) -> None:
             ):
                 raise SealError("footer_totals_vs_receipt", table)
         receipt["links"] = plan["links"]
-        receipt["verdict"] = "PASS"
-        in_root = dict(receipt)
+        in_root = dict(receipt, verdict="PASS")
         installed = install(staging, target, in_root)
         receipt["install"] = installed
+        receipt["verdict"] = "PASS"
         write_json(out / f"receipt_{db}.json", receipt)
-        seal.set_status(db, f"{db} PASS {target}")
+        seal.set_status(db, "PASS", str(target))
         seal.log(f"{db} PASS -> {target}")
     except SealError as exc:
+        receipt["verdict"] = "FAILED"
         receipt["failure"] = {"reason": exc.reason, "detail": exc.detail}
         write_json(out / f"receipt_{db}.json", receipt)
-        seal.set_status(db, f"{db} FAILED {exc.reason} {exc.detail}".rstrip())
+        seal.set_status(db, "FAILED", f"{exc.reason} {exc.detail}")
         seal.log(f"{db} FAILED {exc}")
+    except Exception as exc:  # noqa: BLE001 - any untyped error is a failure, recorded with its type
+        receipt["verdict"] = "FAILED"
+        receipt["failure"] = {
+            "reason": "unexpected_error",
+            "detail": type(exc).__name__,
+        }
+        write_json(out / f"receipt_{db}.json", receipt)
+        seal.set_status(db, "FAILED", f"unexpected_error {type(exc).__name__}")
+        seal.log(f"{db} FAILED unexpected_error {exc!r}")
     finally:
-        spill = seal.scratch_dir(seal.mode, db)
-        if spill.is_dir() and inside(spill, [seal.scratch]):
-            shutil.rmtree(spill)
-    if (
-        seal.mode == "build1"
-        and plan.get("farm")
-        and seal.status.get(db, "").startswith(f"{db} PASS")
-    ):
+        release_scratch(scr, seal.scratch, seal.token)
+    if seal.mode == "build1" and plan.get("farm") and seal.verdict(db) == "PASS":
         try:
             assemble_farm(seal, db, plan, target)
         except SealError as exc:
@@ -1017,7 +1336,7 @@ def run_db(seal: Seal, db: str, plan: dict, code: Path) -> None:
                     "failure": {"reason": exc.reason, "detail": exc.detail},
                 },
             )
-            seal.set_status(db, f"{db} FAILED {exc.reason} {exc.detail}".rstrip())
+            seal.set_status(db, "FAILED", f"{exc.reason} {exc.detail}")
             seal.log(f"{db} farm FAILED {exc}")
 
 
@@ -1034,24 +1353,28 @@ def assemble_farm(seal: Seal, db: str, plan: dict, bucket_root: Path) -> None:
         if not inside(staging / name, [seal.b6]):
             raise SealError("farm_link_outside_allowed_roots", name)
     names = sorted(os.listdir(staging))
-    installed = install(staging, farm, None)
-    manifest = farm / CONVERSION_MANIFEST
+    manifest = staging / CONVERSION_MANIFEST
     record = {
-        "schema": "lead_r13.seal_farm_receipt/1",
+        "schema": "lead_r13.seal_farm_receipt/2",
         "seal_sha": seal.full,
+        "build": seal.mode,
+        "db": db,
         "farm": str(farm),
         "replicates": str(cur),
         "entries": names,
         "bucket_links": links,
+        "bucket_root": str(bucket_root),
         "reference_check": plan.get("farm_reference"),
         "conversion_manifest_sha256": sha256_file(manifest)
         if manifest.is_file()
         else None,
-        "install": installed,
         "verdict": "PASS",
     }
+    # the farm carries its own in-root receipt; a bucket root's _COMPLETE never stands for the farm
+    installed = install(staging, farm, record)
+    record["install"] = installed
     write_json(seal.work / seal.mode / f"receipt_{db}_farm.json", record)
-    seal.set_status(db, f"{db} PASS {bucket_root} farm={farm}")
+    seal.set_status(db, "PASS", f"{bucket_root} farm={farm}")
     seal.log(f"{db} farm PASS -> {farm} ({len(names)} entries)")
 
 
@@ -1062,23 +1385,38 @@ def compare_db(seal: Seal, db: str) -> None:
     out = seal.work / "compare"
     try:
         receipts = []
-        for mode in ("build1", "build2"):
-            p = (
-                Path(seal.cfg["work_root"])
-                / f"seal_{seal.s9}"
-                / mode
-                / f"receipt_{db}.json"
-            )
-            r = json.loads(p.read_text()) if p.is_file() else {}
-            if r.get("verdict") != "PASS" or r.get("seal_sha") != seal.full:
+        work = Path(seal.cfg["work_root"]) / f"seal_{seal.s9}"
+        for mode, root in (("build1", a), ("build2", b)):
+            p = work / mode / f"receipt_{db}.json"
+            if not p.is_file():
                 raise SealError("compare_missing_build", f"{mode}:{db}")
-            receipts.append(r)
-        for t, _ in spec["tables"]:
-            for root in (a, b):
+            # the root is accepted only through its bound in-root receipt (D26-INSTALL, D26-COMPARE-SET)
+            inner = accept_root(root, p, seal.full, mode, db)
+            for t, _ in spec["tables"]:
+                rec = (inner.get("tables") or {}).get(t) or {}
+                manifest = root / f"{t}_bucket" / "_BUCKET_MANIFEST.json"
                 if not (root / f"{t}_bucket" / "_COMPLETE").is_file():
                     raise SealError("compare_missing_build", f"{root.name}/{t}_bucket")
+                if (
+                    not rec.get("manifest_sha256")
+                    or sha256_file(manifest) != rec["manifest_sha256"]
+                ):
+                    raise SealError(
+                        "compare_manifest_unbound", f"{root.name}/{t}_bucket"
+                    )
+            receipts.append(inner)
+        if "farm" in spec:
+            # formal acceptance of CareVue needs the farm receipt as well as the bucket receipts
+            farm = seal.farm_target(db)
+            accept_root(
+                farm,
+                work / "build1" / f"receipt_{db}_farm.json",
+                seal.full,
+                "build1",
+                db,
+            )
         if seal.dry_run:
-            seal.set_status(db, f"{db} DRY_RUN_OK")
+            seal.set_status(db, "DRY_RUN_OK")
             return
         verdicts = {}
         for t, _ in spec["tables"]:
@@ -1118,9 +1456,9 @@ def compare_db(seal: Seal, db: str) -> None:
             seal.log(f"{db} {t} build1-vs-build2 rc={rc} {verdicts[t]}")
             if rc != 0:
                 raise SealError("build1_vs_build2_differs", t)
-        seal.set_status(db, f"{db} IDENTICAL")
+        seal.set_status(db, "IDENTICAL")
     except SealError as exc:
-        seal.set_status(db, f"{db} FAILED {exc.reason} {exc.detail}".rstrip())
+        seal.set_status(db, "FAILED", f"{exc.reason} {exc.detail}")
         seal.log(f"{db} FAILED {exc}")
 
 
@@ -1137,7 +1475,7 @@ for name in ("probe_hash", "probe_var"):
 """
 
 
-def probe(seal: Seal) -> list[str]:
+def probe(seal: Seal) -> list[tuple[str, str]]:
     base = seal.work / "probe"
     if base.exists():
         raise SealError("probe_dir_exists", str(base))
@@ -1161,6 +1499,8 @@ def probe(seal: Seal) -> list[str]:
         "PYTHONNOUSERSITE": "1",
         "PYTHONDONTWRITEBYTECODE": "1",
         "EASYICU_DUCKDB_TEMP_DIR": str(base / "spill"),
+        "SEAL_CLONE": str(code),
+        "SEAL_SHA": seal.full,
     }
     for scheme, table, extra in (
         ("hash", "probe_hash", ["--key", "itemid", "--modulus", "4"]),
@@ -1172,8 +1512,11 @@ def probe(seal: Seal) -> list[str]:
     ):
         if scheme not in schemes:
             continue
+        origin_out = base / f"origin_{table}.json"
         cmd = [
             seal.cfg["python"],
+            "-c",
+            BUILDER_BOOT,
             str(code / BUILDER_REL),
             "--data-path",
             str(data),
@@ -1188,16 +1531,32 @@ def probe(seal: Seal) -> list[str]:
             "1GB",
         ]
         done = subprocess.run(
-            cmd, cwd=data, env=env, capture_output=True, text=True, timeout=900
+            cmd,
+            cwd=data,
+            env={**env, "SEAL_ORIGIN_OUT": str(origin_out)},
+            capture_output=True,
+            text=True,
+            timeout=900,
         )
+        if done.returncode == ORIGIN_EXIT or not origin_ok(
+            read_origin(origin_out), code, seal.full
+        ):
+            results.append(
+                ("FAILED", f"probe {scheme}: FAILED builder_import_origin_mismatch")
+            )
+            continue
         if done.returncode != 0:
-            results.append(f"probe {scheme}: FAILED build_failed rc={done.returncode}")
+            results.append(
+                ("FAILED", f"probe {scheme}: FAILED build_failed rc={done.returncode}")
+            )
             continue
         try:
             qc_bucket(data / f"{table}_bucket", seal.full)
-            results.append(f"probe {scheme}: PASS")
+            results.append(("PASS", f"probe {scheme}: PASS"))
         except SealError as exc:
-            results.append(f"probe {scheme}: FAILED {exc.reason} {exc.detail}")
+            results.append(
+                ("FAILED", f"probe {scheme}: FAILED {exc.reason} {exc.detail}")
+            )
     shutil.rmtree(base)
     return results
 
@@ -1220,8 +1579,10 @@ def main(argv: list[str] | None = None) -> int:
     args = ap.parse_args(argv)
     if args.probe and not args.dry_run:
         ap.error("--probe needs --dry-run")
-    status_lines: list[str] = []
+    # (verdict, line) pairs; success is decided from verdicts only (D26-EXIT)
+    status_lines: list[tuple[str, str]] = []
     seal: Seal | None = None
+    run_lock = None
     try:
         cfg = load_config(args.config)
         cores = dict(c.split("=", 1) for c in args.cores if "=" in c)
@@ -1233,6 +1594,7 @@ def main(argv: list[str] | None = None) -> int:
             [d for d in args.only.split(",") if d],
             cores,
         )
+        run_lock = acquire_run_lock(seal)
         (seal.work / seal.mode).mkdir(parents=True, exist_ok=True)
         seal.log(
             f"seal {seal.full} mode={seal.mode}{' dry-run' if seal.dry_run else ''} "
@@ -1249,30 +1611,49 @@ def main(argv: list[str] | None = None) -> int:
             seal.check_builder_mark()
             run_builds(seal, cfg, cores, args.probe, status_lines)
     except SealError as exc:
-        status_lines.append(f"all FAILED {exc.reason} {exc.detail}".rstrip())
-    lines = [seal.status[d] for d in seal.dbs if d in seal.status] if seal else []
-    if seal and not status_lines:
-        lines += [f"{d} FAILED not_run" for d in seal.dbs if d not in seal.status]
-    lines += status_lines
+        status_lines.append(
+            ("FAILED", f"all FAILED {exc.reason} {exc.detail}".rstrip())
+        )
+    except Exception as exc:  # noqa: BLE001 - any untyped error fails the run, with its type
+        status_lines.append(
+            ("FAILED", f"all FAILED unexpected_error {type(exc).__name__}")
+        )
+    finally:
+        if run_lock is not None:
+            run_lock.close()
+    entries: list[tuple[str, str]] = []
     if seal:
+        entries = [
+            seal.status.get(d, ("FAILED", f"{d} FAILED not_run")) for d in seal.dbs
+        ]
+    entries += status_lines
+    lines = [line for _, line in entries]
+    if seal and (seal.work / seal.mode).is_dir():
         (seal.work / seal.mode / "status").write_text("\n".join(lines) + "\n")
     for line in lines:
         print(line, flush=True)
-    ok = bool(lines) and all(
-        re.search(r" (PASS|IDENTICAL|DRY_RUN_OK)( |$)|: PASS$", ln) for ln in lines
+    ok = (
+        seal is not None
+        and bool(seal.dbs)
+        and bool(entries)
+        and all(verdict in OK_VERDICTS for verdict, _ in entries)
     )
     return EXIT_OK if ok else EXIT_FAIL
 
 
 def run_builds(
-    seal: Seal, cfg: dict, cores: dict, with_probe: bool, status_lines: list[str]
+    seal: Seal,
+    cfg: dict,
+    cores: dict,
+    with_probe: bool,
+    status_lines: list[tuple[str, str]],
 ) -> None:
     plans = {}
     for db in seal.dbs:
         try:
             plans[db] = plan_db(seal, db)
         except SealError as exc:
-            seal.set_status(db, f"{db} FAILED {exc.reason} {exc.detail}".rstrip())
+            seal.set_status(db, "FAILED", f"{exc.reason} {exc.detail}")
             continue
         if seal.dry_run:
             p = plans[db]
@@ -1291,12 +1672,12 @@ def run_builds(
                     else ""
                 )
             )
-            seal.set_status(db, f"{db} DRY_RUN_OK {p['target']}")
+            seal.set_status(db, "DRY_RUN_OK", p["target"])
     if seal.dry_run:
         if with_probe:
-            for line in probe(seal):
+            for verdict, line in probe(seal):
                 seal.log(line)
-                status_lines.append(line)
+                status_lines.append((verdict, line))
         return
     if len(plans) != len(seal.dbs):
         return  # a planning failure stops the seal before anything is built

@@ -12,11 +12,17 @@ For every <table>_bucket directory with a _BUCKET_MANIFEST.json:
 Output: JSON with counts and paths relative to ROOT only (no values, no IDs, no dates).
 Exit 0 = all ok, 1 = at least one failure (listed under `failures` with a typed reason), 2 = usage error.
 
-  python footer_scan.py ROOT --out scan.json [--buckets-only]
+Containment (the seal tool's contract, shared): every directory and file reached -- following links --
+must resolve inside ROOT or an --allowed-root; anything else is a `path_escapes_allowed_roots` failure
+and is not read. Each real directory is visited once (link loops end).
+
+  python footer_scan.py ROOT --out scan.json [--buckets-only] [--allowed-root DIR ...]
 """
 
 from __future__ import annotations
 
+# Import contract: this tool never imports easyicu (pinned by tests/core/test_seal_bucket_round2.py), so
+# seal_rebuild.py may run it with `python -I`; it needs no seal-clone import origin.
 import argparse
 import hashlib
 import json
@@ -46,9 +52,32 @@ def _footer(path: Path) -> tuple[int | None, str | None]:
         return None, f"parquet_footer_unreadable:{type(exc).__name__}"
 
 
-def _parquet_files(root: Path, buckets_only: bool):
+def _inside(path, roots) -> bool:
+    real = os.path.realpath(path)
+    for root in roots:
+        r = os.path.realpath(root)
+        if real == r or real.startswith(r.rstrip("/") + "/"):
+            return True
+    return False
+
+
+def _parquet_files(root: Path, buckets_only: bool, allowed, failures: list):
+    seen: set[str] = set()
     for dirpath, dirnames, filenames in os.walk(root, followlinks=True):
         rel_dir = Path(dirpath).relative_to(root)
+        real = os.path.realpath(dirpath)
+        if not _inside(dirpath, allowed):
+            failures.append(
+                {"path": rel_dir.as_posix(), "reason": "path_escapes_allowed_roots"}
+            )
+            dirnames[:] = []
+            continue
+        if (
+            real in seen
+        ):  # a link loop or a second link to the same directory: visited once
+            dirnames[:] = []
+            continue
+        seen.add(real)
         dirnames[:] = sorted(d for d in dirnames if not d.startswith("."))
         if buckets_only and (
             not rel_dir.parts or not rel_dir.parts[0].endswith("_bucket")
@@ -56,15 +85,25 @@ def _parquet_files(root: Path, buckets_only: bool):
             continue
         for name in sorted(filenames):
             if name.endswith(".parquet") and not name.startswith("."):
-                yield Path(dirpath) / name
+                path = Path(dirpath) / name
+                if not _inside(path, allowed):
+                    failures.append(
+                        {
+                            "path": path.relative_to(root).as_posix(),
+                            "reason": "path_escapes_allowed_roots",
+                        }
+                    )
+                    continue
+                yield path
 
 
-def scan(root: Path, buckets_only: bool = False) -> dict:
+def scan(root: Path, buckets_only: bool = False, allowed_roots=()) -> dict:
     failures: list[dict] = []
     files = 0
     rows_total = 0
     footer_rows: dict[str, int] = {}
-    for path in _parquet_files(root, buckets_only):
+    allowed = [root, *allowed_roots]
+    for path in _parquet_files(root, buckets_only, allowed, failures):
         files += 1
         rel = path.relative_to(root).as_posix()
         n, err = _footer(path)
@@ -156,6 +195,7 @@ def main() -> int:
     ap.add_argument("root", type=Path)
     ap.add_argument("--out", type=Path, required=True)
     ap.add_argument("--buckets-only", action="store_true")
+    ap.add_argument("--allowed-root", action="append", default=[], type=Path)
     args = ap.parse_args()
     if not args.root.is_dir():
         print(f"not a directory: {args.root}", file=sys.stderr)
@@ -163,6 +203,7 @@ def main() -> int:
     result = scan(
         args.root.resolve() if not args.root.is_symlink() else args.root,
         args.buckets_only,
+        args.allowed_root,
     )
     args.out.write_text(json.dumps(result, indent=1, sort_keys=True))
     nb = len(result["buckets"])

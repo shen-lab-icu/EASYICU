@@ -116,7 +116,8 @@ def test_compare_refuses_a_part_that_leads_out_of_its_root(tmp_path):
     )
     assert result.returncode == 1
     out = json.loads((tmp_path / "c.json").read_text())
-    assert out["verdict"] == "DIFFERS"
+    # the first out-of-root finding stops the run before anything else is read
+    assert out["verdict"] == "REFUSED" and "parts" not in out
     assert {
         "root": str(b),
         "path": "bucket_id=1/part.parquet",
@@ -148,6 +149,11 @@ def test_compare_exit_codes_distinguish_usage_from_findings(tmp_path):
     pq.write_table(
         table, part, use_dictionary=False, compression="gzip"
     )  # same values, other bytes
+    manifest = json.loads((b / "_BUCKET_MANIFEST.json").read_text())
+    manifest["inventory"][0]["size"] = (
+        part.stat().st_size
+    )  # still true to its own inventory
+    (b / "_BUCKET_MANIFEST.json").write_text(json.dumps(manifest))
     result = _tool(
         "bucket_compare.py", str(a), str(b), "--out", str(tmp_path / "c.json")
     )
@@ -156,16 +162,33 @@ def test_compare_exit_codes_distinguish_usage_from_findings(tmp_path):
         "LOGICALLY_IDENTICAL",
         "DIFFERS",
     )
+    pq.write_table(
+        table, part, use_dictionary=False
+    )  # the inventory size no longer holds
+    result = _tool(
+        "bucket_compare.py", str(a), str(b), "--out", str(tmp_path / "c.json")
+    )
+    out = json.loads((tmp_path / "c.json").read_text())
+    assert result.returncode == 1 and out["verdict"] == "INVALID"
+    assert out["integrity"]["reason"] == "bucket_part_size_mismatch"
 
 
 def _receipt(
-    path: Path, db: str, neg: int, verdict: str = "PASS", sha: str = "a" * 64
+    path: Path,
+    db: str,
+    neg: int,
+    verdict: str = "PASS",
+    sha: str = "a" * 64,
+    build: str = "build1",
+    seal_sha: str = "f" * 40,
 ) -> Path:
     path.write_text(
         json.dumps(
             {
                 "db": db,
                 "verdict": verdict,
+                "build": build,
+                "seal_sha": seal_sha,
                 "tables": {
                     "t": {
                         "float_fidelity": {
@@ -190,8 +213,8 @@ def test_negzero_table_checks_build2_profiles_and_pending_rows(
     tmp_path, capsys, monkeypatch
 ):
     r1 = _receipt(tmp_path / "r1.json", "aumc", 3)
-    same = _receipt(tmp_path / "r2.json", "aumc", 3)
-    other = _receipt(tmp_path / "r3.json", "aumc", 3, sha="b" * 64)
+    same = _receipt(tmp_path / "r2.json", "aumc", 3, build="build2")
+    other = _receipt(tmp_path / "r3.json", "aumc", 3, sha="b" * 64, build="build2")
 
     def run(*args):
         monkeypatch.setattr(sys, "argv", ["negzero_table.py", *args])

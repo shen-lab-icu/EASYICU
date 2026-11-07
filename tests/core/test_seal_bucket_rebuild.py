@@ -261,7 +261,7 @@ def test_build1_installs_read_only_roots_with_receipts_in_order_and_assembles_th
     assert not (sic / "_lead_r13_build_medication.log").exists()
     # the CareVue farm: the current farm's entries and targets, the new bucket, data_path re-pointed
     current = Path(json.loads(world["config"].read_text())["dbs"]["cv"]["current_root"])
-    skip = {"chartevents_bucket"}
+    skip = {"chartevents_bucket", sr.IN_ROOT_RECEIPT}
     assert sr.link_set(farm, skip) == sr.link_set(current, skip)
     assert os.readlink(farm / "chartevents_bucket") == str(
         bucket / "chartevents_bucket"
@@ -276,6 +276,10 @@ def test_build1_installs_read_only_roots_with_receipts_in_order_and_assembles_th
     assert (
         farm_receipt["verdict"] == "PASS"
         and farm_receipt["install"]["read_only_verified"]
+    )
+    # the farm has its own bound in-root receipt (a bucket _COMPLETE never stands for the farm)
+    assert farm_receipt["install"]["in_root_receipt_sha256"] == sr.sha256_file(
+        farm / sr.IN_ROOT_RECEIPT
     )
     assert not (
         world["b6"] / "_scratch" / f"seal_{s9}" / "build1" / "sic"
@@ -382,8 +386,19 @@ def test_a_dirty_or_moved_checkout_is_refused(world):
     subprocess.run(["git", "clone", "-q", str(world["mirror"]), str(code)], check=True)
     (code / "stray.txt").write_text("not from the seal SHA\n")
     result = _run(seal_args(world, "build1"))
-    assert result.returncode == 1 and "all FAILED checkout_not_clean" in result.stdout
+    # an existing checkout is never reused, clean or not (D26-ISOLATION)
+    assert result.returncode == 1 and "all FAILED checkout_exists" in result.stdout
     assert not _target(world, "sic_cur").exists()
+    (code / "stray.txt").unlink()
+    git_dirty = sr.verify_checkout
+    with pytest.raises(sr.SealError, match="checkout_not_clean"):
+        (code / "stray.txt").write_text("x\n")
+        git_dirty(
+            code,
+            subprocess.run(
+                ["git", "rev-parse", "HEAD"], cwd=code, capture_output=True, text=True
+            ).stdout.strip(),
+        )
     (code / "stray.txt").unlink()
     subprocess.run(
         [
@@ -401,8 +416,8 @@ def test_a_dirty_or_moved_checkout_is_refused(world):
         cwd=code,
         check=True,
     )
-    result = _run(seal_args(world, "build1"))
-    assert result.returncode == 1 and "all FAILED checkout_not_at_seal" in result.stdout
+    with pytest.raises(sr.SealError, match="checkout_not_at_seal"):
+        sr.verify_checkout(code, world["sha"])
 
 
 def test_install_writes_the_in_root_receipt_last_then_read_only_then_renames(
