@@ -406,7 +406,8 @@ def test_flat_parquet_directory_cache_only_stores_positive_results(tmp_path: Pat
 
     flat_dir = tmp_path / "observations"
     flat_dir.mkdir()
-    assert data_source._resolve_flat_parquet_directory("observations") is None
+    with pytest.raises(datasource_module.storage_layout.TableScanError, match="table_layout_broken"):
+        data_source._resolve_flat_parquet_directory("observations")
     assert data_source._flat_parquet_dir_cache == {}
 
     pd.DataFrame({"stay_id": [1], "itemid": [220045]}).to_parquet(flat_dir / "part.parquet")

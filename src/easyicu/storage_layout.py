@@ -839,43 +839,14 @@ def arrow_key_type(kind: pa.DataType) -> str:
 
 
 def flat_table_files(source, table: str) -> tuple[Path, ...]:
-    """Locate only ordinary Parquet sources, without inspecting bucket policy."""
-    if source.base_path is None:
-        # An in-memory source (frames handed to ICUDataSource) has no files:
-        # absence, as the resolver contract states, not a layout error.
-        return ()
-    roots = (source.base_path, source.base_path / "icu", source.base_path / "hosp")
-    candidates = []
-    try:
-        entries = [
-            entry.get("path") or entry.get("file")
-            for entry in source.config.get_table(table).files
-        ]
-        entries = [entry for entry in entries if entry]
-        # A table configured as several files (MIIV labevents/1..10.parquet)
-        # is the whole directory, as in load_table; its first file alone is
-        # a silent subset of the table.
-        if len(entries) > 1:
-            candidates.append(source.base_path / Path(entries[0]).parent)
-        elif entries:
-            candidates.append(source.base_path / entries[0])
-    except (AttributeError, KeyError, ValueError):
-        pass
-    for base in roots:
-        for name in dict.fromkeys((table, table.lower(), table.upper())):
-            candidates.extend(
-                (base / name, base / f"{name}.parquet", base / f"{name}.pq")
-            )
-    for path in candidates:
-        if path.is_dir():
-            files = tuple(
-                sorted(p for p in path.glob("*.parquet") if not p.name.startswith("."))
-            )
-            if files:
-                return files
-        elif path.is_file() and path.suffix.lower() in {".parquet", ".pq"}:
-            return (path,)
-    return ()
+    """The shared owner's flat variant, with the same refusals as every reader.
+
+    A standalone bucket has no flat variant. A legitimate derived pair can
+    deliberately read its verified flat files without changing the main loader.
+    """
+    decision = table_decision(source, table, flat_variant=True)
+    refuse_broken_presence(table, decision)
+    return decision.files if decision.layout == "flat" else ()
 
 
 PRESENCE_ABSENT = "absent"
@@ -958,7 +929,8 @@ def _table_keys(source, table: str) -> set:
             if name.casefold().endswith(suffix):
                 name = name[: -len(suffix)]
                 break
-        keys.add(name)
+        if name:
+            keys.add(name)
     return keys
 
 
@@ -988,55 +960,55 @@ def _physical_identity(path: Path):
 
 
 def match_table_entries(source, table: str, *, subdirectories: bool = True) -> TableMatches:
-    """The one matcher of a table's on-disk entries (delta39d).
+    """Casefold-match all ordinary/configured sources, including nested layouts.
 
-    It lists the actual directory entries, matched case-insensitively
-    (casefold), under the contract roots: the installation, and its ``icu``
-    and ``hosp`` directories in any case. Each entry is matched against the
-    table name and a single configured file's stem, with the suffix '' (a
-    table directory), ``.parquet``, ``.pq`` or ``_bucket`` in any case. With
-    ``subdirectories``, all supported names in nested directories match too.
-    Named table sources are leaves; symlink cycles are visited once. Each match is typed
-    first: a dangling link, an empty directory or an entry of another type
-    is broken. Aliases of one physical source (the same realpath, or a
-    hardlink with the same dev and inode) count once.
+    A configured directory is a source container even if its name ends in CSV.
+    Its parts are not separate candidates. Listings never suppress permission
+    failures, and symlink cycles are visited once.
     """
     base = Path(source.base_path)
     spelled = _table_keys(source, table)
     keys = {k.casefold() for k in spelled}
     wanted = {k + suffix for k in keys for suffix in _SOURCE_SUFFIXES}
     canonical = {k + suffix for k in spelled for suffix in _SOURCE_SUFFIXES}
-    roots, found = [base], []
-    for name in _listdir(base):
+    try:
+        entries = source.config.get_table(table).files
+    except (AttributeError, KeyError, ValueError):
+        entries = ()
+    first = entries[0].get("path") or entries[0].get("file") if entries else None
+    directory_names = {PurePosixPath(first).name.casefold()} if first and len(entries) == 1 else set()
+    if first and len(entries) == 1:
+        canonical.add(PurePosixPath(first).name)
+    roots, found, leaves = [base], [], set()
+    names = _listdir(base)
+    for name in names:
         if name.casefold() in {"icu", "hosp"}:
             path = base / name
             if os.path.islink(path) and not path.exists():
                 found.append(TableMatch(path, "broken"))
             elif path.is_dir():
                 roots.append(path)
+
+    def collect(directory, names):
+        for name in names:
+            path = directory / name
+            if name.casefold() in wanted or (name.casefold() in directory_names and path.is_dir()):
+                match = _classify(path)
+                found.append(match)
+                if match.kind != "file":
+                    leaves.add(path)
+
+    listings = {root: names if root == base else _listdir(root) for root in roots}
     for root in roots:
-        found += [_classify(root / n) for n in _listdir(root) if n.casefold() in wanted]
-    # Registry chunks can name a directory differently from the logical table.
-    # Keep that directory as one complete candidate, never its first chunk alone.
-    try:
-        entries = source.config.get_table(table).files
-    except (AttributeError, KeyError, ValueError):
-        entries = ()
-    if len(entries) > 1:
-        first = entries[0].get("path") or entries[0].get("file")
-        directory = base / PurePosixPath(first).parent if first else base
-        if directory != base and directory.is_dir() and any(
-            n.casefold().endswith(_PARQUET_SUFFIXES) for n in _listdir(directory)
-        ):
-            found.append(_classify(directory))
+        collect(root, listings[root])
     if subdirectories:
         visited = {os.path.realpath(root) for root in roots}
 
-        def descend(directory):
-            for name in _listdir(directory):
-                if name.startswith(".") or name.casefold() in wanted:
-                    continue
+        def descend(directory, names):
+            for name in names:
                 path = directory / name
+                if name.startswith(".") or name.casefold() in wanted or path in leaves:
+                    continue
                 if os.path.islink(path) and not path.exists():
                     found.append(TableMatch(path, "broken"))
                 elif path.is_dir() and not name.casefold().endswith("_bucket"):
@@ -1044,14 +1016,38 @@ def match_table_entries(source, table: str, *, subdirectories: bool = True) -> T
                     if identity in visited:
                         continue
                     visited.add(identity)
-                    found.extend(_classify(path / n) for n in _listdir(path)
-                                 if n.casefold() in wanted)
-                    descend(path)
+                    child_names = _listdir(path)
+                    collect(path, child_names)
+                    descend(path, child_names)
 
         for root in roots:
-            descend(root)
-    seen, flat, bucket, broken, variants = set(), [], [], [], 0
+            descend(root, listings[root])
+    if first:
+        configured = base / first
+        directory = configured if len(entries) == 1 else configured.parent
+        if directory.is_dir():
+            direct = tuple(directory / name for name in _listdir(directory)
+                           if not name.startswith(".") and name.casefold().endswith(_PARQUET_SUFFIXES))
+            existing = [m for m in found if m.kind in {"file", "directory", "bucket"}]
+            equivalent = len(direct) == 1 and any(
+                m.kind == "file" and _physical_identity(m.path) == _physical_identity(direct[0])
+                for m in existing
+            )
+            if not (directory == base and (equivalent or (not direct and existing))):
+                if len(entries) == 1 or direct:
+                    canonical.add(directory.name)
+                    found.append(_classify(directory))
+        elif len(entries) == 1 and configured.suffix.casefold() in _PARQUET_SUFFIXES:
+            if os.path.lexists(configured):
+                found.append(_classify(configured))
+            elif configured.parent.is_dir():
+                found.extend(_classify(configured.parent / name) for name in _listdir(configured.parent)
+                             if name.casefold() == configured.name.casefold())
+    seen, paths, flat, bucket, broken, variants = set(), set(), [], [], [], 0
     for match in found:
+        if match.path in paths:
+            continue
+        paths.add(match.path)
         if match.path.name not in canonical:
             variants += 1
         if match.kind == "broken":
@@ -1128,7 +1124,9 @@ def _csv_loader(source, table: str) -> Path | None:
                  if name.casefold() in names and (base / name).is_file()), None)
 
 
-def table_decision(source, table: str, *, listings_only: bool = False) -> TablePresence:
+def table_decision(
+    source, table: str, *, listings_only: bool = False, flat_variant: bool = False,
+) -> TablePresence:
     """Own the complete Parquet decision and loader for reader, cohort and resolver.
 
     Every runtime caller uses recursive nested search. Only ABSENT permits
@@ -1136,6 +1134,10 @@ def table_decision(source, table: str, *, listings_only: bool = False) -> TableP
     callers rethrow it with :func:`refuse_broken_presence`. A corrupt bucket
     may use a complete validated flat source, as before; two healthy independent
     sources refuse. No source-choice cache is maintained here.
+
+    ``flat_variant`` is the explicit flat-read API: it permits only the
+    verified flat source of an admitted derived pair, after the same
+    complete ambiguity and integrity checks. Normal readers use the bucket.
 
     ``listings_only`` is for read-only installation censuses: it opens no files,
     returns the same candidates, and conservatively refuses multiple sources
@@ -1162,10 +1164,14 @@ def table_decision(source, table: str, *, listings_only: bool = False) -> TableP
                 raise StorageSourceChanged("storage_source_missing", table, str(path / MANIFEST))
             if os.path.realpath(path) != chosen["realpath"]:
                 raise StorageSourceChanged("storage_source_changed", table, str(path))
+        if not listings_only:
+            _conversion_index(Path(source.base_path))
         found = match_table_entries(source, table)
         candidates = (*found.flat, *found.bucket, *found.broken)
         if found.broken:
             path = found.broken[0].path
+            if not listings_only and not found.flat and not found.bucket and path.is_dir():
+                verify_flat_scan(source, table, ())
             refuse_broken_presence(table, TablePresence(PRESENCE_BROKEN, path=path))
         if len(found.flat) > 1 or len(found.bucket) > 1:
             raise TableScanError(SOURCE_AMBIGUOUS, table, "independent table sources")
@@ -1187,7 +1193,7 @@ def table_decision(source, table: str, *, listings_only: bool = False) -> TableP
             try:
                 contract = read_bucket_contract(
                     bucket, allow_legacy=source.config.name == "aumc",
-                    cache=source._bucket_layout_cache,
+                    cache=getattr(source, "_bucket_layout_cache", None),
                 )
             except BucketLayoutError as exc:
                 if (chosen is not None and chosen["layout"] == "bucket") or is_bound(bucket / MANIFEST):
@@ -1204,14 +1210,24 @@ def table_decision(source, table: str, *, listings_only: bool = False) -> TableP
                     raise TableScanError(SOURCE_AMBIGUOUS, table, "bucket is independent of flat source")
                 if chosen is not None and chosen["layout"] == "flat":
                     raise StorageSourceChanged("storage_source_changed", table, str(bucket))
-        if contract is not None:
-            source._bucket_dir_cache[str(table).lower()] = bucket
+        if contract is not None and not (flat_variant and flat is not None):
+            if hasattr(source, "_bucket_dir_cache"):
+                source._bucket_dir_cache[str(table).lower()] = bucket
             return TablePresence(
                 PRESENCE_VALID, tuple(contract.files), "bucket", bucket,
                 loader=bucket, reason="parquet_source_valid", contract=contract,
                 candidates=candidates,
             )
-        files = verify_flat_scan(source, table, () if flat is None else _loader_scan(table, flat, ()))
+        files = () if flat is None else _loader_scan(table, flat, ())
+        if flat is not None and flat.is_dir():
+            inventory = _visible_parquet(flat)
+            if contract is not None:
+                inventory -= set(contract.files)
+            if set(files) != inventory:
+                raise TableScanError("table_scan_incomplete", table, "directory loader omits nested Parquet files")
+        for file in files:
+            admit_consumed_realpath(source.base_path, table, file)
+        files = verify_flat_scan(source, table, files)
         if not files:
             if chosen is not None:
                 held = bound_set(source_key(source, table))
@@ -2240,6 +2256,28 @@ def verify_flat_scan(source, table: str, files: tuple[Path, ...]) -> tuple[Path,
         return files
     base = Path(source.base_path)
     index = _conversion_index(base)
+    if index is not None:
+        # A source alias must not lose manifest ownership just because its
+        # spelling won physical deduplication. Rebind only a unique physical
+        # alias to an actual registered output; copies remain unregistered.
+        canonical = []
+        for path in files:
+            if _relative(base, path) not in index:
+                identity = _file_identity(path)
+                aliases = []
+                for relative in index:
+                    name = PurePosixPath(relative)
+                    if name.is_absolute() or ".." in name.parts:
+                        continue
+                    candidate = base.joinpath(*name.parts)
+                    if candidate.is_file() and _file_identity(candidate) == identity:
+                        aliases.append(candidate)
+                if len(aliases) == 1:
+                    path = aliases[0]
+            canonical.append(path)
+        if len(set(canonical)) != len(canonical):
+            raise TableScanError("table_scan_manifest_mismatch", table, "scan repeats a physical manifest output")
+        files = tuple(canonical)
     if not files:
         registered = _registered_outputs(index, table) if index else frozenset()
         if registered:
@@ -2540,7 +2578,7 @@ def enumerate_parquet_files(directory: Path) -> list[str]:
     if not root.exists():
         return []
     if (
-        root.name.endswith("_bucket")
+        root.name.casefold().endswith("_bucket")
         or (root / MANIFEST).exists()
         or any(root.glob("bucket_id=*"))
         or any(root.glob(f"{PARTITION_PREFIX}*"))
@@ -2550,12 +2588,12 @@ def enumerate_parquet_files(directory: Path) -> list[str]:
                 root, allow_legacy=root.name == "numericitems_bucket"
             ).files
         except BucketLayoutError:
-            flat = root.with_name(root.name.removesuffix("_bucket"))
-            if flat != root and flat.is_dir() and any(flat.glob("*.parquet")):
+            flat = root.with_name(root.name[:-7]) if root.name.casefold().endswith("_bucket") else root
+            if flat != root and flat.is_dir() and _visible_parquet(flat):
                 return enumerate_parquet_files(flat)
             raise
     else:
-        paths = sorted(p for p in root.rglob("*.parquet") if not p.name.startswith("."))
+        paths = sorted(_visible_parquet(root))
     return [p.as_posix() for p in paths]
 
 

@@ -30,6 +30,7 @@ from easyicu.storage_layout import (
 )
 from scripts import build_itemid_bucket_cache as builder
 from tests.support.bucket_storage import (
+    bind_fixture_source,
     with_value_column_rows,
     b6_dictionary,
     b6_source,
@@ -398,6 +399,7 @@ def _legacy_aumc(root, *, receipted=True):
     (cache / MANIFEST).write_text(json.dumps(legacy))
     if receipted:
         (cache / "_BUCKET_BUILD_RECEIPT.json").write_text(json.dumps(receipt))
+    bind_fixture_source(cache, "numericitems")
     return source, cache
 
 

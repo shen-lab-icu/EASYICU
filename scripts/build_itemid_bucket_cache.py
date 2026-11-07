@@ -1393,6 +1393,7 @@ def adopt_bucket_cache(
         sort=[],
         row_group_target=122880,
         source_order=None,
+        derived_from=_derived_from(data_path, table, source, root),
     )
     manifest["float_fidelity"] = float_fidelity
     manifest["builder_code"] = code

@@ -87,6 +87,15 @@ def _converted_mimic(root: Path, csv_target: Path | None = None) -> Path:
     return root
 
 
+def _explicit_csv_source(root, *, enable_cache=True):
+    """Exercise explicit CSV admission, independent of automatic Parquet priority."""
+    source = ICUDataSource(_config("mimic"), base_path=root, enable_cache=enable_cache)
+    source.register_table_source("services", lambda: source._read_file(
+        root / "SERVICES.csv.gz", None, table_name="services", disk_loader=True,
+    ))
+    return source
+
+
 def _services(source):
     return source.load_table(
         "services", columns=["hadm_id", "curr_service"],
@@ -99,12 +108,12 @@ def _touch(path: Path) -> None:
     os.utime(path, ns=(stat.st_atime_ns, stat.st_mtime_ns + 1_000_000_000))
 
 
-def test_a_preferred_csv_is_what_the_binding_and_the_event_name(tmp_path, monkeypatch):
+def test_an_explicit_csv_is_what_the_binding_and_the_event_name(tmp_path, monkeypatch):
     root = _converted_mimic(tmp_path / "mimic")
     log = tmp_path / "run.log"
     monkeypatch.setenv(SCAN_FALLBACK_LOG_ENV, str(log))
     with binding_unit():
-        assert _services(ICUDataSource(_config("mimic"), base_path=root))["curr_service"].tolist() == ["MED"]
+        assert _services(_explicit_csv_source(root))["curr_service"].tolist() == ["MED"]
         consumed = [e for e in consumed_files() if e["table"] == "services"]
     csv = str(root / "SERVICES.csv.gz")
     assert consumed == [{"table": "services", "path": csv, "realpath": os.path.realpath(csv),
@@ -115,7 +124,7 @@ def test_a_preferred_csv_is_what_the_binding_and_the_event_name(tmp_path, monkey
 
 def test_only_the_file_read_is_bound_when_csv_and_parquet_sit_side_by_side(tmp_path):
     root = _converted_mimic(tmp_path / "mimic")
-    source = ICUDataSource(_config("mimic"), base_path=root, enable_cache=False)
+    source = _explicit_csv_source(root, enable_cache=False)
     with binding_unit():
         _services(source)
         snapshot = child_binding(source)
@@ -132,7 +141,7 @@ def test_a_csv_symlink_outside_the_data_root_is_refused(tmp_path):
     outside.mkdir()
     root = _converted_mimic(tmp_path / "mimic", csv_target=outside / "SERVICES.csv.gz")
     with binding_unit(), pytest.raises(TableScanError) as error:
-        _services(ICUDataSource(_config("mimic"), base_path=root))
+        _services(_explicit_csv_source(root))
     assert error.value.reason == "storage_read_outside_data_root"
 
 
@@ -285,7 +294,7 @@ def test_a_clock_helper_link_is_admitted_like_any_consumed_file(tmp_path):
 
 def test_a_cached_csv_payload_is_recorded_again_on_a_hit(tmp_path):
     root = _converted_mimic(tmp_path / "mimic")
-    source = ICUDataSource(_config("mimic"), base_path=root)
+    source = _explicit_csv_source(root)
     csv = str(root / "SERVICES.csv.gz")
     with binding_unit():
         _services(source)
@@ -297,7 +306,7 @@ def test_a_cached_csv_payload_is_recorded_again_on_a_hit(tmp_path):
 
 def test_a_cached_payload_whose_file_changed_is_read_again(tmp_path):
     root = _converted_mimic(tmp_path / "mimic")
-    source = ICUDataSource(_config("mimic"), base_path=root)
+    source = _explicit_csv_source(root)
     with binding_unit():
         assert _services(source)["curr_service"].tolist() == ["MED"]
     changed = _SERVICES.assign(CURR_SERVICE=["CSURG", "SURG"])

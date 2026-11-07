@@ -202,14 +202,16 @@ def _farm_with_derived_manifest(tmp_path):
     pq.write_table(pa.table({"itemid": [1, 2]}), view / "labevents.parquet")
     source = view / "conversion_manifest.json"
     source.write_text(json.dumps({"tables": [{
-        "table": "labevents", "row_count": 2, "outputs": [{"relative_path": "labevents.parquet"}],
+        "table": "labevents", "row_count": 2, "outputs": [{"relative_path": "labevents.parquet",
+             "size_bytes": (view / "labevents.parquet").stat().st_size}],
     }]}))
     farm = tmp_path / "farm"
     (farm / "labevents").mkdir(parents=True)
     (farm / "labevents" / "1.parquet").symlink_to(view / "labevents.parquet")
     (farm / "conversion_manifest.json").write_text(json.dumps({
         "tables": [{"table": "labevents", "row_count": 2,
-                    "outputs": [{"relative_path": "labevents/1.parquet"}]}],
+                    "outputs": [{"relative_path": "labevents/1.parquet",
+             "size_bytes": (view / "labevents.parquet").stat().st_size}]}],
         "derived_from": {"path": str(source), "sha256": hashlib.sha256(source.read_bytes()).hexdigest()},
     }))
     return view, farm, source
@@ -274,7 +276,9 @@ def test_a_registered_table_with_no_files_fails_instead_of_reading_empty(tmp_pat
     _write_manifest(tmp_path, ["1.parquet", "2.parquet"], 2)
     shutil.rmtree(tmp_path / "labevents")
     source = _source(tmp_path, ["labevents/1.parquet", "labevents/2.parquet"])
-    assert flat_table_files(source, "labevents") == ()
+    with pytest.raises(TableScanError) as missing:
+        flat_table_files(source, "labevents")
+    assert missing.value.reason == "table_scan_files_missing"
     with pytest.raises(TableScanError) as caught:
         verify_flat_scan(source, "labevents", ())
     assert caught.value.reason == "table_scan_files_missing"

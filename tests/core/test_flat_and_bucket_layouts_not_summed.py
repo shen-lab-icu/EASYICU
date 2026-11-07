@@ -18,7 +18,7 @@ import pytest
 from easyicu.datasource import FilterOp, FilterSpec, ICUDataSource
 from easyicu.resources import load_data_sources
 from easyicu.scores.outcomes import _raw_table
-from tests.support.bucket_storage import write_contract
+from tests.support.bucket_storage import bind_fixture_source, write_contract
 
 T = pd.Timestamp("2150-01-01 08:00")
 
@@ -46,6 +46,7 @@ def _both_layouts(root, table, frame, key):
     bucket.mkdir(parents=True)
     frame.to_parquet(bucket / "part.parquet")
     write_contract(root / f"{table}_bucket", key=key)
+    bind_fixture_source(root / f"{table}_bucket", table)
 
 
 def _source(root):

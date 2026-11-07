@@ -90,14 +90,16 @@ def get_all_patient_ids_impl(
 
         from ..storage_layout import (
             ORDINAL, PRESENCE_VALID, refuse_broken_presence, restore_frame_order,
-            table_decision, unreadable_file, unreadable_file_errors,
+            resolve_table_files, table_decision, unreadable_file, unreadable_file_errors,
         )
 
         def _ids(table: str, presence) -> tuple[List, str]:
             # IDs in the source's own order, deduplicated in that order; the
             # cap is applied last, by the caller (B-D30-COHORT-ORDER).
             frames = []
-            for shard in presence.files:
+            # Resolve with the owner-provided loader and record the files
+            # actually consumed by discovery, just as the normal reader does.
+            for shard in resolve_table_files(storage, table, loader=presence.loader):
                 try:
                     names = pq.read_schema(shard).names
                     columns = [id_col, ORDINAL] if ORDINAL in names else [id_col]

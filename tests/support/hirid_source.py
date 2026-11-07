@@ -28,6 +28,7 @@ def hirid_source_root(tmp_path, table, rows, layout="flat", preserve_other=False
         frame = pd.concat([original, frame], ignore_index=True)
     if layout == "bucket":
         path.unlink()
+        path.parent.rmdir()
         path = root / f"{table}_bucket/bucket_id=0/1.parquet"
         path.parent.mkdir(parents=True)
     write_fixture_parquet(frame, path, index=False)

@@ -2,6 +2,7 @@
 
 from dataclasses import replace
 import json
+import hashlib
 from pathlib import Path
 
 import duckdb
@@ -10,7 +11,7 @@ import pyarrow.parquet as pq
 
 from easyicu.config import load_src_cfg
 from easyicu.datasource import ICUDataSource
-from easyicu.storage_layout import MANIFEST, SCHEMA, arrow_key_type
+from easyicu.storage_layout import MANIFEST, SCHEMA, arrow_key_type, bucket_source_files
 from scripts.build_itemid_bucket_cache import (
     STAY_KEYS,
     TABLE_CONFIGS,
@@ -54,6 +55,24 @@ def write_contract(
     )
     (root / MANIFEST).write_text(json.dumps(manifest))
     (root / "_COMPLETE").touch()
+    return manifest
+
+
+def bind_fixture_source(bucket: Path, table: str):
+    """Explicit provenance for a fixture actually built from its flat source.
+
+    Never auto-bind arbitrary independent fixtures just because they coexist.
+    """
+    files = bucket_source_files(bucket.parent, table)
+    assert files, "a derived fixture must have its complete flat source"
+    manifest = json.loads((bucket / MANIFEST).read_text())
+    manifest["derived_from"] = {"table": table, "files": [
+        {"path": path.relative_to(bucket.parent).as_posix(),
+         "size": path.stat().st_size, "mtime_ns": path.stat().st_mtime_ns,
+         "sha256": hashlib.sha256(path.read_bytes()).hexdigest()}
+        for path in files
+    ]}
+    (bucket / MANIFEST).write_text(json.dumps(manifest))
     return manifest
 
 

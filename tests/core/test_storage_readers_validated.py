@@ -96,7 +96,8 @@ def test_the_regex_prematch_refuses_a_missing_chunk(tmp_path):
     with pytest.raises(StorageIntegrityError) as caught:
         resolver.load_concepts(["uom_probe"], _source("mimic", tmp_path), merge=False,
                                verbose=False, concept_workers=1)
-    assert _raised_at(caught, "loader=_table_path")
+    # The complete shared decision can reject before regex prematching.
+    assert caught.value.reason == "table_scan_manifest_mismatch"
 
 
 def test_the_single_column_fast_path_refuses_a_file_set_the_policy_does_not_own(tmp_path, monkeypatch):
