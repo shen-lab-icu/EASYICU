@@ -882,7 +882,7 @@ def _listdir(directory: Path) -> list:
 def _table_keys(source, table: str) -> set:
     """The table name and a single configured file's stem, as spelled."""
     keys = {table}
-    if source.config.name == "miiv":
+    if getattr(source.config, "name", None) == "miiv":
         mapped = {"procedureevents_mv": "procedureevents", "inputevents_mv": "inputevents",
                   "inputevents_cv": "inputevents"}.get(table)
         if mapped:
@@ -1095,6 +1095,10 @@ def table_decision(source, table: str, *, listings_only: bool = False) -> TableP
     path = Path(source.base_path)
     try:
         chosen = None if listings_only else bound_layout(source_key(source, table))
+        if chosen is not None and chosen["layout"] == "flat":
+            for held in bound_set(source_key(source, table)):
+                if not Path(held).is_file():
+                    raise StorageSourceChanged("storage_source_missing", table, held)
         if chosen is not None and chosen["layout"] == "bucket":
             path = Path(chosen["root"])
             if not path.is_dir():
@@ -1166,6 +1170,7 @@ def table_decision(source, table: str, *, listings_only: bool = False) -> TableP
                              error=exc, candidates=candidates)
     except OSError as exc:
         error = unreadable_file(table, path, exc)
+        error.__cause__ = exc
         return TablePresence(PRESENCE_BROKEN, path=path, reason=error.reason,
                              error=error, candidates=candidates)
 
