@@ -26,6 +26,35 @@ deferred to it are compared against `2786ea872` there.
 - TODO(d5fixB): bucket source-set and source-root checks
   (B-SOURCE-SET, B-ROOT).
 
+## 2026-11-07 — `vent_ind` window durations take their declared unit [lead-r13, branch `r13srccfg_vent`]
+
+Fail-closed tightening; no value change. In `_callback_vent_ind`, a numeric
+WinTbl duration went through a unit-less `pd.to_timedelta`, which reads numbers
+as nanoseconds. That result is non-null, so the hours fallback never ran, and a
+3-hour window would have covered only its start hour. A numeric duration now
+takes the WinTbl's declared `dur_var` unit
+(`table.duration.duration_series_to_timedelta`). An undeclared numeric duration
+raises `DurationUnitUndeclaredError` (reason `duration_unit_undeclared`).
+Timedelta durations are unchanged.
+
+A trace of `load_concepts(["vent_ind"])` on `827ef57a6` (300 stays per database)
+found 0 calls to `_coerce_duration` on all six databases, so no extracted value
+moves. The trace confirmed it imported that tree, and a synthetic positive
+control did register the unit-less call.
+- MIIV, MIMIC-III CareVue and HiRID pass `mech_vent` as a WinTbl with a float
+  `dur_var` declared in hours. These windows take the WinTbl path
+  (`_windows_from_mech_as_wintbl`), or HiRID's bridge.
+- SICdb, AUMCdb and eICU pass hourly or point evidence: an ICUTable with no
+  duration column.
+
+A numeric duration is converted with its declared unit directly
+(`pd.to_timedelta(values, unit="s"|"min"|"h"|"D")`), not through a float hours
+factor. The hours factor is inexact for seconds and minutes: on `4f3e36191`,
+2,418 of 3,600 integer seconds (0..3599) and 2,880 of 4,320 integer minutes
+came out nanoseconds off direct conversion, and 800 of the 3,600 seconds cases
+changed half-open occupancy (review D27-PRECISION). An unknown declared unit
+raises `DurationUnitError`. Hours and days are unchanged.
+
 ## 2026-11-06 — the raw-concept cache answers only on the grid an entry was loaded on, and callbacks read one input [lead-r13, `49418a0b7`, `bdddfc863`, `4d7fb8748`, `ddfd55bce`]
 
 - `49418a0b7` (D4-NATIVE-CACHE): an ungridded cache entry never answers an

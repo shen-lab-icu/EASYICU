@@ -3620,7 +3620,7 @@ class ConceptResolver:
                         _query_pids = deaths_within_cohort(dead_pids, patient_ids)
                         _alive_pids = deaths_within_cohort(alive_pids, patient_ids)
                         _hd_read_exprs = hirid_observation_read_exprs(
-                            data_source.base_path
+                            data_source
                         )
 
                         if _query_pids and _hd_read_exprs is None:

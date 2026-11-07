@@ -28,12 +28,18 @@ def _status(values, mapping):
     return values.astype("string").str.strip().str.casefold().map(mapping).astype("boolean")
 
 
-def _hirid_time(root, frame):
+def _hirid_time(root, frame, source=None):
     from easyicu.concept.callback_apply import hirid_observation_read_exprs
     from easyicu.databases.research_capabilities import HIRID_TIMING_ITEMS
+    from easyicu.datasource import storage_source
     from easyicu.runtime import duckdb_spill
 
-    expressions = hirid_observation_read_exprs(Path(root))
+    # The caller's source (its own configuration and root) when it has one;
+    # this native database + root entry otherwise uses the storage owner's
+    # source for the active registry, as the modern loader binds it.
+    if source is None:
+        source = storage_source("hirid", Path(root))
+    expressions = hirid_observation_read_exprs(source)
     if expressions is None:
         path = Path(root) / "observations.parquet"
         if not path.is_file():
@@ -55,7 +61,7 @@ def _hirid_time(root, frame):
     return ((last - start).dt.total_seconds() / 3600).where(last >= start)
 
 
-def load_icu_death(database, data_path, *, patient_ids=None, max_patients=None):
+def load_icu_death(database, data_path, *, patient_ids=None, max_patients=None, source=None):
     """Return one nullable status per native ICU id and an explicitly typed time.
 
     Unknown status stays missing. Negative/pre-ICU and post-ICU recorded deaths
@@ -92,7 +98,7 @@ def load_icu_death(database, data_path, *, patient_ids=None, max_patients=None):
     if base == "hirid":
         _columns(frame, "discharge_status", "admissiontime")
         status = _status(frame.discharge_status, {"dead": True, "alive": False})
-        times = _hirid_time(data_path, frame)
+        times = _hirid_time(data_path, frame, source)
         kind = "last_observation_proxy"
     elif base == "aumc":
         _columns(frame, "destination", "admittedat", "dischargedat")

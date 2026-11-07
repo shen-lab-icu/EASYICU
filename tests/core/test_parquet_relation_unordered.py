@@ -63,7 +63,9 @@ def test_unordered_relation_has_no_sort_and_the_same_aggregate(tmp_path, with_or
 
 def test_hirid_timing_relation_is_unordered(tmp_path):
     _write(tmp_path / "observations" / "1.parquet", [(1, 110, 5)])
-    expressions = hirid_observation_read_exprs(tmp_path)
+    from easyicu.datasource import storage_source
+
+    expressions = hirid_observation_read_exprs(storage_source("hirid", tmp_path))
     assert expressions is not None
     fast, safe, layout = expressions
     assert layout == "observations"

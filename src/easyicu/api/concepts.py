@@ -2028,6 +2028,7 @@ def load_concepts(
                     patient_ids=special_patient_ids,
                     verbose=verbose,
                     output_concepts=sorted(_need_outcome),
+                    source=getattr(loader, "datasource", None),
                 )
             except Exception as e:
                 if "icu_death" in _need_outcome:

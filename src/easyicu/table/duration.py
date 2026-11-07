@@ -51,6 +51,17 @@ _HOURS_PER_UNIT = {
     UNIT_DAYS: 24.0,
 }
 
+#: The pandas unit for each declared numeric unit.  A numeric duration is
+#: converted with its own unit, never through a float hours factor: 1/3600 h
+#: is not exact in binary and moved integer-second durations by nanoseconds
+#: (lead-r13 D27-PRECISION).
+_PANDAS_UNIT = {
+    UNIT_SECONDS: "s",
+    UNIT_MINUTES: "min",
+    UNIT_HOURS: "h",
+    UNIT_DAYS: "D",
+}
+
 #: Retired opt-out flag. It used to re-enable a distribution guess for an
 #: undeclared ``dur_var``; it is no longer read, and an undeclared unit is
 #: always an error (lead-r13 magnitude-inference sweep, #9).
@@ -62,6 +73,12 @@ STRICT_ENV_VAR = "EASYICU_STRICT_DUR_VAR_UNIT"
 
 class DurationUnitError(ValueError):
     """Raised when a ``dur_var`` unit is required but cannot be determined."""
+
+
+class DurationUnitUndeclaredError(DurationUnitError):
+    """A numeric duration reached a consumer without a declared unit."""
+
+    reason_code = "duration_unit_undeclared"
 
 
 class DurationValueError(ValueError):
@@ -298,6 +315,50 @@ def _validate_hours(
     return hours
 
 
+def duration_series_to_timedelta(
+    values: pd.Series,
+    unit: Optional[str],
+    *,
+    column: str = "dur_var",
+    concept: Optional[str] = None,
+) -> pd.Series:
+    """Return a duration series as ``timedelta64`` using its declared unit.
+
+    A ``timedelta`` series is returned unchanged. A numeric series is
+    converted with its declared unit directly (seconds, minutes, hours or
+    days, through ``_PANDAS_UNIT``): never with a unit-less
+    ``pd.to_timedelta``, which reads numbers as nanoseconds, and never through
+    a float hours factor, which is inexact for seconds and minutes. Without a
+    declared unit it raises :class:`DurationUnitUndeclaredError`; an unknown
+    unit raises :class:`DurationUnitError`. Values are not validated here:
+    callers keep their own window rules.
+    """
+
+    if pd.api.types.is_timedelta64_dtype(values):
+        return values
+    label = concept or "<unknown>"
+    if unit in _PANDAS_UNIT:
+        return pd.to_timedelta(
+            pd.to_numeric(values, errors="coerce"), unit=_PANDAS_UNIT[unit]
+        )
+    if unit == UNIT_TIMEDELTA:
+        raise DurationUnitError(
+            f"{column!r} for concept {label!r} declares unit 'timedelta' but "
+            "holds a numeric dtype; the producer must convert before the unit "
+            "is consumed"
+        )
+    if unit is not None:
+        raise DurationUnitError(
+            f"{column!r} for concept {label!r} declares an unknown unit {unit!r}; "
+            f"known: {sorted(_PANDAS_UNIT)}"
+        )
+    raise DurationUnitUndeclaredError(
+        f"{column!r} for concept {label!r} is numeric with no declared unit "
+        f"(declared: {unit!r}); a number is not a duration until its unit is "
+        "declared, and EasyICU does not guess one"
+    )
+
+
 def resolve_dur_var_hours(
     frame: pd.DataFrame,
     *,
@@ -353,6 +414,7 @@ __all__ = [
     "VALID_DUR_VAR_UNITS",
     "STRICT_ENV_VAR",
     "DurationUnitError",
+    "DurationUnitUndeclaredError",
     "WindowContractError",
     "assert_window_contract",
     "strict_dur_var_units",
@@ -362,4 +424,5 @@ __all__ = [
     "combine_dur_var_units",
     "convert_dur_var_unit",
     "resolve_dur_var_hours",
+    "duration_series_to_timedelta",
 ]
