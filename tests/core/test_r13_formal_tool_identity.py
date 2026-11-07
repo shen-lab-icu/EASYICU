@@ -464,14 +464,34 @@ def boot_env(tmp_path):
 
 
 def _boot(b, script: str, body: str, *, sha: str | None = None, site: str | None = None,
-          env: dict | None = None, cwd: Path | None = None, place: Path | None = None):
+          env: dict | None = None, cwd: Path | None = None, place: Path | None = None,
+          omit=()):
     target = (place or b.tools) / script
     target.write_text(body)
+    _seal_boot_tools(b, omit=omit)
     argv = [sys.executable, "-I", "-S", "-P", str(b.tools / "formal_boot.py"), str(b.tools),
             str(b.clone), sha or b.sha, site or _site(), str(b.out), str(target), "a1"]
     base = {"PATH": os.environ["PATH"], "TMPDIR": str(b.tmpdir)}
     return subprocess.run(argv, capture_output=True, text=True, cwd=cwd or b.tmp,
                           env={**base, **env} if env is not None else base)
+
+
+def _seal_boot_tools(b, *, omit=()):
+    tools = []
+    for path in sorted(b.tools.glob("*.py")):
+        if path.name in omit:
+            continue
+        relative = "tools/formal/" + path.name
+        target = b.clone / relative
+        target.parent.mkdir(parents=True, exist_ok=True)
+        target.write_bytes(path.read_bytes())
+        tools.append({"name": path.name, "path": relative, "sha256": _sha(path.read_bytes())})
+    manifest = b.clone / "tools/formal/FORMAL_TOOLS.json"
+    manifest.write_text(json.dumps({"schema": "easyicu.formal_tools/1", "tools": tools}))
+    _git(b.clone, "add", ".")
+    _git(b.clone, "-c", "user.name=t", "-c", "user.email=t@t", "commit", "-q",
+         "--allow-empty", "-m", "sealed tools")
+    b.sha = _git(b.clone, "rev-parse", "HEAD")
 
 
 def test_the_boot_runs_a_staged_script_with_clean_origins(boot_env):
@@ -567,6 +587,7 @@ def test_a_linked_script_in_the_tools_dir_is_exit_97(boot_env):
     real = boot_env.tmp / "real.py"
     real.write_text("pass\n")
     os.symlink(real, boot_env.tools / "v2_bench_local.py")
+    _seal_boot_tools(boot_env)
     argv = [sys.executable, "-I", "-S", "-P", str(boot_env.tools / "formal_boot.py"),
             str(boot_env.tools), str(boot_env.clone), boot_env.sha, _site(), str(boot_env.out),
             str(boot_env.tools / "v2_bench_local.py")]
@@ -618,7 +639,7 @@ def test_clean_step_records_and_a_clean_live_receipt_pass(origins):
 
     assert set(out) == {"extract:sic", "memgate:sic", "workers:sic",
                         "inputs:snapshot", "inputs:verify", "receipt"}
-    assert out["workers:sic"] == {"workers": 0}
+    assert out["workers:sic"] == {"workers": 0, "records": []}
 
 
 @pytest.mark.parametrize("change,code", [
@@ -663,6 +684,7 @@ def test_the_boot_refuses_to_run_without_a_private_tmpdir(boot_env):
     marker = boot_env.tmp / "ran"
     target = boot_env.tools / "v2_bench_local.py"
     target.write_text(f"open({str(marker)!r}, 'w').close()\n")
+    _seal_boot_tools(boot_env)
     argv = [sys.executable, "-I", "-S", "-P", str(boot_env.tools / "formal_boot.py"),
             str(boot_env.tools), str(boot_env.clone), boot_env.sha, _site(), str(boot_env.out),
             str(target)]
@@ -738,13 +760,22 @@ def extract_database(db, *, output_dir, **kwargs):
 '''
 
 
-def _spawn_driver(b, flags, *, wrong_src=False):
+def _spawn_driver(b, flags, *, wrong_src=False, contaminate=False, cached_temp=False,
+                  unwritable_temp=False):
     # Actual v2 main under the boot, with a synthetic extraction that starts a
     # real child. The admission stub still checks the boot's live origins.
     api = b.clone / "src" / "easyicu" / "api"
     api.mkdir()
     (api / "__init__.py").write_text("from .extraction import extract_database\n")
-    (api / "extraction.py").write_bytes(_SPAWN_EXTRACTION)
+    extraction = _SPAWN_EXTRACTION.decode()
+    if contaminate:
+        outside = b.tmp / "outside"
+        outside.mkdir()
+        (outside / "outsider.py").write_text("VALUE = 'synthetic'\n")
+        extraction = extraction.replace('    Path(out, "child.json")',
+            f"    sys.path.append({str(outside)!r})\n    import outsider\n"
+            '    Path(out, "child.json")')
+    (api / "extraction.py").write_text(extraction)
     _git(b.clone, "add", ".")
     _git(b.clone, "-c", "user.name=t", "-c", "user.email=t@t", "commit", "-q", "-m", "spawn stub")
     b.sha = _git(b.clone, "rev-parse", "HEAD")
@@ -754,6 +785,19 @@ def _spawn_driver(b, flags, *, wrong_src=False):
         source = source.replace("    _worker_origin()",
                                 "    os.environ['FORMAL_BOOT_SRC'] = '/wrong/src'\n"
                                 "    _worker_origin()")
+    if cached_temp:
+        fallback = b.tmp / "fallback"
+        fallback.mkdir()
+        source = source.replace("import psutil",
+            "import tempfile\nif __name__ == '__mp_main__':\n"
+            "    assert tempfile.tempdir == os.path.realpath(os.environ['TMPDIR'])\n"
+            "import psutil")
+        source = source.replace("    _worker_origin()",
+            f"    import tempfile\n    tempfile.tempdir = {str(fallback)!r}\n"
+            "    _worker_origin()")
+    if unwritable_temp:
+        source = source.replace("    _worker_origin()",
+            "    os.chmod(os.environ['TMPDIR'], 0o500)\n    _worker_origin()")
     driver.write_text(source)
     (b.tools / "memgate.py").write_text(
         "import sys, easyicu\n"
@@ -766,6 +810,7 @@ def _spawn_driver(b, flags, *, wrong_src=False):
            "BENCH_SEG": f"{min(cpus)}-{max(cpus)}", "BENCH_NC": str(len(cpus)),
            **dict.fromkeys(("OMP_NUM_THREADS", "POLARS_MAX_THREADS", "RAYON_NUM_THREADS",
                             "OPENBLAS_NUM_THREADS"), str(len(cpus)))}
+    _seal_boot_tools(b)
     argv = [sys.executable, *flags, str(b.tools / "formal_boot.py"), str(b.tools),
             str(b.clone), b.sha, _site(), str(b.out), str(driver), "synthetic", str(b.tmp),
             str(b.tmp), "full"]
@@ -793,12 +838,15 @@ def test_real_spawn_workers_assert_their_own_origins(boot_env, flags, wrong_src,
     if expected == 0:
         child = json.loads((b.tmp / "child.json").read_text())
         assert child["sys_path"][0] == str(b.tools) and child["isolated"] and child["no_site"]
-        assert receipt._worker_origins("synthetic", b.tmp / "worker_origin",
-                                        str(b.clone / "src")) == {"workers": 1}
+        checked = receipt._worker_origins("synthetic", b.tmp / "worker_origin",
+            str(b.clone / "src"), b.sha, str(b.tools), str(b.tmp))
+        assert checked["workers"] == 1
+        assert checked["records"][0]["sha256"] == _sha(records[0].read_bytes())
     else:
         assert not (b.tmp / "child.json").exists()  # target never ran
         with pytest.raises(receipt.ReceiptError) as error:
-            receipt._worker_origins("synthetic", b.tmp / "worker_origin", str(b.clone / "src"))
+            receipt._worker_origins("synthetic", b.tmp / "worker_origin", str(b.clone / "src"),
+                                    b.sha, str(b.tools), str(b.tmp))
         assert error.value.details["step"] == "workers:synthetic"
     memgate = json.loads((b.tmp / "IMPORT_ORIGIN.memgate.json").read_text())
     assert memgate["complete"] and memgate["mismatched"] == []
@@ -824,7 +872,8 @@ def test_memgate_requires_its_own_complete_boot_record(origins, change):
 def test_the_receipt_refuses_bad_worker_records(origins, change):
     folder = origins.run / "sic" / "worker_origin"
     folder.mkdir()
-    record = {"ok": True, "src": str(origins.src), "easyicu": str(origins.src / "easyicu/x.py"),
+    record = {**_origin(origins.run, origins.tools, origins.src, origins.sha, "v2_bench_local.py"),
+              "ok": True, "src": str(origins.src), "easyicu": str(origins.src / "easyicu/x.py"),
               "isolated": 1, "no_site": 1, "safe_path": True, **(change or {})}
     (folder / "123.json").write_text("{" if change is None else json.dumps(record))
     with pytest.raises(receipt.ReceiptError) as error:
@@ -876,3 +925,130 @@ def test_a_sourceless_pyc_imported_as_mp_main_is_still_exit_97(boot_env):
                  "import sys, importlib\nsys.modules['__mp_main__'] = importlib.import_module('stub')\n")
 
     assert done.returncode == 97
+
+
+# delta43p / delta46p: regressions demonstrated against the item-4 commit.
+
+def test_boot_pins_private_temp_even_when_tempfile_has_a_cached_directory(boot_env):
+    b = boot_env
+    fallback = b.tmp / "fallback"
+    fallback.mkdir()
+    boot = b.tools / "formal_boot.py"
+    boot.write_text(boot.read_text().replace("ORIGIN_EXIT = 97",
+        f"ORIGIN_EXIT = 97\ntempfile.tempdir = {str(fallback)!r}"))
+    done = _boot(b, "v2_bench_local.py",
+        "import os, tempfile\nassert tempfile.tempdir == os.path.realpath(os.environ['TMPDIR'])\n"
+        "fd, path = tempfile.mkstemp()\nos.close(fd)\n")
+    assert done.returncode == 0, done.stderr
+    assert json.loads(b.out.read_text())["tmpdir"] == str(b.tmpdir)
+    assert not list(fallback.iterdir())
+
+
+def test_boot_refuses_an_unwritable_private_temp_without_trying_fallback(boot_env):
+    b = boot_env
+    fallback = b.tmp / "fallback"
+    fallback.mkdir()
+    boot = b.tools / "formal_boot.py"
+    # All candidates stay in this synthetic fixture, including on the buggy base.
+    boot.write_text(boot.read_text().replace("ORIGIN_EXIT = 97",
+        f"ORIGIN_EXIT = 97\ntempfile._candidate_tempdir_list = lambda: "
+        f"[{str(b.tmpdir)!r}, {str(fallback)!r}]"))
+    marker = b.tmp / "ran"
+    b.tmpdir.chmod(0o500)
+    try:
+        done = _boot(b, "v2_bench_local.py", f"open({str(marker)!r}, 'w').close()\n")
+    finally:
+        b.tmpdir.chmod(0o700)
+    assert done.returncode == 97, done.stderr
+    assert not marker.exists() and not list(fallback.iterdir())
+
+
+@pytest.mark.parametrize("escape", ["dotdot", "symlink", "artifact"])
+def test_receipt_resolves_private_temp_and_artifact_containment(origins, escape):
+    outside = origins.run.parent / "outside"
+    outside.mkdir()
+    path = origins.run / "sic" / "IMPORT_ORIGIN.json"
+    if escape == "dotdot":
+        origins.write(path, "v2_bench_local.py", tmpdir=str(origins.run / ".." / "outside"))
+    elif escape == "symlink":
+        link = origins.run / "temp_link"
+        link.symlink_to(outside, target_is_directory=True)
+        origins.write(path, "v2_bench_local.py", tmpdir=str(link))
+    else:
+        target = outside / "record.json"
+        target.write_bytes(path.read_bytes())
+        path.unlink()
+        path.symlink_to(target)
+    with pytest.raises(receipt.ReceiptError) as error:
+        receipt.formal_import_origins(origins.run, origins.sha, origins.code, ["sic"])
+    assert error.value.code == "formal_import_origin_mismatch"
+
+
+def test_boot_uses_the_sealed_manifest_instead_of_discovering_extra_tools(boot_env):
+    b = boot_env
+    (b.tools / "extra_tool.py").write_text("VALUE = 1\n")
+    done = _boot(b, "v2_bench_local.py", "import extra_tool\n", omit=("extra_tool.py",))
+    assert done.returncode == 97
+    assert "extra_tool" in json.loads(b.out.read_text())["mismatched"]
+
+
+@pytest.mark.parametrize("alias", ["other_tool", "boot", "synthetic", "non_string", "nested"])
+def test_mp_main_exemption_is_bound_to_the_verified_script(boot_env, alias):
+    b = boot_env
+    (b.tools / "inputs_bench_local.py").write_text("VALUE = 1\n")
+    files = {"other_tool": str(b.tools / "inputs_bench_local.py"),
+             "boot": str(b.tools / "formal_boot.py"),
+             "synthetic": str(b.clone / "src/easyicu/__init__.py"),
+             "non_string": 123, "nested": str(b.tools / "v2_bench_local.py")}
+    name = "__mp_main__.nested" if alias == "nested" else "__mp_main__"
+    body = ("import sys, types\n"
+            f"module = types.ModuleType({name!r})\nmodule.__file__ = {files[alias]!r}\n"
+            f"sys.modules[{name!r}] = module\n")
+    if alias == "other_tool":
+        body = ("import sys, importlib.util\n"
+                f"spec = importlib.util.spec_from_file_location('__mp_main__', {files[alias]!r})\n"
+                "module = importlib.util.module_from_spec(spec)\n"
+                "sys.modules['__mp_main__'] = module\nspec.loader.exec_module(module)\n")
+    done = _boot(b, "v2_bench_local.py", body)
+    assert done.returncode == 97, done.stderr
+    assert name in json.loads(b.out.read_text())["mismatched"]
+
+
+def test_spawned_worker_checks_all_its_own_modules_after_the_target(boot_env):
+    b = boot_env
+    done = _spawn_driver(b, ["-I", "-S", "-P"], contaminate=True)
+    assert done.returncode == 0, done.stderr
+    assert json.loads((b.tmp / "child_exit.json").read_text()) == 97
+    worker, = (b.tmp / "worker_origin").glob("*.json")
+    record = json.loads(worker.read_text())
+    assert record["complete"] and record["mismatched"] == ["outsider"]
+    with pytest.raises(receipt.ReceiptError):
+        receipt._worker_origins("synthetic", b.tmp / "worker_origin", str(b.clone / "src"),
+                                b.sha, str(b.tools), str(b.tmp))
+
+
+def test_spawned_worker_pins_temp_and_binds_its_full_result_into_receipt(boot_env):
+    b = boot_env
+    done = _spawn_driver(b, ["-I", "-S", "-P"], cached_temp=True)
+    assert done.returncode == 0, done.stderr
+    assert json.loads((b.tmp / "child_exit.json").read_text()) == 0
+    worker, = (b.tmp / "worker_origin").glob("*.json")
+    record = json.loads(worker.read_text())
+    assert record["tmpdir"] == str(b.tmpdir) and record["complete"]
+    assert record["head"] == b.sha and record["mismatched"] == []
+    checked = receipt._worker_origins("synthetic", worker.parent, str(b.clone / "src"),
+                                      b.sha, str(b.tools), str(b.tmp))
+    assert checked["records"][0]["sha256"] == _sha(worker.read_bytes())
+
+
+def test_spawned_worker_refuses_an_unwritable_private_temp_before_its_target(boot_env):
+    b = boot_env
+    try:
+        done = _spawn_driver(b, ["-I", "-S", "-P"], unwritable_temp=True)
+    finally:
+        b.tmpdir.chmod(0o700)
+    assert done.returncode == 0, done.stderr
+    assert json.loads((b.tmp / "child_exit.json").read_text()) == 97
+    assert not (b.tmp / "child.json").exists()
+    worker, = (b.tmp / "worker_origin").glob("*.json")
+    assert json.loads(worker.read_text())["ok"] is False

@@ -10,10 +10,10 @@ formal_boot.py:
   summary["exception_root"], so an error re-typed by a broad handler still
   shows its own type in the receipt;
 * each spawned extraction worker (spawn is the extractor's default start
-  method, api/extraction.py:2021) re-runs this file as __mp_main__ and checks
-  what it actually got before any work: easyicu from the clone's src
-  (FORMAL_BOOT_SRC, set by the boot) and the isolated and no_site interpreter
-  flags, else it exits 97; its record goes to OUT/worker_origin/<pid>.json.
+  method, api/extraction.py:2021) re-runs this file as __mp_main__, binds
+  its private temp directory, and checks its own loaded modules and actual
+  interpreter flags before and after its target, else it exits 97; the
+  receipt binds OUT/worker_origin/<pid>.json by SHA-256.
 The file name ends in "bench_local.py" on purpose: memgate.py and the
 wrapper's core checks count a scope by that substring.
 
@@ -23,17 +23,25 @@ and OOM kills, and the sha256 of every export file. Aggregates only.
 
 usage: bench_local.py DB DATA_PATH OUT (sample|full)
 """
+import os
+import sys
+
+# A fresh spawn must bind tempfile before importing any third-party module.
+if __name__ == "__mp_main__":
+    try:
+        from formal_boot import bind_private_temp
+        bind_private_temp()
+    except Exception:
+        os._exit(97)
+
 import hashlib
 import json
 import random
 import subprocess
-import sys
 import threading
 import time
 import traceback
 from pathlib import Path
-
-import os
 
 import psutil
 
@@ -101,21 +109,16 @@ def exception_root(exc):
 
 
 def _worker_origin():
-    """In a spawned extraction worker: check the origin it actually got (see the module doc)."""
+    """In this spawned worker, run and record the boot's full origin check."""
     src = os.environ.get("FORMAL_BOOT_SRC", "")
     try:
         import easyicu
         path = os.path.realpath(easyicu.__file__)
-        ok = bool(src) and path.startswith(src + os.sep) and bool(sys.flags.isolated) \
+        ok = bool(src) and os.path.commonpath((path, src)) == src and bool(sys.flags.isolated) \
             and bool(sys.flags.no_site) and bool(sys.flags.safe_path)
-        folder = os.environ["FORMAL_WORKER_ORIGIN_DIR"]
-        with open(os.path.join(folder, f"{os.getpid()}.json"), "w") as fh:
-            json.dump({"ok": ok, "easyicu": path, "src": src, "isolated": sys.flags.isolated,
-                       "no_site": sys.flags.no_site, "safe_path": sys.flags.safe_path,
-                       "sys_path": list(sys.path)}, fh)
+        from formal_boot import worker_origin
+        worker_origin(ok)
     except Exception:
-        os._exit(97)
-    if not ok:
         os._exit(97)
 
 

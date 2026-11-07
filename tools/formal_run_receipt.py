@@ -416,41 +416,60 @@ def formal_tool_scripts(sealed_sha: str, code: Mapping[str, Any], run_root: Path
     return records
 
 
+def _under_real(path: Any, root: str) -> bool:
+    """Absolute path containment by canonical components, including symlink targets."""
+    return isinstance(path, str) and os.path.isabs(path) and (
+        os.path.realpath(path) != os.path.realpath(root)) and (
+        os.path.commonpath((os.path.realpath(path), os.path.realpath(root))) == os.path.realpath(root))
+
+
 def _origin_ok(record: Any, sealed_sha: str, src: str, tools: str, script: str,
                root: str) -> bool:
     return (
         isinstance(record, dict) and record.get("complete") is True
         # Its temp dir was private to this run (never /tmp).
-        and isinstance(record.get("tmpdir"), str) and record["tmpdir"].startswith(root + os.sep)
+        and _under_real(record.get("tmpdir"), root)
         and record.get("mismatched") == [] and record.get("head") == sealed_sha
         and record.get("src") == src and record.get("tools") == tools
-        and isinstance(record.get("path"), str) and record["path"].startswith(src + os.sep)
-        and record.get("script") == os.path.join(tools, script)
+        and _under_real(record.get("path"), src)
+        and isinstance(record.get("script"), str) and os.path.isabs(record["script"])
+        and os.path.realpath(record["script"]) == os.path.realpath(os.path.join(tools, script))
     )
 
 
-def _worker_origins(db: str, folder: Path, src: str) -> Dict[str, Any]:
-    """Each spawned extraction worker's own origin record (the driver checks it
-    at worker start: easyicu from the clone's src, interpreter flags isolated
-    and no_site, else the worker exits 97). Spawn is the extractor's default
-    start method; a forked or in-process run leaves none (count 0)."""
+def _worker_origins(db: str, folder: Path, src: str, sealed_sha: str,
+                    tools: str, root: str) -> Dict[str, Any]:
+    """Bind each worker's completed full origin check by content digest.
+
+    Workers check their modules both before and after their target. A run
+    without spawned workers may have no records.
+    """
+    if not _under_real(str(folder), root):
+        raise ReceiptError("formal_import_origin_mismatch", "worker folder escapes the run",
+                           step=f"workers:{db}")
     records = sorted(folder.glob("*.json")) if folder.is_dir() else []
     bad = []
+    bound = []
     for path in records:
         try:
+            if not _under_real(str(path), root):
+                raise ValueError("worker artifact escapes the run")
             record = json.loads(path.read_text(encoding="utf-8"))
         except (OSError, ValueError):
             record = None
-        if not (isinstance(record, dict) and record.get("ok") is True
-                and record.get("src") == src and record.get("isolated")
+        if not (_origin_ok(record, sealed_sha, src, tools, EXTRACTION_DRIVER, root)
+                and record.get("ok") is True and record.get("isolated")
                 and record.get("no_site") and record.get("safe_path")
-                and os.path.realpath(str(record.get("easyicu", ""))).startswith(src + os.sep)):
+                and _under_real(record.get("easyicu"), src)):
             bad.append(path.name)
+        else:
+            bound.append({"path": str(path), "sha256": sha256_file(path),
+                          "pid": record.get("pid"), "modules": len(record.get("modules") or {})})
     if bad:
         raise ReceiptError("formal_import_origin_mismatch",
                            f"{db}: {len(bad)} extraction worker(s) started outside the boot's "
                            "origins", step=f"workers:{db}", workers=bad[:20])
-    return {"workers": len(records)}
+    return {"workers": len(records), "records": bound}
 
 
 def formal_import_origins(run_root: Path, sealed_sha: str, code: Mapping[str, Any],
@@ -481,6 +500,9 @@ def formal_import_origins(run_root: Path, sealed_sha: str, code: Mapping[str, An
                                      "inputs_bench_local.py") for step in INPUT_STEPS})
     out: Dict[str, Any] = {}
     for step, (path, script) in steps.items():
+        if not _under_real(str(path), run_real):
+            raise ReceiptError("formal_import_origin_mismatch", "origin artifact escapes the run",
+                               step=step, path=str(path))
         try:
             record = json.loads(path.read_text(encoding="utf-8"))
         except (OSError, ValueError) as exc:
@@ -496,7 +518,8 @@ def formal_import_origins(run_root: Path, sealed_sha: str, code: Mapping[str, An
         out[step] = {"path": str(path), "sha256": sha256_file(path),
                      "modules": len(record.get("modules") or {})}
     for db in databases:
-        out[f"workers:{db}"] = _worker_origins(db, root / db / WORKER_ORIGIN_DIR, src)
+        out[f"workers:{db}"] = _worker_origins(db, root / db / WORKER_ORIGIN_DIR, src,
+                                               sealed_sha, tools, run_real)
     live = sys.modules.get(BOOT_LIVE_MODULE)
     if live is None:
         raise ReceiptError("formal_boot_missing",

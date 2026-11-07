@@ -10,12 +10,12 @@
     {
       "name": "formal_boot.py",
       "path": "tools/formal/formal_boot.py",
-      "sha256": "9d4607c5c4242f9aa220e648a0f0a5af366fdd134fc2806709d88fa320a4e85d"
+      "sha256": "2fdbd089307903aa6bb07652e67c62f6a5d7fb5d96bc189eb2cee52d5001fb22"
     },
     {
       "name": "v2_bench_local.py",
       "path": "tools/formal/v2_bench_local.py",
-      "sha256": "304c9d06d19802048e39aca310d6cfdf73aec9d84bb9d5e716f38bd6df22ecb7"
+      "sha256": "71b5a5da60925d68155eeead18060154ad2a9e9af1f99915f9e359275699d877"
     },
     {
       "name": "inputs_bench_local.py",
@@ -30,7 +30,7 @@
     {
       "name": "formal_run_receipt.py",
       "path": "tools/formal_run_receipt.py",
-      "sha256": "28981aa05025ee6148f9f5a750d33e5012d76c76f768a0d958535d91e7706504"
+      "sha256": "1d8b946f8b163d068dfc7f62158a6c635a0ec88e29635581868c9852431d5a1d"
     },
     {
       "name": "formal_declared_absent.json",

@@ -103,6 +103,15 @@ records that the receipt checks along with memgate's record. The original
 `bench_local.py` stays byte-identical and leaves the formal tool set.
 Exceptions already converted to strings by extraction remain untyped.
 
+The delta43p/delta46p follow-up pins `tempfile.tempdir` and probes the
+private directory in the boot and every spawned worker (failure exits 97).
+Receipt artifacts and temporary paths use canonical component containment.
+The boot reads its tool allowlist from the sealed `FORMAL_TOOLS.json`;
+`__mp_main__` is accepted only as the exact name with a string source path
+matching the verified script, retaining the staged `.py` rule. Each worker
+runs the full module-origin check before and after its target, and the
+receipt binds the completed record's SHA-256, flags, HEAD and source roots.
+
 ## 2026-11-07 — readers refuse a bucket installation the seal tool has not published [lead-r13, branch `r13slpub`]
 
 **Rule.** The seal tool writes `.<install>.seal_PENDING` beside an installation
