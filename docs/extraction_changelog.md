@@ -16,6 +16,11 @@ deferred to it are compared against `2786ea872` there.
 
 ## lead-r13 — entries pending merge
 
+- [r13-sealtool8, delta58s B58-FARM-PASSTHROUGH; increment on `4a5c8acd3`]
+  Bind existing pass-through and rebuilt farm buckets in one planned receipt set, recording their
+  kind, source and verified contract. Recheck physical source paths, identities and recorded hashes
+  through publication and standalone acceptance; refuse unplanned bucket links and changed contracts.
+  Retain pass-through links during materialisation and create only the rebuilt links.
 - [r13-sealtool7, delta57s B57-CV-LINEAGE-ANCHOR; increment on `70c247850`]
   Resolve comparator lineage at the verified physical bucket installation. Check every farm bucket's
   relative source paths, size, mtime and recorded SHA256 before freeze, after rename and at acceptance;

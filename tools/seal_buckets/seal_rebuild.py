@@ -1415,13 +1415,112 @@ def compute_carevue_origin(farm: Path, flat: Path, bucket_root: Path) -> dict:
     return origin
 
 
-def check_farm_bucket_sources(root: Path, links: dict) -> None:
-    """Check lineage through every bound farm bucket using only the standard library.
+def farm_bucket_sources(bucket: Path) -> tuple[dict, dict]:
+    """Check one physical bucket's source contract using only the standard library.
 
     Relative source names belong to the physical bucket installation. Source symlinks there are
-    retained: their targets are bound by the dependency's link_set and checked against allowed_roots.
+    retained: their targets are snapshotted alongside the contract and checked against allowed_roots.
     The lineage path itself must stay relative and cannot traverse outside that installation.
     """
+    name = bucket.name
+    try:
+        physical = bucket.resolve(strict=True)
+        manifest = json.loads((physical / "_BUCKET_MANIFEST.json").read_text())
+    except (OSError, RuntimeError, ValueError) as exc:
+        raise SealError("bucket_derived_from_invalid", name) from exc
+    if not isinstance(manifest, dict):
+        raise SealError("bucket_derived_from_invalid", name)
+    source_links = {}
+    if "derived_from" not in manifest:
+        return manifest, source_links
+    derived = manifest["derived_from"]
+    files = derived.get("files") if isinstance(derived, dict) else None
+    if not isinstance(files, list) or not files:
+        raise SealError("bucket_derived_from_invalid", name)
+    for entry in files:
+        if (
+            not isinstance(entry, dict)
+            or not isinstance(entry.get("path"), str)
+            or "\0" in entry["path"]
+            or type(entry.get("size")) is not int
+            or entry["size"] < 0
+            or type(entry.get("mtime_ns")) is not int
+            or (
+                "sha256" in entry
+                and (
+                    not isinstance(entry["sha256"], str)
+                    or not re.fullmatch(r"[0-9a-f]{64}", entry["sha256"])
+                )
+            )
+        ):
+            raise SealError("bucket_derived_from_invalid", name)
+        relative = PurePosixPath(entry["path"])
+        if relative.is_absolute() or not relative.parts or ".." in relative.parts:
+            raise SealError("bucket_derived_from_invalid", name)
+        source = physical.parent.joinpath(*relative.parts)
+        try:
+            source_stat = source.stat()
+            if not stat.S_ISREG(source_stat.st_mode):
+                raise SealError("bucket_derived_from_source_missing", name)
+            if (
+                source_stat.st_size != entry["size"]
+                or source_stat.st_mtime_ns != entry["mtime_ns"]
+                or ("sha256" in entry and sha256_file(source) != entry["sha256"])
+            ):
+                raise SealError("bucket_derived_from_source_changed", name)
+            source_links[entry["path"]] = {
+                "resolved_target": str(source.resolve(strict=True)),
+                "raw_target": os.readlink(source) if source.is_symlink() else None,
+            }
+        except OSError as exc:
+            raise SealError("bucket_derived_from_source_missing", name) from exc
+    return manifest, source_links
+
+
+def farm_bucket_contract(bucket: Path, validator: Validator, allowed_roots) -> dict:
+    """Verify and snapshot a read-only bucket, including its bound physical sources."""
+    manifest, source_links = farm_bucket_sources(bucket)
+    for source in source_links.values():
+        if not inside(source["resolved_target"], allowed_roots):
+            raise SealError("farm_link_outside_allowed_roots", bucket.name)
+    physical = bucket.resolve(strict=True)
+    if writable_entries(physical):
+        raise SealError("farm_bucket_not_read_only", bucket.name)
+    check_bucket_contract(bucket, bucket.name.removesuffix("_bucket"), validator)
+    return {
+        "manifest_sha256": sha256_file(physical / "_BUCKET_MANIFEST.json"),
+        "derived_from": manifest.get("derived_from"),
+        "source_links": source_links,
+    }
+
+
+def check_farm_bucket_binding(bucket: Path, binding) -> None:
+    # Keep lineage diagnostics ahead of malformed receipt diagnostics, including for old string
+    # entries. A successful check always requires the full planned binding.
+    target = binding.get("target") if isinstance(binding, dict) else binding
+    if not bucket.is_symlink() or os.readlink(bucket) != target:
+        raise SealError("farm_link_changed", bucket.name)
+    manifest, source_links = farm_bucket_sources(bucket)
+    if (
+        not isinstance(binding, dict)
+        or binding.get("kind") not in {"rebuilt", "pass_through"}
+        or not isinstance(binding.get("contract"), dict)
+    ):
+        raise SealError("farm_bucket_binding_invalid", bucket.name)
+    physical = bucket.resolve(strict=True)
+    if str(physical) != binding.get("source") or (
+        sha256_file(physical / "_BUCKET_MANIFEST.json")
+        != binding["contract"].get("manifest_sha256")
+        or manifest.get("derived_from") != binding["contract"].get("derived_from")
+        or source_links != binding["contract"].get("source_links")
+    ):
+        raise SealError("farm_bucket_contract_changed", bucket.name)
+    if writable_entries(physical):
+        raise SealError("farm_bucket_not_read_only", bucket.name)
+
+
+def check_farm_bucket_sources(root: Path, links: dict) -> None:
+    """The exact planned set, shared by pre-freeze, frozen-tree and acceptance gates."""
     linked_buckets = {
         path.name
         for path in root.iterdir()
@@ -1429,56 +1528,8 @@ def check_farm_bucket_sources(root: Path, links: dict) -> None:
     }
     if linked_buckets != set(links):
         raise SealError("farm_bucket_links_changed", root.name)
-    for name, target in links.items():
-        bucket = root / name
-        if not bucket.is_symlink() or os.readlink(bucket) != target:
-            raise SealError("farm_link_changed", name)
-        try:
-            physical = bucket.resolve(strict=True)
-            manifest = json.loads((physical / "_BUCKET_MANIFEST.json").read_text())
-        except (OSError, RuntimeError, ValueError) as exc:
-            raise SealError("bucket_derived_from_invalid", name) from exc
-        if not isinstance(manifest, dict):
-            raise SealError("bucket_derived_from_invalid", name)
-        if "derived_from" not in manifest:
-            continue
-        derived = manifest["derived_from"]
-        files = derived.get("files") if isinstance(derived, dict) else None
-        if not isinstance(files, list) or not files:
-            raise SealError("bucket_derived_from_invalid", name)
-        for entry in files:
-            if (
-                not isinstance(entry, dict)
-                or not isinstance(entry.get("path"), str)
-                or "\0" in entry["path"]
-                or type(entry.get("size")) is not int
-                or entry["size"] < 0
-                or type(entry.get("mtime_ns")) is not int
-                or (
-                    "sha256" in entry
-                    and (
-                        not isinstance(entry["sha256"], str)
-                        or not re.fullmatch(r"[0-9a-f]{64}", entry["sha256"])
-                    )
-                )
-            ):
-                raise SealError("bucket_derived_from_invalid", name)
-            relative = PurePosixPath(entry["path"])
-            if relative.is_absolute() or not relative.parts or ".." in relative.parts:
-                raise SealError("bucket_derived_from_invalid", name)
-            source = physical.parent.joinpath(*relative.parts)
-            try:
-                source_stat = source.stat()
-                if not stat.S_ISREG(source_stat.st_mode):
-                    raise SealError("bucket_derived_from_source_missing", name)
-                if (
-                    source_stat.st_size != entry["size"]
-                    or source_stat.st_mtime_ns != entry["mtime_ns"]
-                    or ("sha256" in entry and sha256_file(source) != entry["sha256"])
-                ):
-                    raise SealError("bucket_derived_from_source_changed", name)
-            except OSError as exc:
-                raise SealError("bucket_derived_from_source_missing", name) from exc
+    for name, binding in links.items():
+        check_farm_bucket_binding(root / name, binding)
 
 
 def verify_final_set(
@@ -1506,6 +1557,8 @@ def verify_final_set(
                 raise SealError("farm_name_mismatch", root.name)
             check_cv_bucket_only(root)
         check_farm_bucket_sources(root, inner.get("bucket_links") or {})
+        for name in inner["bucket_links"]:
+            check_bucket_contract(root / name, name.removesuffix("_bucket"), validator)
         if allowed_roots is not None:
             check_links(root, allowed_roots)
         try:
@@ -2074,6 +2127,42 @@ def farm_entries(src_root: Path, skip_names: set[str], allowed):
         raise
 
 
+def plan_farm_bucket_links(
+    current: Path,
+    entries,
+    tables,
+    bucket_root: Path,
+    validator: Validator,
+    allowed_roots,
+) -> dict:
+    """Compute farm membership ONCE: existing pass-through links plus future rebuilt links.
+
+    This mapping goes unchanged into the farm receipt; assembly fills only the rebuilt contracts
+    once their physical buckets have passed publication. No later phase infers membership from tables.
+    """
+    links = {}
+    for kind, name, target in entries:
+        if not name.endswith("_bucket"):
+            continue
+        bucket = current / name
+        if kind != "link" or not bucket.is_symlink():
+            raise SealError("farm_link_changed", name)
+        links[name] = {
+            "kind": "pass_through",
+            "target": target,
+            "source": str(bucket.resolve(strict=True)),
+            "contract": farm_bucket_contract(bucket, validator, allowed_roots),
+        }
+    for table in tables:
+        name = f"{table}_bucket"
+        links[name] = {
+            "kind": "rebuilt",
+            "target": str(bucket_root / name),
+            "source": str((bucket_root / name).resolve()),
+        }
+    return links
+
+
 def plan_db(seal: Seal, db: str) -> dict:
     spec = seal.cfg["dbs"][db]
     cur = Path(spec["current_root"])
@@ -2121,6 +2210,9 @@ def plan_db(seal: Seal, db: str) -> dict:
                     raise SealError("farm_target_exists", str(p))
             plan["farm_entries"] = farm_entries(
                 cur, {f"{t}_bucket" for t in tables} | CV_FLAT_ENTRIES, allowed
+            )
+            plan["bucket_links"] = plan_farm_bucket_links(
+                cur, plan["farm_entries"], tables, target, seal.validator(), allowed
             )
             for kind, _, payload in plan["farm_entries"]:
                 if kind == "manifest":
@@ -2464,8 +2556,34 @@ def assemble_farm(seal: Seal, db: str, plan: dict, bucket_root: Path) -> None:
     spec = seal.cfg["dbs"][db]
     cur, farm = Path(spec["current_root"]), Path(plan["farm"])
     staging = seal.staging(farm)
-    links = {f"{t}_bucket": str(bucket_root / f"{t}_bucket") for t in plan["tables"]}
-    materialize(plan["farm_entries"], staging, cur, farm, links)
+    links = plan["bucket_links"]
+    # A source farm can acquire entries after planning. Never silently omit a new bucket link.
+    for path in cur.iterdir():
+        if (
+            path.name.endswith("_bucket")
+            and path.is_symlink()
+            and path.name not in links
+        ):
+            raise SealError("farm_bucket_links_changed", cur.name)
+    validator, allowed = seal.validator(), seal.cfg["allowed_roots"]
+    for name, binding in links.items():
+        if binding["kind"] == "pass_through":
+            check_farm_bucket_binding(cur / name, binding)
+        else:
+            binding["contract"] = farm_bucket_contract(
+                bucket_root / name, validator, allowed
+            )
+    materialize(
+        plan["farm_entries"],
+        staging,
+        cur,
+        farm,
+        {
+            name: binding["target"]
+            for name, binding in links.items()
+            if binding["kind"] == "rebuilt"
+        },
+    )
     manifest = staging / CONVERSION_MANIFEST
     if db == "cv":
         content = json.loads(manifest.read_text())
@@ -2488,8 +2606,8 @@ def assemble_farm(seal: Seal, db: str, plan: dict, bucket_root: Path) -> None:
     check_links(
         staging, seal.cfg["allowed_roots"], reason="farm_link_outside_allowed_roots"
     )
-    for name in links:
-        if not inside(staging / name, [seal.b6]):
+    for name, binding in links.items():
+        if binding["kind"] == "rebuilt" and not inside(staging / name, [seal.b6]):
             raise SealError("farm_link_outside_allowed_roots", name)
     names = sorted(os.listdir(staging))
     record = {
@@ -2510,7 +2628,6 @@ def assemble_farm(seal: Seal, db: str, plan: dict, bucket_root: Path) -> None:
         "verdict": "PASS",
     }
     # the farm carries its own in-root receipt; a bucket root's _COMPLETE never stands for the farm
-    validator, allowed = seal.validator(), seal.cfg["allowed_roots"]
     record["validator"] = validator.fingerprint
     record["tool"] = seal.tool()
     if db == "cv":
