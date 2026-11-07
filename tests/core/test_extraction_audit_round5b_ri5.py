@@ -704,6 +704,7 @@ def _partial_batch_source(tmp_path, database, layout):
         frame = pd.read_parquet(root / table)
         for path in (root / table).glob("*.parquet"):
             path.unlink()
+        (root / table).rmdir()
     path = root / (f"{table}_bucket/bucket_id=0/1.parquet" if layout == "bucket" else f"{table}/1.parquet")
     _write(frame, path)
     return _source(root, database)
