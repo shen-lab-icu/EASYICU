@@ -808,6 +808,7 @@ def adopt_bucket_cache(
         sort=[],
         row_group_target=122880,
         source_order=None,
+        derived_from=_derived_from(data_path, table, source, root),
     )
     temporary = root / (MANIFEST + ".tmp")
     try:

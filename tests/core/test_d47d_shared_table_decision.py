@@ -286,3 +286,21 @@ def test_configured_stem_directory_never_hides_a_nested_inventory_part(tmp_path)
     for part in (directory / "part.parquet", directory / "deep" / "extra.parquet"):
         pd.DataFrame({"patientid": IDS, "value": [60.0] * len(IDS)}).to_parquet(part, index=False)
     assert _refusals(tmp_path, "hirid") == ["table_scan_incomplete"] * 5
+
+
+def test_verified_legacy_adoption_records_the_flat_source_binding(tmp_path):
+    from scripts import build_itemid_bucket_cache as builder
+    from tests.core.test_bucket_storage_b6 import _legacy_aumc
+
+    source, bucket = _legacy_aumc(tmp_path)
+    expected = builder._derived_from(
+        tmp_path.resolve(), "numericitems", sl.bucket_source_files(tmp_path, "numericitems"), bucket,
+    )
+    legacy = json.loads((bucket / sl.MANIFEST).read_text())
+    legacy["derived_from"] = expected
+    (bucket / sl.MANIFEST).write_text(json.dumps(legacy))
+    adopted = builder.adopt_bucket_cache(tmp_path, threads=1, memory_limit="256MB")
+    assert adopted["derived_from"] == expected
+    files = source.resolve_target_files("numericitems")
+    assert files and all(file.is_relative_to(bucket) for file in files)
+    assert sl.flat_table_files(source, "numericitems") == sl.bucket_source_files(tmp_path, "numericitems")
