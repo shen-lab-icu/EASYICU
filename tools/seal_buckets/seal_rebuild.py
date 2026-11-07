@@ -2002,6 +2002,12 @@ def build_env(seal: Seal, db: str, code: Path) -> dict:
         "RAYON_NUM_THREADS": t,
         "OPENBLAS_NUM_THREADS": t,
     }
+    return confined_env(seal, env)
+
+
+def confined_env(seal: Seal, env: dict) -> dict:
+    """Add only the user-bus connection needed by systemd, then check build isolation."""
+    env = dict(env)
     if seal.cfg["confine"] == "systemd":
         for key in ("XDG_RUNTIME_DIR", "DBUS_SESSION_BUS_ADDRESS"):
             if os.environ.get(key):
@@ -2066,14 +2072,19 @@ def confined_run(
             *argv,
         ]
     with open(log, "w") as fh:
-        proc = subprocess.Popen(
-            argv,
-            cwd=cwd,
-            env=env,
-            stdout=fh,
-            stderr=subprocess.STDOUT,
-            start_new_session=True,
-        )
+        try:
+            proc = subprocess.Popen(
+                argv,
+                cwd=cwd,
+                env=env,
+                stdout=fh,
+                stderr=subprocess.STDOUT,
+                start_new_session=True,
+            )
+        except OSError as exc:
+            if seal.cfg["confine"] == "systemd":
+                raise SealError("confine_launch_failed", unit) from exc
+            raise
         try:
             rc = proc.wait(timeout=timeout_s)
         except subprocess.TimeoutExpired:
@@ -2097,6 +2108,10 @@ def confined_run(
     )
     if m:
         peak = int(m.group(1))
+    elif seal.cfg["confine"] == "systemd":
+        # time wraps every scoped workload, even one returning a nonzero verdict. Without its
+        # resource block the launcher/taskset never reached the workload; do not call this a diff.
+        raise SealError("confine_launch_failed", unit)
     return rc, peak
 
 
@@ -2727,11 +2742,14 @@ def compare_db(seal: Seal, db: str) -> None:
             fb = (receipts[1]["tables"].get(t) or {}).get("float_fidelity")
             if fa != fb:
                 raise SealError("compare_float_profile_differs", t)
-            env = {
-                "PATH": "/usr/local/bin:/usr/bin:/bin",
-                "LANG": "C.UTF-8",
-                "PYTHONDONTWRITEBYTECODE": "1",
-            }
+            env = confined_env(
+                seal,
+                {
+                    "PATH": "/usr/local/bin:/usr/bin:/bin",
+                    "LANG": "C.UTF-8",
+                    "PYTHONDONTWRITEBYTECODE": "1",
+                },
+            )
             rc, _ = confined_run(
                 seal,
                 db,
