@@ -81,10 +81,13 @@ def test_an_unreadable_manifest_is_not_treated_as_no_manifest(tmp_path):
     if os.name == "nt":
         pytest.skip("symlink loops need POSIX")
     _sic_cases(tmp_path)
+    # Keep exercising the read-time owner's diagnostic. A new datasource
+    # now refuses an unresolvable closure before this owner can run.
+    source = _source("sic", tmp_path)
     manifest = tmp_path / "conversion_manifest.json"
     manifest.symlink_to(manifest)  # stat raises ELOOP, not FileNotFoundError
     with pytest.raises(TableScanError) as caught:
-        resolve_table_files(_source("sic", tmp_path), "cases")
+        resolve_table_files(source, "cases")
     assert caught.value.reason == "conversion_manifest_unreadable"
 
 

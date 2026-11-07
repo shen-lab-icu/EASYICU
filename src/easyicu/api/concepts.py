@@ -741,6 +741,12 @@ def _get_global_loader(
     """获取或创建全局加载器实例（减少重复初始化）"""
     global _global_loader, _loader_config
 
+    from ..storage_seal_publication import assert_roots_published
+
+    # A cached loader starts another API request without a new datasource.
+    if data_path is not None:
+        assert_roots_published([data_path])
+
     if dict_path is None:
         dict_key = None
     elif isinstance(dict_path, (list, tuple)):
@@ -783,6 +789,18 @@ def _get_global_loader(
                 **kwargs,
             )
             _loader_cache[current_config] = loader
+        else:
+            from ..storage_seal_publication import configured_publication_roots
+
+            # Reused default-path loaders must gate their actual bound roots,
+            # including external registrations, before this request reads.
+            source = getattr(loader, "datasource", None)
+            if source is not None:
+                assert_roots_published(
+                    configured_publication_roots(
+                        source.config, source.base_path, source._table_sources
+                    )
+                )
         _loader_cache.move_to_end(current_config)
         while len(_loader_cache) > _LOADER_CACHE_MAX:
             _loader_cache.popitem(last=False)

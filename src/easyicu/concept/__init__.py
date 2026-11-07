@@ -2239,7 +2239,10 @@ class ConceptResolver:
                                 len(covered_names),
                                 len(names),
                             )
-                except (DuckDBQueryInterrupted, UndeclaredUnitError, SourceBoundsAuditError):
+                except (
+                    DuckDBQueryInterrupted, StorageIntegrityError,
+                    UndeclaredUnitError, SourceBoundsAuditError,
+                ):
                     # A declared-unit refusal (e.g. an invalid FiO2 unit)
                     # keeps its type and reason, as on the single-concept owner.
                     raise

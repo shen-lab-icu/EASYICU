@@ -70,6 +70,9 @@ def get_all_patient_ids_impl(
     (``identifier_order`` for the sorted sample it takes).  It writes nothing
     when no ID could be sampled.  A cap keeps the first IDs in that order.
     """
+    from ..storage_seal_publication import assert_roots_published
+
+    assert_roots_published([data_path])
     resolved_database = database or detect_database_type_fn(data_path)
     id_col = get_id_col_for_database(
         resolved_database,

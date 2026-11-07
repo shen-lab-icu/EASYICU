@@ -3221,7 +3221,17 @@ def _stream_ledger_identity(module_name, concepts, load_kwargs, id_col, ids_dige
     Only the execution parameters (batch size, workers) may differ.
     """
 
+    from ..storage_seal_publication import assert_roots_published
+
     database = str(load_kwargs.get("database") or "")
+    if load_kwargs.get("data_path") is not None:
+        from ..datasource import storage_source
+
+        closure_sha256 = storage_source(
+            database, load_kwargs["data_path"]
+        ).seal_publication_closure["sha256"]
+    else:
+        closure_sha256 = assert_roots_published([]).sha256
     return {
         "schema": _STREAM_LEDGER_SCHEMA,
         "module": str(module_name),
@@ -3229,6 +3239,7 @@ def _stream_ledger_identity(module_name, concepts, load_kwargs, id_col, ids_dige
         "database": database,
         "id_col": str(id_col),
         "ids_sha256": ids_digest,
+        "seal_publication_closure_sha256": closure_sha256,
         "load_params_sha256": _stream_load_params_sha256(load_kwargs),
         "source_identity_sha256": _stream_source_identity_sha256(load_kwargs.get("data_path")),
         "code_identity_sha256": _stream_code_identity_sha256(database),
@@ -3310,6 +3321,14 @@ def _stream_module_batches_to_parquet(
         ledger = json.loads(ledger_path.read_text(encoding="utf-8"))
         if not isinstance(ledger, dict):
             raise ValueError(f"{module_name}: stream ledger is not a ledger ({ledger_path.name})")
+        closure_key = "seal_publication_closure_sha256"
+        if ledger.get(closure_key) != identity[closure_key]:
+            from ..storage_seal_publication import SealPublicationError, UNACCEPTED
+
+            raise SealPublicationError(
+                UNACCEPTED, Path(load_kwargs.get("data_path") or "."),
+                "resume publication closure differs or was not recorded at start",
+            )
         changed = sorted(k for k in identity if ledger.get(k) != identity[k])
         if changed:
             # A different source, code, dictionary, load parameter or request:
@@ -8410,7 +8429,10 @@ def _publish_native_export_v2(
         "resource_budget_mb": result.get("resource_budget_mb"),
         "resource_execution_limits": result.get("resource_execution_limits"),
         "time_window_authority": time_window_authority,
-        "runtime_provenance": _native_export_runtime_provenance(source_name=normalized_database),
+        "runtime_provenance": {
+            **_native_export_runtime_provenance(source_name=normalized_database),
+            "seal_publication_closure": result.get("seal_publication_closure"),
+        },
         "unavailable_modules": unavailable_modules,
         "unavailable_concepts": unavailable_concepts,
         "concept_selection": {
@@ -8698,6 +8720,14 @@ def extract_database(
     from ..storage_layout import SCAN_FALLBACK_LOG_ENV, read_scan_fallback_log
 
     t_start = time.time()
+    # The primary gate precedes cohort discovery, workers and ledger acceptance.
+    if data_path is None:
+        data_path = _get_default_db_path(database)
+        if data_path is None:
+            data_path = get_default_data_path(database)
+    from ..datasource import storage_source
+
+    publication_closure = storage_source(database, data_path).seal_publication_closure
     # Storage fallbacks (a corrupt bucket cache bypassed for its flat source,
     # an unmanifested or CSV read) from this process and its workers become
     # receipt facts: result["storage_fallbacks"] and the publication record.
@@ -8707,12 +8737,6 @@ def extract_database(
     os.close(_fallback_handle)
     previous_fallback_log = os.environ.get(SCAN_FALLBACK_LOG_ENV)
     os.environ[SCAN_FALLBACK_LOG_ENV] = scan_fallback_log
-
-    # 确定数据路径
-    if data_path is None:
-        data_path = _get_default_db_path(database)
-        if data_path is None:
-            data_path = get_default_data_path()
 
     # Resolve the requested module scope before memory planning.  The old
     # database-only guard could not distinguish a 1.66-GiB blood_gas request
@@ -8886,6 +8910,7 @@ def extract_database(
 
     result = {
         "database": database,
+        "seal_publication_closure": publication_closure,
         "num_patients": num_patients,
         "batch_size": batch_size,
         "adaptive_stream_batches": _adaptive_stream_batches,
@@ -9742,6 +9767,26 @@ def extract_all_databases(
     merged_paths = _build_default_db_paths()
     if data_paths:
         merged_paths.update(data_paths)
+
+    # One multi-source run must pass every root before its first source reads.
+    from ..resources import load_data_sources
+    from ..storage_seal_publication import (
+        assert_roots_published,
+        configured_publication_roots,
+    )
+
+    configs = load_data_sources()
+    roots = []
+    for db in databases:
+        path = merged_paths.get(db)
+        if path is not None:
+            config = configs.get(db)
+            roots.extend(
+                configured_publication_roots(config, path)
+                if config is not None
+                else [path]
+            )
+    assert_roots_published(roots)
 
     t_start = time.time()
     results = {}

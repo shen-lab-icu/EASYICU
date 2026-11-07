@@ -1599,6 +1599,9 @@ def _database_for_patient_filter(database: str) -> str:
 
 
 def _find_table_file(root: Path, table_names: List[str]) -> Optional[Path]:
+    from easyicu.storage_seal_publication import assert_roots_published
+
+    assert_roots_published([root])
     suffixes = (".parquet", ".csv", ".csv.gz")
     for table in table_names:
         for suffix in suffixes:
@@ -1954,6 +1957,9 @@ def _resolve_export_cohort(
     api: Any,
     progress: Optional[Callable[[str, Dict[str, Any]], None]] = None,
 ) -> Dict[str, Any]:
+    from easyicu.storage_seal_publication import assert_roots_published
+
+    assert_roots_published([data_path])
     normalized = _normalize_export_cohort(cohort)
     sepsis_load_kwargs = _sepsis_runtime_kwargs(normalized.get("sepsis_definition"))
     max_n = _coerce_int(max_patients, 0, 0, None) if max_patients is not None else 0
