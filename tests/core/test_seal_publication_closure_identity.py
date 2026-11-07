@@ -1,4 +1,4 @@
-"""Delta60s: bind resume to files/edges and share provenance resolution.
+"""Delta60s/61s: bind resume to source files/edges in every anchor context.
 
 Synthetic sentinel files only; no Parquet decoder or extraction is needed.
 Each regression includes its healthy control before exercising the defect.
@@ -235,3 +235,252 @@ def test_arbitrary_provenance_role_follows_chain_without_opening_derived_files(
         assert accepted_opens == [metadata_identity]
     finally:
         active = False
+
+
+def test_hardlinked_bucket_metadata_walks_each_anchor_but_parses_once(tmp_path, monkeypatch):
+    import pyarrow as pa
+    import pyarrow.parquet as pq
+    from types import SimpleNamespace
+
+    import easyicu.resources as resources
+    from tests.support.bucket_storage import write_contract
+
+    buckets = [tmp_path / name / "sample_bucket" for name in ("a", "b")]
+    sources = []
+    for bucket in buckets:
+        bucket.mkdir(parents=True)
+        source = bucket.parent / "source.parquet"
+        source.write_bytes(b"synthetic-source")
+        sources.append(source)
+        part = bucket / "bucket_id=0/part.parquet"
+        part.parent.mkdir()
+        pq.write_table(pa.table({"synthetic_key": pa.array(range(16), type=pa.int64())}), part)
+        write_contract(bucket, key="synthetic_key")
+    info = sources[0].stat()
+    remote = tmp_path / "remote"
+    remote.mkdir()
+    target = remote / "source.parquet"
+    target.write_bytes(sources[1].read_bytes())
+    os.utime(target, ns=(info.st_atime_ns, info.st_mtime_ns))
+    sources[1].unlink()
+    sources[1].symlink_to(target)
+    first, second = [bucket / layout.MANIFEST for bucket in buckets]
+    payload = json.loads(first.read_text())
+    payload["derived_from"] = {"table": "sample", "files": [{
+        "path": "source.parquet", "size": info.st_size, "mtime_ns": info.st_mtime_ns,
+        "sha256": hashlib.sha256(sources[0].read_bytes()).hexdigest(),
+    }]}
+    first.write_text(json.dumps(payload))
+    second.unlink()
+    second.hardlink_to(first)
+    for bucket in buckets:
+        layout.read_bucket_contract(bucket)  # Complete, healthy storage contracts.
+
+    view = tmp_path / "view"
+    view.mkdir()
+    for name, bucket in zip(("admissions", "labevents"), buckets):
+        (view / f"{name}.parquet").symlink_to(bucket / "bucket_id=0/part.parquet")
+    driver = _driver()
+    monkeypatch.setattr(resources, "load_data_sources", lambda: {"miiv": SimpleNamespace(tables={})})
+    read_text = Path.read_text
+    reads = []
+
+    def spy(path, *args, **kwargs):
+        if path.stat().st_ino == first.stat().st_ino:
+            reads.append(path)
+        return read_text(path, *args, **kwargs)
+
+    monkeypatch.setattr(Path, "read_text", spy)
+    resolver = Mock(wraps=layout.resolve_derived_from_source)
+    monkeypatch.setattr(layout, "resolve_derived_from_source", resolver)
+    driver._source_publication_closure({"miiv": str(view)})
+    assert len(reads) == 1
+    anchors = {call.kwargs["bucket_root"] for call in resolver.call_args_list}
+    reads.clear()
+    (tmp_path / f".remote{publication.PENDING_SUFFIX}").write_text("{}")
+    with pytest.raises(publication.SealPublicationError) as caught:
+        driver._source_publication_closure({"miiv": str(view)})
+    assert caught.value.reason == publication.UNPUBLISHED
+    assert caught.value.install == remote
+    assert len(reads) == 1
+    assert anchors == set(buckets)
+
+
+def _shared_provenance(tmp_path):
+    shared = tmp_path / "shared"
+    shared.mkdir()
+    bound = shared / "bound.parquet"
+    bound.write_bytes(b"synthetic-bound-source")
+    metadata = _json(shared / "provenance.json", derived_from={
+        "files": [{"path": "shared/bound.parquet"}],
+    })
+    root = tmp_path / "install"
+    _json(root / layout.CONVERSION_MANIFEST, derived_from=_binding(metadata))
+    (root / "sample.parquet").write_bytes(b"synthetic-input")
+    layout.validate_conversion_manifest(root)
+    return root, shared, bound
+
+
+@pytest.mark.parametrize("suffix,reason", [
+    (publication.PENDING_SUFFIX, publication.UNPUBLISHED),
+    (publication.REFUSAL_SUFFIX, publication.REFUSED),
+])
+def test_metadata_parent_is_marker_only_and_bound_files_remain_in_digest(tmp_path, suffix, reason):
+    root, shared, bound = _shared_provenance(tmp_path)
+    before = publication.assert_roots_published([root])
+    (shared / "unrelated.txt").write_text("unrelated new file")
+    assert publication.assert_roots_published([root]) == before
+    poison = _json(tmp_path / "poison/conversion_manifest.json")
+    (tmp_path / f".poison{publication.PENDING_SUFFIX}").write_text("{}")
+    _json(shared / layout.CONVERSION_MANIFEST, derived_from=_binding(poison))
+    assert publication.assert_roots_published([root]) == before
+    info = bound.stat()
+    replacement = shared / "replacement"
+    replacement.write_bytes(bound.read_bytes())
+    os.utime(replacement, ns=(info.st_atime_ns, info.st_mtime_ns))
+    replacement.replace(bound)
+    assert bound.stat().st_ino != info.st_ino
+    assert publication.assert_roots_published([root]).sha256 != before.sha256
+    (shared.parent / f".{shared.name}{suffix}").write_text("{}")
+    with pytest.raises(publication.SealPublicationError) as caught:
+        publication.assert_roots_published([root])
+    assert caught.value.reason == reason
+    assert caught.value.install == shared
+
+
+@pytest.mark.parametrize("placement", ["external", "under_input"])
+@pytest.mark.parametrize("change", ["normal_resume", "bound_inode", "pending", "refused"])
+def test_stream_resume_excludes_configured_outputs_but_binds_sources(
+    tmp_path, monkeypatch, placement, change,
+):
+    import logging
+
+    import easyicu
+    import pandas as pd
+    from easyicu.api import extraction as api
+
+    root, shared, bound = _shared_provenance(tmp_path)
+    container = shared if placement == "external" else root
+    out = container / "configured_destination"
+    out.mkdir()
+    # A configured log outside output_dir also needs exclusion when a root
+    # scan reaches it. No filename convention is used by the digest owner.
+    handler = logging.FileHandler(container / "configured_trace.txt")
+    api.logger.addHandler(handler)
+    calls = []
+    interrupt = True
+
+    def load(**kwargs):
+        ids = list(kwargs["patient_ids"]["stay_id"])
+        calls.append(ids)
+        if interrupt and len(calls) == 2:
+            raise MemoryError("synthetic interruption")
+        return pd.DataFrame({"stay_id": ids, "charttime": [0.0] * len(ids),
+                             "test_signal": [1.5] * len(ids)})
+
+    monkeypatch.setattr(easyicu, "load_concepts", load)
+    kwargs = {"database": "miiv", "data_path": str(root), "merge": True,
+              "concepts": ["test_signal"]}
+    cohort = {"stay_id": list(range(1, 11))}
+
+    def run():
+        return api._stream_module_batches_to_parquet(
+            "test_module", ["test_signal"], kwargs, cohort, 4, str(out),
+        )
+
+    try:
+        with pytest.raises(MemoryError):
+            run()
+        ledger_path = out / ".test_module.stream_ledger.json"
+        ledger = json.loads(ledger_path.read_text())
+        handler.emit(logging.LogRecord(api.__name__, logging.INFO, "", 0,
+                                       "synthetic run progress", (), None))
+        # All normal order/part/ledger and log writes leave both source
+        # identities unchanged before any negative control is introduced.
+        current = api._stream_ledger_identity(
+            "test_module", ["test_signal"], kwargs, "stay_id",
+            api._stream_ids_digest("stay_id", cohort["stay_id"]),
+            **({"output_paths": api._extraction_output_paths(out)}
+               if hasattr(api, "_extraction_output_paths") else {}),
+        )
+        assert current == {key: ledger[key] for key in current}
+        if change == "bound_inode":
+            info = bound.stat()
+            replacement = shared / "replacement"
+            replacement.write_bytes(bound.read_bytes())
+            os.utime(replacement, ns=(info.st_atime_ns, info.st_mtime_ns))
+            replacement.replace(bound)
+            assert bound.stat().st_ino != info.st_ino
+        elif change in {"pending", "refused"}:
+            suffix = (publication.PENDING_SUFFIX if change == "pending"
+                      else publication.REFUSAL_SUFFIX)
+            (shared.parent / f".{shared.name}{suffix}").write_text("{}")
+        calls.clear()
+        interrupt = False
+        if change == "normal_resume":
+            result = run()
+            assert [value for batch in calls for value in batch] == cohort["stay_id"][4:]
+            assert result["stream_resume_events"][0]["kind"] == "resume_after_worker_retry"
+            assert pd.read_parquet(result["path"])["stay_id"].tolist() == cohort["stay_id"]
+        else:
+            before = {path.name: path.read_bytes() for path in out.iterdir()}
+            with pytest.raises(publication.SealPublicationError) as caught:
+                run()
+            assert caught.value.reason == {
+                "bound_inode": publication.UNACCEPTED, "pending": publication.UNPUBLISHED,
+                "refused": publication.REFUSED,
+            }[change]
+            assert not calls
+            assert {path.name: path.read_bytes() for path in out.iterdir()} == before
+    finally:
+        api.logger.removeHandler(handler)
+        handler.close()
+
+
+@pytest.mark.parametrize("placement", ["external", "under_input"])
+def test_launcher_resume_ignores_its_configured_run_directory(tmp_path, monkeypatch, placement):
+    driver = _driver()
+    root, shared, _ = _shared_provenance(tmp_path)
+    out = (shared if placement == "external" else root) / "configured_run"
+    args = driver._parse_args([
+        "--output-root", str(out), "--databases", "miiv", "--data-path", f"miiv={root}",
+    ])
+    identity = {"repository_root": str(driver.REPOSITORY_ROOT), "commit": "a" * 40}
+    monkeypatch.setattr(driver, "_git_identity", lambda: identity)
+    monkeypatch.setattr(driver, "_require_clean_identity", lambda _: None)
+    monkeypatch.setattr(driver, "_load_psutil", lambda _: (None, {"release_sealable": True}))
+    monkeypatch.setattr(driver, "_detect_effective_memory", lambda _: {})
+
+    def completed(**kwargs):
+        kwargs["manifest"]["sources"]["miiv"] = {"status": "complete"}
+        return []
+
+    monkeypatch.setattr(driver, "_pending_databases", completed)
+    original = driver.run(args)
+    (out / "configured_trace.txt").write_text("normal run progress")
+    resumed = driver._load_resume_manifest(
+        run_root=out, databases=["miiv"], data_paths={"miiv": str(root)},
+        identity=identity, resource_policy=args.resource_policy,
+    )
+    assert resumed["runtime_provenance"] == original["runtime_provenance"]
+
+
+def test_stream_refuses_an_explicit_source_binding_inside_its_output(tmp_path, monkeypatch):
+    import easyicu
+    from easyicu.api import extraction as api
+
+    out = tmp_path / "configured_output"
+    source = _json(out / "source.json")
+    root = tmp_path / "install"
+    _json(root / layout.CONVERSION_MANIFEST, derived_from=_binding(source))
+    loader = Mock(side_effect=AssertionError("input/output overlap reached a data read"))
+    monkeypatch.setattr(easyicu, "load_concepts", loader)
+    with pytest.raises(publication.SealPublicationError) as caught:
+        api._stream_module_batches_to_parquet(
+            "test_module", ["test_signal"],
+            {"database": "miiv", "data_path": str(root), "concepts": ["test_signal"]},
+            {"stay_id": list(range(1, 11))}, 4, str(out),
+        )
+    assert caught.value.reason == publication.UNACCEPTED
+    assert "input overlaps run output" in str(caught.value)
+    loader.assert_not_called()

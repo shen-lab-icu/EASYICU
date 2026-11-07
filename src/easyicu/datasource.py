@@ -612,6 +612,7 @@ class ICUDataSource:
         default_format: str = "parquet",
         enable_cache: bool = True,
         format_priority: Optional[List[str]] = None,
+        publication_excluded_paths: Sequence[str | Path] = (),
     ) -> None:
         """初始化数据源
         
@@ -628,8 +629,10 @@ class ICUDataSource:
         self.config = config
         self.base_path = Path(base_path) if base_path else None
         self._table_sources: MutableMapping[str, Any] = dict(table_sources or {})
+        self._publication_excluded_paths = tuple(publication_excluded_paths)
         self.seal_publication_closure = assert_roots_published(
-            configured_publication_roots(config, self.base_path, self._table_sources)
+            configured_publication_roots(config, self.base_path, self._table_sources),
+            excluded_paths=self._publication_excluded_paths,
         ).to_dict()
         self.default_format = default_format
         self.registry = registry
@@ -657,7 +660,8 @@ class ICUDataSource:
         self.seal_publication_closure = assert_roots_published(
             configured_publication_roots(
                 self.config, self.base_path, {**self._table_sources, table: source}
-            )
+            ),
+            excluded_paths=self._publication_excluded_paths,
         ).to_dict()
         self._table_sources[table] = source
 
@@ -5077,7 +5081,7 @@ def load_wide_table_aggregated(
     return df
 
 
-def storage_source(database: str, base_path) -> "ICUDataSource":
+def storage_source(database: str, base_path, *, publication_excluded_paths=()) -> "ICUDataSource":
     """A data source for ``database`` at ``base_path``, to resolve validated files.
 
     Readers outside the table loader (outcome, cohort and filter readers)
@@ -5088,7 +5092,10 @@ def storage_source(database: str, base_path) -> "ICUDataSource":
     config = load_data_sources().get(database)
     if config is None:
         raise ValueError(f"Unknown database: {database}")
-    return ICUDataSource(config=config, base_path=Path(base_path))
+    return ICUDataSource(
+        config=config, base_path=Path(base_path),
+        publication_excluded_paths=publication_excluded_paths,
+    )
 
 
 # --- Public cross-package alias (thin wrapper, no logic change) ---

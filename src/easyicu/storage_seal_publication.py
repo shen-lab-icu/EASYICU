@@ -121,27 +121,43 @@ def configured_publication_roots(
     return roots
 
 
-def assert_roots_published(roots) -> SealPublicationClosure:
+def assert_roots_published(roots, *, excluded_paths=()) -> SealPublicationClosure:
     """Gate the full install closure before a run, datasource or resume reads.
 
     Resolve symlinks component by component, including intermediate farms and
     ancestors of file targets. Walk all subdirectories, even unused tables.
     Only directory entries, lstat/readlink and publication/provenance JSON are
     read. No table file, schema, receipt hash or data hash is opened here.
-    Directory realpaths deduplicate cycles. Missing legacy paths retain their
-    existing read-time handling; an unreadable closure fails closed.
+    Metadata/source file targets contribute themselves and ancestor marker
+    checks, never a recursive scan of their containing directories. Run-owned
+    output paths are omitted from scans; an explicit input binding into those
+    paths fails closed. Missing legacy paths retain their read-time handling.
     """
     metadata_names = (MANIFEST, "conversion_manifest.json", IN_ROOT_RECEIPT)
     configured = {Path(p) for p in roots if p is not None}
     configured = {p if p.is_absolute() else Path.cwd() / p for p in configured}
     # Role travels with the edge: a derived_from.path target is metadata even
     # when its basename is arbitrary; derived_from.files is always path-only.
-    pending = deque((p, p.name in metadata_names) for p in sorted(configured))
+    pending = deque(
+        (p, p.name in metadata_names, p.name not in metadata_names)
+        for p in sorted(configured)
+    )
+    excluded = {
+        candidate
+        for raw in excluded_paths
+        for candidate in (Path(raw).absolute(), Path(raw).resolve())
+    }
+
+    def is_output(path: Path) -> bool:
+        return any(path.is_relative_to(root) for root in excluded)
+
     checked: set[Path] = set()
     installs: set[Path] = set()
     visited: set[Path] = set()
-    metadata: set[tuple[int, int]] = set()
-    metadata_directories: set[Path] = set()
+    metadata: dict[tuple[int, int], Any] = {}
+    metadata_contexts: set[tuple[tuple[int, int], Path]] = set()
+    metadata_directories: dict[Path, bool] = {}
+    expanded_installs: set[Path] = set()
     links: set[tuple[str, str, str]] = set()
     files: dict[Path, tuple[int, int, int, int]] = {}
     provenance: set[tuple[str, str, str, str]] = set()
@@ -164,11 +180,13 @@ def assert_roots_published(roots) -> SealPublicationClosure:
                 raise SealPublicationError(reason, path)
         checked.add(path)
 
-    def resolve(path: Path) -> Path | None:
+    def resolve(path: Path, walk_install: bool) -> Path | None:
         # Do not normpath before following links: link/.. refers to the
         # target's parent, and collapsing it would skip intermediate farms.
         if not path.is_absolute():
             path = Path.cwd() / path
+        if is_output(path):
+            raise SealPublicationError(UNACCEPTED, path, "input overlaps run output")
         parts = deque(path.parts[1:])
         current = Path(path.anchor)
         chain: set[tuple[Path, tuple[str, ...]]] = set()
@@ -176,14 +194,22 @@ def assert_roots_published(roots) -> SealPublicationClosure:
         while parts:
             check(current)
             installs.add(current)
-            # A linked table may enter an install below its root. Its parent
-            # receipts can bind further installs even outside this subtree.
-            if current not in metadata_directories:
-                metadata_directories.add(current)
-                for name in metadata_names:
-                    candidate_metadata = current / name
-                    if os.path.lexists(candidate_metadata):
-                        pending.append((candidate_metadata, True))
+            if is_output(current):
+                raise SealPublicationError(UNACCEPTED, current, "input overlaps run output")
+            if walk_install:
+                # A configured/data-linked subroot also walks its owning
+                # install, including sibling subroots and parent receipts.
+                # Provenance files only check ancestor publication markers.
+                if current not in metadata_directories:
+                    metadata_directories[current] = False
+                    for name in metadata_names:
+                        candidate_metadata = current / name
+                        if os.path.lexists(candidate_metadata):
+                            metadata_directories[current] = True
+                            pending.append((candidate_metadata, True, False))
+                if metadata_directories[current] and current not in expanded_installs:
+                    expanded_installs.add(current)
+                    pending.append((current, False, True))
             part = parts.popleft()
             if part == "..":
                 current = current.parent
@@ -215,30 +241,39 @@ def assert_roots_published(roots) -> SealPublicationClosure:
             else:
                 current = candidate
                 if stat.S_ISREG(info.st_mode):
+                    if is_output(current):
+                        raise SealPublicationError(
+                            UNACCEPTED, current, "input overlaps run output"
+                        )
                     record_file(current, info)
+        if is_output(current):
+            raise SealPublicationError(UNACCEPTED, current, "input overlaps run output")
         if current.is_dir():
             check(current)
             installs.add(current)
         return current
 
-    def enqueue_metadata(path: Path) -> None:
+    def enqueue_metadata(path: Path, bucket_root: Path) -> None:
         info = path.stat()
         identity = (info.st_dev, info.st_ino)
-        if identity in metadata:
-            return
-        metadata.add(identity)
         record_file(path, info)
-        try:
-            payload = json.loads(path.read_text(encoding="utf-8"))
-        except (ValueError, UnicodeError):
-            # Layout validation remains the read owner's responsibility.
+        context = (identity, bucket_root)
+        if context in metadata_contexts:
             return
+        metadata_contexts.add(context)
+        if identity not in metadata:
+            try:
+                metadata[identity] = json.loads(path.read_text(encoding="utf-8"))
+            except (ValueError, UnicodeError):
+                # Layout validation remains the read owner's responsibility.
+                metadata[identity] = None
+        payload = metadata[identity]
         if not isinstance(payload, dict):
             return
 
         def enqueue(raw: str, target: Path, role: str, *, is_metadata: bool) -> None:
-            provenance.add((str(path), role, raw, str(target)))
-            pending.append((target, is_metadata))
+            provenance.add((str(bucket_root / path.name), role, raw, str(target)))
+            pending.append((target, is_metadata, role.startswith("bucket_links.")))
 
         derived = payload.get("derived_from")
         if isinstance(derived, dict):
@@ -257,7 +292,7 @@ def assert_roots_published(roots) -> SealPublicationClosure:
                     enqueue(
                         entry["path"],
                         storage_layout.resolve_derived_from_source(
-                            entry["path"], bucket_root=path.parent,
+                            entry["path"], bucket_root=bucket_root,
                         ),
                         f"derived_from.files[{index}]", is_metadata=False,
                     )
@@ -271,16 +306,16 @@ def assert_roots_published(roots) -> SealPublicationClosure:
     path = Path(".")
     try:
         while pending:
-            requested, is_metadata = pending.popleft()
-            path = resolve(requested)
+            requested, is_metadata, walk_install = pending.popleft()
+            path = resolve(requested, walk_install)
             if path is None:
                 continue
             if not path.is_dir():
-                # External file targets bring their containing install into
-                # the closure, including its other links and metadata.
-                pending.append((path.parent, False))
                 if is_metadata:
-                    enqueue_metadata(path)
+                    anchor = requested.parent
+                    if not anchor.is_absolute():
+                        anchor = Path.cwd() / anchor
+                    enqueue_metadata(path, anchor)
                 continue
             if path in visited:
                 continue
@@ -288,14 +323,17 @@ def assert_roots_published(roots) -> SealPublicationClosure:
             with os.scandir(path) as entries:
                 for entry in sorted(entries, key=lambda entry: entry.name):
                     child = path / entry.name
+                    if is_output(child):
+                        continue
                     if entry.is_symlink() or entry.is_dir(follow_symlinks=False):
-                        pending.append((child, entry.name in metadata_names))
+                        pending.append((child, entry.name in metadata_names,
+                                        entry.name not in metadata_names))
                     else:
                         info = entry.stat(follow_symlinks=False)
                         if stat.S_ISREG(info.st_mode):
                             record_file(child, info)
                             if entry.name in metadata_names:
-                                pending.append((child, True))
+                                pending.append((child, True, False))
     except OSError as exc:
         raise SealPublicationError(
             UNACCEPTED, path or Path("."), "cannot inspect publication closure"
@@ -303,7 +341,7 @@ def assert_roots_published(roots) -> SealPublicationClosure:
     # Marker state is explicit in the canonical identity. A marked closure
     # raises above and can never become an accepted start identity.
     records = {
-        "schema_version": "easyicu.seal_publication_closure/2",
+        "schema_version": "easyicu.seal_publication_closure/3",
         "roots": [str(p) for p in sorted(configured)],
         "installs": [[str(p), False, False] for p in sorted(installs)],
         "links": sorted(links),

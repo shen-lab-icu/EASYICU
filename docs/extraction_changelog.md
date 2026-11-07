@@ -26,6 +26,20 @@ deferred to it are compared against `2786ea872` there.
 - TODO(d5fixB): bucket source-set and source-root checks
   (B-SOURCE-SET, B-ROOT).
 
+## 2026-11-07 — retain provenance contexts and exclude run outputs [r13_slgate5, D61-PROVENANCE-CONTEXT, D61-OUTPUT-CLOSURE]
+
+Publication checks parse hard-linked metadata once per inode but expand source
+bindings at every bucket anchor through `resolve_derived_from_source`. Metadata
+and bound-source files contribute their own identities and ancestor marker
+checks without recursively hashing their parent directories. Configured and
+data-linked installs retain their full scans, including sibling subroots.
+Launcher and stream digests exclude their configured output trees (including
+ledgers/parts) and active extraction logs; explicit inputs inside an output
+tree are refused before reading. Normal output writes and unrelated files in
+shared provenance directories no longer prevent resume; changed source
+identities and PENDING/REFUSED installs still refuse it. Digest schema `/3`
+refuses older identities. No clinical computation changes.
+
 ## 2026-11-07 — bind publication resume to files and provenance [r13_slgate4, D60-RESUME-FILE, D60-RELATIVE-OVERREACH, D60-PROVENANCE-NAME]
 
 The closure digest now includes configured roots, every link edge and per-hop

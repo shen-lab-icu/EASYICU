@@ -385,7 +385,9 @@ def _committed_ledger(tmp_path, monkeypatch):
     kwargs = {"database": "miiv", "data_path": str(root), "concepts": ["hr"]}
     # Isolate publication identity from the pre-existing code/data signatures.
     monkeypatch.setattr(extraction, "_stream_code_identity_sha256", lambda _: "code")
-    monkeypatch.setattr(extraction, "_stream_source_identity_sha256", lambda _: "data")
+    monkeypatch.setattr(
+        extraction, "_stream_source_identity_sha256", lambda _, *, excluded_paths=(): "data",
+    )
     identity = extraction._stream_ledger_identity(
         "test_module",
         ["hr"],

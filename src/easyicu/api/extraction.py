@@ -3115,7 +3115,25 @@ def _stream_load_params_sha256(load_kwargs: Mapping) -> str:
     })
 
 
-def _stream_source_identity_sha256(data_path) -> str:
+def _extraction_output_paths(output_dir=None) -> tuple:
+    """Run-owned destinations, from output configuration and active log handlers."""
+    from ..storage_layout import SCAN_FALLBACK_LOG_ENV
+
+    paths = [output_dir] if output_dir is not None else []
+    fallback_log = os.environ.get(SCAN_FALLBACK_LOG_ENV)
+    if fallback_log:
+        paths.append(fallback_log)
+    current = logger
+    while current is not None:
+        paths.extend(
+            handler.baseFilename for handler in current.handlers
+            if isinstance(handler, logging.FileHandler)
+        )
+        current = current.parent if current.propagate else None
+    return tuple(paths)
+
+
+def _stream_source_identity_sha256(data_path, *, excluded_paths=()) -> str:
     """The installation a streamed module reads: its path and file signature.
 
     Every file under ``data_path`` (its ``conversion_manifest.json``
@@ -3126,6 +3144,12 @@ def _stream_source_identity_sha256(data_path) -> str:
 
     if not data_path:
         return _canonical_sha256({"data_path": None})
+    excluded = tuple(os.path.realpath(path) for path in excluded_paths)
+
+    def is_output(path):
+        real = os.path.realpath(path)
+        return any(os.path.commonpath((real, root)) == root for root in excluded)
+
     root = os.path.abspath(str(data_path))
     if not os.path.isdir(root):
         try:
@@ -3141,9 +3165,13 @@ def _stream_source_identity_sha256(data_path) -> str:
             subdirs[:] = []
             continue
         seen.add(real)
-        subdirs.sort()
+        subdirs[:] = sorted(
+            name for name in subdirs if not is_output(os.path.join(directory, name))
+        )
         relative = os.path.relpath(directory, root)
         for name in sorted(files):
+            if is_output(os.path.join(directory, name)):
+                continue
             try:
                 stat = os.stat(os.path.join(directory, name))
             except OSError as exc:
@@ -3166,7 +3194,9 @@ def _stream_code_identity_sha256(database: str) -> str:
     return _canonical_sha256({k: v for k, v in provenance.items() if k not in excluded})
 
 
-def _stream_ledger_identity(module_name, concepts, load_kwargs, id_col, ids_digest) -> dict:
+def _stream_ledger_identity(
+    module_name, concepts, load_kwargs, id_col, ids_digest, *, output_paths=(),
+) -> dict:
     """What a stream ledger must match to be resumed (lead-r13 D3-RESUME-IDENTITY).
 
     The module, concepts, database and cohort, plus the source installation,
@@ -3181,7 +3211,7 @@ def _stream_ledger_identity(module_name, concepts, load_kwargs, id_col, ids_dige
         from ..datasource import storage_source
 
         closure_sha256 = storage_source(
-            database, load_kwargs["data_path"]
+            database, load_kwargs["data_path"], publication_excluded_paths=output_paths,
         ).seal_publication_closure["sha256"]
     else:
         closure_sha256 = assert_roots_published([]).sha256
@@ -3194,7 +3224,9 @@ def _stream_ledger_identity(module_name, concepts, load_kwargs, id_col, ids_dige
         "ids_sha256": ids_digest,
         "seal_publication_closure_sha256": closure_sha256,
         "load_params_sha256": _stream_load_params_sha256(load_kwargs),
-        "source_identity_sha256": _stream_source_identity_sha256(load_kwargs.get("data_path")),
+        "source_identity_sha256": _stream_source_identity_sha256(
+            load_kwargs.get("data_path"), excluded_paths=output_paths,
+        ),
         "code_identity_sha256": _stream_code_identity_sha256(database),
     }
 
@@ -3266,6 +3298,7 @@ def _stream_module_batches_to_parquet(
     identity = _stream_ledger_identity(
         module_name, concepts, load_kwargs, id_col,
         _stream_ids_digest(id_col, cohort_ids),
+        output_paths=_extraction_output_paths(output_dir),
     )
 
     resume_events: list = []
@@ -8415,7 +8448,10 @@ def extract_database(
             data_path = get_default_data_path(database)
     from ..datasource import storage_source
 
-    publication_closure = storage_source(database, data_path).seal_publication_closure
+    publication_closure = storage_source(
+        database, data_path,
+        publication_excluded_paths=_extraction_output_paths(output_dir),
+    ).seal_publication_closure
     # Storage fallbacks (a corrupt bucket cache bypassed for its flat source,
     # an unmanifested or CSV read) from this process and its workers become
     # receipt facts: result["storage_fallbacks"] and the publication record.
@@ -9397,7 +9433,7 @@ def extract_all_databases(
                 if config is not None
                 else [path]
             )
-    assert_roots_published(roots)
+    assert_roots_published(roots, excluded_paths=_extraction_output_paths(output_dir))
 
     t_start = time.time()
     results = {}
