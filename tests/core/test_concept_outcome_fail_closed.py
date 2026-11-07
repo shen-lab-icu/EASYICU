@@ -56,6 +56,12 @@ class _GeneralSource:
             raise self._error
         return SimpleNamespace(data=self._general)
 
+    def resolve_target_files(self, table, *args, **kwargs):
+        # The observation files resolve as a HiRID source at this root does.
+        from easyicu.datasource import storage_source
+
+        return storage_source("hirid", self.base_path).resolve_target_files(table, *args, **kwargs)
+
 
 def _apply(data_source, *, frame=None, patient_ids=None):
     return _apply_callback(

@@ -170,19 +170,24 @@ def _duckdb_sql_path_literal(path) -> str:
 
 
 def hirid_observation_read_exprs(
-    base_path,
+    source,
 ) -> Optional[Tuple[str, str, str]]:
     """Return DuckDB read expressions for either supported HiRID layout.
+
+    ``source`` is the caller's ``ICUDataSource``: its own configuration
+    (attached or custom observation mapping included) and its own root.  The
+    files come from that source's storage resolution; a configuration is
+    never re-loaded by name here, where a packaged mapping under a custom
+    root could read the wrong files without failing.
 
     Converted HiRID data may use item buckets (``observations_bucket``) or
     the public archive's native numbered shards (``observations/N.parquet``).
     Both contain the same observation schema and can time deaths.
     """
-    from ..config import load_src_cfg
-    from ..datasource import ICUDataSource
     from ..storage_layout import parquet_relation
 
-    source = ICUDataSource(load_src_cfg("hirid"), base_path=base_path, enable_cache=False)
+    if source is None or not hasattr(source, "resolve_target_files"):
+        raise TypeError("hirid_observation_read_exprs needs the caller's ICUDataSource")
     files = source.resolve_target_files("observations")
     if not files:
         return None
@@ -1821,7 +1826,7 @@ def _apply_callback(
         last_obs = None
         aggregation_error: Optional[BaseException] = None
         if data_source is not None and hasattr(data_source, 'base_path'):
-            read_exprs = hirid_observation_read_exprs(data_source.base_path)
+            read_exprs = hirid_observation_read_exprs(data_source)
             if read_exprs is not None:
                 try:
                     conn = duckdb_spill.connect()

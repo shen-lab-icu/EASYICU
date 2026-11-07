@@ -721,7 +721,7 @@ def _icu_episodes(seq: pd.DataFrame) -> pd.DataFrame:
     return seq
 
 
-def _load_icu_readmission(database, data_path=None, *, patient_ids=None) -> pd.DataFrame:
+def _load_icu_readmission(database, data_path=None, *, patient_ids=None, source=None) -> pd.DataFrame:
     """``icu_readmission`` and ``icu_stay_is_readmission`` per native ICU stay."""
     db = normalize_database_key(database)
     patient_values = _patient_values(patient_ids)
@@ -731,7 +731,7 @@ def _load_icu_readmission(database, data_path=None, *, patient_ids=None) -> pd.D
 
     identifier = get_database_profile(db.removesuffix("_demo")).stay_id_col
     seq = _icu_episodes(_icu_stay_sequence(db, data_path))
-    death = load_icu_death(db, data_path).set_index(identifier)["icu_death"]
+    death = load_icu_death(db, data_path, source=source).set_index(identifier)["icu_death"]
     seq["_died"] = pd.array(seq["_stay"].map(death), dtype="boolean")
     # The episode ends at its last stay; did the patient die in that stay?
     last = seq.groupby(["_hosp", "_episode"]).cumcount(ascending=False).eq(0) & seq["_episode"].notna()
@@ -756,7 +756,7 @@ def _load_icu_readmission(database, data_path=None, *, patient_ids=None) -> pd.D
 
 
 def load_outcomes(database, data_path=None, *, patient_ids=None, max_patients=None,
-                  verbose=False, output_concepts=None):
+                  verbose=False, output_concepts=None, source=None):
     """Load explicitly named endpoints without changing generic death meaning.
 
     Without ``output_concepts`` this returns the follow-up endpoints only, as
@@ -768,11 +768,11 @@ def load_outcomes(database, data_path=None, *, patient_ids=None, max_patients=No
     if "icu_death" in requested:
         from .icu_mortality import load_icu_death
 
-        frames.append(load_icu_death(database, data_path, **options))
+        frames.append(load_icu_death(database, data_path, source=source, **options))
     if not requested or requested - {"icu_death"} - ICU_SEQUENCE_OUTPUTS:
         frames.append(_load_followup_outcomes(database, data_path, verbose=verbose, **options))
     if requested & ICU_SEQUENCE_OUTPUTS:
-        frames.append(_load_icu_readmission(database, data_path, patient_ids=patient_ids))
+        frames.append(_load_icu_readmission(database, data_path, patient_ids=patient_ids, source=source))
     frames = [frame for frame in frames if not frame.empty]
     if not frames:
         return pd.DataFrame()
