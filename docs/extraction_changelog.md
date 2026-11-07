@@ -22,6 +22,27 @@ deferred to it are compared against `2786ea872` there.
   Pre-0.1.0 web exports without these digests retain the existing
   "integrity unrecorded · re-export to verify" refusal and must be re-exported;
   no compatibility path is provided. Extracted values are unchanged.
+- [r13-sealtool8, delta58s B58-FARM-PASSTHROUGH; increment on `4a5c8acd3`]
+  Bind existing pass-through and rebuilt farm buckets in one planned receipt set, recording their
+  kind, source and verified contract. Recheck physical source paths, identities and recorded hashes
+  through publication and standalone acceptance; refuse unplanned bucket links and changed contracts.
+  Retain pass-through links during materialisation and create only the rebuilt links.
+- [r13-sealtool7, delta57s B57-CV-LINEAGE-ANCHOR; increment on `70c247850`]
+  Resolve comparator lineage at the verified physical bucket installation. Check every farm bucket's
+  relative source paths, size, mtime and recorded SHA256 before freeze, after rename and at acceptance;
+  refuse traversal or missing/changed sources. Preserve typed `SealError` diagnostics in CareVue
+  origin queries. The EasyICU reader fix belongs to the d5fixB lane.
+- [r13-sealtool6, supervisor ruling 2026-11-07; increment on `2835f702e`]
+  Publish CareVue as `mimic_cv_bkt_s<sha9>` with bucket-only chartevents;
+  retain `mimic_cv_bucket_s<sha9>` and the build2 suffix. Exclude flat
+  chartevents paths and manifest table entries, record bucket-only provenance,
+  and refuse flat entries or old `mimic_cv_dir_s<sha9>` collisions at publication
+  and acceptance. Build CareVue from the explicitly pinned `mimic_cv_flat_r13`
+  input even with a bucket-only reference farm, retaining retired conversion
+  lineage as provenance only for that pinned plan. Seal and recheck aggregate
+  `carevue_origin` evidence in external and farm receipts. Refuse missing,
+  temporary, or unwritable launch roots without fallback; derive the extraction
+  root from trusted `work_root` when no explicit launch root is supplied.
 - TODO(r13bounds): out-of-bounds values. The `bounds_unit_suspect` refusal
   introduced by `0aa5a8185` is being withdrawn; the line follows when that
   branch merges.
