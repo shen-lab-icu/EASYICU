@@ -26,6 +26,35 @@ deferred to it are compared against `2786ea872` there.
 - TODO(d5fixB): bucket source-set and source-root checks
   (B-SOURCE-SET, B-ROOT).
 
+## 2026-11-06 — bucket layouts keep every source float bit, checked record by record [lead-r13, `c89eb992d` and its delta21b follow-up; r13bitexact]
+
+**Rule.** A bucket returns, for every row, the same IEEE bit pattern the flat
+reader returns for that row: the sign of zero, NaN payloads and nulls
+included. In detail:
+
+- Tables with a float column are written without parquet dictionary encoding
+  (`DICTIONARY_SIZE_LIMIT 0`). DuckDB's dictionary keys floats by equality, so
+  -0.0 and +0.0 shared one entry and the bucket kept whichever sign came
+  first. AUMCdb `numericitems` is the only formal source with -0.0 (461
+  values); the 11-05 bucket held 209,428 and a 45cf984de rebuild 36,052. The
+  formal AUMCdb run read the flat source, so no published value changed.
+  Other tables keep the default encoding. Without dictionary pages, parquet
+  `distinct_count` statistics are no longer written for those tables.
+- Every build compares each float value with its source row (bound by the
+  source ordinal), after the same type unification the flat reader applies:
+  FLOAT and DOUBLE shards, or integer and DOUBLE shards, are read as the
+  unified type (DOUBLE also accepts DECIMAL). A difference fails the build
+  with `bucket_float_fidelity_mismatch` before anything is installed. Other
+  typed refusals: `bucket_float_source_type_unsupported`,
+  `bucket_ordinal_binding_mismatch`, `bucket_float_row_count_mismatch`, and
+  `unsupported_nested_float` for a float inside a LIST/STRUCT/MAP column.
+- `--adopt` of a legacy cache runs the same gate, bound to the whole record
+  per bucket (NaN payloads not distinguished there), writes it to
+  `_BUCKET_ADOPTION_RECEIPT.json`, and refuses on a mismatch.
+- The manifest and the build receipt record `float_fidelity` (per column:
+  values, nulls, -0.0, +0.0, NaN and a sha256 over ordinal and bits); the
+  receipt also records the check's wall time, batch size and peak RSS.
+
 ## 2026-11-06 — eICU GCS sedation windows and the published `ett_gcs` grid [lead-r13, `432ddaf3c`, `80b1cb964`, `e70102c94`, `f9b45386c`, `b7509c080`, `e1d73cd7b`, `2c0579bd5`, `942bfcbfb`, `3e23c65d4`, `06f30f7b0`]
 
 **Rule.** GCS marks an hour as sedated (and imputes 15, ricu `sed_impute`)

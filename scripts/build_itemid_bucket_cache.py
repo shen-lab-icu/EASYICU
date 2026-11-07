@@ -10,12 +10,14 @@ import math
 import os
 import re
 import shutil
+import sys
 import time
 from pathlib import Path
 from typing import Any
 
 import duckdb
 import numpy as np
+import pyarrow as pa
 import pyarrow.parquet as pq
 
 from easyicu.runtime import duckdb_spill
@@ -30,6 +32,7 @@ from easyicu.storage_layout import (
 )
 
 RECEIPT_SCHEMA = "easyicu_itemid_bucket_cache_v1"
+ADOPTION_RECEIPT = "_BUCKET_ADOPTION_RECEIPT.json"
 _IDENTIFIER = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
 TABLE_CONFIGS = {
     "miiv": ("chartevents", "itemid", "stay_id", "charttime"),
@@ -81,24 +84,58 @@ def _identifier(value: str) -> str:
 # other tables keep the default. Never canonicalise: the flat path reads the
 # source bits, and a bucket must return the same bits.
 _FLOAT_TYPES = frozenset({"FLOAT", "DOUBLE", "REAL", "FLOAT4", "FLOAT8"})
+_FLOAT_ALIASES = {"REAL": "FLOAT", "FLOAT4": "FLOAT", "FLOAT8": "DOUBLE"}
+_FLOAT_TOKEN = re.compile(r"\b(?:DOUBLE|FLOAT|REAL|FLOAT4|FLOAT8)\b")
+_INTEGER_TYPES = frozenset({
+    "TINYINT", "SMALLINT", "INTEGER", "BIGINT", "HUGEINT",
+    "UTINYINT", "USMALLINT", "UINTEGER", "UBIGINT", "UHUGEINT",
+})
+# A source shard's float column may be read into the table's unified type only
+# along these widenings: the flat reader (read_parquet union_by_name) applies
+# the same CAST, so the bucket must hold exactly what the flat path returns
+# (DECIMAL(p,s) also widens into DOUBLE, as DuckDB's union does).
+_WIDENING = {
+    "DOUBLE": frozenset({"DOUBLE", "FLOAT"}) | _INTEGER_TYPES,
+    "FLOAT": frozenset({"FLOAT"}) | _INTEGER_TYPES,
+}
+# Rows per compared batch = this budget / bytes per row (ordinal + validity +
+# every float column), so QC memory does not grow with table width.
+QC_BATCH_BYTES = 64 << 20
 FLOAT_FIDELITY_ALGORITHM = (
-    "per float column over non-null values: count, -0.0, +0.0, NaN, and "
-    "count/sum/xor of splitmix64(IEEE bit pattern) (order-independent multiset hash)"
+    "every row bound to its source ordinal: the source is read file by file in the "
+    "builder's ordinal order (file name, file row number) and cast to the flat "
+    "reader's unified type; the bucket is read ordered by the ordinal; per float "
+    "column the null positions and IEEE bit patterns (sign of zero, NaN payload) "
+    "are compared exactly, row by row. Recorded per column: non-null values, nulls, "
+    "-0.0, +0.0, NaN, and sha256 over (ordinal int64, validity u8, bits u64) in "
+    "ordinal order."
 )
 
 
 class FloatFidelityError(RuntimeError):
-    """A bucket's floating-point bits differ from its source (typed build failure)."""
+    """A bucket's floating-point bits differ from its source, or cannot be bound (typed build failure)."""
 
-    reason = "bucket_float_fidelity_mismatch"
-
-    def __init__(self, column: str, source: dict, target: dict):
-        self.column, self.source, self.target = column, source, target
-        super().__init__(f"{self.reason}: column {column!r} source {source} target {target}")
+    def __init__(
+        self,
+        column: str,
+        source: dict,
+        target: dict,
+        reason: str = "bucket_float_fidelity_mismatch",
+    ):
+        self.reason, self.column, self.source, self.target = reason, column, source, target
+        super().__init__(f"{reason}: column {column!r} source {source} target {target}")
 
 
 def _float_columns(schema: list[list[str]]) -> list[str]:
-    return [name for name, kind in schema if kind.upper() in _FLOAT_TYPES]
+    """Scalar float columns; a float nested in a LIST/STRUCT/MAP/ARRAY fails closed."""
+    columns = []
+    for name, kind in schema:
+        upper = kind.upper()
+        if upper in _FLOAT_TYPES:
+            columns.append(name)
+        elif _FLOAT_TOKEN.search(upper):
+            raise FloatFidelityError(name, {"type": kind}, {}, reason="unsupported_nested_float")
+    return columns
 
 
 def _parquet_options(schema: list[list[str]], *extra: str) -> str:
@@ -109,58 +146,232 @@ def _parquet_options(schema: list[list[str]], *extra: str) -> str:
     return ", ".join(options)
 
 
-def _splitmix64(bits: np.ndarray) -> np.ndarray:
-    with np.errstate(over="ignore"):
-        z = bits + np.uint64(0x9E3779B97F4A7C15)
-        z = (z ^ (z >> np.uint64(30))) * np.uint64(0xBF58476D1CE4E5B9)
-        z = (z ^ (z >> np.uint64(27))) * np.uint64(0x94D049BB133111EB)
-        return z ^ (z >> np.uint64(31))
+def _unified(kind: str) -> str:
+    upper = kind.upper()
+    return _FLOAT_ALIASES.get(upper, upper)
 
 
-def _float_profile(files, columns: list[str]) -> dict[str, dict[str, int | str]]:
-    """Sign/NaN counts and a bit-pattern multiset hash per float column."""
-    acc = {c: {"values": 0, "neg_zero": 0, "pos_zero": 0, "nan": 0, "sum": 0, "xor": 0} for c in columns}
-    mask = (1 << 64) - 1
-    for path in files:
-        handle = pq.ParquetFile(path)
-        present = [c for c in columns if c in handle.schema_arrow.names]
-        for batch in handle.iter_batches(columns=present, batch_size=1 << 20):
-            for name in present:
-                array = batch.column(name)
-                if array.null_count:
-                    array = array.drop_null()
-                if not len(array):
-                    continue
-                values = array.to_numpy(zero_copy_only=False)
-                width = values.dtype.itemsize
-                bits = values.view({2: np.uint16, 4: np.uint32, 8: np.uint64}[width]).astype(np.uint64)
-                zero = values == 0
-                negative = np.signbit(values)
-                mixed = _splitmix64(bits)
-                entry = acc[name]
-                entry["values"] += int(values.size)
-                entry["neg_zero"] += int(np.count_nonzero(zero & negative))
-                entry["pos_zero"] += int(np.count_nonzero(zero & ~negative))
-                entry["nan"] += int(np.count_nonzero(np.isnan(values)))
-                entry["sum"] = (entry["sum"] + int(mixed.sum(dtype=np.uint64))) & mask
-                entry["xor"] ^= int(np.bitwise_xor.reduce(mixed))
-    return {c: {**{k: v for k, v in e.items() if k not in ("sum", "xor")},
-                "sum_hash": str(e["sum"]), "xor_hash": str(e["xor"])} for c, e in acc.items()}
+def _check_source_float_types(con, source_files, schema, columns) -> None:
+    """Each shard's float column must widen into the unified type the flat reader uses."""
+    unified = {c: _unified(t) for c, t in schema if c in columns}
+    for path in source_files:
+        shard = {c.casefold(): t for c, t in _schema(con, _relation([path]))}
+        for column in columns:
+            kind = shard.get(column.casefold())
+            if kind is None:
+                continue  # absent in this shard: NULL, as union_by_name reads it
+            if _unified(kind) not in _WIDENING[unified[column]] and not (
+                unified[column] == "DOUBLE" and _unified(kind).startswith("DECIMAL(")
+            ):
+                raise FloatFidelityError(
+                    column, {"shard_type": kind}, {"unified_type": unified[column]},
+                    reason="bucket_float_source_type_unsupported",
+                )
 
 
-def _assert_float_fidelity(source_files, target_files, schema) -> dict[str, Any]:
-    """Source vs bucket float bits must agree exactly, or the build fails typed."""
+class _Rows:
+    """Re-slices a stream of record batches into chunks of an exact row count."""
+
+    def __init__(self, batches):
+        self._batches, self._current, self._offset = iter(batches), None, 0
+
+    def take(self, rows: int):
+        parts, need = [], rows
+        while need:
+            if self._current is None or self._offset >= self._current.num_rows:
+                self._current, self._offset = next(self._batches, None), 0
+                if self._current is None:
+                    break
+                continue
+            count = min(need, self._current.num_rows - self._offset)
+            parts.append(self._current.slice(self._offset, count))
+            self._offset += count
+            need -= count
+        return pa.Table.from_batches(parts) if parts else None
+
+
+def _source_batches(con, source_files, columns, unified, rows):
+    """The source in the builder's ordinal order, cast to the unified types."""
+    for path in sorted(source_files, key=str):
+        present = {c.casefold(): c for c, _ in _schema(con, _relation([path]))}
+        projection = ", ".join(
+            f"CAST({_identifier(present[c.casefold()])} AS {unified[c]}) AS {_identifier(c)}"
+            if c.casefold() in present else f"CAST(NULL AS {unified[c]}) AS {_identifier(c)}"
+            for c in columns
+        )
+        reader = con.execute(
+            f"SELECT file_row_number AS __row, {projection} FROM read_parquet("
+            f"{_sql_string(path)}, file_row_number=true, hive_partitioning=false)"
+        ).fetch_record_batch(rows)
+        expected = 0
+        for batch in reader:
+            row = batch.column(0).to_numpy(zero_copy_only=False)
+            if not np.array_equal(row, np.arange(expected, expected + len(row))):
+                raise RuntimeError("bucket_float_source_order_unverifiable")
+            expected += len(row)
+            yield batch.drop_columns(["__row"]) if hasattr(batch, "drop_columns") else pa.RecordBatch.from_arrays(
+                batch.columns[1:], names=batch.schema.names[1:]
+            )
+
+
+class _ColumnProfile:
+    def __init__(self):
+        self.values = self.nulls = self.neg_zero = self.pos_zero = self.nan = 0
+        self.digest = hashlib.sha256()
+
+    def update(self, ordinals: np.ndarray, valid: np.ndarray, values: np.ndarray, bits: np.ndarray) -> None:
+        zero = valid & (values == 0)
+        negative = np.signbit(values)
+        self.values += int(np.count_nonzero(valid))
+        self.nulls += int(valid.size - np.count_nonzero(valid))
+        self.neg_zero += int(np.count_nonzero(zero & negative))
+        self.pos_zero += int(np.count_nonzero(zero & ~negative))
+        self.nan += int(np.count_nonzero(valid & np.isnan(values)))
+        record = np.empty(ordinals.size, dtype=[("o", "<i8"), ("v", "u1"), ("b", "<u8")])
+        record["o"], record["v"], record["b"] = ordinals, valid, np.where(valid, bits, 0)
+        self.digest.update(record.tobytes())
+
+    def result(self) -> dict:
+        return {"values": self.values, "nulls": self.nulls, "neg_zero": self.neg_zero,
+                "pos_zero": self.pos_zero, "nan": self.nan, "sha256": self.digest.hexdigest()}
+
+
+def _float_arrays(column):
+    array = column.combine_chunks() if hasattr(column, "combine_chunks") else column
+    valid = array.is_valid().to_numpy(zero_copy_only=False)
+    values = array.fill_null(0).to_numpy(zero_copy_only=False)
+    width = {2: np.uint16, 4: np.uint32, 8: np.uint64}[values.dtype.itemsize]
+    return valid, values, values.view(width).astype(np.uint64)
+
+
+def _peak_rss_kb() -> int:
+    import resource
+
+    peak = resource.getrusage(resource.RUSAGE_SELF).ru_maxrss
+    return int(peak // 1024) if sys.platform == "darwin" else int(peak)
+
+
+def _assert_float_fidelity(con, source_files, target_files, schema) -> tuple[dict, dict]:
+    """Bind every float value to its source ordinal and compare bits exactly.
+
+    Returns (fidelity, qc): ``fidelity`` is deterministic (manifest and receipt);
+    ``qc`` holds this run's wall time, peak RSS and batch size (receipt only).
+    Raises ``FloatFidelityError`` (typed reason) on any difference.
+    """
+    started, rss_before = time.monotonic(), _peak_rss_kb()
     columns = _float_columns(schema)
-    source = _float_profile(source_files, columns)
-    target = _float_profile(target_files, columns)
-    for column in columns:
-        if source[column] != target[column]:
-            raise FloatFidelityError(column, source[column], target[column])
-    return {
+    fidelity = {
         "algorithm": FLOAT_FIDELITY_ALGORITHM,
         "dictionary_encoding": "disabled" if columns else "default",
-        "columns": source,
+        "columns": {},
     }
+    if not columns:
+        return fidelity, {"wall_seconds": 0.0, "batch_rows": 0}
+    _check_source_float_types(con, source_files, schema, columns)
+    unified = {c: _unified(t) for c, t in schema if c in columns}
+    width = 9 + sum(8 if unified[c] == "DOUBLE" else 4 for c in columns)
+    rows = max(4096, QC_BATCH_BYTES // width)
+    source_cursor, target_cursor = con.cursor(), con.cursor()
+    for cursor in (source_cursor, target_cursor):
+        cursor.execute("SET preserve_insertion_order=true")
+    target = target_cursor.execute(
+        f"SELECT {_identifier(ORDINAL)}, {', '.join(_identifier(c) for c in columns)} "
+        f"FROM {_relation(target_files)} ORDER BY {_identifier(ORDINAL)}"
+    ).fetch_record_batch(rows)
+    source_rows = _Rows(_source_batches(source_cursor, source_files, columns, unified, rows))
+    target_rows = _Rows(target)
+    source_profile = {c: _ColumnProfile() for c in columns}
+    target_profile = {c: _ColumnProfile() for c in columns}
+    mismatched = dict.fromkeys(columns, 0)
+    first = dict.fromkeys(columns)
+    ordinal = 0
+    while True:
+        s, t = source_rows.take(rows), target_rows.take(rows)
+        if s is None and t is None:
+            break
+        if s is None or t is None or s.num_rows != t.num_rows:
+            raise FloatFidelityError(
+                ORDINAL, {"rows_from": ordinal}, {"rows_from": ordinal},
+                reason="bucket_float_row_count_mismatch",
+            )
+        ordinals = np.arange(ordinal, ordinal + t.num_rows, dtype=np.int64)
+        if not np.array_equal(t.column(0).to_numpy(), ordinals):
+            raise FloatFidelityError(
+                ORDINAL, {"ordinal_from": ordinal}, {"ordinal_from": ordinal},
+                reason="bucket_ordinal_binding_mismatch",
+            )
+        for column in columns:
+            sv, svalues, sbits = _float_arrays(s.column(column))
+            tv, tvalues, tbits = _float_arrays(t.column(column))
+            source_profile[column].update(ordinals, sv, svalues, sbits)
+            target_profile[column].update(ordinals, tv, tvalues, tbits)
+            bad = (sv != tv) | (sv & (sbits != tbits))
+            if bad.any():
+                mismatched[column] += int(np.count_nonzero(bad))
+                if first[column] is None:
+                    first[column] = int(ordinals[np.argmax(bad)])
+        ordinal += t.num_rows
+    for column in columns:
+        src, tgt = source_profile[column].result(), target_profile[column].result()
+        if mismatched[column] or src != tgt:
+            raise FloatFidelityError(
+                column,
+                {**src, "mismatched_rows": mismatched[column], "first_mismatch_ordinal": first[column]},
+                tgt,
+            )
+        fidelity["columns"][column] = src
+    fidelity["rows"] = ordinal
+    qc = {
+        "wall_seconds": round(time.monotonic() - started, 3),
+        "batch_rows": rows,
+        "batch_bytes_budget": QC_BATCH_BYTES,
+        "process_peak_rss_kb_before": rss_before,
+        "process_peak_rss_kb_after": _peak_rss_kb(),
+    }
+    return fidelity, qc
+
+
+def _assert_float_fidelity_unordered(con, source_files, files, schema, key, count) -> tuple[dict, dict]:
+    """Adoption of a legacy cache without an ordinal: bind floats to the whole record.
+
+    Per bucket, the multiset of complete source rows routed there
+    (``hash(key) % count``) must equal the bucket's rows exactly, with each float
+    column's sign bit carried alongside its value (EXCEPT ALL both ways), so
+    sign corruption cannot cancel across buckets or move between records. NaN
+    payloads are not distinguished on this path.
+    """
+    started, rss_before = time.monotonic(), _peak_rss_kb()
+    columns = _float_columns(schema)
+    fidelity = {"algorithm": "adoption: per-bucket exact multiset of complete rows with float sign bits "
+                "(EXCEPT ALL both ways); NaN payloads not distinguished",
+                "dictionary_encoding": "unverified_legacy", "columns": {}}
+    if not columns:
+        return fidelity, {"wall_seconds": 0.0}
+    _check_source_float_types(con, source_files, schema, columns)
+    signs = ", ".join(f"signbit({_identifier(c)}) AS {_identifier('__sign_' + c)}" for c in columns)
+    source = f"SELECT hash({_identifier(key)}) % {count} AS __bucket, *, {signs} FROM {_relation(source_files)}"
+    target = " UNION ALL ".join(
+        f"SELECT {int(f.parent.name.split('=')[1])}::UBIGINT AS __bucket, *, {signs} FROM {_relation([f])}"
+        for f in files
+    )
+    missing, extra = con.execute(
+        f"SELECT (SELECT count(*) FROM (({source}) EXCEPT ALL ({target}))), "
+        f"(SELECT count(*) FROM (({target}) EXCEPT ALL ({source})))"
+    ).fetchone()
+    if missing or extra:
+        raise FloatFidelityError("*", {"rows_not_in_bucket": int(missing)}, {"rows_not_in_source": int(extra)})
+    for column in columns:
+        c = _identifier(column)
+        values, nulls, neg, pos, nan = con.execute(
+            f"SELECT count({c}), count(*) - count({c}), count(*) FILTER (WHERE {c} = 0 AND signbit({c})), "
+            f"count(*) FILTER (WHERE {c} = 0 AND NOT signbit({c})), count(*) FILTER (WHERE isnan({c})) "
+            f"FROM {_relation(source_files)}"
+        ).fetchone()
+        fidelity["columns"][column] = {"values": values, "nulls": nulls, "neg_zero": neg,
+                                       "pos_zero": pos, "nan": nan}
+    qc = {"wall_seconds": round(time.monotonic() - started, 3),
+          "process_peak_rss_kb_before": rss_before, "process_peak_rss_kb_after": _peak_rss_kb()}
+    return fidelity, qc
 
 
 def _relation(files) -> str:
@@ -351,6 +562,7 @@ def build_bucket_cache(
             con.execute("SET preserve_insertion_order=true")
             source_relation = _relation(source_files)
             schema = _schema(con, source_relation)
+            _float_columns(schema)  # fails closed on a nested float leaf
             columns = [c for c, _ in schema]
             by_lower = {c.casefold(): c for c in columns}
             key = by_lower.get(key.casefold(), key)
@@ -467,7 +679,9 @@ def build_bucket_cache(
             fingerprint = _assert_multiset(
                 con, source_relation, target_relation, columns
             )
-            float_fidelity = _assert_float_fidelity(source_files, target_files, schema)
+            float_fidelity, float_fidelity_qc = _assert_float_fidelity(
+                con, source_files, target_files, schema
+            )
             derived = _derived_from(data_path, table, source_files)
             receipt = dict(
                 schema=RECEIPT_SCHEMA,
@@ -496,6 +710,7 @@ def build_bucket_cache(
                 row_group_target=row_group_target,
                 row_multiset_fingerprint=fingerprint,
                 float_fidelity=float_fidelity,
+                float_fidelity_qc=float_fidelity_qc,
                 elapsed_seconds=round(time.monotonic() - started, 3),
             )
             manifest = _manifest(
@@ -594,6 +809,7 @@ def build_variable_cache(
             con.execute("SET preserve_insertion_order=true")
             source_relation = _relation(source_files)
             schema = _schema(con, source_relation)
+            _float_columns(schema)  # fails closed on a nested float leaf
             columns = [c for c, _ in schema]
             by_lower = {c.casefold(): c for c in columns}
             key = by_lower.get(key.casefold(), key)
@@ -733,7 +949,9 @@ def build_variable_cache(
             ):
                 raise RuntimeError("Schema mismatch")
             fingerprint = _assert_multiset(con, source_relation, target_relation, columns)
-            float_fidelity = _assert_float_fidelity(source_files, target_files, schema)
+            float_fidelity, float_fidelity_qc = _assert_float_fidelity(
+                con, source_files, target_files, schema
+            )
             derived = _derived_from(data_path, table, source_files)
             receipt = dict(
                 schema=RECEIPT_SCHEMA,
@@ -767,6 +985,7 @@ def build_variable_cache(
                 row_group_target=row_group_target,
                 row_multiset_fingerprint=fingerprint,
                 float_fidelity=float_fidelity,
+                float_fidelity_qc=float_fidelity_qc,
                 elapsed_seconds=round(time.monotonic() - started, 3),
             )
             manifest = dict(
@@ -875,6 +1094,10 @@ def adopt_bucket_cache(
                 raise ValueError(
                     "bucket_legacy_unverifiable: partition membership mismatch"
                 )
+        # The same float-fidelity gate as a build; a mismatch refuses adoption.
+        float_fidelity, float_fidelity_qc = _assert_float_fidelity_unordered(
+            con, source, files, schema, key, count
+        )
     # Only after verification may an empty, omitted legacy bucket be created.
     for bid in range(count):
         (root / f"bucket_id={bid}").mkdir(exist_ok=True)
@@ -889,12 +1112,25 @@ def adopt_bucket_cache(
         row_group_target=122880,
         source_order=None,
     )
-    temporary = root / (MANIFEST + ".tmp")
-    try:
-        temporary.write_text(json.dumps(manifest, indent=2, sort_keys=True) + "\n")
-        os.replace(temporary, root / MANIFEST)
-    finally:
-        temporary.unlink(missing_ok=True)
+    manifest["float_fidelity"] = float_fidelity
+    adoption = dict(
+        schema="easyicu_bucket_adoption_v1",
+        builder_version=BUILDER_VERSION,
+        duckdb_version=duckdb.__version__,
+        rows=fingerprint["rows"],
+        row_multiset_fingerprint=fingerprint,
+        float_fidelity=float_fidelity,
+        float_fidelity_qc=float_fidelity_qc,
+    )
+    # The adoption receipt first, the manifest last: the manifest is what
+    # makes the cache readable, so it appears only after every check passed.
+    for name, content in ((ADOPTION_RECEIPT, adoption), (MANIFEST, manifest)):
+        temporary = root / (name + ".tmp")
+        try:
+            temporary.write_text(json.dumps(content, indent=2, sort_keys=True) + "\n")
+            os.replace(temporary, root / name)
+        finally:
+            temporary.unlink(missing_ok=True)
     return manifest
 
 
