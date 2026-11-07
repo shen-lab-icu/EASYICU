@@ -26,6 +26,32 @@ deferred to it are compared against `2786ea872` there.
 - TODO(d5fixB): bucket source-set and source-root checks
   (B-SOURCE-SET, B-ROOT).
 
+## 2026-11-07 — readers refuse a bucket installation the seal tool has not published [lead-r13, branch `r13slpub`]
+
+**Rule.** The seal tool writes `.<install>.seal_PENDING` beside an installation
+before it renames the root into place, and removes it only after the external
+PASS receipt is durable. An installation whose verification failed after the
+rename keeps `.<install>.seal_REFUSED`. A reader now refuses an installation
+with either marker beside it: `bucket_install_unpublished` or
+`bucket_install_refused` (`SealPublicationError`, a `StorageIntegrityError`).
+It checks the installation as given and as its realpath, and the realpath of a
+symlinked bucket, so a CareVue farm link into a pending root is refused too. The
+check runs on every bucket open (`read_bucket_contract`) and on every table read
+(`resolve_table_files`, on the source root), so flat tables of a marked
+installation are refused as well. It is not a bucket layout error, so a marked
+bucket never falls back to the flat files of the same installation.
+
+The formal half (`formal=True`, `bucket_install_unaccepted`) is in
+`easyicu.storage_seal_publication` for the formal run receipt to call. It
+requires the in-root `_SEAL_BUILD_RECEIPT.json` with verdict `PASS`, no
+failure, and each read bucket's `_BUCKET_MANIFEST.json` sha256 equal to the
+receipt's `tables[<table>].manifest_sha256`. A farm's own receipt is never
+accepted alone: its bucket links are bound through the receipt of the realpath
+installation. The reader itself has no formal switch.
+
+**Impact.** No value change. An unmarked installation reads as before; a
+marked one now stops the read instead of being read.
+
 ## 2026-11-07 — `vent_ind` window durations take their declared unit [lead-r13, branch `r13srccfg_vent`]
 
 Fail-closed tightening; no value change. In `_callback_vent_ind`, a numeric

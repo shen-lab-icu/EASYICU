@@ -288,6 +288,8 @@ def read_bucket_contract(
     checked on every open, including for an already resolved data source.
     """
     root = Path(root)
+    from .storage_seal_publication import assert_seal_published  # imports this module
+    assert_seal_published(root, formal=False)
     if not (root / MANIFEST).is_file():
         raise BucketLayoutError("bucket_manifest_missing", root)
     if not (root / "_COMPLETE").is_file():
@@ -1197,6 +1199,8 @@ def resolve_table_files(
     ``stay_values`` are the reader's own direct stay predicate
     (``column IN values``); a variable layout narrows its stay buckets with it.
     """
+    from .storage_seal_publication import assert_source_published  # imports this module
+    assert_source_published(source, table, formal=False)
     root = source.resolve_bucket_directory(table)
     if root is None:
         files = flat_table_files(source, table)
