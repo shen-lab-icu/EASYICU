@@ -1625,6 +1625,9 @@ class ICUDataSource:
                         loader = self._resolve_loader_from_disk(table_name)
                 else:
                     loader = self._resolve_loader_from_disk(table_name)
+            # Whatever branch chose it, the loader is the table's one source as
+            # the shared matcher sees it (delta39d).
+            loader = self._reconcile_loader(table_name, loader)
             
             # 🚀 MIMIC-III chartevents CSV fallback
             # When bucket directory is not available (due to memory constraints during conversion),
@@ -1891,7 +1894,55 @@ class ICUDataSource:
                     return dir_path
         return None
 
+    def _reconcile_loader(self, table_name: str, loader):
+        """Bind a disk loader to the table's one source as the shared matcher sees it (delta39d).
+
+        ``storage_layout.table_source`` lists the actual entries in any case
+        under every contract root, refuses independent sources
+        (``table_source_ambiguous``) and returns broken ones, which refuse
+        here as in stay discovery. A loader that found nothing takes the
+        matcher's single flat source (a table spelled in another case). A
+        Parquet loader that is not the matched source is
+        ``table_scan_loader_mismatch``. The reader and stay discovery
+        therefore see one source.
+        """
+        if not self.base_path or not (loader is None or isinstance(loader, Path)):
+            return loader
+        found = storage_layout.table_source(self, table_name)
+        if found.broken:
+            storage_layout.refuse_broken_presence(
+                table_name,
+                storage_layout.TablePresence(
+                    storage_layout.PRESENCE_BROKEN, path=found.broken[0].path
+                ),
+            )
+        matched = (*found.flat, *found.bucket)
+        if loader is None:
+            if found.flat and not found.bucket:
+                return found.flat[0].path
+            if matched:  # a bucket the layout resolver does not open
+                storage_layout.refuse_broken_presence(
+                    table_name,
+                    storage_layout.TablePresence(
+                        storage_layout.PRESENCE_BROKEN, path=matched[0].path
+                    ),
+                )
+            return None
+        parquet = loader.is_dir() or loader.suffix.casefold() in {".parquet", ".pq"}
+        if parquet and matched:
+            identities = {storage_layout._physical_identity(m.path) for m in matched}
+            if storage_layout._physical_identity(loader) not in identities:
+                raise storage_layout.TableScanError(
+                    "table_scan_loader_mismatch", table_name,
+                    f"the reader resolved {loader.name}; the table's source is "
+                    f"{matched[0].path.name}",
+                )
+        return loader
+
     def _resolve_loader_from_disk(self, table_name: str) -> Optional[Callable[[], pd.DataFrame] | Path]:
+        return self._reconcile_loader(table_name, self._resolve_loader_candidate(table_name))
+
+    def _resolve_loader_candidate(self, table_name: str) -> Optional[Callable[[], pd.DataFrame] | Path]:
         if not self.base_path:
             return None
 

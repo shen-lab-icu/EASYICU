@@ -844,72 +844,200 @@ class TablePresence:
     path: Path | None = None
 
 
-def _presence_candidates(source, table: str, subdirectories: bool) -> tuple[list, list]:
-    """Every place the owner's path and case contract could find ``table``.
+SOURCE_AMBIGUOUS = "table_source_ambiguous"
+_SOURCE_SUFFIXES = ("", ".parquet", ".pq", "_bucket")
+_PARQUET_SUFFIXES = (".parquet", ".pq")
 
-    Returns (roots, leaves): the ``icu``/``hosp`` roots, whose dangling link
-    hides every leaf below it, and the leaf candidates: the configured file
-    or directory, then ``<name>``, ``<name>.parquet``, ``<name>.pq`` and
-    ``<name>_bucket`` under each root for the name in its configured, lower
-    and upper case.
-    """
-    base = Path(source.base_path)
-    roots = [base, base / "icu", base / "hosp"]
-    leaves: list = []
+
+@dataclass(frozen=True)
+class TableMatch:
+    """One actual directory entry that names a table (any case, any contract root)."""
+
+    path: Path
+    kind: str  # "file" | "directory" | "bucket" | "broken"
+
+
+@dataclass(frozen=True)
+class TableMatches:
+    """Every entry the matcher found for a table, deduplicated by physical source."""
+
+    flat: tuple  # TableMatch: Parquet files and table directories
+    bucket: tuple  # TableMatch: <name>_bucket directories
+    broken: tuple  # TableMatch: dangling links, empty or untyped entries
+    case_variants: int  # entries whose name differs from the canonical spelling
+
+
+def _listdir(directory: Path) -> list:
+    try:
+        return sorted(os.listdir(directory))
+    except (FileNotFoundError, NotADirectoryError):
+        return []
+
+
+def _table_keys(source, table: str) -> set:
+    """The table name and a single configured file's stem, casefolded."""
+    keys = {table.casefold()}
     try:
         entries = [
             entry.get("path") or entry.get("file")
             for entry in source.config.get_table(table).files
         ]
-        for entry in (e for e in entries if e):
-            path = base / entry
-            if len(entries) > 1:
-                path = path.parent
-            if path.suffix.lower() in {"", ".parquet", ".pq"}:
-                leaves.append(path)
     except (AttributeError, KeyError, ValueError):
-        pass
+        entries = []
+    entries = [e for e in entries if e]
+    if len(entries) == 1:
+        name = PurePosixPath(entries[0]).name
+        for suffix in (".csv.gz", ".csv", ".parquet", ".pq"):
+            if name.casefold().endswith(suffix):
+                name = name[: -len(suffix)]
+                break
+        keys.add(name.casefold())
+    return keys
+
+
+def _classify(path: Path) -> TableMatch:
+    if os.path.islink(path) and not path.exists():
+        return TableMatch(path, "broken")
+    name = path.name.casefold()
+    if path.is_dir():
+        if name.endswith("_bucket"):
+            return TableMatch(path, "bucket")
+        has_parquet = any(
+            n.casefold().endswith(_PARQUET_SUFFIXES) and not n.startswith(".")
+            for n in _listdir(path)
+        )
+        return TableMatch(path, "directory" if has_parquet else "broken")
+    if path.is_file() and name.endswith(_PARQUET_SUFFIXES):
+        return TableMatch(path, "file")
+    return TableMatch(path, "broken")
+
+
+def _physical_identity(path: Path):
+    """The same physical source: a file's (dev, ino), a directory's realpath."""
+    if path.is_file():
+        stat = path.stat()
+        return ("file", stat.st_dev, stat.st_ino)
+    return ("dir", os.path.realpath(path))
+
+
+def match_table_entries(source, table: str, *, subdirectories: bool = False) -> TableMatches:
+    """The one matcher of a table's on-disk entries (delta39d).
+
+    It lists the actual directory entries, matched case-insensitively
+    (casefold), under the contract roots: the installation, and its ``icu``
+    and ``hosp`` directories in any case. Each entry is matched against the
+    table name and a single configured file's stem, with the suffix '' (a
+    table directory), ``.parquet``, ``.pq`` or ``_bucket`` in any case. With
+    ``subdirectories``, ``<name>.parquet`` in any other first-level directory
+    matches too (stay discovery's nested contract). Each match is typed
+    first: a dangling link, an empty directory or an entry of another type
+    is broken. Aliases of one physical source (the same realpath, or a
+    hardlink with the same dev and inode) count once.
+    """
+    base = Path(source.base_path)
+    keys = _table_keys(source, table)
+    wanted = {k + suffix for k in keys for suffix in _SOURCE_SUFFIXES}
+    canonical = {table + suffix for suffix in _SOURCE_SUFFIXES}
+    roots, found = [base], []
+    for name in _listdir(base):
+        if name.casefold() in {"icu", "hosp"}:
+            path = base / name
+            if os.path.islink(path) and not path.exists():
+                found.append(TableMatch(path, "broken"))
+            elif path.is_dir():
+                roots.append(path)
     for root in roots:
-        for name in dict.fromkeys((table, table.lower(), table.upper())):
-            leaves += [root / name, root / f"{name}.parquet", root / f"{name}.pq",
-                       root / f"{name}_bucket"]
+        found += [_classify(root / n) for n in _listdir(root) if n.casefold() in wanted]
     if subdirectories:
-        for name in dict.fromkeys((table, table.lower(), table.upper())):
-            leaves += sorted(base.glob(f"*/{name}.parquet"))
-    return roots[1:], list(dict.fromkeys(leaves))
+        nested = {k + ".parquet" for k in keys}
+        for name in _listdir(base):
+            directory = base / name
+            if directory in roots or not directory.is_dir():
+                continue
+            found += [_classify(directory / n) for n in _listdir(directory)
+                      if n.casefold() in nested]
+    seen, flat, bucket, broken, variants = set(), [], [], [], 0
+    for match in found:
+        if match.path.name not in canonical:
+            variants += 1
+        if match.kind == "broken":
+            broken.append(match)
+            continue
+        identity = _physical_identity(match.path)
+        if identity in seen:
+            continue
+        seen.add(identity)
+        (bucket if match.kind == "bucket" else flat).append(match)
+    return TableMatches(tuple(flat), tuple(bucket), tuple(broken), variants)
+
+
+def _bucket_derives_from(bucket: Path, flat: Path) -> bool:
+    """Whether the bucket's verified ``derived_from`` binds exactly this flat source."""
+    try:
+        manifest = json.loads((bucket / MANIFEST).read_text())
+        derived = manifest.get("derived_from")
+        if not derived:
+            return False
+        recorded = {
+            os.path.realpath(_derived_source(bucket, derived, entry)) for entry in derived["files"]
+        }
+    except (OSError, ValueError, KeyError, TypeError, BucketLayoutError):
+        return False
+    files = [flat] if flat.is_file() else [
+        flat / n for n in _listdir(flat) if n.casefold().endswith(_PARQUET_SUFFIXES)
+    ]
+    return bool(files) and {os.path.realpath(f) for f in files} == recorded
+
+
+def table_source(source, table: str, *, subdirectories: bool = False) -> TableMatches:
+    """The table's one source, or a typed refusal (delta39d).
+
+    Two or more independent sources of one table (case variants, base and
+    ``icu``, two nested directories, links to different sources) are
+    ``table_source_ambiguous``. The only exemption is a flat source beside
+    the bucket whose ``derived_from`` binds exactly that flat source (the
+    bucket contract verifies the binding when it is opened). Broken entries
+    are returned for the caller to refuse.
+    """
+    found = match_table_entries(source, table, subdirectories=subdirectories)
+    pair = (
+        len(found.flat) == 1 and len(found.bucket) == 1
+        and _bucket_derives_from(found.bucket[0].path, found.flat[0].path)
+    )
+    if (len(found.flat) + len(found.bucket) > 1) and not pair:
+        names = sorted(m.path.name for m in (*found.flat, *found.bucket))
+        raise TableScanError(
+            SOURCE_AMBIGUOUS, table,
+            f"{len(names)} independent sources ({', '.join(names)}); remove all but one",
+        )
+    return found
 
 
 def table_presence(source, table: str, *, subdirectories: bool = False) -> TablePresence:
-    """The one presence decision for a table: absent, valid or broken (delta30d).
+    """The one presence decision for a table: absent, valid or broken (delta30d, delta39d).
 
-    A dangling link at any candidate (or at the ``icu``/``hosp`` root above
-    it) is broken. Otherwise the owner resolves and validates the layout
-    (:func:`resolve_table_files`: bucket contract or flat scan, typed on
-    failure); its files make the table valid, even when they hold zero
-    rows. A candidate that exists but yields no file the owner reads (an
-    empty directory, a directory named ``.parquet``) is broken. Only a
-    table with no candidate at all is absent. ``subdirectories`` also admits
-    a ``*/<table>.parquet`` file through the owner's loader scan.
+    :func:`table_source` matches every actual entry (any case, every
+    contract root) and refuses independent sources. Any broken entry, even
+    beside a valid one, makes the table broken. Otherwise the owner
+    resolves and validates the single source (:func:`resolve_table_files`;
+    a flat source in another spelling is admitted through its loader scan).
+    Its files make the table valid, even a healthy zero-row file. A present
+    source the owner reads nothing from is broken. Only a table with no
+    match at all is absent.
     """
     if source.base_path is None:
         return TablePresence(PRESENCE_ABSENT)
-    roots, leaves = _presence_candidates(source, table, subdirectories)
-    for path in (*roots, *leaves):
-        if os.path.lexists(path) and not path.exists():
-            return TablePresence(PRESENCE_BROKEN, path=path)
-    files = resolve_table_files(source, table)
-    if not files and subdirectories:
-        nested = [p for p in leaves if p.parent.parent == Path(source.base_path)
-                  and p.parent.name not in {"icu", "hosp"} and p.is_file()]
-        if nested:
-            files = resolve_table_files(source, table, loader=nested[0])
-    if files:
-        layout = "bucket" if source.resolve_bucket_directory(table) is not None else "flat"
-        return TablePresence(PRESENCE_VALID, tuple(files), layout)
-    present = next((p for p in leaves if p.exists()), None)
-    if present is not None:
-        return TablePresence(PRESENCE_BROKEN, path=present)
-    return TablePresence(PRESENCE_ABSENT)
+    found = table_source(source, table, subdirectories=subdirectories)
+    if found.broken:
+        return TablePresence(PRESENCE_BROKEN, path=found.broken[0].path)
+    if not found.flat and not found.bucket:
+        return TablePresence(PRESENCE_ABSENT)
+    loader = found.flat[0].path if found.flat and not found.bucket else None
+    files = resolve_table_files(source, table, loader=loader)
+    if not files:
+        return TablePresence(PRESENCE_BROKEN, path=(*found.bucket, *found.flat)[0].path)
+    layout = "bucket" if source.resolve_bucket_directory(table) is not None else "flat"
+    return TablePresence(PRESENCE_VALID, tuple(files), layout)
 
 
 def refuse_broken_presence(table: str, presence: TablePresence) -> None:
