@@ -17,6 +17,10 @@
 # itself is made read-only after the copies, so nothing can be renamed in. Each step's record is
 # IMPORT_ORIGIN*.json in the run root (per database: $R/<db>/IMPORT_ORIGIN.json). memgate.py is a
 # staged tool too (admission only; run as a plain staged copy, it reads no input or output).
+# Temp files: nothing is written to /tmp. Stage 1 creates $R/.tmp (TMPDIR, JOBLIB_TEMP_FOLDER for the
+# wrapper and its admission calls); each step gets its own TMPDIR/JOBLIB_TEMP_FOLDER (and DuckDB
+# temp_directory) under $R: <db>/tmp and <db>/spill, .inputs_tmp_<step>, .receipt_scratch/tmp.
+# The boot records each step's temp dir; the receipt refuses one outside the run root.
 # Exit status: a refused receipt step writes RUN_INVALID (receipt_refused) and exits 3; any database
 # or step that did not exit 0 makes the wrapper exit non-zero. DONE in status never masks a failure.
 # Roots: BENCH7_ROOT, BENCH7_MIRROR and BENCH7_PY default to the server's bench root, mirror and venv.
@@ -83,7 +87,7 @@ sha_of() { if command -v sha256sum >/dev/null 2>&1; then sha256sum "$1"; else sh
 stage_tools() {  # copy the sealed tools by content into the fresh $FT; nothing staged is run here
   local entries name path want got
   mkdir -m 700 "$FT" || return 2
-  entries=$(git --git-dir="$K" cat-file blob "$SHA:tools/formal/FORMAL_TOOLS.json" | env -i "$PY" -I -S -c '
+  entries=$(git --git-dir="$K" cat-file blob "$SHA:tools/formal/FORMAL_TOOLS.json" | env -i TMPDIR="$R/.tmp" "$PY" -I -S -c '
 import json, sys
 def unique(pairs):
     out = {}
@@ -164,6 +168,7 @@ fi
 if [ "${BENCH7_STAGE:-1}" != 2 ]; then  # stage 1: a fresh run root, the staged tools, exec the staged wrapper
   [ -e "$R" ] && { echo "refusing: $R exists (a formal run root is created fresh)" >&2; exit 2; }
   mkdir "$R" || exit 2
+  mkdir -m 700 "$R/.tmp" || exit 2; export TMPDIR=$R/.tmp JOBLIB_TEMP_FOLDER=$R/.tmp
   stage_tools || { echo "formal_tools_not_staged" > "$R/RUN_INVALID"; exit 2; }
   exec env BENCH7_STAGE=2 bash "$FT/bench7v3f.sh" "$TAG" "$SHA" "$MODE" "$@"
   exit 2
@@ -172,6 +177,9 @@ fi
 [ "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd -P)/$(basename "${BASH_SOURCE[0]}")" = "$(cd "$FT" && pwd -P)/bench7v3f.sh" ] \
   || { echo "refusing: stage 2 runs only as $FT/bench7v3f.sh" >&2; exit 2; }
 verify_staged || { echo "formal_tool_changed" > "$R/RUN_INVALID"; exit 2; }
+# No step writes to /tmp: every temp dir is private under $R (TMPDIR, JOBLIB_TEMP_FOLDER, DuckDB).
+[ -d "$R/.tmp" ] && [ ! -L "$R/.tmp" ] || { echo "private_tmp_missing" > "$R/RUN_INVALID"; exit 2; }
+export TMPDIR=$R/.tmp JOBLIB_TEMP_FOLDER=$R/.tmp
 SITE=$(site_packages) || { echo "site_packages_unresolved" > "$R/RUN_INVALID"; exit 2; }
 BOOT=("$PY" -I -S -P "$FT/formal_boot.py" "$FT" "$C" "$SHA" "$SITE")
 echo "tag=$TAG sha=$SHA mode=$MODE threads=$T workers=$WK" > "$R/status"
@@ -183,7 +191,7 @@ if [ "${BENCH_FORMAL_RECEIPT:-0}" = 1 ]; then
   if [ -e "$R/REQUIRED_LAYOUT.json" ] && ! cmp -s "$RL" "$R/REQUIRED_LAYOUT.json"; then
     echo "refusing: $R/REQUIRED_LAYOUT.json exists and differs from $RL" >&2; exit 2; fi
   DBS=(); for spec in "$@"; do IFS=: read -r db _ _ <<< "$spec"; DBS+=("$db"); done
-  env -i PATH=/usr/bin:/bin timeout 60 $PY -I - "$RL" "${DBS[@]}" <<'PYEOF' || {
+  env -i PATH=/usr/bin:/bin TMPDIR="$R/.tmp" timeout 60 $PY -I - "$RL" "${DBS[@]}" <<'PYEOF' || {
 import json, sys
 p = json.load(open(sys.argv[1], encoding="utf-8"))
 d = p.get("databases")
@@ -229,9 +237,11 @@ inputs() {  # inputs <snapshot|verify> ARGS...: the sealed formal_inputs owner, 
     exec 9>&-; sleep 60
   done
   verify_staged || { exec 9>&-; return 96; }
-  ( exec 9>&-; cd "$R" || exit 1; INC=$(( ${IC#*-} - ${IC%-*} + 1 ))
+  ( exec 9>&-; cd "$R" || exit 1; INC=$(( ${IC#*-} - ${IC%-*} + 1 )); IT=$R/.inputs_tmp_$1
+    mkdir -m 700 "$IT" || exit 1
     timeout ${BENCH_INPUT_TIMEOUT:-4h} systemd-run --user --scope -q -p MemoryMax=4G -p MemorySwapMax=0 \
       env -i HOME=$HOME PATH=/usr/bin:/bin EASYICU_HOME=$R/.inputs_home \
+      TMPDIR=$IT JOBLIB_TEMP_FOLDER=$IT EASYICU_DUCKDB_TEMP_DIR=$IT \
       OMP_NUM_THREADS=$INC OPENBLAS_NUM_THREADS=$INC MKL_NUM_THREADS=$INC NUMEXPR_MAX_THREADS=$INC \
       POLARS_MAX_THREADS=$INC RAYON_NUM_THREADS=$INC EASYICU_DUCKDB_THREADS=$INC \
       taskset -c "$IC" "${BOOT[@]}" "$R/IMPORT_ORIGIN.inputs_$1.json" "$FT/inputs_bench_local.py" "$@" ) >> "$R/inputs.log" 2>&1 &
@@ -279,9 +289,9 @@ for spec in "$@"; do
     exec 9>&-; sleep 60
   done
   verify_staged || { echo "$db exit=formal_tool_changed" >> "$R/status"; exec 9>&-; continue; }
-  ( exec 9>&-; W=$R/$db; mkdir -p "$W/home" "$W/spill"; cd "$W" || exit 1
+  ( exec 9>&-; W=$R/$db; mkdir -p "$W/home" "$W/spill" "$W/tmp"; cd "$W" || exit 1
     timeout ${BENCH_TIMEOUT:-5h} systemd-run --user --scope -q -p MemoryMax=${BENCH_MEMMAX:-14G} -p MemorySwapMax=0 env -i HOME=$HOME PATH=/usr/bin:/bin \
-      BENCH_GATED=1 BENCH_BATCH=${BENCH_BATCH:-} BENCH_MODULES=${BENCH_MODULES:-} ${BENCH_DUCKMEM:+EASYICU_DUCKDB_MEMORY_LIMIT=$BENCH_DUCKMEM} EASYICU_HOME=$W/home EASYICU_DUCKDB_TEMP_DIR=$W/spill \
+      BENCH_GATED=1 BENCH_BATCH=${BENCH_BATCH:-} BENCH_MODULES=${BENCH_MODULES:-} ${BENCH_DUCKMEM:+EASYICU_DUCKDB_MEMORY_LIMIT=$BENCH_DUCKMEM} EASYICU_HOME=$W/home EASYICU_DUCKDB_TEMP_DIR=$W/spill TMPDIR=$W/tmp JOBLIB_TEMP_FOLDER=$W/tmp \
       "${CAP[@]}" "${TENV[@]}" taskset -c "$cores" "${BOOT[@]}" "$W/IMPORT_ORIGIN.json" "$FT/bench_local.py" "$db" "$dir" "$W" "$MODE" > "$W/run.log" 2>&1
     echo "$db exit=$?" >> "$R/status"; rm -rf "${W:?}/spill" ) &
   sleep 20  # let the scope start so the next spec sees its cores as busy
@@ -295,11 +305,11 @@ if [ "$POST" != 0 ]; then
   echo "inputs_changed_during_run" > "$R/RUN_INVALID"; echo DONE >> "$R/status"; exit 1; fi
 if [ "${BENCH_FORMAL_RECEIPT:-0}" = 1 ]; then
   IFS=: read -r _db _dir RC <<< "$1"; RNC=$(( ${RC#*-} - ${RC%-*} + 1 ))
-  RS=$R/.receipt_scratch; mkdir -p "$RS/home" || exit 1
+  RS=$R/.receipt_scratch; mkdir -p "$RS/home" "$RS/tmp" || exit 1
   verify_staged || finish_receipt 96
   ( cd "$RS" || exit 1
     timeout 2h systemd-run --user --scope -q -p MemoryMax=8G -p MemorySwapMax=0 env -i HOME=$HOME PATH=/usr/bin:/bin \
-      EASYICU_HOME=$RS/home EASYICU_DUCKDB_TEMP_DIR=$RS OMP_NUM_THREADS=$RNC OPENBLAS_NUM_THREADS=$RNC \
+      EASYICU_HOME=$RS/home EASYICU_DUCKDB_TEMP_DIR=$RS TMPDIR=$RS/tmp JOBLIB_TEMP_FOLDER=$RS/tmp OMP_NUM_THREADS=$RNC OPENBLAS_NUM_THREADS=$RNC \
       MKL_NUM_THREADS=$RNC NUMEXPR_MAX_THREADS=$RNC POLARS_MAX_THREADS=$RNC RAYON_NUM_THREADS=$RNC EASYICU_CONV_WORKERS=1 \
       taskset -c "$RC" "${BOOT[@]}" "$R/IMPORT_ORIGIN.receipt.json" "$FT/formal_run_receipt.py" --run-root "$R" --sealed-sha "$SHA" --scratch "$RS" \
       --started-at "$START" --param mode=$MODE --param threads=$T --param workers=$WK \

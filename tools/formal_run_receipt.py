@@ -409,9 +409,12 @@ def formal_tool_scripts(sealed_sha: str, code: Mapping[str, Any], run_root: Path
     return records
 
 
-def _origin_ok(record: Any, sealed_sha: str, src: str, tools: str, script: str) -> bool:
+def _origin_ok(record: Any, sealed_sha: str, src: str, tools: str, script: str,
+               root: str) -> bool:
     return (
         isinstance(record, dict) and record.get("complete") is True
+        # Its temp dir was private to this run (never /tmp).
+        and isinstance(record.get("tmpdir"), str) and record["tmpdir"].startswith(root + os.sep)
         and record.get("mismatched") == [] and record.get("head") == sealed_sha
         and record.get("src") == src and record.get("tools") == tools
         and isinstance(record.get("path"), str) and record["path"].startswith(src + os.sep)
@@ -426,14 +429,15 @@ def formal_import_origins(run_root: Path, sealed_sha: str, code: Mapping[str, An
     The boot's records: each database's extraction (``<db>/IMPORT_ORIGIN.json``,
     script ``bench_local.py``) and both input-snapshot steps
     (``IMPORT_ORIGIN.inputs_<step>.json``, ``inputs_bench_local.py``) must be
-    complete, at the sealed HEAD, with easyicu from the clone's src and no
-    mismatched module. The receipt's own step is checked live through the
+    complete, at the sealed HEAD, with easyicu from the clone's src, no
+    mismatched module and a temp dir inside the run root (never /tmp). The receipt's own step is checked live through the
     boot (``formal_boot_live``) before RUN_RECEIPT.json is written; outside
     the boot it is ``formal_boot_missing``.
     """
     root = Path(run_root)
     src = os.path.realpath(Path(code["import_path"]).parent)
     tools = os.path.realpath(root / FORMAL_TOOLS_DIR)
+    run_real = os.path.realpath(root)
     steps = {f"extract:{db}": (root / db / IMPORT_ORIGIN_FILE, "bench_local.py")
              for db in databases}
     steps.update({f"inputs:{step}": (root / f"IMPORT_ORIGIN.inputs_{step}.json",
@@ -446,7 +450,7 @@ def formal_import_origins(run_root: Path, sealed_sha: str, code: Mapping[str, An
             raise ReceiptError("formal_import_origin_missing",
                                f"{step} left no readable import-origin record", step=step,
                                path=str(path)) from exc
-        if not _origin_ok(record, sealed_sha, src, tools, script):
+        if not _origin_ok(record, sealed_sha, src, tools, script, run_real):
             raise ReceiptError("formal_import_origin_mismatch",
                                f"{step} did not run as the staged {script} under the boot with "
                                "clean import origins", step=step,
@@ -461,7 +465,7 @@ def formal_import_origins(run_root: Path, sealed_sha: str, code: Mapping[str, An
     mismatched = live.check()
     record = live.record
     if mismatched or not _origin_ok({**record, "complete": True}, sealed_sha, src, tools,
-                                    "formal_run_receipt.py"):
+                                    "formal_run_receipt.py", run_real):
         raise ReceiptError("formal_import_origin_mismatch",
                            "the receipt step's import origins are not clean", step="receipt",
                            mismatched=list(mismatched))

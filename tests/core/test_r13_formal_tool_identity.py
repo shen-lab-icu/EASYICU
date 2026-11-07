@@ -457,8 +457,10 @@ def boot_env(tmp_path):
     tools = tmp_path / "tools"
     tools.mkdir()
     shutil.copy(BOOT, tools / "formal_boot.py")
+    tmpdir = tmp_path / "private_tmp"
+    tmpdir.mkdir()
     return types.SimpleNamespace(clone=clone, sha=sha, tools=tools, tmp=tmp_path,
-                                 out=tmp_path / "origin.json")
+                                 out=tmp_path / "origin.json", tmpdir=tmpdir)
 
 
 def _boot(b, script: str, body: str, *, sha: str | None = None, site: str | None = None,
@@ -467,8 +469,9 @@ def _boot(b, script: str, body: str, *, sha: str | None = None, site: str | None
     target.write_text(body)
     argv = [sys.executable, "-I", "-S", "-P", str(b.tools / "formal_boot.py"), str(b.tools),
             str(b.clone), sha or b.sha, site or _site(), str(b.out), str(target), "a1"]
+    base = {"PATH": os.environ["PATH"], "TMPDIR": str(b.tmpdir)}
     return subprocess.run(argv, capture_output=True, text=True, cwd=cwd or b.tmp,
-                          env=env if env is not None else {"PATH": os.environ["PATH"]})
+                          env={**base, **env} if env is not None else base)
 
 
 def test_the_boot_runs_a_staged_script_with_clean_origins(boot_env):
@@ -568,7 +571,8 @@ def test_a_linked_script_in_the_tools_dir_is_exit_97(boot_env):
             str(boot_env.tools), str(boot_env.clone), boot_env.sha, _site(), str(boot_env.out),
             str(boot_env.tools / "bench_local.py")]
 
-    assert subprocess.run(argv, capture_output=True, env={"PATH": os.environ["PATH"]}).returncode == 97
+    env = {"PATH": os.environ["PATH"], "TMPDIR": str(boot_env.tmpdir)}
+    assert subprocess.run(argv, capture_output=True, env=env).returncode == 97
 
 
 def test_a_clone_not_at_the_seal_is_exit_97(boot_env):
@@ -582,7 +586,8 @@ def test_a_clone_not_at_the_seal_is_exit_97(boot_env):
 def _origin(run: Path, tools: Path, src: Path, sha: str, script: str, **change) -> dict:
     return {"complete": True, "mismatched": [], "head": sha, "src": os.path.realpath(src),
             "tools": os.path.realpath(tools), "path": os.path.realpath(src / "easyicu" / "x.py"),
-            "script": os.path.join(os.path.realpath(tools), script), "modules": {}, **change}
+            "script": os.path.join(os.path.realpath(tools), script), "modules": {},
+            "tmpdir": os.path.join(os.path.realpath(run), ".tmp"), **change}
 
 
 @pytest.fixture
@@ -619,6 +624,7 @@ def test_clean_step_records_and_a_clean_live_receipt_pass(origins):
     ("incomplete", "formal_import_origin_mismatch"),
     ("other_script", "formal_import_origin_mismatch"),
     ("other_head", "formal_import_origin_mismatch"),
+    ("tmp_outside", "formal_import_origin_mismatch"),
 ])
 def test_a_step_without_clean_origins_refuses_the_receipt(origins, change, code):
     path = origins.run / "sic" / "IMPORT_ORIGIN.json"
@@ -628,7 +634,8 @@ def test_a_step_without_clean_origins_refuses_the_receipt(origins, change, code)
         origins.write(path, "memgate.py" if change == "other_script" else "bench_local.py",
                       **{"mismatched": {"mismatched": ["evil_mod"]},
                          "incomplete": {"complete": False},
-                         "other_head": {"head": "d" * 40}}.get(change, {}))
+                         "other_head": {"head": "d" * 40},
+                         "tmp_outside": {"tmpdir": "/tmp"}}.get(change, {}))
 
     with pytest.raises(receipt.ReceiptError) as error:
         receipt.formal_import_origins(origins.run, origins.sha, origins.code, ["sic"])
@@ -645,3 +652,40 @@ def test_a_receipt_outside_the_boot_or_with_unclean_origins_is_refused(origins, 
     with pytest.raises(receipt.ReceiptError) as error:
         receipt.formal_import_origins(origins.run, origins.sha, origins.code, ["sic"])
     assert error.value.code == "formal_boot_missing"
+
+
+# No formal step writes to /tmp (supervisor rule for the smoke run).
+
+def test_the_boot_refuses_to_run_without_a_private_tmpdir(boot_env):
+    marker = boot_env.tmp / "ran"
+    target = boot_env.tools / "bench_local.py"
+    target.write_text(f"open({str(marker)!r}, 'w').close()\n")
+    argv = [sys.executable, "-I", "-S", "-P", str(boot_env.tools / "formal_boot.py"),
+            str(boot_env.tools), str(boot_env.clone), boot_env.sha, _site(), str(boot_env.out),
+            str(target)]
+
+    done = subprocess.run(argv, capture_output=True, text=True, env={"PATH": os.environ["PATH"]})
+    assert done.returncode == 97 and "formal_tmpdir_unset" in done.stderr and not marker.exists()
+
+
+def test_the_boot_records_the_temp_dir_in_use(boot_env):
+    done = _boot(boot_env, "bench_local.py", "import tempfile\ntempfile.mkstemp()\n")
+
+    assert done.returncode == 0, done.stderr
+    assert json.loads(boot_env.out.read_text())["tmpdir"] == os.path.realpath(boot_env.tmpdir)
+    assert list(boot_env.tmpdir.iterdir())  # the temp file went to the private dir
+
+
+def test_every_isolated_step_of_the_wrapper_sets_a_private_tmpdir():
+    lines = WRAPPER.read_text().splitlines()
+    launches = [i for i, line in enumerate(lines)
+                if "env -i" in line and not line.lstrip().startswith("#")]
+    assert len(launches) == 5
+    for i in launches:
+        block = " ".join(lines[i:i + 3])
+        assert "TMPDIR=" in block, lines[i]
+    body = WRAPPER.read_text()
+    for step in ("TMPDIR=$W/tmp JOBLIB_TEMP_FOLDER=$W/tmp", "TMPDIR=$IT JOBLIB_TEMP_FOLDER=$IT",
+                 "TMPDIR=$RS/tmp JOBLIB_TEMP_FOLDER=$RS/tmp",
+                 'export TMPDIR=$R/.tmp JOBLIB_TEMP_FOLDER=$R/.tmp'):
+        assert step in body

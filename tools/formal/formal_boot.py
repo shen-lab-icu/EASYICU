@@ -22,7 +22,10 @@ drivers, the receipt) only as a staged copy in TOOLS (the run's
   module must come from CLONE/src, every ``duckdb.*``/``pyarrow.*`` module
   from SITE_PACKAGES, every module named like a staged tool from that tool's
   own source in TOOLS (nothing else from TOOLS: no sourceless ``.pyc``), and
-  no module file from anywhere outside those four roots.
+  no module file from anywhere outside those four roots;
+* TMPDIR must name an existing directory (the wrapper's private one under
+  the run root); the temp dir in use is recorded and the receipt refuses
+  one outside the run root.
 
 Any mismatch is exit 97 (``import_origin_mismatch``). The record (paths,
 head, modules, mismatched, complete) is written to ORIGIN_OUT for the
@@ -41,6 +44,7 @@ import json  # noqa: E402  (every other import after the cut)
 import runpy  # noqa: E402
 import stat  # noqa: E402
 import subprocess  # noqa: E402
+import tempfile  # noqa: E402
 import types  # noqa: E402
 
 ORIGIN_EXIT = 97
@@ -63,7 +67,11 @@ def main() -> None:
     tool_names = {n[:-3] for n in os.listdir(tools) if n.endswith(".py")}
     roots = {"easyicu": [src], "duckdb": [site], "pyarrow": [site]}
     allowed = [tools, src, *(real(p) for p in stdlib), site]
+    if not os.path.isdir(os.environ.get("TMPDIR", "")):
+        print("formal_tmpdir_unset (a formal step never falls back to /tmp)", file=sys.stderr)
+        sys.exit(ORIGIN_EXIT)
     record = {"tools": tools, "src": src, "site_packages": site, "sha": sha,
+              "tmpdir": real(tempfile.gettempdir()),
               "sys_path": list(sys.path), "script": None, "path": None, "head": None,
               "modules": {}, "mismatched": [], "complete": False}
 
