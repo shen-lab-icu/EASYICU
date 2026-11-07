@@ -253,3 +253,129 @@ def test_operator_commits_invalid_pending_root(world, capsys):
         refusal["reason"] == "bucket_contract_invalid"
         and refusal["by"] == "operator_commit"
     )
+
+
+# ---- the tool itself is sealed: launched from the seal SHA's blobs; a swapped copy never runs
+
+
+@pytest.mark.parametrize("swap", ["permissive_pin", "disabled_check"])
+def test_a_swapped_tool_copy_is_refused(tmp_path, swap):
+    """The pin lives inside seal_rebuild.py, so a swapped tool could carry its own pin (or skip the
+    check): the tool runs only as the seal SHA's blob, byte for byte (tool_not_sealed)."""
+    w = make_world(tmp_path / "w", mode="extra_empty_dir")
+    try:
+        tools = tmp_path / "swapped_tools"
+        tools.mkdir()
+        shutil.copyfile(TOOLS / "footer_scan.py", tools / "footer_scan.py")
+        text = (TOOLS / "seal_rebuild.py").read_text()
+        if swap == "permissive_pin":
+            permissive = (
+                "class StorageIntegrityError(Exception):\n    pass\n"
+                "def validate_contract(root):\n    return None\n"
+            )
+            (tools / "bucket_compare.py").write_text(permissive)
+            pin = hashlib.sha256(permissive.encode()).hexdigest()
+            text = text.replace(sr.VALIDATOR_SHA256, pin)
+        else:
+            shutil.copyfile(TOOLS / "bucket_compare.py", tools / "bucket_compare.py")
+            text = text.replace(
+                "            self.module.validate_contract(bucket)\n",
+                "            return None\n",
+            )
+        assert text != (TOOLS / "seal_rebuild.py").read_text()
+        (tools / "seal_rebuild.py").write_text(text)
+        result = _run(
+            seal_args(w, "build1", "--only", "sic"), tools / "seal_rebuild.py"
+        )
+        assert result.returncode == 1
+        assert (
+            "all FAILED tool_not_sealed tools/seal_buckets/seal_rebuild.py"
+            in result.stdout
+        )
+        assert not _target(w).exists()
+    finally:
+        make_writable(w["root"])
+
+
+def test_acceptance_requires_the_sealed_tool_fingerprint(world, capsys):
+    assert sr.main(seal_args(world, "build1", "--only", "sic")) == 0
+    capsys.readouterr()
+    external = (
+        world["work"] / f"seal_{world['sha'][:9]}" / "build1" / "receipt_sic.json"
+    )
+    seal = sr.Seal(
+        sr.load_config(world["config"]), world["sha"], "build1", False, ["sic"], {}
+    )
+    inner = sr.accept_root(
+        _target(world), external, world["sha"], "build1", "sic", tool=seal.tool()
+    )
+    assert inner["tool"] == seal.tool() and len(inner["tool"]) == len(sr.SEALED_TOOLS)
+    other = dict(seal.tool(), **{sr.SEALED_TOOLS[0]: "0" * 64})
+    with pytest.raises(sr.SealError, match="receipt_tool_not_sealed"):
+        sr.accept_root(
+            _target(world), external, world["sha"], "build1", "sic", tool=other
+        )
+
+
+def test_the_launcher_runs_the_seal_shas_own_blobs_and_cleans_up(world, tmp_path):
+    launch_root = tmp_path / "launch"
+    launch_root.mkdir()
+    env = {
+        **{k: v for k, v in os.environ.items() if k != "PYTHONPATH"},
+        "SEAL_PYTHON": sys.executable,
+        "SEAL_MIRROR": json.loads(world["config"].read_text())["mirror"],
+        "SEAL_LAUNCH_ROOT": str(launch_root),
+    }
+    # A foreign local tool beside the wrapper must never run when a SHA is given.
+    local_tools = tmp_path / "local_tools"
+    local_tools.mkdir()
+    launcher = local_tools / "seal_rebuild.sh"
+    shutil.copyfile(TOOLS / "seal_rebuild.sh", launcher)
+    (local_tools / "seal_rebuild.py").write_text("raise SystemExit(99)\n")
+    done = subprocess.run(
+        [
+            "bash",
+            str(launcher),
+            *seal_args(world, "build1", "--only", "sic"),
+        ],
+        capture_output=True,
+        text=True,
+        env=env,
+        timeout=600,
+    )
+    assert done.returncode == 0, done.stdout + done.stderr
+    tool_line = next(x for x in done.stdout.splitlines() if " tool " in x)
+    assert (
+        f"{launch_root.resolve()}/seal_launch." in tool_line and "sealed" in tool_line
+    )
+    assert "sic PASS" in done.stdout
+    assert list(launch_root.iterdir()) == []  # the extraction is removed
+    # options before the SHA never reach an unsealed tool
+    for prefix in (["--config", str(world["config"])], ["--help"], ["-h"]):
+        early = subprocess.run(
+            ["bash", str(launcher), *prefix, world["sha"], "build1"],
+            capture_output=True,
+            text=True,
+            env=env,
+            timeout=30,
+        )
+        assert early.returncode == 2
+    unknown = subprocess.run(
+        ["bash", str(launcher), "0" * 40, "build1"],
+        capture_output=True,
+        text=True,
+        env=env,
+        timeout=30,
+    )
+    assert unknown.returncode == 1
+    assert "all FAILED seal_sha_unknown " + "0" * 40 in unknown.stdout
+    # The extracted tool's failure code also survives cleanup.
+    failed = subprocess.run(
+        ["bash", str(launcher), *seal_args(world, "build1", "--only", "sic")],
+        capture_output=True,
+        text=True,
+        env=env,
+        timeout=600,
+    )
+    assert failed.returncode == 1 and "target_exists" in failed.stdout
+    assert list(launch_root.iterdir()) == []

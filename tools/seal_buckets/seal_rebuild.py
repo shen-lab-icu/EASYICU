@@ -18,6 +18,15 @@ Usage (entry point: seal_rebuild.sh; never launched without coordinator-assigned
   --probe    (with --dry-run) clones the SHA and runs its builder on tiny synthetic tables in the work
              directory, applying the same strict QC (float fidelity, builder_code == SHA, clean).
 
+The SHA must be the launcher's first argument. SEAL_MIRROR selects the git mirror (default the server
+mirror); SEAL_PYTHON selects the interpreter (default the server's EasyICU venv). The launcher extracts
+seal_rebuild.py, footer_scan.py and bucket_compare.py from regular blobs at that SHA into a fresh,
+read-only directory under SEAL_LAUNCH_ROOT (else TMPDIR, else /tmp), runs with -I -S, and removes the
+extraction on exit. Only no arguments or a lone -h/--help use the local tool for usage/help. Before
+taking run locks, the tool verifies its own bytes and footer scanner against the seal SHA
+(tool_not_sealed), then records their SHA256 fingerprints as `tool` in bucket and farm receipts.
+Under -S the interpreter's site-packages is added explicitly for the validator, without site hooks.
+
 Exit codes: 0 every selected DB PASS (or DRY_RUN_OK / IDENTICAL), 1 any typed failure, 2 usage.
 Every failure is a typed reason in the status file and on stdout; nothing is swallowed. The exit code is
 decided from structured verdicts only (never from status text); any untyped exception is a failure.
@@ -90,15 +99,18 @@ Operator runbook (there is no automatic resume; a refused root stays refused unt
      the rename). First make sure no run of that SHA and mode is alive: no seal_rebuild process, no
      seal-<sha9>-<mode>-* scope, and the .seal_<sha9>_<mode>.lock files in work_root and b6_root free.
   2. Check both receipts: the in-root <target>/_SEAL_BUILD_RECEIPT.json (verdict PASS, seal_sha, build,
-     db) and the external $WORK_ROOT/seal_<sha9>/<build>/receipt_<db>.json (verdict PASS, no failure,
+     db, tool) and the external $WORK_ROOT/seal_<sha9>/<build>/receipt_<db>.json (verdict PASS, no failure,
      install.read_only_verified, install.in_root_receipt_sha256 == sha256 of the in-root receipt).
+     The `tool` fingerprints must match seal_rebuild.py and footer_scan.py at the seal SHA; compare
+     and operator commit refuse a missing or foreign fingerprint (receipt_tool_not_sealed).
   3. COMMIT only when the target carries a pending marker, no refusal marker, and both receipts pass:
        seal_rebuild.sh SHA build1|build2 --operator-commit DB [--farm] [--config CONFIG.json]
      It takes the same two run locks as a seal run of that SHA and mode (refused while a run or a
      seal-<sha9>-<mode>-* scope is alive), re-runs the full verification (acceptance with the pending
      marker allowed; the exact bucket set, each manifest against QC, the full bucket contract from the
-     sealed validator, sources, totals, the link closure; for a farm, its links and the bucket root it
-     depends on) and only then removes the pending marker. Any failure writes the refusal marker.
+     sealed validator, sources, totals, the link closure, and the sealed tool fingerprint; for a farm,
+     its links and the bucket root it depends on) and only then removes the pending marker. Any failure
+     writes the refusal marker.
   4. REMOVE in every other case (a refusal marker, a FAILED, missing or mismatched receipt): the target
      and its markers are deleted by the operator (make the tree writable first), then the run is
      repeated. The tool never commits a refused root and never removes anything on its own.
@@ -149,6 +161,13 @@ ORIGIN_EXIT = 97
 # seal SHA (or, for a standalone acceptance, this tool's sibling file), and only when those bytes hash to
 # this pin (tests/core/test_seal_bucket_round4.py keeps it equal to the file). Never imported.
 VALIDATOR_REL = "tools/seal_buckets/bucket_compare.py"
+# This tool and the sibling it executes must be the seal SHA's own blobs, byte for byte: the launcher
+# (seal_rebuild.sh) extracts them from the seal SHA into a fresh read-only directory, and every run (and
+# every acceptance) re-checks it, so the pin below cannot be swapped together with the tool.
+SEALED_TOOLS = (
+    "tools/seal_buckets/seal_rebuild.py",
+    "tools/seal_buckets/footer_scan.py",
+)
 VALIDATOR_SHA256 = "9a90bf08c9b2bd3f443cfa17f3ae487e13f71f86838b3e9eb2b716945e48aa7e"
 # Launches the seal clone's builder like `python <builder>` (sys.path[0] = scripts/), under `python -I -S`:
 # no PYTHONPATH, no current directory and no site hook (sitecustomize, usercustomize, .pth) can add code.
@@ -479,6 +498,12 @@ class Seal:
 
     def verdict(self, db: str) -> str:
         return self.status.get(db, ("FAILED", ""))[0]
+
+    def tool(self) -> dict:
+        """This tool's sealed fingerprint (checked against the seal SHA's blobs, cached per run)."""
+        if getattr(self, "_tool", None) is None:
+            self._tool = sealed_tool_fingerprint(self.gitd, self.full)
+        return self._tool
 
     def validator(self) -> Validator:
         """The contract validator from the seal SHA's git object (cached per run)."""
@@ -1019,17 +1044,40 @@ class Validator:
             ) from exc
 
 
-def load_validator_from_git(git_dir: str, sha: str) -> Validator:
-    """The validator as committed at the seal SHA: a regular blob (a link is refused), its bytes."""
-    tree = git(["ls-tree", sha, "--", VALIDATOR_REL], git_dir=git_dir).split()
+def sealed_blob(git_dir: str, sha: str, rel: str, reason: str) -> bytes:
+    """A file's bytes as committed at the seal SHA: a regular blob (a link is refused)."""
+    tree = git(["ls-tree", sha, "--", rel], git_dir=git_dir).split()
     if len(tree) < 3 or tree[0] not in ("100644", "100755") or tree[1] != "blob":
-        raise SealError("validator_not_a_file", f"{sha[:9]}:{VALIDATOR_REL}")
+        raise SealError(reason, f"{sha[:9]}:{rel}")
     done = subprocess.run(
         ["git", "--git-dir", git_dir, "cat-file", "blob", tree[2]], capture_output=True
     )
     if done.returncode != 0:
-        raise SealError("git_failed", f"cat-file {VALIDATOR_REL}")
-    return Validator(done.stdout, f"git:{sha[:9]}")
+        raise SealError("git_failed", f"cat-file {rel}")
+    return done.stdout
+
+
+def load_validator_from_git(git_dir: str, sha: str) -> Validator:
+    """The validator as committed at the seal SHA: a regular blob (a link is refused), its bytes."""
+    data = sealed_blob(git_dir, sha, VALIDATOR_REL, "validator_not_a_file")
+    return Validator(data, f"git:{sha[:9]}")
+
+
+def sealed_tool_fingerprint(git_dir: str, sha: str) -> dict:
+    """The running tool and its executed sibling must equal the seal SHA's blobs byte for byte
+    (tool_not_sealed otherwise); returns {path: sha256} for the receipts."""
+    out = {}
+    for rel in SEALED_TOOLS:
+        mine = Path(__file__).with_name(Path(rel).name)
+        try:
+            st = os.lstat(mine)
+            data = mine.read_bytes() if stat.S_ISREG(st.st_mode) else None
+        except OSError:
+            data = None
+        if data is None or data != sealed_blob(git_dir, sha, rel, "tool_not_sealed"):
+            raise SealError("tool_not_sealed", rel)
+        out[rel] = hashlib.sha256(data).hexdigest()
+    return out
 
 
 def load_validator_local() -> Validator:
@@ -1286,6 +1334,7 @@ def operator_commit(
     if mode not in ("build1", "build2"):
         raise SealError("operator_mode_invalid", mode)
     seal = Seal(cfg, sha, mode, False, [db], {})
+    seal.tool()  # the operator runs the sealed tool of this SHA, or nothing
     locks = acquire_run_lock(seal)
     try:
         if scope_alive(seal):
@@ -1308,6 +1357,7 @@ def operator_commit(
                 allow_pending=True,
                 validator=validator,
                 allowed_roots=allowed,
+                tool=seal.tool(),
             )
             commit_install(target, validator, allowed)
         except SealError as exc:
@@ -1331,6 +1381,7 @@ def operator_commit(
             db,
             validator=validator,
             allowed_roots=allowed,
+            tool=seal.tool(),
         )
     finally:
         locks.close()
@@ -1358,6 +1409,7 @@ def accept_root(
     allow_pending: bool = False,
     validator: "Validator | None" = None,
     allowed_roots=None,
+    tool: dict | None = None,
 ) -> dict:
     """The acceptance gate for an installed root: a verified external PASS receipt, no refusal marker,
     no pending marker (only operator_commit passes allow_pending), the in-root receipt bound by sha256
@@ -1400,6 +1452,9 @@ def accept_root(
         raise SealError("in_root_receipt_not_pass", root.name)
     if writable_entries(root):
         raise SealError("root_not_read_only", root.name)
+    if tool is not None and inner.get("tool") != tool:
+        # a root is accepted only as built by the sealed tool of this SHA
+        raise SealError("receipt_tool_not_sealed", root.name)
     verify_final_set(root, inner, validator or load_validator_local(), allowed_roots)
     return inner
 
@@ -1805,6 +1860,7 @@ def run_db(seal: Seal, db: str, plan: dict, code: Path) -> None:
         # frozen tree before anything is published (delta29t (b))
         validator = seal.validator()
         receipt["validator"] = validator.fingerprint
+        receipt["tool"] = seal.tool()
         for table in receipt["tables"]:
             check_bucket_contract(staging / f"{table}_bucket", table, validator)
         # the exact final bucket set the in-root receipt binds; each manifest must still be QC's
@@ -1896,6 +1952,7 @@ def assemble_farm(seal: Seal, db: str, plan: dict, bucket_root: Path) -> None:
     # the farm carries its own in-root receipt; a bucket root's _COMPLETE never stands for the farm
     validator, allowed = seal.validator(), seal.cfg["allowed_roots"]
     record["validator"] = validator.fingerprint
+    record["tool"] = seal.tool()
     installed = install(
         staging,
         farm,
@@ -1930,6 +1987,7 @@ def compare_db(seal: Seal, db: str) -> None:
                 db,
                 validator=seal.validator(),
                 allowed_roots=seal.cfg["allowed_roots"],
+                tool=seal.tool(),
             )
             for t, _ in spec["tables"]:
                 rec = (inner.get("tables") or {}).get(t) or {}
@@ -1955,6 +2013,7 @@ def compare_db(seal: Seal, db: str) -> None:
                 db,
                 validator=seal.validator(),
                 allowed_roots=seal.cfg["allowed_roots"],
+                tool=seal.tool(),
             )
         if seal.dry_run:
             seal.set_status(db, "DRY_RUN_OK")
@@ -2129,6 +2188,12 @@ def main(argv: list[str] | None = None) -> int:
         "--farm", action="store_true", help="with --operator-commit: the farm"
     )
     args = ap.parse_args(argv)
+    if (
+        sys.flags.no_site
+    ):  # launched -I -S: the validator's pyarrow/duckdb come from this venv only
+        site = site_packages(sys.executable)
+        if site not in sys.path:
+            sys.path.append(site)
     if args.operator_commit:
         try:
             inner = operator_commit(
@@ -2160,6 +2225,8 @@ def main(argv: list[str] | None = None) -> int:
             [d for d in args.only.split(",") if d],
             cores,
         )
+        seal.tool()  # tool_not_sealed unless this file is the seal SHA's blob (seal_rebuild.sh)
+        seal.log(f"tool {Path(__file__).resolve()} sealed {seal.s9}")
         run_lock = acquire_run_lock(seal)
         (seal.work / seal.mode).mkdir(parents=True, exist_ok=True)
         seal.log(
