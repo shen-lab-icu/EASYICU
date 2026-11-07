@@ -7316,6 +7316,8 @@ def _native_export_runtime_provenance(*, source_name: str | None = None) -> Dict
     import duckdb
     import pyarrow
 
+    from ..resolver_pool import resolver_pool_size
+
     package_root = Path(__file__).resolve().parents[1]
     repository_root = package_root.parents[1]
     foundation_files = {
@@ -7399,6 +7401,8 @@ def _native_export_runtime_provenance(*, source_name: str | None = None) -> Dict
         "pandas_version": pd.__version__,
         "pyarrow_version": pyarrow.__version__,
         "duckdb_version": duckdb.__version__,
+        # Calls on a shared loader each hold one of at most N resolvers.
+        "resolver_pool_size": resolver_pool_size(),
     }
 
 

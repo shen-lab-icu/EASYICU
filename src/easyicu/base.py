@@ -21,6 +21,7 @@ import pandas as pd
 from .datasource import ICUDataSource
 from .concept import ConceptResolver, ConceptDictionary
 from .value_failures import TYPED_VALUE_FAILURES
+from .resolver_pool import ResolverPool, call_resolver, resolver_call_scope
 from .storage_binding import binding_unit, child_binding, in_binding_unit
 from .databases.detection import (
     DatabaseDetectionError,
@@ -46,6 +47,10 @@ def _batch_patient_count(batch_ids: Union[List, Dict, None]) -> int:
     if isinstance(batch_ids, Sequence) and not isinstance(batch_ids, (str, bytes)):
         return len(batch_ids)
     return 0
+
+# Guards the lazy creation of a loader's resolver pool (one pool per loader).
+_RESOLVER_POOL_INIT = threading.Lock()
+
 
 class BaseICULoader:
     """
@@ -453,7 +458,11 @@ class BaseICULoader:
         This is useful when processing data in batches to ensure each batch
         uses fresh data and doesn't accumulate memory from previous batches.
         """
-        if hasattr(self, 'concept_resolver') and self.concept_resolver:
+        pool = getattr(self, '_resolver_pool', None)
+        if pool is not None:
+            for resolver in pool.members():
+                resolver.clear_table_cache(keep_concept_cache=False)
+        elif hasattr(self, 'concept_resolver') and self.concept_resolver:
             self.concept_resolver.clear_table_cache(keep_concept_cache=False)
         
         # Also try to clear datasource cache if it has one
@@ -468,6 +477,32 @@ class BaseICULoader:
     def _create_resolver_clone(self) -> ConceptResolver:
         """Create a fresh ConceptResolver sharing the same dictionary."""
         return ConceptResolver(dictionary=self.concept_dict)
+
+    def _resolver_pool_for_calls(self) -> ResolverPool:
+        """The bounded pool that lends each call one resolver (``easyicu.resolver_pool``).
+
+        Its first member is ``self.concept_resolver``; members created later
+        are registered with the cache manager like it.
+        """
+        pool = getattr(self, '_resolver_pool', None)
+        if pool is None:
+            with _RESOLVER_POOL_INIT:
+                pool = getattr(self, '_resolver_pool', None)
+                if pool is None:
+                    pool = ResolverPool(
+                        self.concept_resolver,
+                        self._create_resolver_clone,
+                        on_create=self._register_pool_resolver,
+                    )
+                    self._resolver_pool = pool
+        return pool
+
+    @staticmethod
+    def _register_pool_resolver(resolver: ConceptResolver) -> None:
+        try:
+            get_cache_manager().register_memory_cache(resolver)
+        except Exception as error:  # registration only feeds eviction; the load is unaffected
+            logger.warning("resolver pool: cache registration failed: %s", error)
 
     def _create_loader_clone(self) -> "BaseICULoader":
         """Create a lightweight fresh loader for isolated chunk execution."""
@@ -957,16 +992,25 @@ class BaseICULoader:
         resolver: Optional[ConceptResolver] = None,
         use_thread_resolver: bool = False,
     ) -> Union[pd.DataFrame, Dict[str, pd.DataFrame]]:
+        if resolver is None and not use_thread_resolver:
+            # A shared loader lends this call one resolver from its pool; a
+            # nested load in the same call reuses it (B18, resolver_pool).
+            with resolver_call_scope():
+                return self._load_concepts_once(
+                    concepts, patient_ids, interval, win_length, aggregate,
+                    keep_components, merge, r_compatible, concept_workers,
+                    extra_kwargs, preserve_cache=preserve_cache,
+                    resolver=call_resolver(self._resolver_pool_for_calls()),
+                )
+
         params = dict(extra_kwargs)
         verbose_flag = params.pop("verbose", self.verbose)
-        
+
         resolver_obj: ConceptResolver
         if resolver is not None:
             resolver_obj = resolver
-        elif use_thread_resolver:
-            resolver_obj = self._get_thread_resolver()
         else:
-            resolver_obj = self.concept_resolver
+            resolver_obj = self._get_thread_resolver()
 
         try:
             result = resolver_obj.load_concepts(

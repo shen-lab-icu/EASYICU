@@ -7,7 +7,7 @@ answers is in brackets.
 lead-r13 (0.2.0) is validated on SICdb 1.0.8, the default release, and
 remains compatible with SICdb 1.0.6 (the release is detected from the schema).
 
-## 2026-11-06 — sharing one resolver across threads needs `copy_context` [lead-r13, B-STAY-SCOPE `0feee4fed`, B18-REENTRY-DEADLOCK]
+## 2026-11-06 — sharing one resolver across threads needs `copy_context` [lead-r13, B-STAY-SCOPE `0feee4fed`, B18-REENTRY-DEADLOCK `723edab14`, resolver pool]
 
 **What changed.** Values do not move. A `ConceptResolver` runs one top-level
 `load_concepts` call at a time. A call from another context while one is
@@ -17,6 +17,15 @@ re-enters a running call can no longer deadlock it. Work that re-enters the
 running call joins it when run with `contextvars.copy_context().run` (the
 built-in concept workers already do this). Concurrent callers use one
 resolver each.
+
+`easyicu.load_concepts` shares one cached loader per database across threads,
+so each call checks out one resolver from that loader's bounded pool and
+returns it on exit; overlapping requests on one database both load. With all
+N resolvers out, a further call waits on the pool until one returns. N
+defaults to 4 (`EASYICU_RESOLVER_POOL_SIZE`) and is recorded in the export's
+`runtime_provenance.resolver_pool_size`. Each pooled resolver keeps its own
+bounded caches, so the pool can hold up to N times the per-resolver cache cap.
+Chunked loads keep their per-chunk resolvers and never use a pool member.
 
 ## 2026-11-06 — the DuckDB and pandas load paths publish the same rows [lead-r13, `f486570e2`]
 

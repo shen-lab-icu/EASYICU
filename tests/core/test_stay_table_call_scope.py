@@ -37,27 +37,12 @@ from easyicu.resolver_errors import ResolverBusyError
 from easyicu.resources import load_dictionary
 from easyicu.storage_binding import active_unit, binding_unit, live_units
 from tests.support.inprocess_extraction import inprocess_mp_context
-from tests.support.urine_raw_source import _source
+from tests.support.stay_call_sources import SYNTHETIC_EICU_IDS, synthetic_eicu
 
 pytestmark = pytest.mark.filterwarnings("ignore")
 
-_IDS = np.arange(1, 4)
-
-
-def _eicu(root: Path):
-    return _source(
-        root, "eicu",
-        patient=pd.DataFrame({
-            "patientunitstayid": _IDS, "patienthealthsystemstayid": _IDS,
-            "unitdischargeoffset": 6000, "hospitaladmitoffset": 0, "admissionweight": 70.0,
-        }),
-        vitalperiodic=pd.DataFrame({
-            "vitalperiodicid": _IDS, "patientunitstayid": _IDS, "observationoffset": 150,
-            "pasystolic": 25.0, "padiastolic": 15.0, "pamean": [30.0, 31.0, 32.0],
-            "heartrate": 80.0,
-        }),
-    )
-
+_IDS = SYNTHETIC_EICU_IDS
+_eicu = synthetic_eicu
 
 def _load(resolver, source, stays):
     return resolver.load_concepts(
