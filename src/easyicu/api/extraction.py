@@ -2784,22 +2784,36 @@ def _load_stream_module_batch(
     return result
 
 
+def _frozen_resolver_pool_config() -> Dict[str, object]:
+    """This (parent) process's frozen pool configuration, handed to each worker."""
+    from easyicu.resolver_pool import resolver_pool_config
+
+    return resolver_pool_config()
+
+
 def _write_isolated_stream_batch(
     module_name: str,
     concepts: List[str],
     load_kwargs: Dict,
     patient_ids: Dict,
+    resolver_pool_config: Optional[Dict],
     stay_binding: Optional[Dict],
     destination: str,
 ) -> None:
     """Extract one patient batch and atomically write it from a fresh process.
 
     ``stay_binding`` is the parent run's source binding: this child's
-    storage reads verify against it (``storage_binding``).
+    storage reads verify against it (``storage_binding``). It adopts the
+    run's frozen ``resolver_pool_config`` like a module worker.
     """
 
     import os
     from pathlib import Path
+
+    if resolver_pool_config is not None:
+        from easyicu.resolver_pool import adopt_resolver_pool_config
+
+        adopt_resolver_pool_config(resolver_pool_config)
 
     import pyarrow as pa
     import pyarrow.parquet as pq
@@ -3363,7 +3377,8 @@ def _stream_module_batches_to_parquet(
                             concepts,
                             batch_load_kwargs,
                             {id_col: batch_ids},
-                            stay_binding,
+                            _frozen_resolver_pool_config(),
+                            stay_binding,  # the binding and destination stay last
                             str(batch_part),
                         ),
                         daemon=False,
@@ -4977,6 +4992,7 @@ def _extract_module_group_worker(
     adaptive_stream_batches: bool = False,
     resource_budget_mb: Optional[float] = None,
     max_workers: Optional[int] = None,
+    resolver_pool_config: Optional[Dict] = None,
     stay_binding: Optional[Dict] = None,
 ):
     """在一个子进程中顺序提取一组共享源表的模块。
@@ -4991,10 +5007,17 @@ def _extract_module_group_worker(
 
     module_specs: [(module_name, [concepts...]), ...]，每个模块写
     ``output_root/<module_name>/``；特殊模块写 ``output_root/_special/``。
+
+    ``resolver_pool_config`` is the parent's frozen pool size and wait; the
+    worker adopts it, so the run's recorded values are the worker's.
     """
     import os
     import traceback
 
+    if resolver_pool_config is not None:
+        from easyicu.resolver_pool import adopt_resolver_pool_config
+
+        adopt_resolver_pool_config(resolver_pool_config)
     if max_workers is None:
         _extract_worker_env_setup(data_path, resource_budget_mb)
     else:
@@ -8869,7 +8892,8 @@ def extract_database(
                 group_adaptive_stream_batches,
                 resource_budget_mb,
                 max_workers,
-                run_stay_binding,
+                _frozen_resolver_pool_config(),
+                run_stay_binding,  # the run binding stays last
             ),
             # A memory-heavy streamed module may create one fresh process per
             # patient batch so the OS, not allocator heuristics, owns teardown.

@@ -311,3 +311,30 @@ def test_raw_loader_surfaces_a_typed_failure_without_a_per_concept_retry(
 
     assert exc_info.value is failure
     assert calls == [("feature_a", "feature_b")]  # no per-concept retry ran
+
+
+def test_raw_loader_keeps_a_typed_failure_from_the_per_concept_retry(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The per-concept catch re-raises typed failures too (not re-labelled)."""
+    root = tmp_path / "databases"
+    (root / "mimiciv").mkdir(parents=True)
+    _patch_distribution(monkeypatch)
+    failure = ResolverPoolExhausted(1, 0.5)
+
+    def fake_load(*, concepts: list[str], **_kwargs: object) -> pd.DataFrame:
+        if len(concepts) > 1:
+            raise RuntimeError("force the per-concept fallback")
+        raise failure
+
+    monkeypatch.setattr(easyicu, "load_concepts", fake_load)
+
+    with pytest.raises(ResolverPoolExhausted) as exc_info:
+        crossdb_review._load_raw_feature_data(
+            data_root=str(root),
+            concepts=["feature_a", "feature_b"],
+            databases=["miiv"],
+            max_patients=40,
+            sample_size=100,
+        )
+    assert exc_info.value is failure

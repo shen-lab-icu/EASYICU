@@ -10,8 +10,9 @@ report. The same holds for an exact sum refused because its exact total is
 beyond float64 (``ExactSumOverflowError``, lead-r13 delta4 D4-EXACT-CATCH).
 A resolver refusing a concurrent top-level call (``ResolverBusyError``,
 B18-REENTRY-DEADLOCK), a copied context loading through a call that already
-finished (``ResolverCallClosed``) and a pool wait that ran out
-(``ResolverPoolExhausted``, D27) are too: a fallback must not turn them into
+finished (``ResolverCallClosed``), a pool wait that ran out
+(``ResolverPoolExhausted``, D27) and a call whose joined workers outstayed
+that wait (``ResolverJoinTimeout``, D35) are too: a fallback must not turn them into
 an empty result. Handlers re-raise them first::
 
     except TYPED_VALUE_FAILURES:
@@ -23,7 +24,12 @@ an empty result. Handlers re-raise them first::
 from __future__ import annotations
 
 from .io.ts_utils import IntervalAggregationError, TimeAxisUnitError
-from .resolver_errors import ResolverBusyError, ResolverCallClosed, ResolverPoolExhausted
+from .resolver_errors import (
+    ResolverBusyError,
+    ResolverCallClosed,
+    ResolverJoinTimeout,
+    ResolverPoolExhausted,
+)
 from .storage_layout import StorageIntegrityError
 from .utils.exact_sum import ExactSumOverflowError
 
@@ -35,6 +41,7 @@ TYPED_VALUE_FAILURES: tuple[type[Exception], ...] = (
     ResolverBusyError,
     ResolverCallClosed,
     ResolverPoolExhausted,
+    ResolverJoinTimeout,
 )
 
 __all__ = ["TYPED_VALUE_FAILURES"]

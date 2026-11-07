@@ -39,6 +39,8 @@ from dataclasses import dataclass
 import pandas as pd
 import numpy as np
 
+from .value_failures import TYPED_VALUE_FAILURES
+
 logger = logging.getLogger(__name__)
 
 # 可选依赖
@@ -1045,6 +1047,8 @@ class MultiDatabaseDistribution:
                                 'concept': concept,
                                 'value': values.values
                             }))
+                except TYPED_VALUE_FAILURES:
+                    raise  # a typed value failure is the result, never a skipped concept
                 except Exception:
                     continue
             

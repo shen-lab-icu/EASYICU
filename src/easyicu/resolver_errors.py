@@ -71,3 +71,27 @@ class ResolverPoolExhausted(RuntimeError):
 
     def __reduce__(self):
         return (type(self), (self.size, self.wait_seconds))
+
+
+class ResolverJoinTimeout(RuntimeError):
+    """A call's joined workers did not leave within the configured wait.
+
+    The call is refused rather than left waiting forever (a worker that waits
+    for something its call does only after returning). The resolver stays
+    held, and its depth, unit and caches untouched, until the last worker
+    has left; that worker finishes the call's cleanup.
+    """
+
+    reason = "resolver_join_timeout"
+
+    def __init__(self, workers: int, wait_seconds: float):
+        self.workers = int(workers)
+        self.wait_seconds = float(wait_seconds)
+        super().__init__(
+            f"resolver_join_timeout: {self.workers} worker(s) joined to this load_concepts "
+            f"call were still running after {self.wait_seconds:g} s; a joined worker must "
+            "not wait for its call to return. The resolver stays in use until they leave"
+        )
+
+    def __reduce__(self):
+        return (type(self), (self.workers, self.wait_seconds))

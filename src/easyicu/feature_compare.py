@@ -48,6 +48,7 @@ import numpy as np
 import pandas as pd
 
 from . import load_concepts
+from .value_failures import TYPED_VALUE_FAILURES
 from .runtime.project_config import (
     DEFAULT_PATIENTS_AUMC,
     DEFAULT_PATIENTS_EICU,
@@ -1128,6 +1129,8 @@ class RicuPyricuComparator:
                 verbose=False,
                 **self._loader_kwargs,
             )
+        except TYPED_VALUE_FAILURES:
+            raise  # a typed value failure is the result, never an empty table
         except Exception:
             return pd.DataFrame(columns=["stay_id", "charttime", "fio2"])
         keep = [c for c in ["stay_id", "charttime", "fio2"] if c in df.columns]

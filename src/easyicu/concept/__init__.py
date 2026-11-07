@@ -10,6 +10,7 @@ import json
 import logging
 import os
 import re
+import time
 import operator
 from collections import OrderedDict
 from datetime import datetime
@@ -17,7 +18,7 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 import hashlib
 from dataclasses import dataclass, field, replace, asdict
 from pathlib import Path
-from threading import Condition, Lock, RLock, local as thread_local
+from threading import Condition, Lock, RLock, get_ident, local as thread_local
 from typing import Dict, FrozenSet, Iterable, List, Mapping, MutableMapping, Optional, Union
 
 import numpy as np
@@ -753,7 +754,8 @@ def _in_binding_unit(method):
     @functools.wraps(method)
     def wrapper(self, *args, **kwargs):
         from ..resolver_errors import ResolverBusyError, ResolverCallClosed
-        from ..storage_binding import active_unit, binding_unit
+        from ..resolver_pool import resolver_pool_config
+        from ..storage_binding import active_unit, binding_unit, release_unit, retain_unit
         from .stay_tables import StayTableUnbound
 
         calls = _RESOLVER_CALLS.get()
@@ -763,13 +765,18 @@ def _in_binding_unit(method):
             # context. It joins the call as one more user and must find the
             # call still open and its live unit (D27-SCOPE-LIFETIME).
             entry = object()
+            unit = None
             try:
                 if not record.guard.join(record, entry):
                     raise ResolverCallClosed("copied context")
-                if active_unit() is None:
+                unit = active_unit()
+                if unit is None or not retain_unit(unit):
+                    unit = None
                     raise StayTableUnbound("load_concepts")
                 return method(self, *args, **kwargs)
             finally:
+                if unit is not None:
+                    release_unit(unit)  # the unit closes with its last user
                 record.guard.leave(record, entry)
         # A top-level call in this context. The resolver's per-call state
         # (depth, batch scope, request caches) is per instance, so one
@@ -782,7 +789,7 @@ def _in_binding_unit(method):
         # still releases it (D27-LOCK-CANCEL). The guard is released when
         # the call AND every joined worker have left.
         guard = _call_guard(self)
-        record = _ResolverCall(guard, id(self))
+        record = _ResolverCall(guard, self)
         try:
             if not guard.enter(record):
                 raise ResolverBusyError(id(self))
@@ -796,15 +803,12 @@ def _in_binding_unit(method):
                 try:
                     return method(self, *args, **kwargs)
                 finally:
-                    try:
-                        # The call ends with its joined workers: no new joins,
-                        # and the depth, unit and guard outlive any worker
-                        # still running in the call's copied context.
-                        guard.close_and_wait(record)
-                    finally:
-                        if self._load_depth:  # left before its own finally ran
-                            self._load_depth = 0
-                            self._end_top_level_load()
+                    # The call ends with its joined workers: no new joins, and
+                    # a bounded wait for those already in (D35-JOIN-DEADLINE).
+                    # On a timeout or an interrupt the depth, unit, caches and
+                    # guard stay as they are; the last user to leave finishes
+                    # the call (``_ResolverCall.finish``, D35-JOIN-CANCEL-DEPTH).
+                    guard.close_and_wait(record, resolver_pool_config()["wait_seconds"])
         finally:
             _RESOLVER_CALLS.set(calls)
             guard.leave(record, record)
@@ -815,13 +819,33 @@ def _in_binding_unit(method):
 class _ResolverCall:
     """One top-level call of one resolver; its users are the call and its joined workers."""
 
-    __slots__ = ("guard", "resolver_id", "users", "closed")
+    __slots__ = ("guard", "resolver", "resolver_id", "owner_thread", "users", "closed",
+                 "finishing", "cleanup")
 
-    def __init__(self, guard: "_CallGuard", resolver_id: int) -> None:
+    def __init__(self, guard: "_CallGuard", resolver) -> None:
         self.guard = guard
-        self.resolver_id = resolver_id
+        self.resolver = resolver
+        self.resolver_id = id(resolver)
+        self.owner_thread = get_ident()
         self.users = {self}  # the call itself; joined workers add their own entries
         self.closed = False
+        self.finishing = False
+        self.cleanup: list = []  # shared cleanup deferred to the last user
+
+    def finish(self) -> None:
+        """Run by the last user: the call's shared cleanup, then depth repair."""
+        resolver = self.resolver
+        pending, self.cleanup = self.cleanup, []
+        if resolver is not None and getattr(resolver, "_load_depth", 0):
+            # A call left before its own finally ran (or a worker was
+            # interrupted): nothing of this call is running any more.
+            resolver._load_depth = 0
+            if not pending:
+                pending.append(resolver._release_call_caches)
+            if get_ident() == self.owner_thread:
+                resolver._clear_request_state()
+        for step in pending:
+            step()
 
 
 class _CallGuard:
@@ -849,14 +873,28 @@ class _CallGuard:
             record.users.add(entry)
             return True
 
-    def close_and_wait(self, record: _ResolverCall) -> None:
-        """Close the call to new joins and wait for the workers already joined."""
+    def close_and_wait(self, record: _ResolverCall, wait_seconds: float) -> None:
+        """Close the call to new joins; wait (bounded) for the workers already joined."""
+        from ..resolver_errors import ResolverJoinTimeout
+
+        deadline = time.monotonic() + wait_seconds
         with self.mutex:
             if self.call is not record:
                 return
             record.closed = True
             while record.users - {record}:
-                self.changed.wait()
+                remaining = deadline - time.monotonic()
+                if remaining <= 0:
+                    raise ResolverJoinTimeout(len(record.users - {record}), wait_seconds)
+                self.changed.wait(remaining)
+
+    def defer_cleanup(self, record: _ResolverCall, step) -> bool:
+        """Leave ``step`` to the call's last user; False if the call is not held."""
+        with self.mutex:
+            if self.call is not record or record.finishing:
+                return False
+            record.cleanup.append(step)
+            return True
 
     def leave(self, record: _ResolverCall, entry) -> None:
         with self.mutex:
@@ -866,12 +904,18 @@ class _CallGuard:
             self.changed.notify_all()
             if entry is record:
                 record.closed = True
-            if not (record.closed and not record.users):
+            if not (record.closed and not record.users) or record.finishing:
                 return
-            self.call = None
-            after, self.after = self.after, []
-        for callback in after:
-            callback()
+            record.finishing = True
+        try:
+            record.finish()  # the guard stays held until the cleanup is done
+        finally:
+            with self.mutex:
+                self.call = None
+                after, self.after = self.after, []
+                self.changed.notify_all()
+            for callback in after:
+                callback()
 
     def defer(self, callback) -> bool:
         """Run ``callback`` when the running call ends; False if none is running."""
@@ -2596,10 +2640,29 @@ class ConceptResolver:
             self._load_depth -= 1
             # 🔧 只有顶层调用才清除概念缓存和inflight，避免递归概念内部调用清除外层所需的缓存
             if is_top_level:
-                self._end_top_level_load()
+                self._finish_top_level_load()
 
     def _end_top_level_load(self) -> None:
         """Release a top-level call's caches and request state (every exit path)."""
+        self._clear_request_state()
+        self._release_call_caches()
+
+    def _finish_top_level_load(self) -> None:
+        """End of the top-level body: this thread's request state now; shared caches
+        once the call's last joined worker has left (D35-JOIN-CANCEL-DEPTH)."""
+        self._clear_request_state()
+        record = next((c for c in _RESOLVER_CALLS.get() if c.resolver_id == id(self)), None)
+        if record is None or not record.guard.defer_cleanup(record, self._release_call_caches):
+            self._release_call_caches()
+
+    def _clear_request_state(self) -> None:
+        """This thread's request state (inflight set, requested results)."""
+        self._get_inflight().clear()
+        self._thread_local.requested_names = None
+        self._thread_local.requested_results = None
+
+    def _release_call_caches(self) -> None:
+        """The call's shared caches, then the allocator."""
         with self._cache_lock:
             self._concept_cache.clear()
             # 🔧 _concept_data_cache 始终清除：在全患者规模(200K+)下
@@ -2613,17 +2676,10 @@ class ConceptResolver:
                 self._drop_cache_accounting()
             else:
                 self._drop_cache_accounting('concept', 'data')
-            # 清除当前线程的inflight集合
-            self._get_inflight().clear()
 
-        # Drop request-owned component references before asking the
-        # allocator to release memory.  Keeping them until after
-        # ``release_memory`` made that call ineffective for exactly
-        # the large SOFA component frames this map is designed to
-        # reuse.
-        self._thread_local.requested_names = None
-        self._thread_local.requested_results = None
-
+        # Request-owned component references were dropped first
+        # (``_clear_request_state``): keeping them past ``release_memory``
+        # made that call ineffective for the large SOFA component frames.
         # 🔧 释放碎片内存
         from ..runtime.memory_manager import release_memory
         release_memory()

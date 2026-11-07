@@ -378,3 +378,303 @@ def test_run_metadata_records_the_frozen_pool_values_not_a_later_environment(mon
 
     record = _native_export_runtime_provenance()
     assert (record["resolver_pool_size"], record["resolver_pool_wait_seconds"]) == (3, 7.0)
+
+
+# -- delta35t -----------------------------------------------------------------
+
+ResolverJoinTimeout = getattr(resolver_errors, "ResolverJoinTimeout", _Absent)
+
+
+def _line_starts(frame, prefix: str) -> bool:
+    import linecache
+
+    return linecache.getline(frame.f_code.co_filename, frame.f_lineno).strip().startswith(prefix)
+
+
+def _owner_with_unjoined_worker(resolver, source, *, worker_waits_for):
+    """The owner's body starts a copied-context worker whose nested load waits on an event."""
+    real = stay_tables.stay_table_frame
+    started = threading.Event()
+    in_worker = threading.local()
+    box: dict = {}
+
+    def frame(data_source, table, stays, read, **kwargs):
+        if getattr(in_worker, "on", False):
+            started.set()
+            worker_waits_for.wait(timeout=60)
+        elif "worker" not in box:
+            def nested():
+                in_worker.on = True
+                try:
+                    box["nested"] = _load(resolver, source, [1])
+                except BaseException as error:  # noqa: BLE001 - asserted by callers
+                    box["nested"] = error
+
+            box["worker"] = threading.Thread(
+                target=contextvars.copy_context().run, args=(nested,), daemon=True)
+            box["worker"].start()
+            assert started.wait(timeout=30)
+        return real(data_source, table, stays, read, **kwargs)
+
+    return frame, box
+
+
+def test_a_joined_worker_wait_has_a_deadline_and_the_last_user_finishes_the_call(tmp_path, monkeypatch):
+    """Reviewer probe joined_worker_wait_has_no_deadline (D35-JOIN-DEADLINE)."""
+    monkeypatch.setenv(pool_module.POOL_WAIT_ENV, "0.3")
+    source = _eicu(tmp_path / "eicu")
+    resolver = _resolver()
+    expected = _load(_resolver(), source)
+    nested_expected = _load(_resolver(), source, [1])
+    owner_returned = threading.Event()
+    real = stay_tables.stay_table_frame
+    frame, box = _owner_with_unjoined_worker(resolver, source, worker_waits_for=owner_returned)
+    monkeypatch.setattr(stay_tables, "stay_table_frame", frame)
+    owner_done = threading.Event()
+
+    def owner():
+        try:
+            box["owner"] = _load(resolver, source)
+        except BaseException as error:  # noqa: BLE001 - asserted below
+            box["owner"] = error
+        finally:
+            owner_returned.set()  # the worker needs the owner's return
+            owner_done.set()
+
+    thread = threading.Thread(target=owner, daemon=True)
+    thread.start()
+    finished = owner_done.wait(timeout=10)
+    owner_returned.set()  # rescue a version without a deadline
+    thread.join(timeout=60)
+    box["worker"].join(timeout=60)
+    assert finished, "the owner waited past the configured wait for its joined worker"
+    assert isinstance(box["owner"], ResolverJoinTimeout), box["owner"]
+    pd.testing.assert_frame_equal(box["nested"], nested_expected, check_exact=True)
+    assert not _guard_held(resolver) and resolver._load_depth == 0
+    monkeypatch.setattr(stay_tables, "stay_table_frame", real)
+    pd.testing.assert_frame_equal(_load(resolver, source), expected, check_exact=True)
+
+
+def test_an_interrupted_join_wait_leaves_depth_to_the_last_user(tmp_path, monkeypatch):
+    """Reviewer probe cancel_join_wait_corrupts_depth (D35-JOIN-CANCEL-DEPTH)."""
+    source = _eicu(tmp_path / "eicu")
+    resolver = _resolver()
+    expected = _load(_resolver(), source)
+    release = threading.Event()
+    real = stay_tables.stay_table_frame
+    frame, box = _owner_with_unjoined_worker(resolver, source, worker_waits_for=release)
+    monkeypatch.setattr(stay_tables, "stay_table_frame", frame)
+    concept_file = concept_module.__file__
+    hit: list = []
+
+    def tracer(frame_, event, arg):
+        if (not hit and event == "line" and frame_.f_code.co_filename == concept_file
+                and frame_.f_code.co_name == "close_and_wait"
+                and _line_starts(frame_, "self.changed.wait(")):
+            hit.append(True)
+            raise KeyboardInterrupt()
+        return tracer
+
+    def owner():
+        sys.settrace(tracer)
+        try:
+            box["owner"] = _load(resolver, source)
+        except BaseException as error:  # noqa: BLE001 - asserted below
+            box["owner"] = error
+        finally:
+            sys.settrace(None)
+
+    thread = threading.Thread(target=owner, daemon=True)
+    try:
+        thread.start()
+        thread.join(timeout=30)
+        assert hit and isinstance(box["owner"], KeyboardInterrupt), box.get("owner")
+        assert box["worker"].is_alive()
+        # The worker still runs inside the call: its depth and guard are intact.
+        assert resolver._load_depth >= 1
+        assert _guard_held(resolver)
+    finally:
+        release.set()
+    box["worker"].join(timeout=60)
+    assert isinstance(box["nested"], pd.DataFrame), box["nested"]
+    assert resolver._load_depth == 0 and not _guard_held(resolver)
+    monkeypatch.setattr(stay_tables, "stay_table_frame", real)
+    # A fresh call is served, not refused as unbound.
+    pd.testing.assert_frame_equal(_load(resolver, source), expected, check_exact=True)
+
+
+def test_an_interrupted_scope_release_is_resumed(monkeypatch):
+    """Reviewer probe cancel_scope_finalization_leaks_lease (D35-RELEASE-CANCEL)."""
+    pool = ResolverPool(object(), object, size=1, wait_seconds=0.3)
+    pool_file = pool_module.__file__
+    box: dict = {}
+    hit: list = []
+
+    def tracer(frame_, event, arg):
+        if (not hit and event == "line" and frame_.f_code.co_filename == pool_file
+                and frame_.f_code.co_name == "leave" and _line_starts(frame_, "for pool in pools")):
+            hit.append(True)
+            raise KeyboardInterrupt()
+        return tracer
+
+    sys.settrace(tracer)
+    try:
+        with pytest.raises(KeyboardInterrupt):
+            with resolver_call_scope():
+                box["scope"] = pool_module._CALL_SCOPE.get()
+                call_resolver(pool)
+    finally:
+        sys.settrace(None)
+    assert hit
+    # The next call is served (the pool takes back the finished scope's lease).
+    with resolver_call_scope():
+        assert call_resolver(pool) is pool.members()[0]
+    assert pool.stats() == {"size": 1, "members": 1, "idle": 1}
+    box["scope"].leave(box["scope"].owner)  # a repeated leave is harmless
+    assert pool.stats() == {"size": 1, "members": 1, "idle": 1}
+
+
+def test_feature_tools_surface_a_typed_failure(tmp_path, monkeypatch):
+    """NB: cohort_visualization.load_feature_data and feature_compare._load_easyicu_fio2."""
+    import easyicu
+    from easyicu import cohort_visualization, feature_compare
+
+    failure = resolver_errors.ResolverPoolExhausted(1, 0.5)
+
+    def refuse(*args, **kwargs):
+        raise failure
+
+    monkeypatch.setattr(easyicu, "load_concepts", refuse)
+    (tmp_path / "eicu").mkdir()
+    distribution = cohort_visualization.MultiDatabaseDistribution(data_root=str(tmp_path), language="en")
+    monkeypatch.setattr(distribution, "_get_db_path", lambda db: tmp_path / db)
+    with pytest.raises(type(failure)):
+        distribution.load_feature_data(["hr"], ["eicu"], max_patients=5, sample_size=5)
+
+    monkeypatch.setattr(feature_compare, "load_concepts", refuse)
+    comparator = feature_compare.RicuPyricuComparator.__new__(feature_compare.RicuPyricuComparator)
+    comparator.database, comparator.data_path = "eicu", tmp_path / "eicu"
+    comparator.test_patients, comparator._loader_kwargs = None, {}
+    with pytest.raises(type(failure)):
+        comparator._load_easyicu_fio2()
+
+
+# -- delta38t -----------------------------------------------------------------
+
+def _receive(connection):
+    """The child's report, or None if it died first (its exit code then tells why)."""
+    try:
+        return connection.recv() if connection.poll(1) else None
+    except EOFError:
+        return None
+
+
+def _start_method_available(method: str) -> bool:
+    import multiprocessing
+
+    return method in multiprocessing.get_all_start_methods()
+
+
+@pytest.mark.skipif(not _start_method_available("fork"), reason="no fork start method")
+@pytest.mark.parametrize("frozen", [True, False], ids=["frozen", "first-freeze-in-child"])
+def test_a_fork_worker_started_while_the_config_lock_is_held_completes(monkeypatch, frozen):
+    """Reviewer probe process_probes run('fork', contended=True) (D38-FORK-LOCK)."""
+    import multiprocessing
+
+    from tests.support.pool_process_children import read_pool_config
+
+    monkeypatch.setenv(pool_module.POOL_SIZE_ENV, "3")
+    monkeypatch.setenv(pool_module.POOL_WAIT_ENV, "7")
+    if frozen:
+        pool_module.resolver_pool_config()
+    holding, release = threading.Event(), threading.Event()
+    lock = pool_module._CONFIG_LOCK
+
+    def hold():
+        with lock:
+            holding.set()
+            release.wait(timeout=60)
+
+    holder = threading.Thread(target=hold, daemon=True)
+    holder.start()
+    assert holding.wait(timeout=10)
+    context = multiprocessing.get_context("fork")
+    receive, send = context.Pipe(duplex=False)
+    child = context.Process(target=read_pool_config, args=(send,))
+    try:
+        child.start()  # forked while another thread holds the configuration lock
+        send.close()
+        child.join(timeout=30)  # the child's own alarm ends a hang first
+        got = _receive(receive)
+    finally:
+        release.set()
+        holder.join(timeout=10)
+        if child.is_alive():
+            child.kill()
+            child.join(timeout=10)
+    assert child.exitcode == 0, f"fork child did not complete (exit {child.exitcode})"
+    assert got == (3, 7.0)
+
+
+@pytest.mark.parametrize("method", [m for m in ("spawn", "fork") if _start_method_available(m)])
+def test_workers_adopt_the_parents_frozen_pool_config(monkeypatch, method):
+    """NB: a worker records and uses its run's pool values, not its own environment's."""
+    import multiprocessing
+
+    from tests.support.pool_process_children import adopt_pool_config
+
+    monkeypatch.setenv(pool_module.POOL_SIZE_ENV, "3")
+    monkeypatch.setenv(pool_module.POOL_WAIT_ENV, "7")
+    parent = pool_module.resolver_pool_config()
+    monkeypatch.setenv(pool_module.POOL_SIZE_ENV, "5")
+    monkeypatch.setenv(pool_module.POOL_WAIT_ENV, "9")
+    context = multiprocessing.get_context(method)
+    receive, send = context.Pipe(duplex=False)
+    child = context.Process(
+        target=adopt_pool_config,
+        args=(send, parent, pool_module.POOL_SIZE_ENV, pool_module.POOL_WAIT_ENV),
+    )
+    child.start()
+    send.close()
+    child.join(timeout=60)
+    got = _receive(receive)
+    if child.is_alive():
+        child.kill()
+    assert child.exitcode == 0 and got is not None, f"worker failed (exit {child.exitcode})"
+    adopted, size, wait_seconds = got
+    assert adopted == parent == {"size": 3, "wait_seconds": 7.0}
+    assert (size, wait_seconds) == (3, 7.0)
+
+
+def test_extraction_hands_its_frozen_pool_config_to_each_module_worker(tmp_path, monkeypatch):
+    """NB: the module worker receives the run's frozen values; the manifest records them."""
+    import json
+
+    from easyicu.api import extraction
+    from easyicu.synthetic_sources import generate_source
+    from tests.support.inprocess_extraction import inprocess_mp_context
+
+    monkeypatch.setenv(pool_module.POOL_SIZE_ENV, "3")
+    monkeypatch.setenv(pool_module.POOL_WAIT_ENV, "7")
+    pool_module.resolver_pool_config()
+    monkeypatch.setenv(pool_module.POOL_SIZE_ENV, "5")
+    monkeypatch.setenv(pool_module.POOL_WAIT_ENV, "9")
+    root = tmp_path / "aumc"
+    generate_source(root, "aumc", stays=4)
+    handed: list = []
+    real_worker = extraction._extract_module_group_worker
+
+    def recording(*args):
+        handed.append(args[-2])  # the run binding stays last
+        return real_worker(*args)
+
+    monkeypatch.setattr(extraction, "_extract_module_group_worker", recording)
+    monkeypatch.setattr(extraction, "_get_extraction_mp_context", inprocess_mp_context)
+    extraction.extract_database(
+        "aumc", data_path=str(root), output_dir=str(tmp_path / "export"),
+        modules=["vitals", "outcome"], native_export_v2=True, verbose=False,
+    )
+    assert handed and all(value == {"size": 3, "wait_seconds": 7.0} for value in handed)
+    manifest = json.loads((tmp_path / "export" / "_manifest.json").read_text(encoding="utf-8"))
+    provenance = manifest["runtime_provenance"]
+    assert (provenance["resolver_pool_size"], provenance["resolver_pool_wait_seconds"]) == (3, 7.0)

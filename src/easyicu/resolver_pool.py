@@ -52,6 +52,7 @@ __all__ = [
     "POOL_WAIT_ENV",
     "ResolverPool",
     "call_resolver",
+    "adopt_resolver_pool_config",
     "resolver_call_scope",
     "resolver_pool_config",
     "resolver_pool_size",
@@ -101,14 +102,53 @@ def resolver_pool_config() -> dict:
 
     Every pool created without explicit values uses them, and run metadata
     records them, so a later change of the environment cannot make the
-    record disagree with the pools that served the run.
+    record disagree with the pools that served the run. Once frozen, a read
+    takes no lock (one tuple read); only the first freeze is locked, and a
+    forked child gets a fresh lock (D38-FORK-LOCK).
     """
     global _CONFIG
+    frozen = _CONFIG
+    if frozen is None:
+        with _CONFIG_LOCK:
+            if _CONFIG is None:
+                _CONFIG = (resolver_pool_size(), resolver_pool_wait_seconds())
+            frozen = _CONFIG
+    size, wait_seconds = frozen
+    return {"size": size, "wait_seconds": wait_seconds}
+
+
+def adopt_resolver_pool_config(config) -> dict:
+    """Freeze a worker process to its parent's pool configuration.
+
+    Extraction passes the parent's frozen values to every module worker, so
+    the run's recorded configuration is the one each worker used. A worker
+    already frozen to different values (it read its own environment first)
+    is refused.
+    """
+    global _CONFIG
+    wanted = (int(config["size"]), float(config["wait_seconds"]))
+    if wanted[0] < 1 or not math.isfinite(wanted[1]) or wanted[1] <= 0:
+        raise ValueError(f"resolver pool configuration out of range: {config!r}")
     with _CONFIG_LOCK:
         if _CONFIG is None:
-            _CONFIG = (resolver_pool_size(), resolver_pool_wait_seconds())
-        size, wait_seconds = _CONFIG
-    return {"size": size, "wait_seconds": wait_seconds}
+            _CONFIG = wanted
+        elif _CONFIG != wanted:
+            raise RuntimeError(
+                f"resolver_pool_config_mismatch: this worker already uses {_CONFIG}, "
+                f"its run uses {wanted}"
+            )
+    return resolver_pool_config()
+
+
+def _fresh_config_lock_in_child() -> None:
+    # A lock held by another thread at fork stays locked forever in the child
+    # (its owner thread does not exist there). Keep the frozen tuple.
+    global _CONFIG_LOCK
+    _CONFIG_LOCK = threading.Lock()
+
+
+if hasattr(os, "register_at_fork"):
+    os.register_at_fork(after_in_child=_fresh_config_lock_in_child)
 
 
 def _reset_resolver_pool_config() -> None:
@@ -178,6 +218,7 @@ class ResolverPool:
                 held = self._held_by(owner)
                 if held is not None:
                     return held
+                self._reclaim_finished()
                 free = [slot for slot in self._slots if slot.owner is None]
                 if free:
                     slot = next((s for s in free if s.resolver is self._primary), free[-1])
@@ -198,15 +239,27 @@ class ResolverPool:
         """Return every resolver leased to ``owner``; one still running returns when its call ends."""
         with self._condition:
             for slot in self._slots:
-                if slot.owner is not owner:
-                    continue
-                if self._defer_until_idle is not None and self._defer_until_idle(
-                    slot.resolver, lambda slot=slot, owner=owner: self._returned(slot, owner)
-                ):
-                    slot.owner = _RETURNING
-                else:
-                    slot.owner = None
+                if slot.owner is owner:
+                    self._return_slot(slot, owner)
             self._condition.notify_all()
+
+    def _return_slot(self, slot, owner) -> None:
+        # Under the condition. The deferral is registered before the slot is
+        # marked, and ``_returned`` accepts either mark, so an interrupt in
+        # between cannot strand the slot.
+        if self._defer_until_idle is not None and self._defer_until_idle(
+            slot.resolver, lambda slot=slot, owner=owner: self._returned(slot, owner)
+        ):
+            slot.owner = _RETURNING
+        else:
+            slot.owner = None
+
+    def _reclaim_finished(self) -> None:
+        """Take back leases of scopes that finished but whose release did not complete."""
+        for slot in self._slots:
+            finished = getattr(slot.owner, "finished", None)
+            if finished is not None and finished():
+                self._return_slot(slot, slot.owner)
 
     def _returned(self, slot, owner) -> None:
         with self._condition:
@@ -239,7 +292,14 @@ class ResolverPool:
 
 
 class _CallScope:
-    """One call's leases; closed when its owner exits, released after its last user."""
+    """One call's leases; closed when its owner exits, released after its last user.
+
+    ``finished`` (closed, no users left) is what makes its leases returnable;
+    ``released`` is set only after every pool has taken them back. The
+    release is idempotent, so an interrupted one is resumed by a later
+    ``leave`` or by the pool itself (``ResolverPool`` reclaims the leases of
+    a finished scope, D35-RELEASE-CANCEL).
+    """
 
     __slots__ = ("lock", "owner", "users", "closed", "released", "pools")
 
@@ -251,17 +311,21 @@ class _CallScope:
         self.released = False
         self.pools: list = []
 
+    def finished(self) -> bool:
+        return self.closed and not self.users
+
     def leave(self, entry) -> None:
         with self.lock:
             self.users.discard(entry)
             if entry is self.owner:
                 self.closed = True
-            release = self.closed and not self.users and not self.released
-            if release:
-                self.released = True
-            pools = list(self.pools) if release else []
+            if not self.finished() or self.released:
+                return
+            pools = list(self.pools)
         for pool in pools:
-            pool.release(self)
+            pool.release(self)  # idempotent: returns only what is still leased to us
+        with self.lock:
+            self.released = True
 
 
 _CALL_SCOPE: contextvars.ContextVar[Optional[_CallScope]] = contextvars.ContextVar(

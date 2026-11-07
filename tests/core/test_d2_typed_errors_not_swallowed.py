@@ -24,7 +24,12 @@ import pytest
 import easyicu
 from easyicu.io import ts_utils
 from easyicu.io.ts_utils import IntervalAggregationError, TimeAxisUnitError
-from easyicu.resolver_errors import ResolverBusyError, ResolverCallClosed, ResolverPoolExhausted
+from easyicu.resolver_errors import (
+    ResolverBusyError,
+    ResolverCallClosed,
+    ResolverJoinTimeout,
+    ResolverPoolExhausted,
+)
 from easyicu.storage_layout import StorageIntegrityError, TableScanError
 from easyicu.utils.exact_sum import ExactSumOverflowError
 from easyicu.value_failures import TYPED_VALUE_FAILURES
@@ -60,6 +65,7 @@ def test_the_shared_tuple_names_every_type():
     assert set(TYPED_VALUE_FAILURES) == {
         IntervalAggregationError, StorageIntegrityError, ExactSumOverflowError,
         TimeAxisUnitError, ResolverBusyError, ResolverCallClosed, ResolverPoolExhausted,
+        ResolverJoinTimeout,  # delta35t D35-JOIN-DEADLINE
     }
 
 

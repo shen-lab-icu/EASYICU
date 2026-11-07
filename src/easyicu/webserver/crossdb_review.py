@@ -1382,6 +1382,8 @@ def _load_raw_feature_data(
                         )
                     except _CrossdbRawCancelled:
                         raise
+                    except TYPED_VALUE_FAILURES:
+                        raise  # keeps its type; not re-labelled as a concept failure
                     except Exception as exc:
                         raise CrossdbReviewError(
                             {
