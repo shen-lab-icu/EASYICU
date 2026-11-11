@@ -789,9 +789,14 @@ async def _bounded_streaming_response(request: Request, upstream_payload: dict):
         raise
 
     if upstream_response.status_code >= 400:
-        data = _json_or_text(upstream_response)
-        upstream_response.close()
-        await slot.__aexit__(None, None, None)
+        # The error body of a streamed response is still unread: reading it is
+        # blocking network I/O, so do it off the event loop. The response and
+        # the slot are released even if the read raises or is cancelled.
+        try:
+            data = await run_in_threadpool(_json_or_text, upstream_response)
+        finally:
+            upstream_response.close()
+            await slot.__aexit__(None, None, None)
         return JSONResponse(status_code=upstream_response.status_code, content=data)
 
     async def _release_after(iterator):
