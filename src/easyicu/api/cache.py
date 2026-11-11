@@ -13,7 +13,10 @@ from typing import Callable, Dict, List, Optional, Union
 
 import pandas as pd
 
-from easyicu.concept.definition_identity import optional_dictionary_files_fingerprint
+from easyicu.concept.definition_identity import (
+    concept_computation_identity,
+    optional_dictionary_files_fingerprint,
+)
 from easyicu.content_identity import data_path_fingerprint
 
 #: Environment variable carrying the secret for ``.trusted.pkl`` HMAC signing.
@@ -127,6 +130,9 @@ def load_concept_cached_impl(
         # The dictionary's content and the computation version, not its
         # path: an edit at the same path must recompute (11-03 review).
         "dictionary_identity": optional_dictionary_files_fingerprint(kwargs.get("dict_path")),
+        # The code that computes the values, bound even when the dictionary
+        # has no file identity: an upgrade must recompute (11-11 review P1-2).
+        "computation_identity": concept_computation_identity(),
     }
     cache_key = get_cache_key_fn(concept_list, source, **cache_params)
     cache_file = resolved_cache_dir / (
