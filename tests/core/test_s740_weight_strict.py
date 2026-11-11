@@ -82,3 +82,32 @@ def test_patient_scope_must_name_the_stay_identifier(bad):
         assert _selected_ids(bad, "stay_id") == [1]
     with pytest.raises(ValueError):
         _selected_ids({"hadm_id": [2]}, "stay_id")
+
+
+class _AumcSource:
+    """load_table as the AUMC data source returns it: times already in minutes (ms / 60000)."""
+
+    class config:
+        name = "aumc"
+
+    def __init__(self, tables):
+        self.tables = tables
+
+    def load_table(self, table, columns=None, filters=None, verbose=False):
+        return self.tables[table].loc[:, list(columns)].copy()
+
+
+def test_aumc_times_from_load_table_are_minutes():
+    from easyicu.concept import weight_strict
+
+    source = _AumcSource({
+        "admissions": pd.DataFrame({"admissionid": [1, 2], "admittedat": [600.0, 0.0], "weightgroup": [None, None]}),
+        "numericitems": pd.DataFrame({"admissionid": [1, 2], "measuredat": [480.0, 90.0], "itemid": [6638, 6638],
+                                      "value": [70.0, 80.0]}),
+    })
+    weight_strict._CACHE.clear()
+    out, id_column = weight_strict.strict_weight_fields(source, None)
+    out = out.set_index(id_column)
+    assert (out.loc[1, "weight_admit_strict_source"], out.loc[1, "weight_admit_strict_time_h"]) == ("pre_icu_last", -2.0)
+    assert (out.loc[2, "weight_admit_strict_source"], out.loc[2, "weight_admit_strict_time_h"]) == ("charted_first", 1.5)
+    weight_strict._CACHE.clear()

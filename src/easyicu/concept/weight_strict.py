@@ -136,8 +136,9 @@ def _observations(database: str, data_source, ids) -> tuple[pd.DataFrame, pd.Ser
         rows = _load(data_source, "numericitems", ["admissionid", "measuredat", "itemid", "value"], "admissionid", ids,
                      [_item("itemid", (20081, 6638, 6637, 10442))])
         rows = rows.merge(stays[["admissionid", "admittedat"]], on="admissionid", how="inner")
+        # load_table returns AmsterdamUMCdb times in minutes (source ms / 60000).
         time_h = (pd.to_numeric(rows["measuredat"], errors="coerce")
-                  - pd.to_numeric(rows["admittedat"], errors="coerce")) / 3_600_000.0
+                  - pd.to_numeric(rows["admittedat"], errors="coerce")) / 60.0
         return pd.concat([static, obs(rows["admissionid"], "fallback", 0, time_h, rows["value"])],
                          ignore_index=True), stays["admissionid"]
     if database == "hirid":
