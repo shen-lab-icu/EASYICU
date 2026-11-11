@@ -228,8 +228,8 @@ def get_parallel_config(
     )
     
     logger.info(
-        f"🔧 并行配置: {config.performance_tier} "
-        f"(内存: {total_mem:.1f}GB, CPU: {cpu_count}核, "
+        f"🔧 Parallel configuration: {config.performance_tier} "
+        f"(memory: {total_mem:.1f}GB, CPU: {cpu_count} cores, "
         f"workers: {max_workers}, buckets/batch: {buckets_per_batch})"
     )
     

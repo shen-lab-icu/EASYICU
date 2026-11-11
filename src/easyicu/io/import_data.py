@@ -18,21 +18,30 @@ from ..config import DataSourceConfig, TableConfig
 LOGGER = logging.getLogger(__name__)
 
 
+class MissingSourceFilesError(FileNotFoundError):
+    """A table's source files are absent (usually: not the prepared directory)."""
+
+
 class TableImportError(RuntimeError):
     """Per-table import failure with structured errors (fail-closed).
 
     Attributes:
         ok: Tables imported successfully.
         failed: Mapping of table name -> error message for each failure.
+        missing: Mapping of failed name -> number of tables whose source files
+            were absent. A name is listed only when every failure under it was
+            a missing-files failure, so a caller can print one summary line.
     """
 
-    def __init__(self, ok: list, failed: dict) -> None:
+    def __init__(self, ok: list, failed: dict, missing: Optional[dict] = None) -> None:
         self.ok = list(ok)
         self.failed = dict(failed)
+        self.missing = dict(missing or {})
         details = "; ".join(f"{name}: {err}" for name, err in self.failed.items())
         super().__init__(
             f"Failed to import {len(self.failed)} table(s): {details}"
         )
+
 
 def import_table(
     table_cfg: TableConfig,
@@ -75,8 +84,9 @@ def import_table(
     # Check if files exist
     missing = [f for f in csv_files if not f.exists()]
     if missing:
-        raise FileNotFoundError(
-            f"Missing source files for table {table_name}: {missing}"
+        LOGGER.debug("Missing source files for table %s: %s", table_name, missing)
+        raise MissingSourceFilesError(
+            f"Missing {len(missing)} source file(s) for table {table_name}"
         )
 
     if verbose:
@@ -257,17 +267,26 @@ def import_src(
     # Import each table (fail-closed: collect per-table errors, then raise)
     ok: list = []
     failed: dict = {}
+    missing: set = set()
     for table_name in tables:
         try:
             table_cfg = config.get_table(table_name)
             import_table(table_cfg, data_dir, force=force, verbose=verbose)
             ok.append(table_name)
+        except MissingSourceFilesError as e:
+            LOGGER.debug("Failed to import table %s: %s", table_name, e)
+            failed[table_name] = str(e)
+            missing.add(table_name)
         except Exception as e:
             LOGGER.error(f"Failed to import table {table_name}: {e}")
             failed[table_name] = str(e)
 
     if failed:
-        raise TableImportError(ok=ok, failed=failed)
+        raise TableImportError(
+            ok=ok,
+            failed=failed,
+            missing={config.name: len(failed)} if set(failed) == missing else None,
+        )
     if verbose:
         LOGGER.info(f"Successfully imported all {len(tables)} tables")
 
@@ -305,13 +324,21 @@ def import_sources(
     """
     ok: list = []
     failed: dict = {}
+    missing: dict = {}
     for source_name, data_dir in zip(source_names, data_dirs):
         try:
             config = registry.get(source_name)
             import_src(config, Path(data_dir), **kwargs)
             ok.append(source_name)
+        except TableImportError as e:
+            # import_src already logged each failing table; the caller prints
+            # one summary line, so the detail here is DEBUG only.
+            LOGGER.debug("Failed to import %s: %s", source_name, e)
+            failed[source_name] = str(e)
+            if e.missing:
+                missing[source_name] = sum(e.missing.values())
         except Exception as e:
             LOGGER.error(f"Failed to import {source_name}: {e}")
             failed[source_name] = str(e)
     if failed:
-        raise TableImportError(ok=ok, failed=failed)
+        raise TableImportError(ok=ok, failed=failed, missing=missing)

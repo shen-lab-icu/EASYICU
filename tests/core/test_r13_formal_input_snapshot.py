@@ -271,7 +271,12 @@ def test_the_cli_opt_in_says_it_is_not_the_formal_guarantee():
         assert "listed input files are unchanged before and after the run" in flat
         assert "does NOT publish a consumed set or a RUN_RECEIPT" in flat
         assert "does NOT prove that every file the run read was in the snapshot" in flat
-        assert "formal guarantee comes only from bench7v2 / " in flat
+        # S856: the user-facing --help names no internal harness.
+        if text is option.help:
+            assert "formal guarantee comes only from the governed full-workflow run" in flat
+            assert "bench7v2" not in flat
+        else:
+            assert "formal guarantee comes only from bench7v2 / " in flat
 
 
 @pytest.mark.parametrize("scheme", ["variable", "hash"])
