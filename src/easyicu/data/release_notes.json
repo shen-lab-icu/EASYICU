@@ -32,8 +32,8 @@
         },
         {
           "code": "writer_complementary_suppression",
-          "zh": "发给写作模型的证据中，被小格抑制的计数无法再由总数和比例反推出来。",
-          "en": "In the evidence sent to the writing model, a suppressed small count can no longer be recovered from a published total and rate."
+          "zh": "发给写作模型的证据和人群筛选计数中，1 到 10 的小计数一律隐去，也无法再由总数、比例或筛选链上的其他计数反推出来。",
+          "en": "Counts of 1 to 10 are withheld from the evidence and the selection counts sent to the writing model, and can no longer be recovered from published totals, rates or the other counts in the selection chain."
         },
         {
           "code": "manuscript_number_binding",
