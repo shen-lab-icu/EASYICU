@@ -6,12 +6,12 @@
 
 [![Python 3.10+](https://img.shields.io/badge/python-3.10+-blue.svg)](https://www.python.org/downloads/)
 [![License: GPL v3](https://img.shields.io/badge/License-GPLv3-blue.svg)](COPYING)
-[![Version](https://img.shields.io/badge/version-0.1.2-green.svg)](https://github.com/shen-lab-icu/easyicu)
+[![Version](https://img.shields.io/badge/version-0.1.0-green.svg)](https://github.com/shen-lab-icu/easyicu)
 [![临床映射状态](https://img.shields.io/badge/clinical%20mappings-mapping--only-yellow.svg)](src/easyicu/data/clinical-contracts.json)
 
 EasyICU 是一个面向重症监护室（ICU）数据分析的 Python 工具包。它统一接入支持的公开 ICU 数据库，支持数百种标准化临床概念的自动提取，并提供 **Web 可视化界面**，帮助用户完成队列定义、特征审阅、可视化分析与数据导出。当前精确数量由已发布 registry 自动生成，见[目录摘要](docs/catalog_summary.md)，不再在说明文字里手工复制。
 
-> **临床证据状态：**`0.1.2` 是软件/API 发布版本，不代表数据库特异性
+> **临床证据状态：**`0.1.0` 是软件/API 发布版本，不代表数据库特异性
 > 临床验证已经完成。原有六个全概念数据库的映射仍均为 `mapping_only`；
 > 独立临床复核与跨库输出可比性验证尚未完成。SOFA-2 已有算法级 golden
 > 与失败关闭边界测试，但这些测试不能替代逐数据库映射验证。新增的 NWICU、

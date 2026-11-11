@@ -2,9 +2,24 @@
   "schema_version": "easyicu.release-notes/1",
   "entries": [
     {
-      "version": "0.1.2",
-      "date": "2026-11-02",
+      "version": "0.1.0",
+      "date": "2026-11-11",
       "changes": [
+        {
+          "code": "history_identifiers_removed",
+          "zh": "仓库历史中移除了误入的数据库标识符。",
+          "en": "Database identifiers that had slipped into the repository history were removed."
+        },
+        {
+          "code": "extract_cli_exit",
+          "zh": "命令行 easyicu extract 在数据库被跳过或没有导出任何行时返回非零退出码。",
+          "en": "The easyicu extract command exits non-zero when a requested database is skipped or yields no rows."
+        },
+        {
+          "code": "weight_admit_strict",
+          "zh": "可选导出模块 weight_strict 提供入 ICU 时可知的单次体重及其来源和时间，原有 weight 不变。",
+          "en": "The opt-in weight_strict export module gives one stay weight known at ICU admission, with its source and time; the existing weight is unchanged."
+        },
         {
           "code": "outcome_confirmation",
           "zh": "生成计划前先请你确认系统提议的主要结局；确认卡直接保存你确认的结局。",
@@ -44,13 +59,7 @@
           "code": "community_databases",
           "zh": "新增 NWICU、浙江 eICU、金华、自贡四个社区 ICU 数据源（仅映射）；修正 MIMIC-III/IV 与 AUMC 的葡萄糖、血氧、氧分压、尿量和入量取数，新增 FiO2/PEEP 来源通道。",
           "en": "Adds four community ICU sources (NWICU, Zhejiang eICU, Jinhua, Zigong; mapping only); corrects dextrose, oxygen saturation, PaO2, urine and fluid-input mappings for MIMIC-III/IV and AUMC, and adds FiO2/PEEP source channels."
-        }
-      ]
-    },
-    {
-      "version": "0.1.1",
-      "date": "2026-10-29",
-      "changes": [
+        },
         {
           "code": "task_list",
           "zh": "对话侧栏按任务列出：待你处理的单独成组，最近的在前，可打开全部任务表搜索和筛选。",
@@ -90,13 +99,7 @@
           "code": "skill_hub",
           "zh": "技能中心各页统一标题与操作；技能可以打包导入导出。",
           "en": "Skill Hub tabs share one header and actions; skills can be imported and exported as packages."
-        }
-      ]
-    },
-    {
-      "version": "0.1.0",
-      "date": "2026-10-26",
-      "changes": [
+        },
         {
           "code": "mimic_iii_demo",
           "zh": "新增 MIMIC-III 官方演示数据，可以在旧版 MIMIC 结构上从抽取一直做到出图。",
