@@ -37,9 +37,11 @@ from ..authority.evidence_store import (
     _NUMERIC_IN_PROSE_RE,
 )
 from ..authority.numeric_claim_identity import (
+    NUMERIC_FACT_IDENTITY_NOT_NAMED,
     NumericQuantityKind,
     prose_quantity_kind,
     quantity_kind_refuses_claim,
+    unnamed_fact_identity,
 )
 from ..schema import ResearchContext
 from .writer_repair_decision import coerce_writer_repair_decisions
@@ -2149,6 +2151,30 @@ def _released_fact_claim(
     return None
 
 
+def _unnamed_fact_identity(
+    manuscript: str,
+    *,
+    start: int,
+    end: int,
+    claim: NumericClaim,
+    registry: Sequence[NumericClaim],
+) -> List[str]:
+    """The registered facts the sentence around one number fails to rule out."""
+
+    sentence_start, sentence_end = _numeric_sentence_bounds(
+        manuscript, start=start, end=end
+    )
+    return unnamed_fact_identity(
+        manuscript,
+        start=start,
+        end=end,
+        sentence_start=sentence_start,
+        sentence_end=sentence_end,
+        claim=claim,
+        registry=registry,
+    )
+
+
 def bind_numeric_values(
     manuscript: str,
     *,
@@ -2216,12 +2242,18 @@ def bind_numeric_values(
         ]
 
     lineage = _evidence_lineage(evidence)
+    identity_registry = (
+        authoritative_claims
+        if authoritative_claims is not None
+        else evidence.numeric_claims()
+    )
     skip_spans = sorted(_spans_to_skip(manuscript) + bibliographic_year_spans(manuscript, literature))
     released = released_fact_lines(manuscript, method_facts, bind_fact)
     fact_sources: Dict[str, str] = {}
     binding_map: Dict[str, NumericClaim] = {}
     untraced: List[str] = []
     miscited: List[Dict[str, Any]] = []
+    unnamed: List[Dict[str, Any]] = []
     used_ids: Dict[str, str] = {}  # claim identity -> footnote_id
     display_values: Dict[str, str] = {}
     previous_step_id: Optional[str] = None
@@ -2284,6 +2316,49 @@ def bind_numeric_values(
             ),
             prose_kind=prose_quantity_kind(manuscript, start=start, end=end),
         )
+        # Fail closed (P1-1): a candidate whose field, statistic, unit or
+        # group the prose does not name, while another registered fact of its
+        # kind differs in them, is not a candidate at all. Narrowing first
+        # lets the field the words do name win; a value no candidate of which
+        # is named stays unbound with its own reason code.
+        unnamed_by = {
+            id(candidate): _unnamed_fact_identity(
+                manuscript,
+                start=start,
+                end=end,
+                claim=candidate,
+                registry=identity_registry,
+            )
+            for candidate, _distance in candidates
+        }
+        named = [item for item in candidates if not unnamed_by[id(item[0])]]
+        if not named and candidates:
+            untraced.append(value)
+            unnamed_ids = [_claim_identity(candidate) for candidate, _ in candidates]
+            not_ruled_out = list(
+                dict.fromkeys(
+                    blocker
+                    for candidate, _ in candidates
+                    for blocker in unnamed_by[id(candidate)]
+                )
+            )
+            unnamed.append(
+                {
+                    "value": value,
+                    "reason_code": NUMERIC_FACT_IDENTITY_NOT_NAMED,
+                    "candidates": unnamed_ids,
+                    "not_ruled_out": not_ruled_out,
+                }
+            )
+            if mode is EvidenceEnforcementMode.SOFT:
+                out_parts.append(
+                    f" <!-- AMBIGUOUS:{value}"
+                    f":candidates=[{','.join(unnamed_ids)}]"
+                    f":reason={NUMERIC_FACT_IDENTITY_NOT_NAMED} -->"
+                )
+            cursor = end
+            continue
+        candidates = named
         claim, ambiguous = _select_numeric_claim(
             candidates=candidates,
             context=context,
@@ -2378,9 +2453,11 @@ def bind_numeric_values(
                 # cited what.
                 f" Miscited: {miscited[:3]}" if miscited else ""
             ),
-            detail={"untraced": untraced, "miscited": miscited}
-            if miscited
-            else {"untraced": untraced},
+            detail={
+                "untraced": untraced,
+                **({"miscited": miscited} if miscited else {}),
+                **({"unnamed_fact_identity": unnamed} if unnamed else {}),
+            },
         )
 
     return bound, binding_map, untraced
@@ -2446,6 +2523,11 @@ def drop_untraceable_numeric_sentences(
                 "sentence": sentence.strip(),
                 "untraced": [str(item) for item in detail.get("untraced", [])],
                 "miscited": list(detail.get("miscited", [])),
+                **(
+                    {"unnamed_fact_identity": list(detail["unnamed_fact_identity"])}
+                    if detail.get("unnamed_fact_identity")
+                    else {}
+                ),
             }
 
     if not rejected_by_span:
@@ -2491,6 +2573,9 @@ def drop_untraceable_numeric_sentences(
                 **({"dependent_context_drops": [
                     item for detail in details for item in detail.get("dependent_context_drops", [])
                 ]} if any(detail.get("dependent_context_drops") for detail in details) else {}),
+                **({"unnamed_fact_identity": [
+                    item for detail in details for item in detail.get("unnamed_fact_identity", [])
+                ]} if any(detail.get("unnamed_fact_identity") for detail in details) else {}),
             }
         )
     return filtered, removed

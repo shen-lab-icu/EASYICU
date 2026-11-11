@@ -3,10 +3,11 @@
 from __future__ import annotations
 
 import enum
+import functools
 import json
 import re
 from dataclasses import asdict, dataclass, field
-from typing import Any, Dict, Iterator, List, Optional, Tuple
+from typing import Any, Dict, FrozenSet, Iterator, List, Optional, Sequence, Set, Tuple
 
 
 class NumericEffectScale(str, enum.Enum):
@@ -588,6 +589,363 @@ def quantity_kind_refuses_claim(
     return field_kind is not None and field_kind is not prose_kind
 
 
+# ---------------------------------------------------------------------------
+# Fact identity named by the prose (fail-closed v0.1.0 mitigation)
+# ---------------------------------------------------------------------------
+#
+# A matching value and a matching quantity kind still do not identify a fact.
+# External review (P1-1): with ``n=500`` and ``n_deaths=12`` registered,
+# "12 patients" bound to ``n_deaths``; a printed mean bound to a registered
+# median; a value in days bound to a field registered in hours; a group-A
+# value bound to the group-B field; a percentage bound to a proportion of a
+# different denominator. In each case the binder accepted the one candidate
+# left after the value and kind filters.
+#
+# Until claim ids are rendered by the host, a bind is accepted only when the
+# words around the number name what tells the chosen field apart from every
+# other registered field of the same kind (its statistic, unit, subject and
+# group), and never when those words name the other field's identity instead.
+# A field whose parts the prose does not name is left unbound: losing a bind
+# costs one sentence, a wrong bind publishes a real hash for the wrong fact.
+
+#: Reason code for a bind refused because the prose does not name the fact.
+NUMERIC_FACT_IDENTITY_NOT_NAMED = "numeric_fact_identity_not_named"
+
+_STATISTIC = "statistic"
+_UNIT = "unit"
+_SUBJECT = "subject"
+
+#: Field token -> (dimension, prose pattern naming it).
+_IDENTITY_VOCABULARY: Dict[str, Tuple[str, str]] = {
+    "median": (_STATISTIC, r"\bmedians?\b|中位"),
+    "mean": (_STATISTIC, r"\bmeans?\b|\baverages?\b|均值|平均"),
+    "average": (_STATISTIC, r"\bmeans?\b|\baverages?\b|均值|平均"),
+    "avg": (_STATISTIC, r"\bmeans?\b|\baverages?\b|均值|平均"),
+    "sd": (_STATISTIC, r"\bsds?\b|\bstandard\s+deviations?\b|标准差"),
+    "std": (_STATISTIC, r"\bsds?\b|\bstandard\s+deviations?\b|标准差"),
+    "iqr": (_STATISTIC, r"\biqr\b|\binterquartile\b|\bquartiles?\b|四分位"),
+    "q1": (_STATISTIC, r"\biqr\b|\binterquartile\b|\bquartiles?\b|\bq1\b|\b25th\b|四分位"),
+    "q3": (_STATISTIC, r"\biqr\b|\binterquartile\b|\bquartiles?\b|\bq3\b|\b75th\b|四分位"),
+    "p25": (_STATISTIC, r"\biqr\b|\binterquartile\b|\bquartiles?\b|\b25th\b|四分位"),
+    "p75": (_STATISTIC, r"\biqr\b|\binterquartile\b|\bquartiles?\b|\b75th\b|四分位"),
+    "minimum": (_STATISTIC, r"\bminimum\b|\blowest\b"),
+    "max": (_STATISTIC, r"\bmaximum\b|\bhighest\b|\bmax\b"),
+    "maximum": (_STATISTIC, r"\bmaximum\b|\bhighest\b|\bmax\b"),
+    "days": (_UNIT, r"\bdays?\b|\bd\b|天"),
+    "day": (_UNIT, r"\bdays?\b|\bd\b|天"),
+    "hours": (_UNIT, r"\bhours?\b|\bhrs?\b|\bh\b|小时"),
+    "hour": (_UNIT, r"\bhours?\b|\bhrs?\b|\bh\b|小时"),
+    "hrs": (_UNIT, r"\bhours?\b|\bhrs?\b|\bh\b|小时"),
+    "h": (_UNIT, r"\bhours?\b|\bhrs?\b|\bh\b|小时"),
+    "minutes": (_UNIT, r"\bminutes?\b|\bmins?\b|分钟"),
+    "mins": (_UNIT, r"\bminutes?\b|\bmins?\b|分钟"),
+    "weeks": (_UNIT, r"\bweeks?\b|\bwks?\b|周"),
+    "months": (_UNIT, r"\bmonths?\b|个月"),
+    "years": (_UNIT, r"\byears?\b|\byrs?\b|年(?!龄)"),
+    "deaths": (_SUBJECT, r"\bdeaths?\b|\bdied\b|\bdead\b|\bdeceased\b|\bmortality\b|死亡"),
+    "death": (_SUBJECT, r"\bdeaths?\b|\bdied\b|\bdead\b|\bdeceased\b|\bmortality\b|死亡"),
+    "mortality": (_SUBJECT, r"\bdeaths?\b|\bdied\b|\bdead\b|\bdeceased\b|\bmortality\b|死亡"),
+    "died": (_SUBJECT, r"\bdeaths?\b|\bdied\b|\bdead\b|\bdeceased\b|\bmortality\b|死亡"),
+    "los": (_SUBJECT, r"\blos\b|\blength\s+of\s+(?:icu\s+|hospital\s+)?stay|住院时间|住院天数"),
+}
+#: Tokens that structure a field name or restate its kind, never its identity.
+_IDENTITY_STRUCTURAL_TOKENS = frozenset(
+    {
+        "n", "count", "counts", "number", "num", "total", "overall", "all",
+        "value", "values", "result", "results", "summary", "stats", "data",
+        "table", "one", "by", "group", "groups", "subgroup", "subgroups",
+        "strata", "stratum", "level", "levels", "arm", "arms", "the", "of",
+        "and", "in", "per", "denominator", "numerator", "size",
+        *_FIELD_PROPORTION_TOKENS,
+    }
+)
+#: Count units: naming one says what was counted, not which count it is, so
+#: the word can confirm a field that carries it but never refutes another.
+_IDENTITY_WEAK_TOKENS = frozenset(
+    {
+        "patients", "patient", "stays", "stay", "admissions", "admission",
+        "encounters", "encounter", "subjects", "participants", "individuals",
+        "records", "rows", "observations",
+    }
+)
+_GROUP_LETTER_BEFORE = (
+    r"\b(?:group|arm|cohort|cluster|class|category|stratum|level|subgroup)\s+"
+)
+#: Citations, footnotes and comments carry digits and words that are not prose.
+_IDENTITY_MARKUP_RE = re.compile(
+    r"\{evidence:[^}]*\}|\[[^\]\n]*\]\(evidence/[^)\n]*\)|\[\^[^\]]*\]|<!--.*?-->",
+    re.S,
+)
+#: A standalone number; digits fused to a name ("SOFA-2") are part of it.
+_IDENTITY_NUMBER_RE = re.compile(r"(?<![A-Za-z0-9_.])(?<![A-Za-z]-)\d[\d,]*(?:\.\d+)?%?")
+
+
+def _identity_part_tokens(part: str) -> List[str]:
+    _normalized, tokens = _field_tokens(part)
+    joined: List[str] = []
+    index = 0
+    while index < len(tokens):
+        token = tokens[index]
+        if token in {"non", "not", "no"} and index + 1 < len(tokens):
+            # "non_survivors" is one group, not a negation of "survivors".
+            joined.append(token + tokens[index + 1])
+            index += 2
+            continue
+        joined.append(token)
+        index += 1
+    return joined
+
+
+@functools.lru_cache(maxsize=8192)
+def _field_kind(source_field: str) -> Optional[NumericQuantityKind]:
+    return source_field_quantity_kind(source_field)
+
+
+_EXTREME_STATISTIC_TOKENS = frozenset({"max", "maximum", "minimum"})
+_GROUP_PART_TOKENS = frozenset(
+    {"group", "groups", "subgroup", "subgroups", "strata", "stratum", "arm", "arms", "by"}
+)
+
+
+@functools.lru_cache(maxsize=8192)
+def _field_identity(source_field: str) -> Tuple[FrozenSet[str], FrozenSet[str]]:
+    """``(tokens, required)`` for one registered field name.
+
+    ``required`` are the subject tokens prose must state to bind the field
+    when a peer lacks them: a named outcome or measure in the vocabulary
+    ("deaths", "los") and a group label ("group_b", "groups.non_survivors").
+    Other name parts ("input", "included") confirm a field when stated but
+    are not demanded: host sentences describe them in their own words.
+    """
+
+    tokens: Set[str] = set()
+    required: Set[str] = set()
+    previous_was_group = False
+    for part in re.split(r"[.\[\]]+", str(source_field or "")):
+        if not part:
+            continue
+        raw = _identity_part_tokens(part)
+        is_group = previous_was_group or bool(_GROUP_PART_TOKENS & set(raw))
+        for token in raw:
+            if token.isdigit() or token in _IDENTITY_STRUCTURAL_TOKENS:
+                continue
+            tokens.add(token)
+            if _identity_dimension(token) == _SUBJECT and (
+                is_group or token in _IDENTITY_VOCABULARY
+            ):
+                required.add(token)
+        previous_was_group = bool(raw) and all(
+            token in _GROUP_PART_TOKENS for token in raw
+        )
+    return frozenset(tokens), frozenset(required)
+
+
+def numeric_fact_identity_tokens(source_field: str) -> FrozenSet[str]:
+    """The name tokens that identify a registered field among its peers."""
+
+    return _field_identity(str(source_field or ""))[0]
+
+
+def _identity_dimension(token: str) -> str:
+    known = _IDENTITY_VOCABULARY.get(token)
+    return known[0] if known is not None else _SUBJECT
+
+
+def _token_pattern(token: str) -> str:
+    known = _IDENTITY_VOCABULARY.get(token)
+    if known is not None:
+        return known[1]
+    if len(token) == 1:
+        # A single-letter group ("group_a") is named only as a group label;
+        # the article "a" names nothing.
+        return _GROUP_LETTER_BEFORE + re.escape(token) + r"\b"
+    stem = token[:-1] if token.endswith("s") and len(token) > 4 else token
+    if len(stem) < 3:
+        return r"(?<![a-z0-9])" + re.escape(stem) + r"(?![a-z0-9])"
+    return r"(?<![a-z0-9])" + re.escape(stem) + r"[a-z0-9]*"
+
+
+def _normalized_prose(text: str) -> str:
+    """Lower-case prose in which a field's compound names can be found."""
+
+    lowered = text.lower()
+    lowered = re.sub(r"\b(non|not|no)[\s-]+(?=[a-z])", r"\1", lowered)
+    # "Sepsis-3" is the field token "sepsis3".
+    return re.sub(r"(?<=[a-z])-(?=\d)", "", lowered)
+
+
+@functools.lru_cache(maxsize=8192)
+def _compiled_token_pattern(token: str) -> "re.Pattern[str]":
+    return re.compile(_token_pattern(token), re.I)
+
+
+def _names_any(window: str, tokens: FrozenSet[str], *, weak_counts: bool) -> bool:
+    for token in tokens:
+        if not weak_counts and token in _IDENTITY_WEAK_TOKENS:
+            continue
+        if _compiled_token_pattern(token).search(window):
+            return True
+    return False
+
+
+def _consistent(
+    windows: List[str],
+    *,
+    own: FrozenSet[str],
+    other: FrozenSet[str],
+    required: FrozenSet[str],
+    sentence: str,
+) -> bool:
+    """Whether the prose names one dimension of the chosen field consistently.
+
+    ``own``/``other`` are the tokens of this dimension that only the chosen
+    field / only the rival carries. The nearest governing window decides:
+    naming only the rival's token refutes the bind. ``required`` own tokens
+    must then be stated somewhere in the sentence.
+    """
+
+    for window in windows:
+        names_own = bool(own) and _names_any(window, own, weak_counts=True)
+        names_other = bool(other) and _names_any(window, other, weak_counts=False)
+        if names_other and not names_own:
+            return False
+        if names_own:
+            return True
+    return not required or _names_any(sentence, required, weak_counts=True)
+
+
+_IDENTITY_CLAUSE_RE = re.compile(r"[,;:]")
+
+
+def _identity_windows(
+    text: str, *, start: int, end: int, sentence_start: int, sentence_end: int
+) -> Tuple[str, str, str]:
+    """``(before, after, sentence)``: the words between the number and the
+    nearest other number or clause break on each side, and the sentence."""
+
+    sentence = text[sentence_start:sentence_end]
+    masked = _IDENTITY_MARKUP_RE.sub(lambda m: " " * len(m.group(0)), sentence)
+    local_start, local_end = start - sentence_start, end - sentence_start
+    before_start = 0
+    after_end = len(masked)
+    for match in _IDENTITY_NUMBER_RE.finditer(masked):
+        if match.end() <= local_start:
+            before_start = match.end()
+        elif match.start() >= local_end:
+            after_end = match.start()
+            break
+    before = _IDENTITY_CLAUSE_RE.split(masked[before_start:local_start])[-1]
+    after = _IDENTITY_CLAUSE_RE.split(masked[local_end:after_end])[0]
+    return (
+        _normalized_prose(before),
+        _normalized_prose(after),
+        _normalized_prose(masked),
+    )
+
+
+def unnamed_fact_identity(
+    text: str,
+    *,
+    start: int,
+    end: int,
+    sentence_start: int,
+    sentence_end: int,
+    claim: "NumericClaim",
+    registry: Sequence["NumericClaim"],
+) -> List[str]:
+    """Why the prose around one number does not identify ``claim``.
+
+    Returns an empty list when the bind may stand. Otherwise each entry names
+    a registered field of the same quantity kind that the prose does not rule
+    out (``<step>:<field>``), or ``prose:<dimension>`` when the words name
+    another statistic or unit than the one the field registers.
+    """
+
+    before, after, sentence = _identity_windows(
+        text,
+        start=start,
+        end=end,
+        sentence_start=sentence_start,
+        sentence_end=sentence_end,
+    )
+    windows_for = {
+        # A statistic governs the number after it ("median 3.1"); a unit or a
+        # counted noun follows its number ("3.1 days", "12 deaths").
+        _STATISTIC: [before],
+        _UNIT: [after],
+        _SUBJECT: [after, before],
+    }
+    own_tokens, own_required = _field_identity(str(claim.source_field or ""))
+    blockers: List[str] = []
+
+    # A field's own statistic or unit contradicted by the words that govern
+    # the number, whatever else is registered: "mean" is not a median and
+    # "days" are not hours.
+    for dimension in (_STATISTIC, _UNIT):
+        own = frozenset(t for t in own_tokens if _identity_dimension(t) == dimension)
+        if not own:
+            continue
+        own_patterns = {_IDENTITY_VOCABULARY[t][1] for t in own}
+        others = frozenset(
+            token
+            for token, (dim, pattern) in _IDENTITY_VOCABULARY.items()
+            if dim == dimension and pattern not in own_patterns
+        )
+        window = windows_for[dimension][0]
+        if _names_any(window, others, weak_counts=False) and not _names_any(
+            window, own, weak_counts=True
+        ):
+            blockers.append(f"prose:{dimension}")
+
+    kind = _field_kind(str(claim.source_field or ""))
+    if kind is None:
+        return blockers
+    seen: Set[FrozenSet[str]] = {own_tokens}
+    for rival in registry:
+        rival_field = str(rival.source_field or "")
+        if _field_kind(rival_field) is not kind:
+            continue
+        rival_tokens, rival_required = _field_identity(rival_field)
+        if rival_tokens in seen:
+            continue
+        seen.add(rival_tokens)
+        for dimension in (_STATISTIC, _UNIT, _SUBJECT):
+            own = frozenset(
+                t for t in own_tokens - rival_tokens if _identity_dimension(t) == dimension
+            )
+            other = frozenset(
+                t for t in rival_tokens - own_tokens if _identity_dimension(t) == dimension
+            )
+            if not own and not other:
+                continue
+            # A unit or a summary statistic that tells the two apart is always
+            # stated; a subject only when it is an outcome, measure or group
+            # label. An extreme ("max_fraction_missing" across a variable
+            # group) is refused when contradicted but not demanded.
+            if dimension == _SUBJECT:
+                required = own & own_required
+                if own:
+                    # The chosen field carries its own qualifier; a rival's
+                    # descriptive word nearby ("the grace period", "after the
+                    # landmark") refutes it only when it is an outcome,
+                    # measure or group label.
+                    other = other & rival_required
+            elif dimension == _STATISTIC:
+                required = own - _EXTREME_STATISTIC_TOKENS
+            else:
+                required = own
+            if not _consistent(
+                windows_for[dimension],
+                own=own,
+                other=other,
+                required=required,
+                sentence=sentence,
+            ):
+                blockers.append(f"{rival.step_id}:{rival.source_field}")
+                break
+    return blockers
+
+
 class ProseNumberMatcher:
     """The prose number recogniser: one regex plus a phrase check.
 
@@ -624,13 +982,16 @@ __all__ = [
     "NumericClaim",
     "NumericEffectScale",
     "NumericEstimand",
+    "NUMERIC_FACT_IDENTITY_NOT_NAMED",
     "NumericQuantityKind",
     "coerce_numeric_effect_scale",
     "infer_numeric_claim_identity",
+    "numeric_fact_identity_tokens",
     "prose_quantity_kind",
     "quantity_kind_refuses_claim",
     "short_integer_reports_quantity",
     "source_field_quantity_kind",
+    "unnamed_fact_identity",
 ]
 
 
