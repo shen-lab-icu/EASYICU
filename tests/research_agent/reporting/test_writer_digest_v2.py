@@ -891,3 +891,38 @@ def test_native_curve_does_not_promote_secondary_population_interval():
     assert _preferred_writer_scalar(summary, "ci_high") is None
     assert _preferred_writer_scalar(summary, "n_complete_case") == 80
     assert summary["scientific_runtime_receipt"]["variable_opportunity_sensitivity"]["n"] == 90
+
+
+def _digest_for_group(tmp_path, group: dict) -> str:
+    evidence = EvidenceStore(tmp_path)
+    _register_step_evidence(evidence, tmp_path, step_id="fixture", evidence_id="summary")
+    for name, value in group.items():
+        evidence.register_numeric_claim(
+            value=str(value), canonical=float(value), evidence_id="summary", step_id="fixture",
+            source_field=f"reportable_descriptive_results.groups[0].{name}",
+        )
+    return _render_writer_evidence_digest_v2(
+        [{**_record("fixture", "ok", {}), "evidence_ids": ["summary"]}],
+        evidence=evidence, run_dir=tmp_path,
+    )
+
+
+def test_a_suppressed_count_does_not_leave_its_derived_numbers_in_the_digest(tmp_path):
+    # Synthetic: 3 of 120 (2.5%); n_non_events = 117 would recover the 3.
+    out = _digest_for_group(
+        tmp_path, {"n_events": 3, "n_total": 120, "n_non_events": 117,
+                   "rate": 0.025, "rate_pct": 2.5, "survival_proportion": 0.975},
+    )
+    assert "n_events=suppressed" in out
+    assert "n_total=120" in out
+    for leaked in ("=3;", "=3\n", "0.025", "2.50", "2.5;", "2.5\n", "0.975", "97.5", "117"):
+        assert leaked not in out + "\n", leaked
+    assert "rate=suppressed" in out
+    assert "rate_pct=suppressed" in out
+
+
+def test_a_count_above_the_small_cell_threshold_keeps_its_rate(tmp_path):
+    out = _digest_for_group(tmp_path, {"n_events": 30, "n_total": 120, "rate": 0.25, "n_non_events": 90})
+    assert "n_events=30" in out and "n_total=120" in out and "n_non_events=90" in out
+    assert "rate=0.25" in out
+    assert "suppressed" not in out
