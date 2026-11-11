@@ -330,14 +330,16 @@ def test_only_a_recorded_selection_in_icu_stays_has_counts() -> None:
 
 
 def test_the_block_lists_the_stays_each_criterion_excluded() -> None:
+    # A count of 1 to 10 reaches the model as `suppressed` (the digest's rule);
+    # the egress test pins it for the Writer's requests.
     block = _block(_context(_report(), restriction=_restriction(700, 700)))
 
     assert (
         "- Selection counts, in ICU stays, never patients (cite research_context): "
         "the source database held 1,000; "
-        "age under 18 years: 120 excluded (4 of them for want of a value), 880 remain; "
+        "age under 18 years: 120 excluded (suppressed of them for want of a value), 880 remain; "
         "not the patient's first ICU stay: 130 excluded, 750 remain; "
-        "ICU stay shorter than 24 h: 50 excluded (3 of them for want of a value), "
+        "ICU stay shorter than 24 h: 50 excluded (suppressed of them for want of a value), "
         "700 remain; the export held 700; "
         "not the patient's first ICU stay (restricted by the host): 0 excluded, "
         "700 remain; the analysis input held 700."
