@@ -476,22 +476,30 @@ def handle_extract(args) -> int:
             LOGGER.error("Input snapshot refused: %s", error)
             return 3
 
+    # S778: a requested source that is skipped or yields no rows makes the run
+    # fail (exit 2) instead of reporting success with nothing written for it.
+    incomplete = []
     for source_name, dir_name in zip(args.sources, args.data_dirs):
         data_dir = Path(dir_name)
         if not data_dir.exists():
             LOGGER.error("Data directory %s does not exist; skipping %s", data_dir, source_name)
+            incomplete.append(f"{source_name}: data directory does not exist")
             continue
 
         LOGGER.info("Processing %s @ %s", source_name, data_dir)
         try:
             datasource = resolve_datasource(registry, source_name, data_dir)
         except KeyError:
-            LOGGER.warning("No data-source configuration named '%s'; skipping.", source_name)
+            LOGGER.error("No data-source configuration named '%s'; skipping.", source_name)
+            incomplete.append(f"{source_name}: no data-source configuration")
             continue
 
         frames = extract_groups(resolver, datasource, groups)
-        if frames:
-            export_groups(frames, args.output, prefix=source_name)
+        if not frames or all(frame is None or len(frame) == 0 for frame in frames.values()):
+            LOGGER.error("No concept rows extracted for %s; nothing written for it.", source_name)
+            incomplete.append(f"{source_name}: no concept rows")
+            continue
+        export_groups(frames, args.output, prefix=source_name)
 
     if snapshot is not None:
         from ..formal_inputs import InputSnapshotError, verify_snapshot, write_snapshot
@@ -501,6 +509,9 @@ def handle_extract(args) -> int:
         except InputSnapshotError as error:
             LOGGER.error("Inputs changed during the run; the outputs are not valid: %s", error)
             return 3
+    if incomplete:
+        LOGGER.error("Extraction incomplete: %s", "; ".join(incomplete))
+        return 2
     return 0
 
 

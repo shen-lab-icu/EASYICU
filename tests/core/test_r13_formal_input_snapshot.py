@@ -13,6 +13,7 @@ import json
 import os
 from pathlib import Path
 
+import pandas as pd
 import pytest
 
 from easyicu import formal_inputs
@@ -220,7 +221,8 @@ def test_the_extract_cli_opt_in_proves_the_inputs_did_not_change(tmp_path, monke
     def run(resolver, datasource, groups):
         if change:
             _rewrite_same_stat(target)
-        return {}
+        # A non-empty group: an empty extraction is itself an error (S778).
+        return {"demo": pd.DataFrame({"patientid": [1], "hr": [80.0]})}
 
     monkeypatch.setattr(extract_features, "extract_groups", run)
     out = tmp_path / "exports"
