@@ -28,7 +28,7 @@ from ..source_bounds import (
     public_bounds,
     strip_private_ledgers,
 )
-from ..concept.catalog import BOUNDS_AUDIT_CONCEPTS, CONCEPT_GROUPS_INTERNAL
+from ..concept.catalog import BOUNDS_AUDIT_CONCEPTS, CONCEPT_GROUPS_INTERNAL, WEIGHT_STRICT_CONCEPTS
 from ..concept.merge_time_index import merge_fill_scope
 from ..config import DATABASE_ID_CONFIG
 from ..resources import load_dictionary
@@ -127,6 +127,8 @@ EXTRACT_MODULES["sic_case_landmark"] = [
 # Audit values are available only when this module is explicitly requested.
 # Raw columns use the usual hourly median; QC is max over source observations.
 EXTRACT_MODULES["bounds_audit"] = list(BOUNDS_AUDIT_CONCEPTS)
+# S740: leakage-free stay weight fields, exported only when explicitly requested.
+EXTRACT_MODULES["weight_strict"] = list(WEIGHT_STRICT_CONCEPTS)
 
 # Production cohort boundary used only to admit a calibrated one-shot fast
 # path on sufficiently large-memory hosts.  Crossing it always uses streaming.

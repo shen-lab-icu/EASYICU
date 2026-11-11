@@ -9059,6 +9059,17 @@ class ConceptResolver:
                 data=derived[["CaseID", concept_name]], id_columns=["CaseID"],
                 index_column=None, value_column=concept_name,
             )
+        elif callback == "weight_admit_strict_fields":
+            # S740: leakage-free stay weight fields (owner: concept/weight_strict.py).
+            from .weight_strict import FIELDS, strict_weight_fields
+
+            if concept_name not in FIELDS:
+                raise ValueError("weight_admit_strict_fields serves only its registered fields")
+            derived, id_column = strict_weight_fields(data_source, patient_ids)
+            raw = ICUTable(
+                data=derived[[id_column, concept_name]], id_columns=[id_column],
+                index_column=None, value_column=concept_name,
+            )
         elif callback == "service_at_admission":
             from .service_at_admission import service_at_admission
 
@@ -9099,6 +9110,9 @@ class ConceptResolver:
         if callback == "service_at_admission":
             # One service per stay by construction.
             aggregator = False
+        if callback == "weight_admit_strict_fields":
+            # One reading per stay by construction; a median would undo the rule.
+            agg_value = False
         if callback == "sic_case_landmark_fields":
             if aggregator not in (None, False, "auto"):
                 raise ValueError("SIC case landmark fields cannot be re-aggregated")

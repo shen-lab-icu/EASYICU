@@ -680,6 +680,10 @@ BOUNDS_AUDIT_CONCEPTS = tuple(
     for suffix in ("raw", "qc")
 )
 
+# S740 (2026-11-11): leakage-free stay weight with its source and time, beside
+# the unchanged ``weight``. Exported only by the opt-in ``weight_strict`` module.
+WEIGHT_STRICT_CONCEPTS = ('weight_admit_strict', 'weight_admit_strict_source', 'weight_admit_strict_time_h')
+
 HIDDEN_DICTIONARY_CONCEPTS = {
     # R5C-HIRID-013: native U/L CK-MB remains explicitly loadable, but its
     # unresolved assay identity cannot enter the cross-source mass catalog.
@@ -703,6 +707,7 @@ HIDDEN_DICTIONARY_CONCEPTS = {
     *BOUNDS_AUDIT_CONCEPTS,
     # Non-urine output; surfaced through fluid_balance (2026-11-04 audit round 3).
     'other_output_ml',
+    *WEIGHT_STRICT_CONCEPTS,
 }
 
 # R5 urine receipts remain in extraction modules and the data catalog, but are

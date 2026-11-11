@@ -38290,5 +38290,131 @@
     }
    ]
   }
+ },
+ "weight_admit_strict": {
+  "target": "id_tbl",
+  "unit": "kg",
+  "min": 1,
+  "max": 500,
+  "category": "demographics",
+  "description": "stay weight from one reading that a decision at ICU admission could know or that is timed (see weight_admit_strict_time_h). Per stay, over readings in [1, 500] kg: an admission channel (admission before admission_lbs) takes its earliest reading; otherwise the last fallback reading before ICU admission; otherwise the first fallback reading at or after ICU admission; otherwise none. Never a median. MIIV: 226512 kg, 226531 lbs, fallback 224639; AUMC: admissions.weightgroup midpoint, fallback numericitems 20081/6638/6637/10442; HiRID: observations 10000400 (fallback only); SICdb: cases.WeightOnAdmission; eICU: patient.admissionweight, fallback intakeoutput Bodyweight (kg) then (lb).",
+  "_comment": "2026-11-11 S740: leakage-free stay weight beside the unchanged weight concept (owner: concept/weight_strict.py). Exported only by the opt-in weight_strict module.",
+  "sources": {
+   "aumc": [
+    {
+     "class_name": "fun_itm",
+     "callback": "weight_admit_strict_fields"
+    }
+   ],
+   "eicu": [
+    {
+     "class_name": "fun_itm",
+     "callback": "weight_admit_strict_fields"
+    }
+   ],
+   "hirid": [
+    {
+     "class_name": "fun_itm",
+     "callback": "weight_admit_strict_fields"
+    }
+   ],
+   "miiv": [
+    {
+     "class_name": "fun_itm",
+     "callback": "weight_admit_strict_fields"
+    }
+   ],
+   "sic": [
+    {
+     "class_name": "fun_itm",
+     "callback": "weight_admit_strict_fields"
+    }
+   ]
+  }
+ },
+ "weight_admit_strict_source": {
+  "target": "id_tbl",
+  "class_name": "fct_cncpt",
+  "levels": [
+   "admission",
+   "admission_lbs",
+   "pre_icu_last",
+   "charted_first",
+   "none"
+  ],
+  "category": "demographics",
+  "description": "which rule chose weight_admit_strict: admission, admission_lbs, pre_icu_last, charted_first, or none (no usable reading).",
+  "_comment": "2026-11-11 S740: leakage-free stay weight beside the unchanged weight concept (owner: concept/weight_strict.py). Exported only by the opt-in weight_strict module.",
+  "sources": {
+   "aumc": [
+    {
+     "class_name": "fun_itm",
+     "callback": "weight_admit_strict_fields"
+    }
+   ],
+   "eicu": [
+    {
+     "class_name": "fun_itm",
+     "callback": "weight_admit_strict_fields"
+    }
+   ],
+   "hirid": [
+    {
+     "class_name": "fun_itm",
+     "callback": "weight_admit_strict_fields"
+    }
+   ],
+   "miiv": [
+    {
+     "class_name": "fun_itm",
+     "callback": "weight_admit_strict_fields"
+    }
+   ],
+   "sic": [
+    {
+     "class_name": "fun_itm",
+     "callback": "weight_admit_strict_fields"
+    }
+   ]
+  }
+ },
+ "weight_admit_strict_time_h": {
+  "target": "id_tbl",
+  "unit": "h",
+  "category": "demographics",
+  "description": "time of the reading behind weight_admit_strict in hours from ICU admission (negative before admission; 0 for static admission fields; missing when the source is none). Condition on time_h <= p for a decision at hour p.",
+  "_comment": "2026-11-11 S740: leakage-free stay weight beside the unchanged weight concept (owner: concept/weight_strict.py). Exported only by the opt-in weight_strict module.",
+  "sources": {
+   "aumc": [
+    {
+     "class_name": "fun_itm",
+     "callback": "weight_admit_strict_fields"
+    }
+   ],
+   "eicu": [
+    {
+     "class_name": "fun_itm",
+     "callback": "weight_admit_strict_fields"
+    }
+   ],
+   "hirid": [
+    {
+     "class_name": "fun_itm",
+     "callback": "weight_admit_strict_fields"
+    }
+   ],
+   "miiv": [
+    {
+     "class_name": "fun_itm",
+     "callback": "weight_admit_strict_fields"
+    }
+   ],
+   "sic": [
+    {
+     "class_name": "fun_itm",
+     "callback": "weight_admit_strict_fields"
+    }
+   ]
+  }
  }
 }
