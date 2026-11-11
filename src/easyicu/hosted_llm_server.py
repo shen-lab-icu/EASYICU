@@ -32,6 +32,7 @@ import hmac
 import ipaddress
 import json
 import os
+import sys
 import threading
 import time
 from collections import OrderedDict, deque
@@ -838,9 +839,19 @@ def build_parser() -> argparse.ArgumentParser:
 
 
 def main(argv: Sequence[str] | None = None) -> int:
-    _require_openrouter_key()
+    # Parse first so --help and argument errors work without the key; the
+    # key is still required before anything is served.
     parser = build_parser()
     args = parser.parse_args(argv)
+    try:
+        _require_openrouter_key()
+    except RuntimeError:
+        print(
+            "easyicu-llm-server: OPENROUTER_API_KEY is not set; "
+            "export it and run again.",
+            file=sys.stderr,
+        )
+        return 2
     _validate_security_configuration(args.host)
 
     import uvicorn
