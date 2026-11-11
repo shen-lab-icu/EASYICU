@@ -1,5 +1,9 @@
 # FastAPI Migration Release Boundary - Stage29
 
+> Historical internal document. The `easyicu-1.0.0` wheel names and similar
+> build ids below are internal build identifiers, not public EasyICU versions;
+> the first public release is 0.1.0.
+
 Date: 2026-06-24
 
 ## Decision

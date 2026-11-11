@@ -1,9 +1,14 @@
 # Install and run / 安装与启动
 
+This page (in Chinese) covers the three ways to install EasyICU: the desktop
+installer, the Python wheel for the API and browser interface (Python
+3.11–3.12), and a source checkout for development. For English instructions,
+see the [README](../README.md).
+
 | 使用方式 | 需要下载 | 本机要求 |
 |---|---|---|
 | 桌面界面 | 对应平台的 EasyICU 安装包 | 安装包说明中的操作系统版本；自带 Python 与 Node |
-| Python API / 浏览器界面 | EasyICU wheel | Python 3.11+；浏览器界面需 `webapp` 依赖 |
+| Python API / 浏览器界面 | EasyICU wheel | Python 3.11–3.12；浏览器界面需 `webapp` 依赖 |
 | 开发或复现检查 | Git 源码仓库 / sdist | Python 与对应开发依赖 |
 
 软件发行以 [GitHub Releases](https://github.com/shen-lab-icu/EASYICU/releases)
