@@ -21,7 +21,7 @@ import pandas as pd
 from ..schema import ResearchContext
 from ..gates.publication_disclosure import SMALL_CELL_BELOW
 from ..research_context.outbound import (
-    SUPPRESSED_COUNT, project_outbound_counts, project_outbound_step_summary,
+    SUPPRESSED_COUNT, complementary_suppressed_fields, project_outbound_counts, project_outbound_step_summary,
 )
 from ..authority.evidence_store import EvidenceStore
 from ..authority.target_trial_scientific_claims import (
@@ -1333,6 +1333,15 @@ def _render_writer_evidence_digest_v2(
             if not _writer_numeric_field_allowed(claim.source_field):
                 continue
             claims_by_step.setdefault(claim.step_id, []).append(claim)
+        withheld_fields = complementary_suppressed_fields(
+            claim for step_claims in claims_by_step.values() for claim in step_claims
+        )
+
+        def _project_claim(claim: Any) -> Any:
+            if (claim.step_id, claim.evidence_id, claim.source_field) in withheld_fields:
+                return SUPPRESSED_COUNT
+            return project_outbound_counts(claim.value, key=claim.source_field)
+
         if claims_by_step:
             numeric_citation_lines.extend(
                 [
@@ -1382,7 +1391,7 @@ def _render_writer_evidence_digest_v2(
                         f"{src_step}.{src_field}"
                         for src_step, src_field in getattr(c, "derived_from", [])
                     )
-                    projected = project_outbound_counts(c.value, key=c.source_field)
+                    projected = _project_claim(c)
                     derived_lines.append(f"  {c.source_field}={projected}")
                     if projected == SUPPRESSED_COUNT:
                         continue
@@ -1431,8 +1440,8 @@ def _render_writer_evidence_digest_v2(
                     f"  {c.source_field}="
                     + render_claim_value_for_writer(
                         source_field=c.source_field,
-                        value=project_outbound_counts(c.value, key=c.source_field),
-                        canonical=(None if project_outbound_counts(c.value, key=c.source_field) == SUPPRESSED_COUNT else c.canonical),
+                        value=_project_claim(c),
+                        canonical=(None if _project_claim(c) == SUPPRESSED_COUNT else c.canonical),
                     )
                     + f"; cite={{evidence:{c.evidence_id}}}"
                 )

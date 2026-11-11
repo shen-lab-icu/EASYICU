@@ -82,6 +82,56 @@ def project_outbound_counts(value: Any, *, key: str = "", parent: str = "") -> A
     return value
 
 
+def complementary_suppressed_fields(claims: Any) -> set[tuple[str, str, str]]:
+    """Return ``(step_id, evidence_id, source_field)`` of claim leaves to withhold.
+
+    Claims are split from mappings leaf by leaf, so a suppressed small count no
+    longer sits beside its siblings. Within one parent object that holds a
+    suppressed subject count, withhold every proportion or percentage that
+    equals count/total or (total - count)/total (also by name), and every
+    published count other than the largest (the total), because
+    ``total - other count`` recovers the suppressed count.
+    """
+    groups: dict[tuple[str, str, str], list[Any]] = {}
+    for claim in claims:
+        field = str(claim.source_field)
+        parent = field.rsplit(".", 1)[0] if "." in field else ""
+        groups.setdefault((claim.step_id, claim.evidence_id, parent), []).append(claim)
+
+    def leaf(claim: Any) -> str:
+        return re.sub(r"\[\d+\]", "", str(claim.source_field)).rsplit(".", 1)[-1].removeprefix("statistic:")
+
+    withheld: set[tuple[str, str, str]] = set()
+    for members in groups.values():
+        # Probe the owner's count-name rule with a small cell value.
+        counts = [c for c in members if project_outbound_counts(1, key=c.source_field) == SUPPRESSED_COUNT
+                  and leaf(c) not in _METADATA_COUNTS]
+        hidden = [c for c in counts if small_cell_value(c.canonical) is not None]
+        if not hidden:
+            continue
+        visible = [c for c in counts if c not in hidden]
+        top = max((c.canonical for c in visible), default=None)
+        numerators = [c.canonical for c in hidden]
+        denominators = [c.canonical for c in visible if c.canonical > 0]
+        numerators += [d - h for d in denominators for h in numerators[: len(hidden)]]
+        for claim in visible:
+            if claim.canonical != top:
+                withheld.add((claim.step_id, claim.evidence_id, claim.source_field))
+        for claim in members:
+            if claim in counts:
+                continue
+            value = claim.canonical
+            by_name = bool(_PROPORTION_NAME.search(leaf(claim)))
+            by_value = any(
+                abs(value - num / d) <= 0.0051 + 0.01 * abs(num / d)
+                or abs(value - 100 * num / d) <= 0.051 + 0.01 * abs(100 * num / d)
+                for d in denominators for num in numerators
+            )
+            if by_name or by_value:
+                withheld.add((claim.step_id, claim.evidence_id, claim.source_field))
+    return withheld
+
+
 def project_outbound_count_text(text: str) -> str:
     """Protect count assignments in already-curated Writer digest text."""
     pattern = re.compile(
