@@ -179,6 +179,23 @@ _PHRASE_ALIASES = {
 }
 
 
+# Opt-in stay-level field families (S740/S748/S772). Each family is one clinical
+# axis; its source/anchor/time/count fields describe how that value was chosen,
+# not another construct, so they retrieve the same literature.
+_OPT_IN_FIELD_IDENTITIES: dict[str, LiteratureConceptIdentity] = {}
+_BODY_WEIGHT_IDENTITY = LiteratureConceptIdentity(
+    concept_id="body_weight",
+    canonical_phrase="body weight",
+    retrieval_alternatives=(("body weight",), ("admission weight",)),
+    screening_role_term="body weight",
+    screening_required_terms=(),
+)
+_OPT_IN_FIELD_IDENTITIES.update({key: _BODY_WEIGHT_IDENTITY for key in (
+    "weight_admit_strict", "weight_admit_strict_source", "weight_admit_strict_time_h",
+)})
+_IDENTITIES.update(_OPT_IN_FIELD_IDENTITIES)
+
+
 def concept_id(value: Any) -> str:
     token = " ".join(str(value or "").split()).casefold()[:180]
     for suffix in _MATERIALIZED_SUFFIXES:
