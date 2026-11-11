@@ -650,7 +650,13 @@ _DICT_CALLBACKS = sorted(_enumerate_dict_callbacks())
 # it would incorrectly flag them as missing from ``_apply_callback``.
 _REGISTRY_HANDLED = set(CALLBACK_REGISTRY.keys())
 # service_at_admission (MIIV adm) is a fun_itm loaded by _load_fun_item.
-_LOAD_SINGLE_CONCEPT_HANDLED = {"los_callback", "service_at_admission"}  # plus any fwd_concept(*)
+# Stay-level field callbacks (S740/S748/S772) are fun_itm items dispatched by
+# ConceptResolver to their owner modules, like service_at_admission.
+_LOAD_SINGLE_CONCEPT_HANDLED = {  # plus any fwd_concept(*)
+    "los_callback",
+    "service_at_admission",
+    "weight_admit_strict_fields",
+}
 
 
 def _dispatched_elsewhere(cb: str) -> bool:

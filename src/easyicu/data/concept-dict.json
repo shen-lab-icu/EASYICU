@@ -38380,6 +38380,7 @@
  },
  "weight_admit_strict_time_h": {
   "target": "id_tbl",
+  "class_name": "num_cncpt",
   "unit": "h",
   "category": "demographics",
   "description": "time of the reading behind weight_admit_strict in hours from ICU admission (negative before admission; 0 for static admission fields; missing when the source is none). Condition on time_h <= p for a decision at hour p.",
