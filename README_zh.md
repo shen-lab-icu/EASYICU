@@ -4,7 +4,7 @@
 
 > 面向跨公开 ICU 数据库研究的可复现基础设施：标准化临床概念提取、面向临床用户的 Web 工作流、可编程的 Python API，以及一个**证据绑定研究 Agent**——追踪已覆盖、已注册的数值声明，并把无法核验的声明在稿件边界拦下。
 
-[![Python 3.10+](https://img.shields.io/badge/python-3.10+-blue.svg)](https://www.python.org/downloads/)
+[![Python 3.11–3.12](https://img.shields.io/badge/python-3.11%E2%80%933.12-blue.svg)](https://www.python.org/downloads/)
 [![License: GPL v3](https://img.shields.io/badge/License-GPLv3-blue.svg)](COPYING)
 [![Version](https://img.shields.io/badge/version-0.1.0-green.svg)](https://github.com/shen-lab-icu/easyicu)
 [![临床映射状态](https://img.shields.io/badge/clinical%20mappings-mapping--only-yellow.svg)](src/easyicu/data/clinical-contracts.json)
@@ -52,7 +52,7 @@ EasyICU 有两层，对应同一个问题的两半——*一个被报告的 ICU 
 |------|------|
 | 不写 Python,可视化校验数据 / 定义队列 / 导出特征 | **FastAPI 原生 Web 应用** — `easyicu-webapp` *(或 `./start_easyicu.sh` / `start_easyicu.command`)* —— 见 **路线 A** |
 | 用 Python 构建可复现的特征/队列流水线 | **Python API** — `import easyicu` —— 见 **路线 B** |
-| 用 CLI 跑特征提取(脚本化、无 UI) | `easyicu`(对应 `extract_features` 控制台脚本) |
+| 用 CLI 跑特征提取(脚本化、无 UI) | `easyicu extract --sources miiv --data-dirs /path/to/prepared/mimic-iv --output out/`(对应 `extract_features` 控制台脚本;`easyicu --help` 列出 `extract`、`download`、`import`、`setup`、`copilot`) |
 | 让 research-agent 跑一个研究问题 + 队列 | `easyicu-research-agent` |
 | 用 agent 复现一篇外部论文 | `easyicu-research-replication` |
 | 启动 research-agent 用的 LLM 代理服务 | `easyicu-llm-server` |
@@ -81,13 +81,18 @@ EasyICU 有两层，对应同一个问题的两半——*一个被报告的 ICU 
 - 用可视化方式完成数据准备
 - 不写 Python 直接定义队列并导出特征
 
+> **运行要求**
+> - Python 3.11–3.12，至少 4 个 CPU 核心。
+> - 全队列提取所需内存：MIMIC-IV 规模的数据库建议 16 GB 内存（4 核约 66–70 分钟；14 GB 也能完成，会自动重试一次）。eICU 需要高内存服务器（4 个 worker 峰值约 88 GiB）。
+> - 各数据库的峰值内存与完整表格见 [docs/local_run_guide.md](docs/local_run_guide.md#memory--内存)。
+
 推荐入口：
 - **Windows**：双击 `start_easyicu.bat`
 - **macOS**：双击 `start_easyicu.command`
 - **Linux**：运行 `./start_easyicu.sh`
 
 首次启动会在 `.easyicu-runtime/` 下自动创建本地运行环境，并安
-装 Web 所需依赖。当前这条路径建议使用 Python 3.10+。
+装 Web 所需依赖。当前这条路径建议使用 Python 3.11–3.12。
 
 默认本地地址：
 
@@ -102,7 +107,7 @@ http://127.0.0.1:8765
 - 自动化特征提取流程
 - 在代码里构建可复现的队列管线
 
-当前打包依赖建议使用 Python 3.10+。
+当前打包依赖建议使用 Python 3.11–3.12。
 
 **直接安装使用**（无需 clone）：
 
@@ -260,7 +265,7 @@ Research Agent 把"问题 + EasyICU 准备好的数据"通过 4 阶段流水线 
 
 建议为本项目创建独立开发环境，并运行当前自动化检查：
 
-开发环境建议使用 Python 3.10+。
+开发环境建议使用 Python 3.11–3.12。
 
 ```bash
 python -m venv .venv
@@ -302,6 +307,8 @@ converter.convert_all()
 > 但能保证不卡死、稳定跑完。
 
 ### 最小端到端示例
+
+`data_path` 始终指向转换后的（准备完成的）目录；只有原始下载文件时，请先运行转换器（`DataConverter(...).convert_all()` 或 Web 界面的 **Convert & Setup**）。
 
 下面这个示例演示了 API 用户的完整最小流程：从原始数据库目录开始，先转换，再提取标准化特征。
 

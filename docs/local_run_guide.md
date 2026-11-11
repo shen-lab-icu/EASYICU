@@ -58,15 +58,32 @@ byte-identical module files; the recommendation is the faster one within the
 | eICU-CRD | variable × stay buckets (two-level, contiguous) | 487 s / 3.9 GiB | hash buckets: same within noise (487 s / 3.9 GiB) |
 | SICdb 1.0.8 | variable × stay buckets (`data_float_h`, `laboratory` single-key hash; `medication` two-level) | 236 s / 1.8 GiB | flat Parquet: 261 s / 8.9 GiB |
 | MIMIC-III CareVue view | hash buckets | 375 s / 2.6 GiB | variable × stay buckets: 2,165 s / 2.7 GiB (each open re-validates about 5,700 bucket files) |
-| MIMIC-IV | TODO(miiv_var): pending the variable-layout measurement | | |
+| MIMIC-IV | default layout (full-cohort measurement in the hardware table below) | 66–70 min on 4 cores, full cohort / 12.45 GiB peak under a 14 GB cap | |
 | HiRID | contiguous batches on the current layout | 2,142 s / 3.5 GiB | |
 | AmsterdamUMCdb | unchanged | 2,040 s / 6.0 GiB | |
 
 ## Memory / 内存
 
-Peak memory of the full-cohort extractions (the 14 GiB local target and the
-64 GiB server runs) is recorded in each database's formal 0.2.0
-`RUN_RECEIPT`, after the formal run. On the 3,000-stay samples every database
-peaked at or below 8.9 GiB (cgroup peak, 2 workers): SICdb flat 8.9 GiB,
-MIMIC-IV 6.8 GiB, AmsterdamUMCdb 6.0 GiB, eICU 3.9 GiB, HiRID 3.5 GiB,
-MIMIC-III 3.2 GiB, CareVue 2.7 GiB.
+Full-cohort measurements of the default extraction (4 workers) are listed
+below; each database's `RUN_RECEIPT` records the peak of its own run.
+
+| Database | Peak memory, 4 workers, no cap |
+|---|---|
+| MIMIC-IV | 19.4 GiB |
+| AmsterdamUMCdb (AUMC) | 17.4 GiB |
+| HiRID | 17.6 GiB |
+| eICU-CRD | 87.7 GiB |
+| SICdb | 7.4 GiB |
+| MIMIC-III | 14.5 GiB |
+
+- Minimum: 4 CPU cores.
+- MIMIC-IV-scale databases: 16 GB RAM recommended; about 66–70 minutes on
+  4 cores. Under a 14 GB cap the peak was 12.45 GiB and the run took 65.6
+  minutes; it completed after one automatic halve-on-out-of-memory retry.
+- eICU needs a high-memory server: about 88 GiB peak with 4 workers and no
+  cap. Under a 32 GB cap it completes with 3 automatic retries.
+- Fitting within 14 GB without retries is planned for 0.1.1.
+
+On the 3,000-stay samples every database peaked at or below 8.9 GiB (cgroup
+peak, 2 workers): SICdb flat 8.9 GiB, MIMIC-IV 6.8 GiB, AmsterdamUMCdb
+6.0 GiB, eICU 3.9 GiB, HiRID 3.5 GiB, MIMIC-III 3.2 GiB, CareVue 2.7 GiB.

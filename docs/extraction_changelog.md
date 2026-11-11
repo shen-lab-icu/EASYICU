@@ -4,7 +4,7 @@ Changes that move extracted values between versions, for anyone comparing an
 export with an earlier one. Each entry names its commit; the audit item it
 answers is in brackets.
 
-lead-r13 (0.2.0) is validated on SICdb 1.0.8, the default release, and
+lead-r13 (0.1.0) is validated on SICdb 1.0.8, the default release, and
 remains compatible with SICdb 1.0.6 (the release is detected from the schema).
 
 ## 2026-11-06 — sharing one resolver across threads needs `copy_context` [lead-r13, B-STAY-SCOPE `0feee4fed`, B18-REENTRY-DEADLOCK `723edab14`, resolver pool `3802ddf70`, delta27s, delta35t, delta38t]
@@ -71,7 +71,7 @@ Deviations from ricu 0.6.3, and the rules this release aligned with ricu, are
 listed in [ricu_deviations.md](ricu_deviations.md). Counts of 1–9 are written
 as "<10". "Sample" means the 3,000-stay server sample of a database used for
 the lead-r13 gates. "Formal `RUN_RECEIPT`" means the errata block of the
-receipt that the post-seal 0.2.0 extraction writes for each database. Counts
+receipt that the post-seal extraction (internal receipt name "0.2.0") writes for each database. Counts
 deferred to it are compared against `2786ea872` there.
 
 ## lead-r13 — entries pending merge

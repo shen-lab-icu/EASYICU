@@ -4,7 +4,7 @@
 
 > A reproducible infrastructure for cross-database ICU research: standardized concept extraction, clinician-friendly web workflows, scriptable Python APIs, and an **evidence-bound research agent** that traces covered registered claims and holds back claims it cannot verify.
 
-[![Python 3.11+](https://img.shields.io/badge/python-3.11+-blue.svg)](https://www.python.org/downloads/)
+[![Python 3.11–3.12](https://img.shields.io/badge/python-3.11%E2%80%933.12-blue.svg)](https://www.python.org/downloads/)
 [![License: GPL v3](https://img.shields.io/badge/License-GPLv3-blue.svg)](COPYING)
 [![Version](https://img.shields.io/badge/version-0.1.0-green.svg)](https://github.com/shen-lab-icu/easyicu)
 [![Clinical mappings](https://img.shields.io/badge/clinical%20mappings-mapping--only-yellow.svg)](src/easyicu/data/clinical-contracts.json)
@@ -54,7 +54,7 @@ EasyICU has two layers that answer the two halves of one question — *how trust
 |------|-------------|
 | Validate data / define cohorts / export features without writing Python | **Native FastAPI Web app** — `easyicu-webapp` *(or `./start_easyicu.sh` / `start_easyicu.command`)* — see **Path A** |
 | Build a reproducible extraction or feature pipeline in Python | **Python API** — `import easyicu` — see **Path B** |
-| Extract features via CLI (scripted, no UI) | `easyicu` (the `extract_features` console script) |
+| Extract features via CLI (scripted, no UI) | `easyicu extract --sources miiv --data-dirs /path/to/prepared/mimic-iv --output out/` (the `extract_features` console script; `easyicu --help` lists `extract`, `download`, `import`, `setup`, `copilot`) |
 | Run the research-agent on a question + cohort | `easyicu-research-agent` |
 | Reproduce an external paper through the agent | `easyicu-research-replication` |
 | Host the LLM proxy used by the research-agent | `easyicu-llm-server` |
@@ -84,13 +84,18 @@ Choose this path if you want to:
 - validate and prepare data visually
 - define cohorts and export features without writing Python
 
+> **Requirements**
+> - Python 3.11–3.12 and at least 4 CPU cores.
+> - Memory for a full-cohort extraction: 16 GB RAM recommended for MIMIC-IV-scale databases (about 66–70 minutes on 4 cores; 14 GB also completes after one automatic retry). eICU needs a high-memory server (about 88 GiB peak with 4 workers).
+> - Peak memory per database, measured data and the full table: [docs/local_run_guide.md](docs/local_run_guide.md#memory--内存).
+
 Recommended entry:
 - Double-click `start_easyicu.bat` on Windows
 - Double-click `start_easyicu.command` on macOS
 - Run `./start_easyicu.sh` on Linux
 
 First launch will create a local runtime under `.easyicu-runtime/` and
-install the web dependencies automatically. Use Python 3.11+ for this
+install the web dependencies automatically. Use Python 3.11–3.12 for this
 path.
 
 Default local URL:
@@ -110,7 +115,7 @@ Choose this path if you want to:
 - automate feature extraction
 - build reproducible cohort pipelines in code
 
-EasyICU requires Python 3.11 or newer (`requires-python = ">=3.11"`).
+EasyICU is tested on Python 3.11 and 3.12 (`requires-python = ">=3.11"` is the package floor; 3.13 is not yet tested in CI).
 
 **Install it to use it** (no clone needed):
 
@@ -314,7 +319,7 @@ benchmark, and should be described that way.
 
 Create a local development environment and run the current automated checks:
 
-Use Python 3.11+ for the development environment.
+Use Python 3.11–3.12 for the development environment.
 
 ```bash
 python -m venv .venv
@@ -356,6 +361,8 @@ After conversion, use the prepared directory in all API examples below.
 > guaranteed completion.
 
 ### Minimal End-to-End Example
+
+`data_path` always points at the converted/prepared directory. If you only have a raw download, run the converter (`DataConverter(...).convert_all()` or the Web UI **Convert & Setup**) first.
 
 The example below shows the full workflow for API users: start from raw data, convert it, then extract standardized features.
 

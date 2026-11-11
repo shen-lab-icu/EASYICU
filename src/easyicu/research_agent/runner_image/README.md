@@ -13,6 +13,9 @@ packages at run time would defeat the isolation guarantee.
 
 ## Build
 
+`easyicu-research-agent:1.0.0` is the internal image tag the runner expects by
+default. It is unrelated to the EasyICU package version (0.1.0).
+
 From the repository root:
 
 ```bash

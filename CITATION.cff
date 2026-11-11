@@ -3,7 +3,8 @@ cff-version: 1.2.0
 # clinical configuration is recorded in THIRD_PARTY_NOTICES.md.
 message: "If you use EasyICU in your research, please cite this software repository."
 title: "EasyICU"
-version: "1.0.0"
+version: "0.1.0"
+date-released: "2026-11-11"
 type: software
 authors:
   - family-names: "Zhu"

@@ -5,7 +5,7 @@ quickstart** — it shows the one rule that trips up most new API users: every
 extraction API expects a **prepared (converted)** directory, never a raw
 download.
 
-Use Python 3.10+ with EasyICU installed. From a source checkout, run
+Use Python 3.11–3.12 with EasyICU installed. From a source checkout, run
 `pip install ".[webapp]"`; individual research examples document any additional
 optional dependencies. Development tools are not required to use an example.
 
