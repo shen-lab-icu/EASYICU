@@ -779,7 +779,7 @@ class ICUDataSource:
             
             with self._lock:
                 self._preloaded_tables[table_name] = df
-            logger.info(f"📦 预加载表 {table_name}: {len(df):,}行")
+            logger.info(f"📦 Preloaded table {table_name}: {len(df):,} rows")
     
     def get_preloaded_table(self, table_name: str) -> Optional[pd.DataFrame]:
         """获取预加载的表"""
@@ -916,8 +916,8 @@ class ICUDataSource:
                     
                 columns = list(base_cols)
                 if DEBUG_MODE:
-                    logger.debug(f"🎯 宽表动态列选择: {table_name} -> {columns}")
-                    logger.debug(f"🎯 宽表value列(用于NULL过滤): {wide_table_value_columns}")
+                    logger.debug(f"🎯 Wide-table dynamic column selection: {table_name} -> {columns}")
+                    logger.debug(f"🎯 Wide-table value columns (for NULL filtering): {wide_table_value_columns}")
                     
             elif USE_MINIMAL_COLUMNS and table_name in MINIMAL_COLUMNS_MAP:
                 base_columns = list(MINIMAL_COLUMNS_MAP[table_name])
@@ -928,18 +928,18 @@ class ICUDataSource:
                 if db_name in ('mimic', 'mimic_demo') and 'stay_id' in base_columns:
                     base_columns = [c if c != 'stay_id' else 'icustay_id' for c in base_columns]
                     if DEBUG_MODE:
-                        logger.debug("🔄 MIMIC-III 列映射: stay_id -> icustay_id")
+                        logger.debug("🔄 MIMIC-III column mapping: stay_id -> icustay_id")
                 
                 if columns is not None:
                     # 合并最小列集和传入的额外列（去重）
                     extra_cols = [c for c in columns if c not in base_columns]
                     columns = base_columns + extra_cols
                     if DEBUG_MODE and extra_cols:
-                        logger.debug(f"扩展最小列集: {table_name} + {extra_cols} -> {len(columns)}列")
+                        logger.debug(f"Expanded minimal column set: {table_name} + {extra_cols} -> {len(columns)} columns")
                 else:
                     columns = base_columns
                     if DEBUG_MODE:
-                        logger.debug(f"应用最小列集优化: {table_name} -> {len(columns)}列")
+                        logger.debug(f"Applying minimal column set optimisation: {table_name} -> {len(columns)} columns")
             else:
                 # 对于不在 MINIMAL_COLUMNS_MAP 中的表，加载所有列
                 # 这确保 AUMC/HiRID 等数据库的表能正确加载必要的 ID 和值列
@@ -987,7 +987,7 @@ class ICUDataSource:
                             if mapped_itemids:
                                 # 使用 itemid 进行 bucket 过滤（快 50x）
                                 concept_itemid_filter = ('itemid', mapped_itemids)
-                                logger.debug(f"🔄 VALUE-TO-ITEMID映射: value IN {filter_values} -> itemid IN {mapped_itemids}")
+                                logger.debug(f"🔄 VALUE-TO-ITEMID mapping: value IN {filter_values} -> itemid IN {mapped_itemids}")
                                 # 注意：仍需在内存中应用 value 过滤（因为 itemid 可能包含多种 value）
                                 # 这个过滤会在后面的 filters 循环中应用
                                 continue
@@ -1007,7 +1007,7 @@ class ICUDataSource:
                         concept_itemid_filter = (spec.column, ids)
                         if DEBUG_MODE:
                             logger.info(
-                                "🎯 概念精确 selector: %s IN %d 个值",
+                                "🎯 Concept-exact selector: %s IN %d values",
                                 spec.column,
                                 len(ids),
                             )
@@ -1023,7 +1023,7 @@ class ICUDataSource:
                         if table_name in hospital_tables and is_mimic_db and is_id_filter:
                             try:
                                 if verbose:
-                                    logger.info(f"🔄 [{table_name}] 将 {spec.column} 过滤器转换为 hadm_id 以优化读取...")
+                                    logger.info(f"🔄 [{table_name}] Converting {spec.column} filters to hadm_id to optimise reading...")
                                 
                                 # 加载 icustays 获取映射
                                 # MIMIC-III 使用 icustay_id，MIMIC-IV 使用 stay_id
@@ -1044,7 +1044,7 @@ class ICUDataSource:
                                     mapped_filter = FilterSpec(column='hadm_id', op=FilterOp.IN, value=valid_hadm_ids)
                                     patient_ids_filter = mapped_filter
                                     if verbose:
-                                        logger.info(f"✅ [{table_name}] 映射成功: {len(spec.value)} stay_ids -> {len(valid_hadm_ids)} hadm_ids")
+                                        logger.info(f"✅ [{table_name}] Mapping succeeded: {len(spec.value)} stay_ids -> {len(valid_hadm_ids)} hadm_ids")
                             except TYPED_VALUE_FAILURES:
                                 raise  # a typed failure keeps its type (D10D)
                             except Exception as e:
@@ -1060,7 +1060,7 @@ class ICUDataSource:
                             cache_key = f"_filter_logged_{table_name}"
                             if not hasattr(self, cache_key) or not getattr(self, cache_key, False):
                                 if DEBUG_MODE:
-                                    logger.debug(f"检测到患者ID过滤器: {len(spec.value)} 个患者, 列={spec.column}")
+                                    logger.debug(f"Detected patient-ID filter: {len(spec.value)} patients, column={spec.column}")
                                 setattr(self, cache_key, True)
                         break
 
@@ -1208,13 +1208,13 @@ class ICUDataSource:
                             if spec.column in ['stay_id', 'icustay_id', 'subject_id'] and spec.op == FilterOp.IN:
                                 icustays_filters.append(spec)
                                 if verbose:
-                                    logger.debug(f"[{table_name}] 提取患者ID过滤器: {spec.column} IN ({len(spec.value)} 个值)")
+                                    logger.debug(f"[{table_name}] Extracted patient-ID filter: {spec.column} IN ({len(spec.value)} values)")
                                 # 不要 break，可能有多个过滤器
                     
                     # 加载 icustays 映射（需要 hadm_id, stay_id/icustay_id, subject_id）
                     # 如果有患者ID过滤器，传递给 icustays 以避免加载全表
                     if verbose:
-                        logger.debug(f"[{table_name}] 加载 icustays，filters={len(icustays_filters)}个")
+                        logger.debug(f"[{table_name}] Loading icustays, filters={len(icustays_filters)}")
                     icustays_map = self.load_table(
                         'icustays', 
                         columns=['hadm_id', target_id_col, 'subject_id', 'intime', 'outtime'],  # 需要 intime 和 outtime 用于 rolling join
@@ -1223,7 +1223,7 @@ class ICUDataSource:
                     )
                     icustays_df = icustays_map.data if hasattr(icustays_map, 'data') else icustays_map
                     if verbose:
-                        logger.debug(f"[{table_name}] icustays 加载完成: {len(icustays_df)} 行")
+                        logger.debug(f"[{table_name}] icustays loaded: {len(icustays_df)} rows")
                     
                     # 🔥 CRITICAL FIX: 为了正确实现 rolling join，需要加载同一 hadm_id 下的所有 stays
                     # 当请求单个 stay 时，可能同一 hadm_id 有多个 ICU stays
@@ -1242,7 +1242,7 @@ class ICUDataSource:
                         # 检查是否有新增的 stays（同一 hadm_id 下的其他 stays）
                         if len(all_stays_df) > len(icustays_df):
                             if verbose:
-                                logger.debug(f"[{table_name}] 发现同一 hadm_id 下有额外的 stays: {len(icustays_df)} → {len(all_stays_df)}")
+                                logger.debug(f"[{table_name}] Found additional stays under the same hadm_id: {len(icustays_df)} → {len(all_stays_df)}")
                             # 使用完整的 stays 列表进行 join
                             icustays_df = all_stays_df
                     
@@ -1297,7 +1297,7 @@ class ICUDataSource:
                         
                         if multi_stay_hadms:
                             if verbose:
-                                logger.debug(f"[{table_name}] 检测到 {len(multi_stay_hadms)} 个 hadm_id 有多个 {target_id_col}，执行 rolling join (使用 outtime)")
+                                logger.debug(f"[{table_name}] Detected {len(multi_stay_hadms)} hadm_ids with multiple {target_id_col}; running a rolling join (using outtime)")
                             
                             # 规范化时间列 - 统一为 datetime64[ns] 以兼容 merge_asof
                             def _normalize_datetime_ns(series: pd.Series) -> pd.Series:
@@ -1374,7 +1374,7 @@ class ICUDataSource:
                                 frame = pd.concat([single_stay_data, merged], ignore_index=True)
                             
                             if verbose:
-                                logger.debug(f"[{table_name}] rolling join 完成: {after_join_rows} → {len(frame)} 行")
+                                logger.debug(f"[{table_name}] rolling join finished: {after_join_rows} → {len(frame)} rows")
                     
                     # 清理临时的 intime 和 outtime 列
                     for col in ['intime', 'outtime']:
@@ -1397,14 +1397,14 @@ class ICUDataSource:
                             if spec.column in ['stay_id', 'icustay_id'] and spec.op == FilterOp.IN:
                                 target_stay_ids = set(spec.value)
                                 if verbose:
-                                    logger.debug(f"[{table_name}] 从 {spec.column} 过滤器获取: {len(target_stay_ids)} stays")
+                                    logger.debug(f"[{table_name}] From {spec.column} filter obtained: {len(target_stay_ids)} stays")
                                 break
                             elif spec.column == 'subject_id' and spec.op == FilterOp.IN:
                                 # 从 metadata 中提取原始 stay_ids
                                 if spec.metadata and 'original_stay_ids' in spec.metadata:
                                     target_stay_ids = set(spec.metadata['original_stay_ids'])
                                     if verbose:
-                                        logger.debug(f"[{table_name}] 从 subject_id 过滤器的 metadata 获取原始 {target_id_col}: {len(target_stay_ids)} stays")
+                                        logger.debug(f"[{table_name}] Obtained the original value from the subject_id filter metadata: {target_id_col}: {len(target_stay_ids)} stays")
                                     break
                     
                     if target_stay_ids:
@@ -1413,17 +1413,17 @@ class ICUDataSource:
                             frame = frame[frame[target_id_col].isin(target_stay_ids)]
                             if verbose:
                                 logger.debug(
-                                    f"[{table_name}] 应用 {target_id_col} 过滤: {before_filter}行 → {len(frame)}行 "
-                                    f"(保留 {len(target_stay_ids)} 个目标 {target_id_col})"
+                                    f"[{table_name}] Applying {target_id_col} filter: {before_filter} rows -> {len(frame)} rows "
+                                    f"(kept {len(target_stay_ids)} target {target_id_col})"
                                 )
                         else:
                             if verbose:
-                                logger.warning(f"[{table_name}] join 后仍无 {target_id_col} 列，无法应用过滤")
+                                logger.warning(f"[{table_name}] Still no {target_id_col} column after the join; cannot apply the filter")
                     
                     # 记录补全操作
                     if verbose and before_rows != after_rows:
                         logger.info(
-                            "表 %s: 通过 hadm_id 补全 %s (%d → %d 行)",
+                            "Table %s: filled %s via hadm_id (%d -> %d rows)",
                             table_name,
                             target_id_col,
                             before_rows,
@@ -1435,7 +1435,7 @@ class ICUDataSource:
                     if 'stay_id' in frame.columns:
                         id_columns = ['stay_id']
                         if verbose:
-                            logger.debug(f"[{table_name}] 补全 {target_id_col} 后更新 id_columns: subject_id → {target_id_col}")
+                            logger.debug(f"[{table_name}] Filled {target_id_col} then updated id_columns: subject_id -> {target_id_col}")
                         
                 except TYPED_VALUE_FAILURES:
                     raise  # a typed failure keeps its type (D10D)
@@ -1457,7 +1457,7 @@ class ICUDataSource:
             # 减少日志输出，只在 DEBUG 模式下显示
             if DEBUG_MODE:
                 logger.debug(
-                    "表 %s: %d 行, %d 个 %s",
+                    "Table %s: %d rows, %d %s",
                     table_name,
                     len(frame),
                     frame[id_label].nunique() if id_label in frame.columns else 0,
@@ -1557,7 +1557,7 @@ class ICUDataSource:
             # 🚀 OPTIMIZATION: 从缓存中取数据后再应用patient过滤
             # 这样多个概念可以共享同一个缓存的表副本
             # ⚡ 性能优化: 避免copy(),直接返回过滤后的视图
-            logger.debug(f"从缓存加载: table={table_name}, cached_columns={list(cached_frame.columns)}")
+            logger.debug(f"Loaded from cache: table={table_name}, cached_columns={list(cached_frame.columns)}")
             if patient_ids_filter:
                 # 如果缓存的key已经包含了filter，那么cached_frame已经是过滤过的了
                 # 但为了安全起见（或者如果filter_key逻辑有变），再次检查
@@ -1851,7 +1851,7 @@ class ICUDataSource:
             itemid_filter_config = concept_itemid_filter
             if DEBUG_MODE:
                 col, ids = concept_itemid_filter
-                logger.info(f"🎯 使用概念特定过滤: {col} IN {len(ids)} 个 ID (精确模式)")
+                logger.info(f"🎯 Using concept-specific filter: {col} IN {len(ids)} IDs (exact mode)")
         elif db_name == 'aumc' and table_name == 'numericitems':
             # AUMC numericitems: 80GB → 约5GB
             itemid_filter_config = ('itemid', AUMC_NUMERICITEMS_ITEMIDS)
@@ -1884,7 +1884,7 @@ class ICUDataSource:
         columns = mimic_disk_columns(self, path, table_name, columns, files=resolved_files)
         if path.is_dir():
             if DEBUG_MODE:
-                logger.debug(f"读取分区目录: {path.name}, 请求列: {list(columns) if columns else '全部列'}")
+                logger.debug(f"Reading partition directory: {path.name}, requested columns: {list(columns) if columns else 'all columns'}")
             # 🚀 优先使用 DuckDB（单患者/小批量查询快 5-6 倍）
             # 对于大批量患者（>100），PyArrow 的并行读取更优
             use_duckdb = True
@@ -2270,7 +2270,7 @@ class ICUDataSource:
             filter_col_upper = filter_col.upper()
             itemids_list = ", ".join(str(int(x)) for x in filter_ids)
             where_conditions.append(f"{filter_col_upper} IN ({itemids_list})")
-            logger.debug(f"🎯 CSV 过滤: {filter_col_upper} IN ({len(filter_ids)} 个 ID)")
+            logger.debug(f"🎯 CSV filter: {filter_col_upper} IN ({len(filter_ids)} IDs)")
         
         # Patient ID filter
         if patient_ids_filter and patient_ids_filter.value:
@@ -2623,7 +2623,7 @@ class ICUDataSource:
             for val_col in wide_table_value_columns:
                 where_conditions.append(f"{val_col} IS NOT NULL")
             if DEBUG_MODE:
-                logger.info(f"🚀 宽表NULL过滤: {wide_table_value_columns} IS NOT NULL")
+                logger.info(f"🚀 Wide-table NULL filter: {wide_table_value_columns} IS NOT NULL")
         
         # 构建 WHERE 子句
         where_clause = ""
@@ -2662,11 +2662,11 @@ class ICUDataSource:
                             )
                     _quoted = [f'"{str(_key).replace(chr(34), chr(34)*2)}"' for _key in sort_keys]
                     order_by_clause = f" ORDER BY {', '.join(_quoted)}"
-                    logger.debug(f"🚀 宽表预排序: {table_name} ORDER BY {sort_keys}")
+                    logger.debug(f"🚀 Wide-table pre-sort: {table_name} ORDER BY {sort_keys}")
             except ValueError:
                 raise
             except Exception as e:
-                logger.debug(f"无法获取表配置进行预排序: {e}")
+                logger.debug(f"Cannot get the table configuration for pre-sorting: {e}")
         
         query = f"SELECT {select_cols} FROM {target_relation} {where_clause}{order_by_clause}"
 
@@ -2682,7 +2682,7 @@ class ICUDataSource:
         except storage_layout.StorageIntegrityError:
             raise
         except Exception as e:
-            logger.warning(f"DuckDB 读取失败，回退到 PyArrow: {e}")
+            logger.warning(f"DuckDB read failed; falling back to PyArrow: {e}")
             return self._read_partitioned_data_optimized(
                 directory, columns, patient_ids_filter, itemid_filter_config=itemid_filter_config,
                 table_name=table_name, scan_loader=scan_loader,
@@ -2942,7 +2942,7 @@ class ICUDataSource:
         
         # 🔍 调试日志：显示分区加载请求的列
         if DEBUG_MODE and columns:
-            logger.debug(f"分区表 {directory.name} 请求的列: {list(columns)}")
+            logger.debug(f"Partitioned table {directory.name} requested columns: {list(columns)}")
         
         files = list(self.resolve_target_files(table_name, loader=directory))
         if not files:
@@ -3592,7 +3592,7 @@ def load_bucketed_table_aggregated(
             # 表无 unit 列：按 item ID 隐含单位，filter 视为"应用此转换"提示
             import logging
             logging.getLogger(__name__).info(
-                f"ℹ️ 表无 unit 列，按隐含单位应用 convert_unit（filter={convert_unit_filter}）"
+                f"ℹ️ Table has no unit column; applying convert_unit with the implied unit (filter={convert_unit_filter}）"
             )
             convert_unit_filter = None  # 清空 filter，使后续直接走无条件转换分支
     

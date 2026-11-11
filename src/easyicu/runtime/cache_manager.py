@@ -92,12 +92,12 @@ class CacheManager:
                     # 重新创建空目录
                     cache_dir.mkdir(parents=True, exist_ok=True)
                     results[str(cache_dir)] = True
-                    logger.info(f"✅ 已清除磁盘缓存: {cache_dir}")
+                    logger.info(f"✅ Cleared disk cache: {cache_dir}")
                 else:
                     results[str(cache_dir)] = True  # 不存在也算清除成功
             except Exception as e:
                 results[str(cache_dir)] = False
-                logger.warning(f"⚠️  清除磁盘缓存失败: {cache_dir} - {e}")
+                logger.warning(f"⚠️  Failed to clear disk cache: {cache_dir} - {e}")
 
         return results
 
@@ -113,19 +113,19 @@ class CacheManager:
                 if hasattr(cache_obj, 'clear'):
                     cache_obj.clear()
                     results[f"memory_cache_{i}"] = True
-                    logger.info(f"✅ 已清除内存缓存: {type(cache_obj).__name__}")
+                    logger.info(f"✅ Cleared memory cache: {type(cache_obj).__name__}")
                 else:
                     results[f"memory_cache_{i}"] = False
-                    logger.warning(f"⚠️  缓存对象没有clear方法: {type(cache_obj).__name__}")
+                    logger.warning(f"⚠️  Cache object has no clear method: {type(cache_obj).__name__}")
             except Exception as e:
                 results[f"memory_cache_{i}"] = False
-                logger.warning(f"⚠️  清除内存缓存失败: {type(cache_obj).__name__} - {e}")
+                logger.warning(f"⚠️  Failed to clear memory cache: {type(cache_obj).__name__} - {e}")
 
         return results
 
     def clear_all_cache(self) -> Dict[str, Any]:
         """清除所有缓存（磁盘+内存）"""
-        logger.info("🧹 开始清除所有easyicu缓存...")
+        logger.info("🧹 Clearing all easyicu caches...")
 
         disk_results = self.clear_disk_cache()
         memory_results = self.clear_memory_cache()
@@ -143,9 +143,9 @@ class CacheManager:
         total_count = summary['total_disk_dirs'] + summary['total_memory_caches']
 
         if success_count == total_count:
-            logger.info(f"🎉 缓存清除完成: {success_count}/{total_count} 个缓存已清除")
+            logger.info(f"🎉 Cache clearing finished: {success_count}/{total_count} caches cleared")
         else:
-            logger.warning(f"⚠️  部分缓存清除失败: {success_count}/{total_count} 个缓存已清除")
+            logger.warning(f"⚠️  Some caches failed to clear: {success_count}/{total_count} caches cleared")
 
         return summary
 
@@ -191,11 +191,11 @@ def get_cache_manager() -> CacheManager:
 def auto_clear_cache_if_enabled():
     """如果启用了自动清除，则清除缓存"""
     if AUTO_CLEAR_CACHE:
-        logger.info("🔄 自动缓存清除已启用，正在清理缓存...")
+        logger.info("🔄 Automatic cache clearing is enabled; clearing caches...")
         cache_manager = get_cache_manager()
         return cache_manager.clear_all_cache()
     else:
-        logger.info("ℹ️  自动缓存清除已禁用")
+        logger.info("ℹ️  Automatic cache clearing is disabled")
         return None
 
 def clear_easyicu_cache():
@@ -208,7 +208,7 @@ def clear_easyicu_cache():
     try:
         from ..api import clear_global_loader
         clear_global_loader()
-        logger.info("✅ 已清除全局加载器")
+        logger.info("✅ Cleared the global loader")
     except ImportError:
         pass
     

@@ -214,6 +214,22 @@ def src_data_avail(source_name: Optional[str] = None) -> Dict[str, bool]:
     return availability
 
 
+def _has_local_tables(config: DataSourceConfig, data_dir: Path) -> bool:
+    """True when at least one declared table (parquet or source file) is local."""
+    if not data_dir.is_dir():
+        return False
+    for name in config.tables:
+        if (data_dir / f"{name}.parquet").exists():
+            return True
+        try:
+            first = config.get_table(name).first_file()
+        except Exception:
+            first = None
+        if first and (data_dir / first).exists():
+            return True
+    return False
+
+
 def setup_src_data(
     source_name: str,
     registry: DataSourceRegistry,
@@ -229,7 +245,12 @@ def setup_src_data(
         data_dir: Directory for data storage
         force: If True, force re-download and re-import
     """
-    from .download import DownloadError, download_src
+    from .download import (
+        DownloadError,
+        check_downloadable,
+        download_src,
+        is_credentialed,
+    )
     from .import_data import import_src
 
     config = registry.get(source_name)
@@ -237,15 +258,21 @@ def setup_src_data(
 
     LOGGER.info(f"Setting up data source '{source_name}'")
 
-    # Download if needed: typed download failures propagate to the caller
-    # instead of being swallowed here (import/attach would otherwise fail
-    # later with an unrelated error).
-    try:
-        download_src(config, data_dir, force=force)
-    except DownloadError:
-        raise
-    except Exception as e:
-        LOGGER.warning(f"Download failed or skipped: {e}")
+    # A credentialed database is never fetched here: refuse before any network
+    # call unless its files are already local (then only import/attach run).
+    if is_credentialed(source_name):
+        if not _has_local_tables(config, data_dir):
+            check_downloadable(source_name)
+    else:
+        # Download if needed: typed download failures propagate to the caller
+        # instead of being swallowed here (import/attach would otherwise fail
+        # later with an unrelated error).
+        try:
+            download_src(config, data_dir, force=force)
+        except DownloadError:
+            raise
+        except Exception as e:
+            LOGGER.warning(f"Download failed or skipped: {e}")
 
     # Import
     import_src(config, data_dir, force=force)

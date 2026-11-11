@@ -1940,8 +1940,8 @@ class ConceptResolver:
                     concept_workers = parallel_config.max_workers
                     if verbose and not _batch_loading:
                         logger.info(
-                            f"🔧 自动并行配置: {parallel_config.performance_tier} "
-                            f"(内存: {parallel_config.total_memory_gb:.1f}GB, "
+                            f"🔧 Automatic parallel configuration: {parallel_config.performance_tier} "
+                            f"(memory: {parallel_config.total_memory_gb:.1f}GB, "
                             f"workers: {concept_workers})"
                         )
                 else:
@@ -2098,7 +2098,7 @@ class ConceptResolver:
                                     column_bounds[val_var] = (vmin, vmax)
                         
                         if verbose:
-                            logger.info(f"🚀 宽表批量加载: {shared_table} ({len(value_columns)} 列)")
+                            logger.info(f"🚀 Wide-table batch load: {shared_table} ({len(value_columns)} columns)")
                         
                         # 一次性加载所有列 (使用median与R ricu保持一致)
                         batch_df = load_wide_table_aggregated(
@@ -2182,7 +2182,7 @@ class ConceptResolver:
                                 table_batch_results[concept_name] = _tbl
                         
                         if verbose:
-                            logger.info(f"✅ 宽表批量加载完成，加载了 {len(concepts_info_filtered)} 个概念")
+                            logger.info(f"✅ Wide-table batch load finished; loaded {len(concepts_info_filtered)} concepts")
                         
                     except (
                         DuckDBQueryInterrupted, StorageIntegrityError, UndeclaredUnitError,
@@ -2425,7 +2425,7 @@ class ConceptResolver:
 
                         if verbose and covered_names:
                             logger.info(
-                                "✅ 长表批量加载完成: %s (%d/%d 概念)",
+                                "✅ Long-table batch load finished: %s (%d/%d concepts)",
                                 shared_table,
                                 len(covered_names),
                                 len(names),
@@ -2476,7 +2476,7 @@ class ConceptResolver:
         if not wide_table_covered_names and len(table_to_concepts) == 1 and concept_workers > 1 and total > 1:
             shared_table = list(table_to_concepts.keys())[0]
             if verbose:
-                logger.info(f"🔄 所有 {total} 个概念共享表 '{shared_table}'，使用串行加载以共享缓存")
+                logger.info(f"🔄 All {total} concepts share table '{shared_table}'; loading serially to share the cache")
             effective_workers = 1
         
         # 🚀 新优化：检测共享子概念，强制串行加载以利用缓存
@@ -2520,7 +2520,7 @@ class ConceptResolver:
                         set(shared_sub_concepts) | set(requested_dependency_overlap)
                     )
                     logger.info(
-                        "🔄 检测到依赖重叠概念 %s，使用串行加载以利用缓存",
+                        "🔄 Detected overlapping-dependency concepts %s; loading serially to reuse the cache",
                         hazards,
                     )
                 effective_workers = 1
@@ -2534,7 +2534,7 @@ class ConceptResolver:
                 concept_table = wide_table_batch_results[name]
                 if verbose and logger.isEnabledFor(logging.INFO):
                     row_count = len(concept_table.data) if (isinstance(concept_table, ICUTable) or hasattr(concept_table, 'data')) else len(concept_table)
-                    logger.info("✅  概念 '%s' (批量) 已加载 (行数: %s)", name, row_count)
+                    logger.info("✅  Concept '%s' (batch) loaded (rows: %s)", name, row_count)
                 return name, concept_table
             if name in wide_table_covered_names:
                 # merge=True can return the producer-built wide frame directly.
@@ -2542,7 +2542,7 @@ class ConceptResolver:
                 return name, None
             
             if verbose and logger.isEnabledFor(logging.INFO):
-                logger.info("➡️  [%d/%d] 加载概念 '%s'", position, total, name)
+                logger.info("➡️  [%d/%d] Loading concept '%s'", position, total, name)
 
             concept_table = self._ensure_concept_loaded(
                 name,
@@ -2567,7 +2567,7 @@ class ConceptResolver:
                     row_count = len(concept_table)
                 else:
                     row_count = "N/A"
-                logger.info("✅  概念 '%s' 已加载 (行数: %s)", name, row_count)
+                logger.info("✅  Concept '%s' loaded (rows: %s)", name, row_count)
             return name, concept_table
 
         depth_entered = False
@@ -2667,7 +2667,7 @@ class ConceptResolver:
                 # 如果是r_compatible模式且只有一个概念，返回ricu.R格式的DataFrame
                 if r_compatible and len(tables) == 1:
                     concept_name = list(tables.keys())[0]
-                    logger.debug("调试：调用_to_r_format处理概念 %s", concept_name)
+                    logger.debug("Debug: calling _to_r_format for concept %s", concept_name)
                     # 计算interval_hours
                     interval_hours = 1.0
                     if interval is not None:
@@ -2690,7 +2690,7 @@ class ConceptResolver:
                 wide_table_covered_names >= set(names)
             ):
                 if verbose:
-                    logger.info("🚀 使用宽表批量加载的合并结果，跳过合并步骤")
+                    logger.info("🚀 Using the merged result of the wide-table batch load; skipping the merge step")
                 return self._ensure_requested_concept_columns(
                     wide_table_merged_df,
                     names,
@@ -2758,7 +2758,7 @@ class ConceptResolver:
                                     result_cols.append(concept_name)
                                 df = df[[c for c in result_cols if c in df.columns]]
                                 if verbose:
-                                    logger.info(f"🔧 win_tbl 概念 '{concept_name}' 直接返回原始格式: {len(df)} 行, 列={df.columns.tolist()}")
+                                    logger.info(f"🔧 win_tbl concept '{concept_name}' returned in its raw format: {len(df)} rows, columns={df.columns.tolist()}")
                                 return df
                 
                 # 🚀 宽表优化：如果有批量加载的合并结果，直接用它
@@ -2774,7 +2774,7 @@ class ConceptResolver:
                         )
                         if merged_partial is not None:
                             if verbose:
-                                logger.info("🚀 使用部分宽表批量结果并仅合并剩余概念")
+                                logger.info("🚀 Using the partial wide-table batch result and merging only the remaining concepts")
                             return self._ensure_requested_concept_columns(
                                 merged_partial,
                                 names,
@@ -2785,7 +2785,7 @@ class ConceptResolver:
                         # Partial merge failed (e.g. non-charttime time column) — fall through to full merge
                     elif _all_covered:
                         if verbose:
-                            logger.info("🚀 使用宽表批量加载的合并结果 (ricu格式)")
+                            logger.info("🚀 Using the merged result of the wide-table batch load (ricu format)")
                         _sort_time = 'charttime'
                         for _tc in ('charttime', 'measuredat_minutes'):
                             if _tc in wide_table_merged_df.columns:
@@ -3032,8 +3032,8 @@ class ConceptResolver:
             warn_key = (str(db_name), str(concept_name))
             if warn_key not in _MISSING_SOURCE_WARNED:
                 logger.info(
-                    f"⚠️  概念 '{concept_name}' 在数据库 '{db_name}' 中未配置数据源，返回空结果。"
-                    f"（这是正常的，该特征在此数据库中可能不可用）"
+                    f"⚠️  Concept '{concept_name}' has no data source configured in database '{db_name}'; returning an empty result."
+                    f"(expected: this feature may not be available in this database)"
                 )
                 _MISSING_SOURCE_WARNED.add(warn_key)
             
@@ -4020,7 +4020,7 @@ class ConceptResolver:
                         and _can_inline_callback
                         and _target != 'id_tbl'
                     ):
-                        logger.debug(f"🚀 宽表单列DuckDB聚合触发: {source.table}.{source.value_var}")
+                        logger.debug(f"🚀 Wide-table single-column DuckDB aggregation triggered: {source.table}.{source.value_var}")
                         # 🚀 Wide table single-column DuckDB aggregation
                         # eICU vitalperiodic/vitalaperiodic: column-based tables without itemid
                         # Raw loading reads ALL rows (146M+ for vitalperiodic), this does
@@ -4176,7 +4176,7 @@ class ConceptResolver:
                                 table._pre_aggregated = True
                                 _sql_row_bounded_sum = _wt_agg_func == 'SUM' and bool(_wt_bounds)
                                 if verbose:
-                                    logger.info(f"   🚀 宽表单列DuckDB聚合: {source.table}.{_wt_val_var} -> {len(frame):,} 行")
+                                    logger.info(f"   🚀 Wide-table single-column DuckDB aggregation: {source.table}.{_wt_val_var} -> {len(frame):,} rows")
                             else:
                                 # No top-level Parquet set (a bucket root or a CSV):
                                 # this table is routed to the raw path, which
@@ -4390,7 +4390,7 @@ class ConceptResolver:
                     raise
                 except Exception as e:
                     if DEBUG_MODE:
-                        logger.warning(f"patients 表关联失败: {e}")
+                        logger.warning(f"patients table join failed: {e}")
             
             if (data_source.config.name == 'miiv' and source.table == 'labevents'
                     and 'stay_id' not in frame.columns):
@@ -4648,7 +4648,7 @@ class ConceptResolver:
                             # 这是正常的数据过滤行为（例如实验室结果在ICU出院后采集，或在miiv中是ICU入院前的数据）
                             if DEBUG_MODE:
                                 reason = "ricu.R-style时间过滤" if before_filter > 0 else "ICU住院匹配"
-                                logger.warning(f"[{concept_name}] MIMIC {source.table}: {reason}后为空 (原始{len(frame)}行 → 匹配{before_filter}行 → 过滤后0行)")
+                                logger.warning(f"[{concept_name}] MIMIC {source.table}: {reason}empty after filtering (raw {len(frame)} rows -> matched {before_filter} rows -> 0 rows after filtering)")
                             frame = pd.DataFrame(columns=frame.columns)
                             
                         # 🔗 关键修复：如果用户提供了特定的 stay_id/icustay_id，在映射后再次过滤
@@ -5069,7 +5069,7 @@ class ConceptResolver:
                 elif value_column not in frame.columns:
                     # 如果仍然不存在，跳过这个源
                     if DEBUG_MODE:
-                        logger.warning(f"value_column '{value_column}' 不存在，跳过此源")
+                        logger.warning(f"value_column '{value_column}' does not exist; skipping this source")
                     frame = pd.DataFrame()
                     continue
 
@@ -5125,7 +5125,7 @@ class ConceptResolver:
                 if regex_column not in frame.columns:
                     # 如果目标列不存在，跳过这个源
                     if DEBUG_MODE:
-                        logger.warning(f"regex 列 '{regex_column}' 不存在，跳过此源")
+                        logger.warning(f"regex column '{regex_column}' does not exist; skipping this source")
                     frame = pd.DataFrame()
                     continue
                 # 使用 regex=True 并抑制 UserWarning
@@ -5251,12 +5251,12 @@ class ConceptResolver:
                 if mismatched and (DEBUG_MODE or len(frame) > 0):
                     # 只在调试模式或有数据时记录
                     if DEBUG_MODE:
-                        logger.warning(f"单位警告 (允许{definition.units}): 发现不匹配单位 {mismatched}")
-                    # 发出Python警告供日志记录
+                        logger.warning(f"Unit warning (allowed{definition.units}): found mismatching units {mismatched}")
+                    # Emit a Python warning for the log
                     import warnings
                     warnings.warn(
-                        f"概念 '{concept_name}': 不是所有单位都在允许列表中 {definition.units}, "
-                        f"发现: {mismatched}",
+                        f"Concept '{concept_name}': not all units are in the allowed list {definition.units}, "
+                        f"found: {mismatched}",
                         UserWarning
                     )
 
@@ -5301,7 +5301,7 @@ class ConceptResolver:
                     raise
                 except Exception as e:
                     if DEBUG_MODE:
-                        logger.warning(f"[MIMIC-III] source级时间标准化失败: {e}")
+                        logger.warning(f"[MIMIC-III] source-level time normalisation failed: {e}")
                 
                 # 🔧 以下是被禁用的严格过滤逻辑（保留作为参考）
                 skip_unit_filter = True  # 与 R ricu 一致，不过滤数据
@@ -5471,7 +5471,7 @@ class ConceptResolver:
             # 确保ID列在数据中
             available_id_cols = [col for col in id_columns if col in frame.columns]
             if not available_id_cols and id_columns:
-                logging.debug(f"配置的ID列 {id_columns} 不在数据中，可用列: {list(frame.columns)[:10]}")
+                logging.debug(f"Configured ID column {id_columns} is not in the data; available columns: {list(frame.columns)[:10]}")
             
             ordered_cols: List[str] = []
             # 保留所有可用的ID列（不只是第一个）
@@ -5573,14 +5573,14 @@ class ConceptResolver:
                             missing_tables.append(source.table)
 
             if missing_tables and db_name in ['eicu', 'eicu_demo']:
-                logging.debug(f"eICU测试数据缺少表 {missing_tables}，概念 '{concept_name}' 暂时不可用")
+                logging.debug(f"eICU test data lacks table {missing_tables}, concept '{concept_name}' is temporarily unavailable")
             else:
                 # 只对某些高级治疗概念显示INFO级别信息
                 advanced_concepts = ['ecmo', 'ecmo_indication', 'mech_circ_support', 'rrt']
                 if concept_name in advanced_concepts:
-                    logging.info(f"概念 '{concept_name}' 在测试数据中不可用（高级治疗）")
+                    logging.info(f"Concept '{concept_name}' is unavailable in the test data (advanced therapy)")
                 else:
-                    logging.debug(f"概念 '{concept_name}' 的所有 {len(sources)} 个数据源都返回空数据")
+                    logging.debug(f"Concept '{concept_name}': all {len(sources)} data sources returned empty data")
             # 创建一个空的 DataFrame，包含必要的列
             # 确保有 ID 列：使用配置的 id_columns，如果没有则使用数据库的默认ID列
             if not id_columns:
@@ -5805,7 +5805,7 @@ class ConceptResolver:
                         raise
                     except Exception as e:
                         if DEBUG_MODE:
-                            logger.warning(f"[MIMIC-III] datetime→numeric 转换失败: {e}")
+                            logger.warning(f"[MIMIC-III] datetime-to-numeric conversion failed: {e}")
                 
                 # 优先使用 charttime，如果不存在则创建
                 if 'charttime' not in combined.columns:
@@ -5890,7 +5890,7 @@ class ConceptResolver:
                             raise
                         except Exception as e:
                             if DEBUG_MODE:
-                                logger.warning(f"[MIMIC-III] charttime mixed-type 规范化失败: {e}")
+                                logger.warning(f"[MIMIC-III] charttime mixed-type normalisation failed: {e}")
 
                 combined['charttime'] = pd.to_numeric(combined['charttime'], errors='coerce') if not pd.api.types.is_numeric_dtype(combined['charttime']) else combined['charttime']
 
@@ -5930,7 +5930,7 @@ class ConceptResolver:
                         raise
                     except Exception as e:
                         if DEBUG_MODE:
-                            logger.warning(f"[MIMIC-III] epoch charttime 规范化失败: {e}")
+                            logger.warning(f"[MIMIC-III] epoch charttime normalisation failed: {e}")
 
         # 🔧 CRITICAL FIX 2026-03-10: Multi-source concat produces object dtype for value column
         # When frames from different sources (e.g., respiratorycharting + lab) are concatenated,
@@ -6467,7 +6467,7 @@ class ConceptResolver:
                     if DEBUG_MODE:
                         print(f"   🔍 DEBUG: expand后, 行数={len(combined)}")
                     if verbose:
-                        logger.info(f"   ✅ 展开 win_tbl '{concept_name}' 到 {len(combined)} 行")
+                        logger.info(f"   ✅ Expanded win_tbl '{concept_name}' to {len(combined)} rows")
                 except TYPED_VALUE_FAILURES:
                     # An undeclared or unknown time-axis unit (or a failed exact
                     # aggregation) has no raw-row fallback.
@@ -8019,7 +8019,7 @@ class ConceptResolver:
             try:
                 data[index_column] = pd.to_datetime(data[index_column], errors='coerce', utc=True).dt.tz_localize(None)
             except Exception as e:
-                logger.warning(f"无法将时间列 {index_column} 转换为datetime: {e}")
+                logger.warning(f"Cannot convert time column {index_column} to datetime: {e}")
                 return data
         
         try:
@@ -8420,16 +8420,16 @@ class ConceptResolver:
                     id_cols = table.id_vars
                     
                     if verbose and logger.isEnabledFor(logging.DEBUG):
-                        logger.debug("   对齐 WinTbl '%s': index_var=%s, dur_var=%s", name, idx_col, dur_col)
+                        logger.debug("   Aligning WinTbl '%s': index_var=%s, dur_var=%s", name, idx_col, dur_col)
                         if idx_col in table.data.columns:
-                            logger.debug("      index_var 类型: %s", table.data[idx_col].dtype)
+                            logger.debug("      index_var type: %s", table.data[idx_col].dtype)
                         if dur_col and dur_col in table.data.columns:
-                            logger.debug("      dur_var 类型: %s", table.data[dur_col].dtype)
+                            logger.debug("      dur_var type: %s", table.data[dur_col].dtype)
                     
                     # Align index_var (start time) if it's datetime
                     if idx_col and idx_col in table.data.columns and pd.api.types.is_datetime64_any_dtype(table.data[idx_col]):
                         if verbose and logger.isEnabledFor(logging.DEBUG):
-                            logger.debug("      ✅ 转换 index_var 从 datetime 到小时")
+                            logger.debug("      ✅ Converted index_var from datetime to hours")
                         table.data = self._align_time_to_admission(
                             table.data,
                             data_source,
@@ -8444,11 +8444,11 @@ class ConceptResolver:
                     if dur_col and dur_col in table.data.columns:
                         if pd.api.types.is_timedelta64_dtype(table.data[dur_col]):
                             if verbose and logger.isEnabledFor(logging.DEBUG):
-                                logger.debug("      ✅ 转换 dur_var 从 timedelta 到小时")
+                                logger.debug("      ✅ Converted dur_var from timedelta to hours")
                             table.data[dur_col] = table.data[dur_col].dt.total_seconds() / 3600.0
                         elif pd.api.types.is_datetime64_any_dtype(table.data[dur_col]):
                             # If dur_var is datetime (shouldn't happen), warn
-                            logger.warning("WinTbl '%s' 的 dur_var '%s' 是 datetime 类型，预期是 timedelta", name, dur_col)
+                            logger.warning("WinTbl '%s': dur_var '%s' is of datetime type; expected timedelta", name, dur_col)
                 
                 aligned_sub_tables[name] = table
             sub_tables = aligned_sub_tables
@@ -8559,7 +8559,7 @@ class ConceptResolver:
             if idx_col and idx_col in result.data.columns and pd.api.types.is_datetime64_any_dtype(result.data[idx_col]):
                 if verbose and logger.isEnabledFor(logging.DEBUG):
                     logger.debug(
-                        "   对齐 WinTbl 结果 '%s': index_var=%s (datetime → 小时)",
+                        "   Aligning WinTbl result '%s': index_var=%s (datetime -> hours)",
                         concept_name,
                         idx_col,
                     )
@@ -8577,7 +8577,7 @@ class ConceptResolver:
             if dur_col and dur_col in result.data.columns and pd.api.types.is_timedelta64_dtype(result.data[dur_col]):
                 if verbose and logger.isEnabledFor(logging.DEBUG):
                     logger.debug(
-                        "   转换 WinTbl 结果 '%s': dur_var=%s (timedelta → 小时)",
+                        "   Converting WinTbl result '%s': dur_var=%s (timedelta -> hours)",
                         concept_name,
                         dur_col,
                     )
@@ -8633,7 +8633,7 @@ class ConceptResolver:
                             _declare_dur_var_hours(result.data)
                         elif pd.api.types.is_datetime64_any_dtype(result.data[dur_col]):
                             # 如果是 datetime（不应该，但保险起见），记录警告
-                            logger.warning(f"WinTbl 的 dur_var '{dur_col}' 是 datetime 类型，预期是 timedelta")
+                            logger.warning(f"WinTbl dur_var '{dur_col}' is of datetime type; expected timedelta")
             
             # Align time to ICU admission if requested
             if align_to_admission and not result.data.empty:
@@ -8672,7 +8672,7 @@ class ConceptResolver:
                 if idx_col and dur_col and idx_col in result.data.columns and dur_col in result.data.columns:
                     if verbose:
                         if logger.isEnabledFor(logging.DEBUG):
-                            logger.debug("   扩展 WinTbl '%s' 到时间序列 (interval=%s)", concept_name, interval)
+                            logger.debug("   Expanding WinTbl '%s' to a time series (interval=%s)", concept_name, interval)
 
                     # 扩展窗口到时间序列 (vectorized; replaces an iterrows loop that
                     # ran ~200x slower on a 100k-row WinTbl).
@@ -8704,7 +8704,7 @@ class ConceptResolver:
                             time_columns=[],
                         )
                         if logger.isEnabledFor(logging.DEBUG):
-                            logger.debug("   ✅ 扩展完成: %d 行", len(expanded_df))
+                            logger.debug("   ✅ Expansion finished: %d rows", len(expanded_df))
                         elif verbose:
                             print(f"   ✅ 扩展完成: {len(expanded_df)} 行")
                     else:
@@ -9944,7 +9944,7 @@ class ConceptResolver:
             missing_key_cols = [col for col in key_cols if col not in frame.columns]
             if missing_key_cols:
                 # 如果缺少关键列，跳过这个表
-                logger.warning(f"表 '{name}' 缺少关键列 {missing_key_cols}，跳过合并")
+                logger.warning(f"Table '{name}' lacks key columns {missing_key_cols}; skipping merge")
                 continue
             
             if name not in frame.columns:
@@ -9952,7 +9952,7 @@ class ConceptResolver:
                 # 这种情况可能发生在keep_components=True时，回调返回了组件列而不是概念名称列
                 value_cols = [col for col in frame.columns if col not in key_cols]
                 if not value_cols:
-                    logger.warning(f"表 '{name}' 没有值列，跳过合并")
+                    logger.warning(f"Table '{name}' has no value column; skipping merge")
                     continue
             
             # 选择要保留的列：ID列 + 时间列 + 所有非关键列（包括概念值列和组件列）
@@ -10218,7 +10218,7 @@ class ConceptResolver:
                 # 检查增强的概念数据缓存
                 if concept_cache_key in self._concept_data_cache:
                     if verbose and logger.isEnabledFor(logging.DEBUG):
-                        logger.debug("✨ 从内存缓存加载概念 '%s' (命中增强缓存)", concept_name)
+                        logger.debug("✨ Loaded concept '%s' from the memory cache (enhanced-cache hit)", concept_name)
                     # � 缓存中已存储独立副本（在路径D存入时copy），返回时无需再次copy
                     # 调用方如需修改，应自行copy（如_to_r_format已自己copy）
                     cached = self._concept_data_cache[concept_cache_key]
@@ -10263,7 +10263,7 @@ class ConceptResolver:
                     if hasattr(raw_cached, 'copy'):
                         raw_cached = raw_cached.copy()
                     if verbose and logger.isEnabledFor(logging.DEBUG):
-                        logger.debug("🚀 从原始缓存重建概念 '%s' (interval=%s, agg=%s)", concept_name, interval, agg_value)
+                        logger.debug("🚀 Rebuilt concept '%s' from the raw cache (interval=%s, agg=%s)", concept_name, interval, agg_value)
                     
                     # 应用聚合（如果需要）
                     if agg_value not in (None, False, "auto"):
@@ -10413,7 +10413,7 @@ class ConceptResolver:
                 
                 if idx_col and dur_col and idx_col in result.data.columns and dur_col in result.data.columns:
                     if verbose:
-                        logger.info("   扩展 WinTbl '%s' 到时间序列 (interval=%s)", concept_name, interval)
+                        logger.info("   Expanding WinTbl '%s' to a time series (interval=%s)", concept_name, interval)
 
                     # 扩展窗口到时间序列 (vectorized; replaces an iterrows loop that
                     # ran ~270x slower on a 100k-row WinTbl).
@@ -10470,7 +10470,7 @@ class ConceptResolver:
                             time_columns=[],
                         )
                         if verbose:
-                            logger.info("   ✅ 扩展完成: %d 行", len(expanded_df))
+                            logger.info("   ✅ Expansion finished: %d rows", len(expanded_df))
             
             # 🔧 FIX 2026-02: 对于 target='id_tbl' 的概念（如 height, weight），
             # 需要聚合到每个患者只有一行。R ricu 使用 median 作为数值类型的默认聚合。
@@ -10500,7 +10500,7 @@ class ConceptResolver:
                         agg_df = df.groupby(id_cols, as_index=False).agg({value_col: agg_func})
                         
                         if verbose:
-                            logger.info("   📊 聚合 id_tbl 概念 '%s': %d 行 -> %d 行 (agg=%s)", 
+                            logger.info("   📊 Aggregated id_tbl concept '%s': %d rows -> %d rows (agg=%s)", 
                                        concept_name, len(df), len(agg_df), agg_func)
                         
                         result = ICUTableClass(

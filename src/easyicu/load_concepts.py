@@ -194,7 +194,7 @@ class ConceptLoader:
                 self._low_memory = available_gb < 24
         
         if self._low_memory:
-            logger.info(f"🧠 低内存模式启用 for {self._src_name}")
+            logger.info(f"🧠 Low-memory mode enabled for {self._src_name}")
         
         self._id_lookup_cache: Optional[pd.DataFrame] = None
         self._table_cache: Dict[str, pd.DataFrame] = {}
@@ -912,7 +912,7 @@ class ConceptLoader:
         
         # 🔍 调试：显示推断的列
         if required_columns:
-            logger.debug(f"   🔹 表 {table_name} 推断的列: {required_columns}")
+            logger.debug(f"   🔹 Table {table_name} inferred columns: {required_columns}")
         
         df = self._read_declared_table(table_name, required_columns)
         if df is None:
@@ -1049,7 +1049,7 @@ class ConceptLoader:
         # 2. 过滤 sub_var (如 itemid)
         if source.sub_var and source.ids:
             if source.sub_var not in df.columns:
-                logger.warning(f"表 {table_name} 中找不到列 {source.sub_var}")
+                logger.warning(f"Table {table_name}: column not found: {source.sub_var}")
                 return pd.DataFrame()
             df = df[df[source.sub_var].isin(source.ids)]
         
@@ -1440,7 +1440,7 @@ class ConceptLoader:
                 # 从字典中加载子概念定义
                 concept_dict = load_dictionary(self._src_name)
                 if sub_name not in concept_dict:
-                    logger.warning(f"找不到子概念 {sub_name}")
+                    logger.warning(f"Sub-concept not found: {sub_name}")
                     continue
                 sub_concept = concept_dict[sub_name]
                     

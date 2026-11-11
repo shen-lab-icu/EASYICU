@@ -37,6 +37,60 @@ class DownloadError(OSError):
         self.destination = destination
 
 
+class SourceNotDownloadableError(DownloadError):
+    """The source cannot be fetched automatically (credentialed or no recipe).
+
+    Raised before any network call. The message is a single actionable line.
+    """
+
+
+#: Sources whose files are fetched anonymously from PhysioNet (open access).
+DOWNLOADABLE_SOURCES = ("mimic_demo", "eicu_demo")
+
+#: Credentialed databases: key -> (display name, where to obtain it).
+CREDENTIALED_SOURCES = {
+    "miiv": ("MIMIC-IV", "PhysioNet"),
+    "mimic": ("MIMIC-III", "PhysioNet"),
+    "eicu": ("eICU-CRD", "PhysioNet"),
+    "hirid": ("HiRID", "PhysioNet"),
+    "sic": ("SICdb", "PhysioNet"),
+    "aumc": ("AmsterdamUMCdb", "the Amsterdam UMC data-sharing portal"),
+}
+
+
+def _canonical_source(source_name: str) -> str:
+    try:
+        from ..databases.profiles import normalize_database_key
+
+        return normalize_database_key(source_name)
+    except Exception:
+        return str(source_name)
+
+
+def is_credentialed(source_name: str) -> bool:
+    return _canonical_source(source_name) in CREDENTIALED_SOURCES
+
+
+def check_downloadable(source_name: str) -> None:
+    """Refuse a credentialed or unsupported source before any network call."""
+
+    key = _canonical_source(source_name)
+    if key in DOWNLOADABLE_SOURCES or str(source_name) in DOWNLOADABLE_SOURCES:
+        return
+    if key in CREDENTIALED_SOURCES:
+        label, where = CREDENTIALED_SOURCES[key]
+        raise SourceNotDownloadableError(
+            f"{label} requires credentialed access: download it manually from "
+            f"{where}, then run the converter "
+            f"(DataConverter(raw_dir, database='{key}').convert_all())"
+        )
+    raise SourceNotDownloadableError(
+        f"Source '{source_name}' cannot be downloaded automatically "
+        f"(downloadable: {', '.join(DOWNLOADABLE_SOURCES)}); obtain the files "
+        "yourself, then run the converter"
+    )
+
+
 class PhysioNetDownloader:
     """Handler for downloading data from PhysioNet."""
 
@@ -281,6 +335,9 @@ def download_sources(
         DownloadError: If any source fails to download.
         KeyError: If a source name is unknown.
     """
+    source_names = list(source_names)
+    for source_name in source_names:
+        check_downloadable(source_name)
     for source_name, data_dir in zip(source_names, data_dirs):
         try:
             config = registry.get(source_name)

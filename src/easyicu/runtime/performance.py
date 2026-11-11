@@ -50,14 +50,14 @@ class TablePreloader:
                    如果为None，使用默认表列表
         """
         if not self.enable_preload:
-            logger.info("预加载已禁用")
+            logger.info("Preloading is disabled")
             return
         
         # 默认预加载配置
         if tables is None:
             tables = self._get_default_tables()
         
-        logger.info(f"📦 开始预加载 {len(tables)} 个表...")
+        logger.info(f"📦 Starting preload of {len(tables)} tables...")
         patient_set = set(patient_ids)
         total_start = time.perf_counter()
         
@@ -70,7 +70,7 @@ class TablePreloader:
             if not table_path.exists():
                 table_path = self.data_path / table_name
             if not table_path.exists():
-                logger.warning(f"  ⚠️  {table_name} 跳过: not installed under {self.data_path}")
+                logger.warning(f"  ⚠️  {table_name} skipped: not installed under {self.data_path}")
                 self.cache[table_name] = None
                 continue
 
@@ -121,12 +121,12 @@ class TablePreloader:
 
             if filter_ratio > 0:
                 logger.info(
-                    f"  ✅ {table_name}: {filtered_rows:,}行 "
-                    f"({filter_ratio:.1f}% 过滤), {memory_mb:.1f}MB, {elapsed:.2f}s"
+                    f"  ✅ {table_name}: {filtered_rows:,} rows "
+                    f"({filter_ratio:.1f}% filtered), {memory_mb:.1f}MB, {elapsed:.2f}s"
                 )
             else:
                 logger.info(
-                    f"  ✅ {table_name}: {filtered_rows:,}行, "
+                    f"  ✅ {table_name}: {filtered_rows:,} rows, "
                     f"{memory_mb:.1f}MB, {elapsed:.2f}s"
                 )
 
@@ -135,8 +135,8 @@ class TablePreloader:
         total_rows = sum(s['rows'] for s in self.stats.values())
         
         logger.info(
-            f"\n📊 预加载完成: {total_rows:,}行, {total_memory:.1f}MB, "
-            f"{total_time:.2f}s ({total_time/len(patient_ids)*1000:.1f}ms/患者)"
+            f"\n📊 Preload finished: {total_rows:,} rows, {total_memory:.1f}MB, "
+            f"{total_time:.2f}s ({total_time/len(patient_ids)*1000:.1f}ms/patient)"
         )
     
     def get_table(self, table_name: str) -> Optional[pd.DataFrame]:
@@ -222,8 +222,8 @@ class BatchProcessor:
         results = []
         
         logger.info(
-            f"🔄 开始批处理: {total_batches}个批次, "
-            f"{'并行' if self.enable_parallel and self.num_workers > 1 else '串行'}模式"
+            f"🔄 Starting batch processing: {total_batches} batches, "
+            f"{'parallel' if self.enable_parallel and self.num_workers > 1 else 'serial'} mode"
         )
         
         if self.enable_parallel and self.num_workers > 1:
@@ -248,7 +248,7 @@ class BatchProcessor:
                         results.append(result)
                     except Exception as e:
                         batch_idx = futures[future]
-                        logger.error(f"批次 {batch_idx+1}/{total_batches} 失败: {e}")
+                        logger.error(f"Batch {batch_idx+1}/{total_batches} failed: {e}")
                         results.append(None)
         else:
             # 串行处理
@@ -257,13 +257,13 @@ class BatchProcessor:
                     result = process_func(batch, idx, total_batches, **kwargs)
                     results.append(result)
                 except Exception as e:
-                    logger.error(f"批次 {idx+1}/{total_batches} 失败: {e}")
+                    logger.error(f"Batch {idx+1}/{total_batches} failed: {e}")
                     results.append(None)
         
         # 过滤失败的批次
         results = [r for r in results if r is not None]
         
-        logger.info(f"✅ 批处理完成: {len(results)}/{total_batches} 个批次成功")
+        logger.info(f"✅ Batch processing finished: {len(results)}/{total_batches} batches succeeded")
         
         return results
 
@@ -302,10 +302,10 @@ class PerformanceOptimizer:
         """
         if self.enable_preload and len(patient_ids) >= 100:
             # 只有患者数量足够多时才预加载
-            logger.info(f"🚀 启用预加载优化（{len(patient_ids)}名患者）")
+            logger.info(f"🚀 Preload optimisation enabled ({len(patient_ids)} patients)")
             self.preloader.preload_for_patients(patient_ids, preload_tables)
         else:
-            logger.info("预加载优化已禁用或患者数量过少")
+            logger.info("Preload optimisation is disabled or there are too few patients")
     
     def get_preloaded_table(self, table_name: str) -> Optional[pd.DataFrame]:
         """获取预加载的表数据"""

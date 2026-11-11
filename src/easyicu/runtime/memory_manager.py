@@ -300,7 +300,7 @@ def release_memory(aggressive: bool = False) -> int:
     freed = max(0, rss_before - rss_after)
     
     if freed > 50:
-        logger.debug(f"💾 release_memory: 回收 {freed:.0f} MB (RSS: {rss_before:.0f} → {rss_after:.0f})")
+        logger.debug(f"💾 release_memory: reclaimed {freed:.0f} MB (RSS: {rss_before:.0f} → {rss_after:.0f})")
     
     return int(freed)
 
@@ -567,8 +567,8 @@ def auto_batch_size(
     
     if full_estimate <= memory_budget:
         logger.debug(
-            f"📊 内存估算: {full_estimate:.0f}MB < 预算 {memory_budget:.0f}MB, "
-            f"不需要分批 ({total_patients} patients)"
+            f"📊 Memory estimate: {full_estimate:.0f}MB < budget {memory_budget:.0f}MB, "
+            f"no batching needed ({total_patients} patients)"
         )
         return None
     
@@ -582,8 +582,8 @@ def auto_batch_size(
 
     if n_chunks <= 1:
         logger.debug(
-            f"📊 内存估算: 1 份即可（估算 {full_estimate:.0f}MB / 预算 "
-            f"{memory_budget:.0f}MB，上限 {MAX_EXTRACT_CHUNKS} 份），不分批"
+            f"📊 Memory estimate: 1 part is enough (estimated {full_estimate:.0f}MB / budget "
+            f"{memory_budget:.0f}MB, limit {MAX_EXTRACT_CHUNKS} parts), no batching"
         )
         return None
 
@@ -595,13 +595,13 @@ def auto_batch_size(
     # 极端情况：若一份已覆盖全队列，则不分批
     if batch_size >= total_patients:
         logger.debug(
-            f"📊 内存估算: batch_size ({batch_size}) >= total ({total_patients}), 不分批"
+            f"📊 Memory estimate: batch_size ({batch_size}) >= total ({total_patients}), no batching"
         )
         return None
 
     logger.info(
-        f"📊 自动分批: {total_patients} patients → {_ceil_div(total_patients, batch_size)} 份"
-        f"（上限 {MAX_EXTRACT_CHUNKS}）, 估算峰值 {full_estimate:.0f}MB > 预算 "
+        f"📊 Automatic batching: {total_patients} patients → {_ceil_div(total_patients, batch_size)} parts"
+        f"(limit {MAX_EXTRACT_CHUNKS}), estimated peak {full_estimate:.0f}MB > budget "
         f"{memory_budget:.0f}MB, batch_size={batch_size}"
     )
 
@@ -741,10 +741,10 @@ def _popen_and_run(args: dict, temp_dir: str, batch_num: int) -> int:
         )
         return result.returncode
     except subprocess.TimeoutExpired:
-        logger.warning(f"Batch {batch_num} Popen 超时 (60min)")
+        logger.warning(f"Batch {batch_num} Popen timed out (60min)")
         return -1
     except Exception as e:
-        logger.warning(f"Batch {batch_num} Popen 失败: {e}")
+        logger.warning(f"Batch {batch_num} Popen failed: {e}")
         return -1
     finally:
         try:
@@ -949,7 +949,7 @@ def _merge_parquet_batches(temp_dir: str) -> Union[pd.DataFrame, Dict[str, pd.Da
             concept = '.'.join(parts[1:-1])
             grouped[concept].append(f)
         except Exception as e:
-            logger.warning(f"⚠️ 读取 {f} 失败: {e}")
+            logger.warning(f"⚠️ Reading {f} failed: {e}")
 
     merged: Dict[str, pd.DataFrame] = {}
     for concept, files in grouped.items():
@@ -1013,7 +1013,7 @@ def subprocess_batch_load(
     
     if verbose:
         mode = "os.fork()" if _use_raw_fork else ("Popen" if _use_popen else "mp.Process")
-        logger.debug("🔄 子进程隔离分批: %d patients, batch_size=%d, %d batches [%s]",
+        logger.debug("🔄 Subprocess-isolated batching: %d patients, batch_size=%d, %d batches [%s]",
                      total, batch_size, num_batches, mode)
     
     temp_dir = tempfile.mkdtemp(prefix='easyicu_batch_')
@@ -1075,7 +1075,7 @@ def subprocess_batch_load(
                     exitcode = proc.exitcode
             
             if exitcode != 0:
-                logger.warning(f"Batch {batch_num} 子进程退出码: {exitcode}")
+                logger.warning(f"Batch {batch_num} subprocess exit code: {exitcode}")
                 if verbose:
                     logger.debug(" ❌ (exit=%s)", exitcode)
                 continue
@@ -1095,16 +1095,16 @@ def subprocess_batch_load(
             return pd.DataFrame()
 
         if verbose:
-            logger.debug("   📋 合并批次结果...")
+            logger.debug("   📋 Merging batch results...")
 
         result = _merge_parquet_batches(temp_dir)
 
         if verbose:
             if isinstance(result, pd.DataFrame):
-                logger.debug("   ✅ 合并完成: %d rows, RSS: %.0fMB", len(result), get_rss_mb())
+                logger.debug("   ✅ Merge done: %d rows, RSS: %.0fMB", len(result), get_rss_mb())
             else:
                 total_rows = sum(len(df) for df in result.values())
-                logger.debug("   ✅ 合并完成: %d concepts / %d rows, RSS: %.0fMB",
+                logger.debug("   ✅ Merge done: %d concepts / %d rows, RSS: %.0fMB",
                              len(result), total_rows, get_rss_mb())
         
         return result
@@ -1152,7 +1152,7 @@ def inprocess_batch_load(
     num_batches = (total + batch_size - 1) // batch_size
     
     if verbose:
-        logger.debug("🔄 进程内分批: %d patients, batch_size=%d, %d batches",
+        logger.debug("🔄 In-process batching: %d patients, batch_size=%d, %d batches",
                      total, batch_size, num_batches)
     
     buffered_batches: List[Union[pd.DataFrame, Dict[str, pd.DataFrame]]] = []
@@ -1246,10 +1246,10 @@ def inprocess_batch_load(
         release_memory(aggressive=True)
         if verbose:
             if isinstance(final, pd.DataFrame):
-                logger.debug("   ✅ 完成(disk): %d rows, RSS: %.0fMB", len(final), get_rss_mb())
+                logger.debug("   ✅ Done (disk): %d rows, RSS: %.0fMB", len(final), get_rss_mb())
             else:
                 total_rows = sum(len(df) for df in final.values())
-                logger.debug("   ✅ 完成(disk): %d concepts / %d rows, RSS: %.0fMB",
+                logger.debug("   ✅ Done (disk): %d concepts / %d rows, RSS: %.0fMB",
                              len(final), total_rows, get_rss_mb())
         return final
 
@@ -1259,10 +1259,10 @@ def inprocess_batch_load(
 
     if verbose:
         if isinstance(final, pd.DataFrame):
-            logger.debug("   ✅ 完成: %d rows, RSS: %.0fMB", len(final), get_rss_mb())
+            logger.debug("   ✅ Done: %d rows, RSS: %.0fMB", len(final), get_rss_mb())
         else:
             total_rows = sum(len(df) for df in final.values())
-            logger.debug("   ✅ 完成: %d concepts / %d rows, RSS: %.0fMB",
+            logger.debug("   ✅ Done: %d concepts / %d rows, RSS: %.0fMB",
                          len(final), total_rows, get_rss_mb())
 
     return final
@@ -1286,7 +1286,7 @@ def inprocess_batch_load_streaming(
     num_batches = max(1, (total_patients + batch_size - 1) // batch_size)
 
     if verbose:
-        logger.debug("🔄 流式进程内分批: %d patients, batch_size=%d, %d batches",
+        logger.debug("🔄 Streaming in-process batching: %d patients, batch_size=%d, %d batches",
                      total_patients, batch_size, num_batches)
 
     buffered_batches: List[Union[pd.DataFrame, Dict[str, pd.DataFrame]]] = []
