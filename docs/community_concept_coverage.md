@@ -1,7 +1,7 @@
 # Community database concept coverage
 
 Generated from `tools/build_community_concept_registry.py`. The matrix covers every standard
-concept (base dictionary plus SOFA-2 overlay): **333 concepts × 4 databases**.
+concept (base dictionary plus SOFA-2 overlay): **336 concepts × 4 databases**.
 
 `partial` is deliberately not advertised as extractable: it records useful ingredients while preventing an incomplete score or phenotype from being mistaken for a complete definition.
 
@@ -9,10 +9,10 @@ concept (base dictionary plus SOFA-2 overlay): **333 concepts × 4 databases**.
 
 | Database | Direct | Derived | Partial | Unavailable |
 |---|---:|---:|---:|---:|
-| nwicu | 137 | 19 | 35 | 142 |
-| zhejiang_eicu | 128 | 39 | 23 | 143 |
-| jinhua | 135 | 19 | 32 | 147 |
-| zigong | 125 | 27 | 39 | 142 |
+| nwicu | 137 | 19 | 35 | 145 |
+| zhejiang_eicu | 128 | 39 | 23 | 146 |
+| jinhua | 135 | 19 | 32 | 150 |
+| zigong | 125 | 27 | 39 | 145 |
 
 ## Complete matrix
 
@@ -351,3 +351,6 @@ concept (base dictionary plus SOFA-2 overlay): **333 concepts × 4 databases**.
 | `warfarin` | medications | direct | direct | direct | direct |
 | `wbc` | hematology | direct | direct | direct | direct |
 | `weight` | demographics | direct | direct | direct | unavailable |
+| `weight_admit_strict` | demographics | unavailable | unavailable | unavailable | unavailable |
+| `weight_admit_strict_source` | demographics | unavailable | unavailable | unavailable | unavailable |
+| `weight_admit_strict_time_h` | demographics | unavailable | unavailable | unavailable | unavailable |

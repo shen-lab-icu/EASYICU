@@ -1,5 +1,5 @@
 {
-  "concept_count": 333,
+  "concept_count": 336,
   "concepts": {
     "abx": {
       "category": "medications",
@@ -10616,6 +10616,72 @@
         }
       },
       "description": "patient weight"
+    },
+    "weight_admit_strict": {
+      "category": "demographics",
+      "databases": {
+        "jinhua": {
+          "reason": "no validated native field/event in this release",
+          "status": "unavailable"
+        },
+        "nwicu": {
+          "reason": "no validated native field/event in this release",
+          "status": "unavailable"
+        },
+        "zhejiang_eicu": {
+          "reason": "no validated native field/event in this release",
+          "status": "unavailable"
+        },
+        "zigong": {
+          "reason": "no validated native field/event in this release",
+          "status": "unavailable"
+        }
+      },
+      "description": "stay weight from one reading that a decision at ICU admission could know or that is timed (see weight_admit_strict_time_h). Per stay, over readings in [1, 500] kg: an admission channel (admission before admission_lbs) takes its earliest reading; otherwise the last fallback reading before ICU admission; otherwise the first fallback reading at or after ICU admission; otherwise none. Never a median. MIIV: 226512 kg, 226531 lbs, fallback 224639; AUMC: admissions.weightgroup midpoint, fallback numericitems 20081/6638/6637/10442; HiRID: observations 10000400 (fallback only); SICdb: cases.WeightOnAdmission; eICU: patient.admissionweight, fallback intakeoutput Bodyweight (kg) then (lb)."
+    },
+    "weight_admit_strict_source": {
+      "category": "demographics",
+      "databases": {
+        "jinhua": {
+          "reason": "no validated native field/event in this release",
+          "status": "unavailable"
+        },
+        "nwicu": {
+          "reason": "no validated native field/event in this release",
+          "status": "unavailable"
+        },
+        "zhejiang_eicu": {
+          "reason": "no validated native field/event in this release",
+          "status": "unavailable"
+        },
+        "zigong": {
+          "reason": "no validated native field/event in this release",
+          "status": "unavailable"
+        }
+      },
+      "description": "which rule chose weight_admit_strict: admission, admission_lbs, pre_icu_last, charted_first, or none (no usable reading)."
+    },
+    "weight_admit_strict_time_h": {
+      "category": "demographics",
+      "databases": {
+        "jinhua": {
+          "reason": "no validated native field/event in this release",
+          "status": "unavailable"
+        },
+        "nwicu": {
+          "reason": "no validated native field/event in this release",
+          "status": "unavailable"
+        },
+        "zhejiang_eicu": {
+          "reason": "no validated native field/event in this release",
+          "status": "unavailable"
+        },
+        "zigong": {
+          "reason": "no validated native field/event in this release",
+          "status": "unavailable"
+        }
+      },
+      "description": "time of the reading behind weight_admit_strict in hours from ICU admission (negative before admission; 0 for static admission fields; missing when the source is none). Condition on time_h <= p for a decision at hour p."
     }
   },
   "counts": {
@@ -10623,25 +10689,25 @@
       "derived": 19,
       "direct": 135,
       "partial": 32,
-      "unavailable": 147
+      "unavailable": 150
     },
     "nwicu": {
       "derived": 19,
       "direct": 137,
       "partial": 35,
-      "unavailable": 142
+      "unavailable": 145
     },
     "zhejiang_eicu": {
       "derived": 39,
       "direct": 128,
       "partial": 23,
-      "unavailable": 143
+      "unavailable": 146
     },
     "zigong": {
       "derived": 27,
       "direct": 125,
       "partial": 39,
-      "unavailable": 142
+      "unavailable": 145
     }
   },
   "databases": [
