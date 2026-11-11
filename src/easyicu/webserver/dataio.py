@@ -746,9 +746,17 @@ def make_convert_runner(raw_path: str, database: str) -> Any:
     return runner
 
 
-def _conversion_quality(results: Mapping[str, Any]) -> Dict[str, Any]:
+def _conversion_quality(
+    results: Mapping[str, Any], expected: Optional[Sequence[str]] = None,
+) -> Dict[str, Any]:
     bad_rows = 0
     incomplete = False
+    done = {"completed", "skipped"}
+    missing = sorted(
+        key for key in (expected or ())
+        if not (isinstance(results.get(key), Mapping) and results[key].get("status") in done)
+    )
+    incomplete = bool(missing)
     for result in results.values():
         if not isinstance(result, Mapping):
             raise ValueError("invalid conversion receipt")
@@ -758,13 +766,30 @@ def _conversion_quality(results: Mapping[str, Any]) -> Dict[str, Any]:
         bad_rows += count
         incomplete |= result.get("status") not in {"completed", "skipped"}
     partial = bad_rows > 0 or incomplete
-    return {"bad_rows_skipped": bad_rows, "data_quality_status": "partial" if partial else "clean",
-            "ready_for_analysis": not partial}
+    quality = {"bad_rows_skipped": bad_rows, "data_quality_status": "partial" if partial else "clean",
+               "ready_for_analysis": not partial}
+    if missing:
+        quality["pending_tables"] = missing
+    return quality
 
 
 def _conversion_quality_for_path(path: Path, *, require_record: bool = False) -> Dict[str, Any]:
     receipt = path / ".easyicu_conversion_status.json"
+    pending = path / ".easyicu_conversion_pending.json"
+    expected: List[str] = []
+    if pending.exists():
+        # A started conversion that never finished (cancelled, crashed): the
+        # receipts of the files that did finish cannot vouch for the rest.
+        try:
+            record = json.loads(pending.read_text(encoding="utf-8"))
+            expected = record["expected"]
+            if not isinstance(expected, list) or not all(isinstance(k, str) for k in expected):
+                raise ValueError("invalid pending conversion record")
+        except (ValueError, KeyError, TypeError, OSError):
+            return {"bad_rows_skipped": None, "data_quality_status": "unknown", "ready_for_analysis": False}
     if not receipt.exists():
+        if expected:
+            return _conversion_quality({}, expected)
         if require_record:
             return {"bad_rows_skipped": None, "data_quality_status": "not_converted", "ready_for_analysis": False}
         return _conversion_quality({})
@@ -772,7 +797,7 @@ def _conversion_quality_for_path(path: Path, *, require_record: bool = False) ->
         results = json.loads(receipt.read_text(encoding="utf-8"))
         if not isinstance(results, dict):
             raise ValueError("invalid conversion status")
-        return _conversion_quality(results)
+        return _conversion_quality(results, expected)
     except (ValueError, OSError):
         return {"bad_rows_skipped": None, "data_quality_status": "unknown", "ready_for_analysis": False}
 

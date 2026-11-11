@@ -287,6 +287,10 @@ class DataConverter:
     # Status file name to track conversion progress
     STATUS_FILE = ".easyicu_conversion_status.json"
     CONVERSION_MANIFEST_FILE = "conversion_manifest.json"
+    # Tables a started conversion still owes. Written before the first file
+    # converts and removed only when a run finishes, so a cancelled or crashed
+    # run stays visible to a later rescan that reads only completed receipts.
+    PENDING_FILE = ".easyicu_conversion_pending.json"
     
     # Common encodings to try
     ENCODINGS = ['utf-8', 'latin1', 'cp1252', 'iso-8859-1']
@@ -729,6 +733,26 @@ class DataConverter:
             os.replace(tmp_file, status_file)
         except Exception as e:
             logger.warning(f"Could not save status file: {e}")
+
+    def _write_pending(self, file_keys: List[str]) -> None:
+        """Atomically persist the expected set of tables for this run."""
+        pending_file = self.data_path / self.PENDING_FILE
+        tmp_file = pending_file.with_name(f"{pending_file.name}.{os.getpid()}.tmp")
+        try:
+            tmp_file.write_text(
+                json.dumps({"expected": sorted(file_keys)}, indent=2), encoding="utf-8"
+            )
+            os.replace(tmp_file, pending_file)
+        except OSError as e:
+            logger.warning(f"Could not save pending-conversion record: {e}")
+
+    def _clear_pending(self) -> None:
+        try:
+            (self.data_path / self.PENDING_FILE).unlink()
+        except FileNotFoundError:
+            pass
+        except OSError as e:
+            logger.warning(f"Could not clear pending-conversion record: {e}")
 
     def _record_status(self, file_key: str, result: Dict[str, Any]) -> None:
         """Atomically record one file's status and flush to disk.
@@ -3496,6 +3520,7 @@ class DataConverter:
             if self.verbose:
                 logger.info(f"All {len(csv_files)} files are already converted")
             results = self.get_conversion_status()
+            self._clear_pending()
             if self.database in COMMUNITY_DATABASES:
                 ensure_community_stays(
                     self.data_path,
@@ -3515,6 +3540,7 @@ class DataConverter:
         
         results = {}
         total = len(files_to_convert)
+        self._write_pending([self._status_key(p) for p in files_to_convert])
 
         def _emit(csv_path: Path, result: Dict[str, Any], done: int) -> None:
             if progress_callback is None:
@@ -3584,6 +3610,9 @@ class DataConverter:
         # 🚀 perf A1/A2: drop bucket/shard cache so a subsequent call sees
         # the new shards/buckets written by this run.
         self._invalidate_dir_caches()
+        # Every expected file ran to a receipt (a failed one keeps its failed
+        # receipt, which the quality check reports on its own).
+        self._clear_pending()
         if self.database in COMMUNITY_DATABASES:
             failed = [
                 name
