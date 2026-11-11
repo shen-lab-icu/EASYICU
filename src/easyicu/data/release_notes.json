@@ -46,6 +46,11 @@
           "en": "The 12-hour urine gap rule no longer depends on the absolute clock: exactly 12 hours is kept, 1 second more is a gap."
         },
         {
+          "code": "cli_clear_errors",
+          "zh": "命令行遇到常见输入问题时给出一行可操作的英文提示并以退出码 2 结束：需要授权的数据库不再尝试下载（请从 PhysioNet 手动下载后转换），未准备好的目录提示先运行转换；easyicu-llm-server --help 不再要求先设置密钥。",
+          "en": "The command line answers common input problems with one actionable English line and exit code 2: credentialed databases are no longer downloaded (download them from PhysioNet, then convert), an unprepared directory asks you to run the converter first, and easyicu-llm-server --help no longer requires a key."
+        },
+        {
           "code": "extract_cli_exit",
           "zh": "命令行 easyicu extract 在数据库被跳过或没有导出任何行时返回非零退出码。",
           "en": "The easyicu extract command exits non-zero when a requested database is skipped or yields no rows."
