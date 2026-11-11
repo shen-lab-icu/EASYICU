@@ -873,7 +873,9 @@ def unnamed_fact_identity(
         # counted noun follows its number ("3.1 days", "12 deaths").
         _STATISTIC: [before],
         _UNIT: [after],
-        _SUBJECT: [after, before],
+        # A counted noun right after the number ("107 ICU stays") is what it
+        # counts; words before it ("2 missing of 107") then describe another.
+        _SUBJECT: [after] if _PROSE_COUNT_AFTER_RE.match(after) else [after, before],
     }
     own_tokens, own_required = _field_identity(str(claim.source_field or ""))
     blockers: List[str] = []
