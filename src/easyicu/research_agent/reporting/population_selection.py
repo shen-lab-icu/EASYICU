@@ -48,7 +48,7 @@ from __future__ import annotations
 import math
 import re
 from dataclasses import dataclass
-from typing import Any, Literal, Mapping, Optional, Sequence
+from typing import Any, Callable, Literal, Mapping, Optional, Sequence
 
 from easyicu.databases.profiles import get_database_profile
 
@@ -64,6 +64,7 @@ from ..research_context.export_selection import (
     export_applied_selection,
     export_selection_counts,
 )
+from ..research_context.outbound import SUPPRESSED_COUNT, project_outbound_counts
 from ..schema import AnalysisPlan, ResearchContext
 
 
@@ -456,14 +457,35 @@ _CAP_RULE_TEXT = {
 }
 
 
-def _selection_counts_line(counts: SelectionCounts) -> str:
-    """The stays from the source database to the analysis input, step by step."""
+def _is_small_cell(value: int) -> bool:
+    return project_outbound_counts(value, key="n") == SUPPRESSED_COUNT
 
-    parts = [f"the source database held {counts.source_total:,}"]
-    parts += [_step_text(step) for step in counts.steps if step.stage == "export"]
-    parts.append(f"the export held {counts.exported:,}")
-    parts += [_step_text(step) for step in counts.steps if step.stage == "host"]
-    parts.append(f"the analysis input held {counts.analysis_input:,}")
+
+def _selection_counts_line(counts: SelectionCounts) -> str:
+    """The stays from the source database to the analysis input, step by step.
+
+    The Writer's request is model egress, so a small cell is withheld as in
+    the digest.  Each count here is a link of one chain (source total minus
+    every exclusion is the analysis input, and the analysis input also reaches
+    the request as the cohort size), so a small cell in the chain would be
+    recovered from its neighbours: every count of the chain is withheld then.
+    A small count of excluded-for-want-of-a-value stays alone.
+    """
+
+    chain = (
+        counts.source_total, counts.exported, counts.analysis_input,
+        *(value for step in counts.steps for value in (step.n_excluded, step.n_remaining)),
+    )
+    withhold_chain = any(_is_small_cell(value) for value in chain)
+
+    def show(value: int) -> str:
+        return SUPPRESSED_COUNT if withhold_chain or _is_small_cell(value) else f"{value:,}"
+
+    parts = [f"the source database held {show(counts.source_total)}"]
+    parts += [_step_text(step, show) for step in counts.steps if step.stage == "export"]
+    parts.append(f"the export held {show(counts.exported)}")
+    parts += [_step_text(step, show) for step in counts.steps if step.stage == "host"]
+    parts.append(f"the analysis input held {show(counts.analysis_input)}")
     return (
         "- Selection counts, in ICU stays, never patients (cite research_context): "
         + "; ".join(parts)
@@ -471,15 +493,15 @@ def _selection_counts_line(counts: SelectionCounts) -> str:
     )
 
 
-def _step_text(step: SelectionStep) -> str:
+def _step_text(step: SelectionStep, show: Callable[[int], str]) -> str:
     missing = (
-        f" ({step.n_excluded_missing:,} of them for want of a value)"
+        f" ({show(step.n_excluded_missing)} of them for want of a value)"
         if step.n_excluded_missing
         else ""
     )
     return (
-        f"{_step_label(step)}: {step.n_excluded:,} excluded{missing}, "
-        f"{step.n_remaining:,} remain"
+        f"{_step_label(step)}: {show(step.n_excluded)} excluded{missing}, "
+        f"{show(step.n_remaining)} remain"
     )
 
 
