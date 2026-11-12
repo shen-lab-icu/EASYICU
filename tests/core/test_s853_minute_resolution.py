@@ -134,7 +134,8 @@ def test_resolution_summary_reports_gaps_without_identifiers(tmp_path):
 
 @pytest.fixture
 def hirid_minute_source(tmp_path):
-    """Synthetic HiRID with three extra arterial MAP samples 2, 4 and 6 minutes after one."""
+    """Synthetic HiRID with three extra arterial MAP samples 2, 4 and 6 minutes after one,
+    measured PEEP (2610) at minutes 3 and 5 and a PEEP setting (2600) at minute 3."""
     from easyicu.api.concepts import clear_global_loader
     from easyicu.synthetic_sources import generate_source
 
@@ -145,6 +146,9 @@ def hirid_minute_source(tmp_path):
     anchor = table.loc[table["variableid"].eq(110)].sort_values(["patientid", "datetime"]).iloc[[0]]
     extra = pd.concat([anchor.assign(datetime=anchor["datetime"] + pd.Timedelta(minutes=m), value=v)
                        for m, v in ((2, 61.0), (4, 62.0), (6, 63.0))])
+    extra = pd.concat([extra, *(anchor.assign(variableid=item, value=v,
+                                              datetime=anchor["datetime"] + pd.Timedelta(minutes=m))
+                                for item, m, v in ((2610, 3, 8.0), (2610, 5, 9.0), (2600, 3, 5.0)))])
     pd.concat([table, extra], ignore_index=True).astype(table.dtypes.to_dict()).to_parquet(path, index=False)
     yield source, int(anchor["patientid"].iloc[0])
     clear_global_loader()
@@ -177,3 +181,35 @@ def test_subhour_module_keeps_minute_samples_that_the_hourly_grid_merges(hirid_m
     hourly_stay = hourly.loc[hourly.iloc[:, 0].eq(patient) & hourly["map_invasive"].notna()]
     assert (pd.to_numeric(hourly_stay.iloc[:, 1]) % 1 == 0).all()
     assert hourly_stay.loc[pd.to_numeric(hourly_stay.iloc[:, 1]).eq(0.0), "map_invasive"].tolist() == [62.0]
+
+
+def test_subhour_module_keeps_measured_peep_apart_from_the_setting(hirid_minute_source, tmp_path):
+    from easyicu.api import extraction as api
+    from easyicu.concept.catalog import SUBHOUR_SIGNAL_CONCEPTS
+
+    assert SUBHOUR_SIGNAL_CONCEPTS == ("map_invasive", "cvp", "peep_set", "peep_total")
+    source, patient = hirid_minute_source
+    api._run_module_extraction(
+        module_name="subhour_signals", concepts=api.EXTRACT_MODULES["subhour_signals"],
+        database="hirid", data_path=str(source), patient_ids_filter={"patientid": [1, 2, 3]},
+        batch_size=3, output_dir=str(tmp_path),
+    )
+    frame = pd.read_parquet(tmp_path / "subhour_signals.parquet")
+    stay = frame.loc[frame.iloc[:, 0].eq(patient)]
+    minutes = (pd.to_numeric(stay.iloc[:, 1]) * 60).round(6)
+    total = dict(zip(minutes[stay["peep_total"].notna()], stay["peep_total"].dropna()))
+    setting = dict(zip(minutes[stay["peep_set"].notna()], stay["peep_set"].dropna()))
+    # HiRID 2610 (measured) feeds peep_total only, 2600 (setting) peep_set only.
+    assert {k: total.get(k) for k in (3.0, 5.0)} == {3.0: 8.0, 5.0: 9.0}
+    assert setting.get(3.0) == 5.0 and 5.0 not in setting
+    # The native-v2 receipt summarises every requested signal with values.
+    native = tmp_path / "native"
+    result = api.extract_database(
+        "hirid", data_path=str(source), output_dir=str(native), modules=["outcome", "subhour_signals"],
+        native_export_v2=True, resource_budget_mb=2048, verbose=False,
+    )
+    assert not {k: v["errors"] for k, v in result["modules"].items() if v.get("errors")}
+    entry = next(row for row in __import__("json").loads((native / "_manifest.json").read_text())["files"]
+                 if row["module"] == "subhour_signals")
+    assert entry["physical_concept_ids"] == list(SUBHOUR_SIGNAL_CONCEPTS)
+    assert {"peep_set", "peep_total"} <= set(entry["time_resolution"]["signals"])

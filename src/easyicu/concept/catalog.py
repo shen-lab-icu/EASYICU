@@ -687,7 +687,9 @@ WEIGHT_STRICT_CONCEPTS = ('weight_admit_strict', 'weight_admit_strict_source', '
 # S853/S863 (2026-11-12): public signals at a one-minute grid, exported only by
 # the opt-in ``subhour_signals`` module (owner: concept/minute_resolution.py).
 # The hourly modules that also carry these concepts are unchanged.
-SUBHOUR_SIGNAL_CONCEPTS = ('map_invasive', 'cvp', 'peep_set')
+# peep_total (measured/total PEEP; HiRID 2610, AUMC 12301, MIIV/MIMIC 224700)
+# is kept apart from the ventilator setting peep_set (S853b).
+SUBHOUR_SIGNAL_CONCEPTS = ('map_invasive', 'cvp', 'peep_set', 'peep_total')
 
 HIDDEN_DICTIONARY_CONCEPTS = {
     # R5C-HIRID-013: native U/L CK-MB remains explicitly loadable, but its
