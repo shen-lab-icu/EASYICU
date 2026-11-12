@@ -2913,7 +2913,7 @@ models.export(auc, cal, ledger=<span class="ln-s">"manifest.json"</span>)` },
       setGuidedProjectOpenStatus(
         setupBox,
         'error',
-        `${icon('info', 12)} <span>${t('Paste a local EasyICU project folder path first, then I can open the memory scoped to that folder.', '请先粘贴一个本地 EasyICU 项目文件夹路径，然后我才能打开绑定到该文件夹的记忆。')}</span>`,
+        `${icon('info', 12)} <span>${t('Paste or browse to a local EasyICU project folder to open it.', '请粘贴或浏览选择一个本地 EasyICU 项目文件夹以打开它。')}</span>`,
       );
       const focus = latestGuidedDraftSetupBox(setupBox);
       const input = focus ? focus.querySelector('[data-existing-project-dir]') : null;

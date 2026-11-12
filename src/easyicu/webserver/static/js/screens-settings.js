@@ -32,6 +32,12 @@
   let settingsKeysReadAt = 0;
   let settingsKeysLoading = false;
   let settingsStorageError = '';
+  // A refused folder reads as one sentence in the UI language, never "data_dir: <reason>".
+  function storageFailureText(error) {
+    const owner = window.EasyICU && window.EasyICU.guidedPi && window.EasyICU.guidedPi.optional('errorText');
+    return owner && owner.storageErrorText ? owner.storageErrorText(error, T)
+      : String((error && error.message) || error || '').replace(/^[a-z_]+:\s+/, '');
+  }
   let settingsKeysError = '';
   const settingsPathDrafts = {};
 
@@ -685,7 +691,7 @@
           delete settingsPathDrafts[key];
           if (key === 'data_dir' && window.EU_OFFICIAL_DEMO_SOURCES) await window.EU_OFFICIAL_DEMO_SOURCES.ensureLoaded(null, true);
           setNotice(T('Storage location saved.', '存储位置已保存。'));
-        } catch (error) { settingsStorageError = error.message; rerender(); }
+        } catch (error) { settingsStorageError = storageFailureText(error); rerender(); }
         finally { button.disabled = false; }
       }));
       root.querySelectorAll('[data-storage-return]').forEach(button => button.addEventListener('click', () => {

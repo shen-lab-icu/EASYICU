@@ -6,11 +6,6 @@
       "date": "2026-11-11",
       "changes": [
         {
-          "code": "history_identifiers_removed",
-          "zh": "仓库历史中移除了误入的数据库标识符。",
-          "en": "Database identifiers that had slipped into the repository history were removed."
-        },
-        {
           "code": "hardware_requirements",
           "zh": "硬件要求：MIMIC-IV 规模的数据库建议 16 GB 内存，4 核约 70 分钟；14 GB 也能完成，但会触发一次内存不足后的自动减半重试。eICU 需要高内存服务器：4 个 worker 不限内存时峰值约 88 GiB，限制在 32 GB 时可完成但有 3 次自动重试。各库 4 个 worker 不限内存时的峰值：MIMIC-IV 19.4、AUMC 17.4、HiRID 17.6、eICU 87.7、SICdb 7.4、MIMIC-III 14.5 GiB。14 GB 内的优化留到 0.1.1。",
           "en": "Hardware: MIMIC-IV-scale databases need 16 GB RAM and take about 70 minutes on 4 cores; 14 GB also completes, after one automatic halve-on-out-of-memory retry. eICU needs a high-memory server: about 88 GiB peak with 4 workers and no memory cap; under a 32 GB cap it completes with 3 automatic retries. Peak memory per database with 4 workers and no cap: MIMIC-IV 19.4, AUMC 17.4, HiRID 17.6, eICU 87.7, SICdb 7.4, MIMIC-III 14.5 GiB. Fitting within 14 GB is planned for 0.1.1."
@@ -189,6 +184,11 @@
           "code": "local_problem_bundle",
           "zh": "运行出问题时可以下载问题报告：只含版本、运行状态和原因代码，不含数据、提示词和对话内容，由你决定是否发给支持人员。",
           "en": "When a run goes wrong you can download a problem report with versions, run state and reason codes only, no data, prompts or conversation text, and decide yourself whether to send it."
+        },
+        {
+          "code": "repository_history_rewritten",
+          "zh": "仓库历史已重写，移除了不应公开的文件；此前的 0.1.x 预发布版本已撤回，由本版本取代。",
+          "en": "The repository history was rewritten to remove files that should not have been published; earlier 0.1.x pre-releases were withdrawn and this release replaces them."
         }
       ]
     }

@@ -86,6 +86,15 @@
   }
   let vizErr = null;
 
+  // A refused request whose only text is its machine code (no_export_files,
+  // not_a_directory, ...) reads as a sentence; readable server text stays.
+  function failureText(err) {
+    const raw = String(err && err.message || err);
+    const code = err && typeof err === 'object' ? err.code : null;
+    const owner = window.EasyICU?.guidedPi?.optional('errorText');
+    return code && raw === code && owner ? owner.scanErrorText(code, t) : raw;
+  }
+
   function setRouteError(screenId, value) {
     if (screenId === 'patient') patientReview.setError(value);
     else if (screenId === 'cohort') cohortOwner.setError(value);
@@ -363,7 +372,7 @@
     window.EU_API.registerWorkspaceSource(path, { active: !multi, crossdb: true }).then(() => {
       setRouteError(screenId, null); window.EU_VIZ_WORKSPACE = null; window.EU_CROSSDB_WORKSPACE = null; window.EU_PATIENT_DRILLDOWN = null; window.EU_PATIENT_SOURCES = null; cohortOwner.resetForSourceChange(); resetCrossSetupForSourceChange(); patientReview.resetForSourceChange(); repaintScreen(screenId);
     }).catch(err => {
-      const msg = String(err && err.message || err);
+      const msg = failureText(err);
       setRouteError(screenId, msg);
       if (button) button.removeAttribute('aria-disabled');
       setSourceAddFeedback(container, msg, 'warn');
@@ -466,7 +475,7 @@
           b.onclick = () => load(en.path); listEl.appendChild(b);
         });
       }).catch(err => {
-        listEl.innerHTML = `<div class="eu-pick-empty">${t('Failed to list folder', '列目录失败')}: ${esc(String(err && err.message || err))}</div>`;
+        listEl.innerHTML = `<div class="eu-pick-empty">${t('Failed to list folder', '列目录失败')}: ${esc(failureText(err))}</div>`;
       });
     }
     load(cur);
@@ -487,7 +496,7 @@
           return;
         }
         repaintScreen(screenId);
-      }).catch(err => { setRouteError(screenId, String(err && err.message || err)); repaintScreen(screenId); });
+      }).catch(err => { setRouteError(screenId, failureText(err)); repaintScreen(screenId); });
     }));
     root.querySelectorAll('[data-src-cross]').forEach(b => b.addEventListener('click', e => {
       if (e.target.closest('[data-src-action]')) return;
@@ -501,7 +510,7 @@
           continuity.onSelectionChanged(registeredSelectionIdentity(next), '');
         }
         window.EU_CROSSDB_WORKSPACE = null; cohortOwner.resetForSourceChange(); resetCrossSetupForSourceChange(); repaintScreen(screenId);
-      }).catch(err => { vizErr = String(err && err.message || err); repaintScreen(screenId); });
+      }).catch(err => { vizErr = failureText(err); repaintScreen(screenId); });
     }));
     root.querySelectorAll('[data-src-add]').forEach(b => b.addEventListener('click', () => {
       registerSourceFromInput(b.closest('[data-src-mode]') || root, screenId, b);
@@ -541,7 +550,7 @@
       if (next === null) return;
       window.EU_API.renameWorkspaceSource(path, next).then(() => {
         setRouteError(screenId, null); repaintScreen(screenId);
-      }).catch(err => { setRouteError(screenId, String(err && err.message || err)); repaintScreen(screenId); });
+      }).catch(err => { setRouteError(screenId, failureText(err)); repaintScreen(screenId); });
     }));
     root.querySelectorAll('[data-src-remove]').forEach(b => b.addEventListener('click', e => {
       e.preventDefault(); e.stopPropagation();
@@ -550,11 +559,11 @@
       if (!window.confirm(t('Remove this source from the registry? Export files stay on disk.', '从注册表中移除此来源？导出文件仍会保留在磁盘上。'))) return;
       window.EU_API.removeWorkspaceSource(path).then(() => {
         setRouteError(screenId, null); window.EU_VIZ_WORKSPACE = null; window.EU_CROSSDB_WORKSPACE = null; window.EU_PATIENT_DRILLDOWN = null; window.EU_PATIENT_SOURCES = null; cohortOwner.resetForSourceChange(); resetCrossSetupForSourceChange(); patientReview.resetForSourceChange(); repaintScreen(screenId);
-      }).catch(err => { setRouteError(screenId, String(err && err.message || err)); repaintScreen(screenId); });
+      }).catch(err => { setRouteError(screenId, failureText(err)); repaintScreen(screenId); });
     }));
     root.querySelectorAll('[data-src-refresh]').forEach(b => b.addEventListener('click', () => {
       if (!(window.EU_API && window.EU_API.hydrateWorkspaceRegistry)) return;
-      window.EU_API.hydrateWorkspaceRegistry().then(() => { window.EU_PATIENT_SOURCES = null; repaintScreen(screenId); }).catch(err => { setRouteError(screenId, String(err && err.message || err)); repaintScreen(screenId); });
+      window.EU_API.hydrateWorkspaceRegistry().then(() => { window.EU_PATIENT_SOURCES = null; repaintScreen(screenId); }).catch(err => { setRouteError(screenId, failureText(err)); repaintScreen(screenId); });
     }));
   }
   function loadRealWorkspace(done) {
@@ -574,7 +583,7 @@
       }
       done && done(true);
     }).catch(err => {
-      vizErr = String(err && err.message || err);
+      vizErr = failureText(err);
       done && done(false);
     });
   }
@@ -728,7 +737,7 @@
           done && done(false);
         } else {
           crossRawProgress.flushCancel(window.EU_API, err => {
-            vizErr = String(err && err.message || err);
+            vizErr = failureText(err);
             repaintCrossRawProgress();
           });
         }
@@ -736,7 +745,7 @@
       }).catch(err => {
         if (!operationActive()) return;
         crossRawProgress.clear();
-        vizErr = String(err && err.message || err);
+        vizErr = failureText(err);
         done && done(false);
       });
       return;
@@ -805,7 +814,7 @@
           done && done(false);
         } else {
           crossRawProgress.flushCancel(window.EU_API, err => {
-            vizErr = String(err && err.message || err);
+            vizErr = failureText(err);
             repaintCrossRawProgress();
           });
         }
@@ -813,7 +822,7 @@
       }).catch(err => {
         if (!operationActive()) return;
         crossRawProgress.clear();
-        vizErr = String(err && err.message || err);
+        vizErr = failureText(err);
         done && done(false);
       });
       return;

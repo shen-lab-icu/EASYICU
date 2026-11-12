@@ -64,6 +64,7 @@ def test_invalid_folder_rejects_entire_patch(isolated, monkeypatch, case, code):
     if case == "file":
         folder.write_text("synthetic")
     if case == "unwritable":
+        folder.mkdir()
         monkeypatch.setattr(storage_locations.os, "access", lambda *_: False)
     if case == "missing":
         mkdir = Path.mkdir
@@ -77,6 +78,36 @@ def test_invalid_folder_rejects_entire_patch(isolated, monkeypatch, case, code):
     assert error.value.rejected[0]["code"] == code
     assert settings.load_settings()["density"] == "comfortable"
     assert not settings._CONFIG_PATH.exists()
+
+
+def test_a_missing_folder_under_a_read_only_parent_is_reported_as_not_creatable(isolated, monkeypatch):
+    """A path that does not exist is not "no write permission for this folder".
+
+    The UI said 没有此文件夹的写入权限 for /nonexistent/zzz in English mode: the
+    reason named the wrong problem and the wrong language. The folder is
+    missing and cannot be made under its read-only parent.
+    """
+    from easyicu.webserver import storage_locations
+
+    parent = isolated / "read-only-parent"
+    parent.mkdir()
+    real_access = storage_locations.os.access
+    monkeypatch.setattr(storage_locations.os, "access",
+                        lambda path, mode: False if Path(path) == parent else real_access(path, mode))
+    with pytest.raises(settings.SettingsValidationError) as error:
+        settings.update_settings({"data_dir": str(parent / "missing" / "deeper")})
+    rejected = error.value.rejected[0]
+    assert rejected["code"] == "storage_path_not_creatable"
+    assert rejected["reason"] == "This folder does not exist, and EasyICU cannot create it there."
+    assert not (parent / "missing").exists()
+
+
+def test_storage_refusals_are_english_server_text():
+    """The server reason is the English fallback; the UI maps the code to its language."""
+    from easyicu.webserver import storage_locations
+
+    source = Path(storage_locations.__file__).read_text(encoding="utf-8")
+    assert not any("\u4e00" <= ch <= "\u9fff" for ch in source)
 
 
 def test_first_download_requires_confirmation_before_job_creation(isolated, monkeypatch):

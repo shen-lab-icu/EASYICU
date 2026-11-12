@@ -246,13 +246,13 @@ def test_native_guided_and_single_copilot_entry_are_bilingual() -> None:
     assert "打开唯一的 EasyICU 研究助手对话" not in _static_js("app.js")
     assert "Page guide" not in dock_js
     assert (
-        "js/screens-guided-projects.js?v=20261102-ui2" in index_html
+        "js/screens-guided-projects.js?v=20261111-s872" in index_html
     )
     assert (
         "js/screens-guided-idea-provider.js?v=20260627-ideas-feasibility-plan"
         in index_html
     )
-    assert "js/screens-guided.js?v=20261102-ui1" in index_html
+    assert "js/screens-guided.js?v=20261111-s872" in index_html
     assert "js/copilot-dock.js?v=20261027-old1" in index_html
 
 
@@ -448,7 +448,7 @@ def test_native_guided_copilot_runs_extraction_inline_and_answers_catalog_questi
     assert "css/guided-idea-plan.css?v=20260827-type-scale1" in index_html
     assert "js/api.js?v=20261102-demo2" in index_html
     assert (
-        "js/screens-guided-projects.js?v=20261102-ui2" in index_html
+        "js/screens-guided-projects.js?v=20261111-s872" in index_html
     )
     provider_pos = index_html.find("screens-guided-idea-provider.js")
     projects_pos = index_html.find("screens-guided-projects.js")
@@ -559,7 +559,7 @@ def test_native_guided_copilot_runs_extraction_inline_and_answers_catalog_questi
     assert ".gdi-plan-details" in guided_plan_css
     assert ".gdi-feature-row.one" in guided_plan_css
     assert ".gdi-plan-details" not in redesign_css
-    assert "js/screens-guided.js?v=20261102-ui1" in index_html
+    assert "js/screens-guided.js?v=20261111-s872" in index_html
 
     assert "function startGuidedIdeaFlow" in idea_js
     assert "function renderGuidedIdeaApiSetupCard" in idea_js
@@ -991,7 +991,7 @@ def test_native_settings_controls_are_backend_wired() -> None:
     assert "css/tweaks.css?v=20260625-stage96" in index_html
     assert "css/settings.css?v=20261029-journey1" in index_html
     assert "js/screens-settings-extensions.js?v=20261028-set1" in index_html
-    assert "js/screens-settings.js?v=20261102-ui1" in index_html
+    assert "js/screens-settings.js?v=20261111-s872" in index_html
     assert "js/screens-settings-personalization.js?v=20261026-personal1" in index_html
     assert index_html.index("js/screens-settings-personalization.js") < index_html.index("js/screens-settings.js")
     assert ".settings-cap-panel" in settings_css
@@ -1795,7 +1795,7 @@ def test_native_crossdb_uses_progressive_setup_and_one_chart_results() -> None:
     assert "js/screens-viz-crossdb-setup.js?v=20261026-xdbq1" in index_html
     assert "js/screens-viz-crossdb-charts.js?v=20260830-viz-final1" in index_html
     assert "js/screens-viz-crossdb-results.js?v=20261026-dbnames1" in index_html
-    assert "js/screens-viz.js?v=20261027-nodemo1" in index_html
+    assert "js/screens-viz.js?v=20261111-s872" in index_html
     assert "css/crossdb.css?v=20261026-src1" in index_html
     for selector in (
         ".crossdb-method-grid",
@@ -1842,7 +1842,7 @@ def test_native_cohort_snapshot_renders_real_clinical_profile() -> None:
     assert ".cprof-grid" in cohort_css
     assert ".cxh" not in cohort_css
     # Cache-bust bumped so the restored charts ship to existing clients.
-    assert "js/screens-viz.js?v=20261027-nodemo1" in index_html
+    assert "js/screens-viz.js?v=20261111-s872" in index_html
 
 
 def test_native_cohort_groups_render_table_one_without_legacy_bars() -> None:
@@ -2330,12 +2330,12 @@ def test_native_guided_local_rail_shows_only_real_local_context() -> None:
     assert "!important" not in projects_css
     assert ":has(" not in projects_css
     assert "api.js?v=20261102-demo2" in index_html
-    assert "screens-guided-projects.js?v=20261102-ui2" in index_html
+    assert "screens-guided-projects.js?v=20261111-s872" in index_html
     assert (
         "screens-guided-idea-provider.js?v=20260627-ideas-feasibility-plan"
         in index_html
     )
-    assert "screens-guided.js?v=20261102-ui1" in index_html
+    assert "screens-guided.js?v=20261111-s872" in index_html
     assert "guided.css?v=20261027-old1" in index_html
     assert "guided-projects.css?v=20261027-proj1" in index_html
     assert "gd-rail-heading" in projects_js
@@ -2544,7 +2544,7 @@ def test_native_patient_source_radios_are_real_controls() -> None:
     assert index_html.index("js/screens-viz-patient.js?") < index_html.index(
         "js/screens-viz.js?"
     )
-    assert "js/screens-viz.js?v=20261027-nodemo1" in index_html
+    assert "js/screens-viz.js?v=20261111-s872" in index_html
     assert "bounded browser review', '本页审阅" in patient_domain_js
     assert "function buildPatientDrilldown" not in viz_js
     assert "function demoTablePreviewRowContext" not in viz_js
@@ -2740,7 +2740,7 @@ def test_native_cohort_comparison_radios_are_stateful_controls() -> None:
     index_html = _static_html("index.html")
 
     assert "css/cohort.css?v=20261026-data1" in index_html
-    assert "js/screens-viz.js?v=20261027-nodemo1" in index_html
+    assert "js/screens-viz.js?v=20261111-s872" in index_html
     assert "view: 'idle'," in cohort_js
     assert "featureScope: 'recommended'," in cohort_js
     assert 'data-cohort-config-required="true"' in cohort_js

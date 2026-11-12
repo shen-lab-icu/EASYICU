@@ -47,8 +47,8 @@ See [docs/local_run_guide.md](docs/local_run_guide.md).
 
 ### Repository history
 
-Repository history was rewritten to remove database identifiers and data files
-that had been committed by mistake.
+The repository history was rewritten to remove files that should not have been
+published. Earlier 0.1.x pre-releases were withdrawn; this release replaces them.
 
 ### Earlier note
 

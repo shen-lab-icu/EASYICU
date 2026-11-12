@@ -45,38 +45,45 @@ def validate_directory(value: Any, *, required_bytes: int = 0) -> Path:
     try:
         path = Path(text).expanduser()
         if not text or not path.is_absolute() or any(ord(ch) < 32 for ch in text):
-            raise StorageLocationError("storage_path_absolute_required", "请输入完整的文件夹路径。")
+            raise StorageLocationError("storage_path_absolute_required", "Enter the full path of a folder.")
         path = path.resolve()
         if path.exists() and not path.is_dir():
-            raise StorageLocationError("storage_path_not_directory", "此路径不是文件夹。")
+            raise StorageLocationError("storage_path_not_directory", "This path is a file, not a folder.")
         ancestor = path
         while not ancestor.exists() and ancestor != ancestor.parent:
             ancestor = ancestor.parent
         if not ancestor.is_dir():
-            raise StorageLocationError("storage_path_not_directory", "上级路径不是文件夹。")
+            raise StorageLocationError("storage_path_not_directory", "A parent of this path is a file, not a folder.")
         if not os.access(ancestor, os.W_OK | os.X_OK):
-            raise StorageLocationError("storage_path_not_writable", "没有此文件夹的写入权限。")
+            if ancestor != path:
+                # The folder does not exist and cannot be made where it was asked for.
+                raise StorageLocationError(
+                    "storage_path_not_creatable",
+                    "This folder does not exist, and EasyICU cannot create it there.",
+                    existing_parent=str(ancestor),
+                )
+            raise StorageLocationError("storage_path_not_writable", "EasyICU cannot write to this folder.")
         free = shutil.disk_usage(ancestor).free
         if free < required_bytes:
-            raise StorageLocationError("storage_insufficient_space", "此文件夹的可用空间不足。",
+            raise StorageLocationError("storage_insufficient_space", "This folder does not have enough free space.",
                                        required_bytes=required_bytes, available_bytes=free)
         existed = path.exists()
         try:
             path.mkdir(parents=True, exist_ok=True)
         except OSError:
-            raise StorageLocationError("storage_path_not_creatable", "无法创建此文件夹。") from None
+            raise StorageLocationError("storage_path_not_creatable", "EasyICU could not create this folder.") from None
         try:
             with tempfile.TemporaryFile(dir=path) as handle:
                 handle.write(b"EasyICU storage check")
                 handle.flush()
         except OSError:
             code = "storage_path_not_writable" if existed else "storage_path_not_creatable"
-            raise StorageLocationError(code, "无法写入此文件夹。") from None
+            raise StorageLocationError(code, "EasyICU cannot write to this folder.") from None
         return path
     except StorageLocationError:
         raise
     except (OSError, ValueError, RuntimeError):
-        raise StorageLocationError("storage_path_unavailable", "无法访问此文件夹。") from None
+        raise StorageLocationError("storage_path_unavailable", "EasyICU cannot open this folder.") from None
 
 
 def prepare_settings_patch(patch: dict[str, Any], current: dict[str, Any]) -> dict[str, Any]:
@@ -86,9 +93,9 @@ def prepare_settings_patch(patch: dict[str, Any], current: dict[str, Any]) -> di
     for key in patch.keys() & STORAGE_KEYS:
         try:
             if hosted.is_hosted():
-                raise StorageLocationError("storage_managed_by_administrator", "存储位置由管理员设置。")
+                raise StorageLocationError("storage_managed_by_administrator", "The administrator sets storage locations on this server.")
             if key == "data_dir_history":
-                raise StorageLocationError("storage_history_read_only", "已有数据的位置由应用保留。")
+                raise StorageLocationError("storage_history_read_only", "Earlier data locations are kept by EasyICU and cannot be edited.")
             if key in PATH_KEYS:
                 result[key] = str(validate_directory(patch[key]))
             elif key == "data_dir_confirmed" and patch[key]:

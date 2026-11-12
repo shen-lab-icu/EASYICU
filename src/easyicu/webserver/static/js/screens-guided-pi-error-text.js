@@ -38,6 +38,7 @@
       export_member_integrity_failed: ['An export file no longer matches its published manifest; run the extraction again.', '导出文件与其发布清单不符，请重新运行提取。'],
       export_member_unreadable: ['An export file cannot be read; run the extraction again.', '导出文件无法读取，请重新运行提取。'],
       no_path: ['Choose or paste a folder path first.', '请先选择或粘贴文件夹路径。'],
+      no_export_files: ['This folder has no EasyICU export files. Choose a folder exported by Data Extraction, or export your data there first.', '该文件夹中没有 EasyICU 导出文件。请选择由“数据提取”导出的文件夹，或先在那里导出数据。'],
       not_a_directory: ['That path is not a folder EasyICU can open.', '该路径不是 EasyICU 能打开的文件夹。'],
       permission_denied: ['EasyICU does not have permission to read that folder.', 'EasyICU 没有读取该文件夹的权限。'],
       unrecognized_folder: ['This folder has no supported ICU data layout.', '该文件夹中没有可识别的 ICU 数据结构。'],
@@ -65,6 +66,28 @@
       text = ['The export structure does not match its manifest; choose a complete export.', '导出文件结构与清单不符，请选择完整的导出文件夹。'];
     }
     return tr(...(text || ['This folder could not be scanned; choose another folder.', '无法扫描该文件夹，请选择其他文件夹。']));
+  }
+
+  // Storage-location refusals (Settings data and project folders, a demo
+  // download destination) carry a code; the server reason is the fallback,
+  // without the "data_dir:" key prefix of a rejected settings patch.
+  function storageErrorText(error, tr) {
+    const detail = error && typeof error === 'object' ? error.detail : null;
+    const rejected = detail && Array.isArray(detail.rejected) ? detail.rejected[0] : null;
+    const code = String((rejected && rejected.code) || (error && error.code) || '');
+    const messages = {
+      storage_path_absolute_required: ['Enter the full path of a folder.', '请输入完整的文件夹路径。'],
+      storage_path_not_directory: ['This path is a file, not a folder.', '此路径是文件，不是文件夹。'],
+      storage_path_not_writable: ['EasyICU does not have permission to write to this folder.', 'EasyICU 没有此文件夹的写入权限。'],
+      storage_path_not_creatable: ['This folder does not exist, and EasyICU cannot create it there. Choose an existing folder or a location you can write to.', '此文件夹不存在，EasyICU 也无法在该位置创建它。请选择已有的文件夹，或你有写入权限的位置。'],
+      storage_insufficient_space: ['This folder does not have enough free space.', '此文件夹的可用空间不足。'],
+      storage_path_unavailable: ['EasyICU cannot open this folder.', 'EasyICU 无法访问此文件夹。'],
+      storage_managed_by_administrator: ['The administrator sets storage locations on this server.', '这台服务器的存储位置由管理员设置。'],
+      storage_history_read_only: ['Earlier data locations are kept by EasyICU and cannot be edited.', '已有数据的位置由 EasyICU 保留，不能修改。'],
+    };
+    if (messages[code]) return tr(...messages[code]);
+    const raw = String((rejected && rejected.reason) || (error && error.message) || error || '');
+    return raw.replace(/^[a-z_]+:\s+/, '');
   }
 
   function create({ tr, staticPreview }) {
@@ -1275,5 +1298,5 @@
     return Object.freeze({ errorText, jobErrorText, modelErrorText, providerPreset, option, runFailureText, studyFamilyGapText, manuscriptNotPassedText });
   }
 
-  window.EasyICU.guidedPi.declare('errorText', { create, scanErrorText });
+  window.EasyICU.guidedPi.declare('errorText', { create, scanErrorText, storageErrorText });
 })();

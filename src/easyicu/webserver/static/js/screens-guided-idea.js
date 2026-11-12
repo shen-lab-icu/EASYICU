@@ -278,7 +278,11 @@
     const shortcuts = Array.isArray(data.shortcuts) ? data.shortcuts : [];
     const currentPath = data.path || browser.path || '';
     const parent = data.parent || '';
-    const failed = browser.error || (data && data.ok === false ? data.error : '');
+    const failedCode = browser.error || (data && data.ok === false ? data.error : '');
+    // A listing code (not_a_directory, permission_denied) reads as a sentence.
+    const errorOwner = window.EasyICU?.guidedPi?.optional('errorText');
+    const failed = failedCode && errorOwner && /^[a-z][a-z0-9_]*$/.test(String(failedCode))
+      ? errorOwner.scanErrorText(String(failedCode), t) : failedCode;
     return `
       <div class="gds-browser" data-guided-literature-browser>
         <div class="gds-browser-head">

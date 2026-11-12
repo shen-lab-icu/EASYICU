@@ -36,6 +36,7 @@ CONTRACTS: dict[str, list[str]] = {
     "skill_import_activation.test.js": [],
     "guided_pi_idea_source_network.test.js": [],
     "storage_and_remembered_keys.test.js": [],
+    "ui_codes_read_in_the_ui_language.test.js": [],
     "data_preparation_plan.test.js": [],
     "pi_action_authorization_receipts.test.js": [],
     "pi_outbound_effort.test.js": [],

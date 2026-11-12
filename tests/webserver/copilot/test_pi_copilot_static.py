@@ -40,7 +40,7 @@ def test_pi_shell_assets_are_explicitly_wired_before_guided_owner() -> None:
     assert index.index("css/guided-pi.css?v=") < index.index("css/guided-pi-header.css?v=20261029-freshfix6") < index.index("css/guided-pi-composer-menus.css?v=")
     assert _read("css/guided-pi-header.css").startswith("/* Owner: Guided Copilot conversation header")
     assert "css/guided-pi-idea-source.css?v=20260922-connectors1" in index
-    assert "css/guided-pi-demo.css?v=20261026-fig1" in index
+    assert "css/guided-pi-demo.css?v=20261111-s872" in index
     assert "css/guided-pi-preview.css?v=20261029-freshfix6" in index
     assert "css/guided-pi-technical-report.css?v=20260830-technical-report1" in index
     assert "css/guided-pi-analysis-report.css?v=20260916-study-workspace3" in index
@@ -103,8 +103,8 @@ def test_pi_shell_assets_are_explicitly_wired_before_guided_owner() -> None:
     assert "js/screens-guided-pi-project.js?v=20261026-projects1" in index
     assert "js/screens-guided-pi-data-consent.js?v=20261102-demo2" in index
     assert "js/screens-guided-pi-data-binding.js?v=20261029-journey3" in index
-    assert "js/screens-guided-pi-session-navigation.js?v=20261030-video2" in index
-    assert "js/screens-guided-pi-session-view.js?v=20261102-ui1" in index
+    assert "js/screens-guided-pi-session-navigation.js?v=20261111-s872" in index
+    assert "js/screens-guided-pi-session-view.js?v=20261111-s872" in index
     assert index.index("js/screens-guided-pi-session-view.js") < index.index(
         "js/screens-guided-pi.js"
     )
@@ -140,9 +140,9 @@ def test_pi_shell_assets_are_explicitly_wired_before_guided_owner() -> None:
     assert "js/screens-guided-pi-plan-actions.js?v=20261030-preparation1" in index
     assert "js/screens-guided-pi-quick-answers.js?v=20261103-reasons1" in index
     assert "js/screens-guided-pi-childjob.js?v=20261026-recovered1" in index
-    assert "js/screens-guided-pi-error-text.js?v=20261103-plain2" in index
+    assert "js/screens-guided-pi-error-text.js?v=20261111-s872" in index
     assert "js/screens-guided-pi.js?v=20261102-ui1" in index
-    assert "js/screens-guided.js?v=20261102-ui1" in index
+    assert "js/screens-guided.js?v=20261111-s872" in index
     assert (
         "js/screens-guided-project-continuity.js?v=20260813-project-continuity1"
         in index

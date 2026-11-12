@@ -71,6 +71,14 @@
           projectOwner.syncLocation(expectedProjectId, state.session.session_id);
         }
         state.sessions = [state.session].concat(state.sessions.filter(row => row.session_id !== state.session.session_id));
+        // A question picked on Help or the Skill Hub before a model was
+        // connected starts this conversation. Startup applies it itself.
+        if (!state.startupPromise && !state.draft) {
+          try {
+            const pending = window.sessionStorage.getItem('easyicu.skillHub.question');
+            if (pending) { state.draft = pending; window.sessionStorage.removeItem('easyicu.skillHub.question'); }
+          } catch (_) {}
+        }
       } catch (error) {
         if (expectedProjectId !== projectId() || selectionRevision !== state.sessionSelectionRevision) return;
         state.error = errorText(error);

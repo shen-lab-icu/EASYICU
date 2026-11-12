@@ -131,6 +131,18 @@ def test_native_web_accepts_bracketed_ipv6_loopback_host() -> None:
     assert response.status_code == 200
 
 
+def test_privacy_panel_lists_only_hosts_a_user_can_open(monkeypatch) -> None:
+    """The in-process test client's host is accepted but not shown in Settings → Privacy."""
+    from easyicu.webserver import host_security
+
+    monkeypatch.delenv("EASYICU_WEB_ALLOWED_HOSTS", raising=False)
+    monkeypatch.delenv("EASYICU_PUBLIC_ORIGIN", raising=False)
+    assert host_security.TEST_CLIENT_HOST in host_security.resolve_allowed_hosts()
+    policy = host_security.local_access_policy()
+    assert policy["allowed_hosts"] == ["127.0.0.1", "localhost", "[::1]"]
+    assert policy["enforced"] is True
+
+
 def test_native_web_sets_defense_in_depth_headers_and_has_no_font_network_call() -> None:
     response = TestClient(app).get("/")
 

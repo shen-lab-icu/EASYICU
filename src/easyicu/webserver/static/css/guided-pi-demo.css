@@ -1,6 +1,13 @@
 /* Owner: read-only complete research-demo entry, banner, and footer. */
 .gpi-demo-launch{display:inline-flex;align-items:center;gap:6px}
 .gpi-activate>.gpi-demo-launch{width:100%;justify-content:center;margin:0 0 10px}
+/* Demo header: the kicker sits over a one-line title inside the header.
+   The header grows instead of clipping, and the meta wraps under the title
+   when the pane is too narrow for both (preview pane open, phone width). */
+.gpi-demo-panel>.gpi-head{height:auto;min-height:56px;padding-block:6px;flex-wrap:wrap;row-gap:2px}
+.gpi-demo-panel>.gpi-head>div:first-child{flex:1 1 15rem;min-width:0}
+.gpi-demo-panel>.gpi-head .gpi-kicker,.gpi-demo-panel>.gpi-head .gpi-title{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.gpi-demo-panel>.gpi-head .gpi-head-meta{flex:0 1 auto;min-width:0;margin-left:auto}
 .gpi-demo-note{
   flex:0 0 auto;display:flex;align-items:center;gap:9px;padding:8px 20px;
   border-bottom:1px solid color-mix(in srgb,#b68538 28%,var(--line));

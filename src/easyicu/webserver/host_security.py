@@ -27,7 +27,10 @@ PROXY_HEADERS = (
     "forwarded",
 )
 
-DEFAULT_ALLOWED_HOSTS = ("127.0.0.1", "localhost", "[::1]", "testserver")
+#: The in-process test client's Host header. It is accepted like a loopback
+#: name but is not a host a user can open, so the Privacy panel omits it.
+TEST_CLIENT_HOST = "testserver"
+DEFAULT_ALLOWED_HOSTS = ("127.0.0.1", "localhost", "[::1]", TEST_CLIENT_HOST)
 
 _TRUTHY = {"1", "true", "yes", "on"}
 
@@ -158,7 +161,7 @@ def local_access_policy() -> Dict[str, Any]:
     proxy_trusted = trusts_proxy()
     return {
         "loopback_clients_only": True,
-        "allowed_hosts": allowed,
+        "allowed_hosts": [host for host in allowed if host != TEST_CLIENT_HOST],
         "any_host_allowed": "*" in allowed,
         "proxy_headers_trusted": proxy_trusted,
         "proxy_headers_rejected": not proxy_trusted,

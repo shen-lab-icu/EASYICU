@@ -80,6 +80,7 @@
         <h2>${tr('Start a conversation in this project', '在当前项目中开始对话')}</h2>
         <div class="gpi-config-note ok"><span class="gpi-dot"></span>${tr('Research project', '研究项目')}: <strong>${esc(displayProjectTitle(state.project && state.project.title, projectId()))}</strong></div>
         ${providerBindingSummary()}
+        ${pendingQuestionNote()}
         ${state.error ? `<div class="gpi-error" role="alert">${esc(state.error)}</div>${MODULES.optional('skillAttach')?.defaultRecoveryControl?.(projectId()) || ''}` : ''}
         <button class="btn primary" type="button" data-gpi-create ${state.creating ? 'disabled' : ''}>
           ${state.creating ? tr('Starting…', '正在启动…') : tr('Start research conversation', '开始研究对话')}
@@ -93,6 +94,19 @@
       </div>`;
     }
 
+    // A question picked on Help or the Skill Hub waits for the next new
+    // conversation (screens-guided-pi-session-navigation.js consumes it).
+    // Before any project exists it fills the first-question box instead.
+    function pendingQuestion() {
+      try { return window.sessionStorage.getItem('easyicu.skillHub.question') || ''; } catch (_) { return ''; }
+    }
+    function pendingQuestionNote() {
+      const pending = pendingQuestion();
+      return pending
+        ? `<div class="gpi-config-note gpi-pending-question" data-gpi-pending-question><span>${tr('Your question opens in the new conversation:', '你的问题会填入新对话：')} <q>${esc(pending)}</q></span></div>`
+        : '';
+    }
+
     // Before any project exists the page still opens on a question: sending it
     // creates a project named after the question and asks it there.
     function projectRequiredPanel() {
@@ -103,7 +117,7 @@
           <p>${tr('Write your clinical question. EasyICU creates a project for it, which keeps the study setup, runs, evidence and conversations.', '写下你的临床问题。EasyICU 会为它新建一个项目，研究配置、运行、证据和对话都保存在项目里。')}</p>
         </header>
         <div class="gpi-compose gpi-entry-compose"><div class="gpi-compose-card">
-          <textarea data-gpi-first-question rows="2" maxlength="12000" aria-label="${tr('Research question', '研究问题')}" placeholder="${tr('What ICU research question do you want to study?', '你想研究什么 ICU 科学问题？')}"></textarea>
+          <textarea data-gpi-first-question rows="2" maxlength="12000" aria-label="${tr('Research question', '研究问题')}" placeholder="${tr('What ICU research question do you want to study?', '你想研究什么 ICU 科学问题？')}">${esc(pendingQuestion())}</textarea>
           <div class="gpi-actions"><div class="gpi-action-leading"></div><div class="gpi-action-trailing">
             <button class="btn primary" type="button" data-project-from-question aria-label="${tr('Send', '发送')}" title="${tr('Send', '发送')}">${iconHtml('arrow', 15)}</button>
           </div></div>
