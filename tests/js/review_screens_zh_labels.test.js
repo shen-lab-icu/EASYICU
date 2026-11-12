@@ -280,8 +280,10 @@ for (const word of ['描述性分组汇总', '血气分析', '生命体征', '�
 
 context.EU_LANG = 'en';
 const cohortEn = renderCohort();
-for (const word of ['Median HR', 'HR', 'Sofa2 Cardio Available %']) {
-  assert(cohortEn.includes(word), `English Cohort Statistics should keep "${word}"`);
+// English names catalog concepts too, never the column code ("Median HR").
+for (const word of ['Median Heart Rate', 'available %']) {
+  assert(cohortEn.includes(word), `English Cohort Statistics should show "${word}"`);
 }
+assert(!/\bMedian HR\b/.test(cohortEn), 'English Cohort Statistics should not name heart rate by its column code');
 
 console.log(JSON.stringify({ ok: true }));

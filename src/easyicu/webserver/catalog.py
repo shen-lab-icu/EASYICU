@@ -573,17 +573,34 @@ def build_catalog(*, planning_metadata_only: bool = False) -> Dict[str, Any]:
     }
 
 
+def _declared_inputs(value: Any) -> list[str]:
+    if not value:
+        return []
+    return [str(item) for item in (value if isinstance(value, (list, tuple)) else [value])]
+
+
+def _database_label(source_profiles: Dict[str, Any], database: str) -> str:
+    profile = source_profiles.get(database, {})
+    meta = profile.get("profile") if isinstance(profile.get("profile"), dict) else {}
+    return str(meta.get("display_name") or database.upper())
+
+
 def build_concept_lineage(concept_id: str) -> Dict[str, Any] | None:
     """Return declared cross-database lineage for one catalog concept.
 
     This is dictionary provenance, not an observed-data claim. Missing fields
     remain null so the UI never invents a source column or transformation.
     """
-    from easyicu.concept.loader import load_concept_dict_cached
-
-    raw = load_concept_dict_cached().get(concept_id)
+    # The base dictionary with the overlays extraction applies (community
+    # sources, then the SOFA-2 definitions), as the catalog itself reads it.
+    raw = catalog_definitions().get(concept_id)
     if not isinstance(raw, dict):
-        return None
+        # A variable an EasyICU module computes (KDIGO AKI, outcomes, ...) has
+        # no dictionary entry; name the module instead of failing the lookup.
+        producer = cc.COMPOSITE_CONCEPT_OUTPUT_SOURCES.get(concept_id)
+        if concept_id not in cc.CONCEPT_DICTIONARY or not producer:
+            return None
+        raw = {"producer": producer}
     data_sources_path = Path(__file__).resolve().parents[1] / "data" / "data-sources.json"
     with data_sources_path.open(encoding="utf-8") as handle:
         source_catalog = json.load(handle)
@@ -626,18 +643,15 @@ def build_concept_lineage(concept_id: str) -> Dict[str, Any] | None:
                 }
             )
         if serialized:
-            display_name = (
-                (profile.get("profile") or {}).get("display_name")
-                if isinstance(profile.get("profile"), dict)
-                else None
-            )
             lanes.append(
                 {
                     "database": database,
-                    "label": display_name or database.upper(),
+                    "label": _database_label(source_profiles, database),
                     "mappings": serialized,
                 }
             )
+    inputs = _declared_inputs(raw.get("concepts"))
+    mapped = {lane["database"] for lane in lanes}
     units = raw.get("unit")
     if isinstance(units, list):
         canonical_unit = str(units[0]) if units else None
@@ -656,5 +670,15 @@ def build_concept_lineage(concept_id: str) -> Dict[str, Any] | None:
             "aggregate": raw.get("aggregate"),
         },
         "lanes": lanes,
+        # Where a database declares no source row, a variable with declared
+        # inputs is computed from them; name those inputs and databases.
+        "inputs": inputs,
+        "derived_in": [
+            {"database": database, "label": _database_label(source_profiles, database)}
+            for database in cc.SUPPORTED_DB_KEYS
+            if database not in mapped and isinstance(source_profiles.get(database, {}).get("tables"), dict)
+        ] if inputs else [],
+        "callback": raw.get("callback"),
+        "producer": raw.get("producer"),
         "scope": "declared_dictionary_lineage_not_observed_data",
     }

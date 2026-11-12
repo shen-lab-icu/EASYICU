@@ -16,16 +16,19 @@
   let dictLineageError = '';
   let dictLineageRequest = 0;
   let dictShowInternal = false;
-  let dictView = 'concepts';   // 'concepts' | 'studies'
+  let dictView = 'concepts';   // 'concepts' | 'studies' | 'tables'
+  let dictPendingConcept = null;   // opened from the source-table view
   // The study-type view has its own address, #dictionary/studies.
   function hashView() {
     const hash = typeof location !== 'undefined' ? String(location.hash || '') : '';
-    return hash === '#dictionary/studies' ? 'studies' : hash.startsWith('#dictionary') ? 'concepts' : null;
+    if (hash === '#dictionary/studies') return 'studies';
+    if (hash === '#dictionary/tables') return 'tables';
+    return hash.startsWith('#dictionary') ? 'concepts' : null;
   }
   function showView(view) {
     dictView = view;
     if (typeof history !== 'undefined' && typeof location !== 'undefined') {
-      history.replaceState(null, '', `${location.pathname}${location.search}#dictionary${view === 'studies' ? '/studies' : ''}`);
+      history.replaceState(null, '', `${location.pathname}${location.search}#dictionary${view === 'concepts' ? '' : `/${view}`}`);
     }
     window.__euRender();
   }
@@ -292,6 +295,36 @@
   function mappingSummary(lane) {
     return (lane.mappings || []).map(mapping => `${field(mapping.table)}.${field(mapping.value_field)}`).join(' + ');
   }
+  // A derived variable reads no table: name its declared inputs (each opens
+  // its own lineage) or the EasyICU module that computes it.
+  function derivedLineage() {
+    const inputs = dictLineage.inputs || [];
+    const name = window.EU_LANG === 'zh' ? zhOf(dictLineage.concept) : nameOf(dictLineage.concept);
+    const head = `<div class="dict-lineage-head"><div><div class="eyebrow">${L('Feature provenance', '特征血缘')}</div><h2>${html(name)} <span class="mono">${html(dictLineage.concept)}</span></h2></div></div>`;
+    if (inputs.length) {
+      return `<section class="dict-lineage" data-dict-lineage>${head}
+        <p class="dict-lineage-derived">${L('Derived: computed from these variables, not read from a table.', '派生变量：由以下变量计算得到，不直接读表。')}${dictLineage.callback ? ` <span class="mono">${html(dictLineage.callback)}</span>` : ''}</p>
+        ${inputChips(inputs)}
+      </section>`;
+    }
+    if (dictLineage.producer) {
+      return `<section class="dict-lineage" data-dict-lineage>${head}
+        <p class="dict-lineage-derived">${L('Computed by an EasyICU module from other variables; the dictionary declares no table for it.', '由 EasyICU 的计算模块根据其他变量生成；字典没有为它声明来源表。')} <span class="mono">${html(dictLineage.producer)}</span></p>
+      </section>`;
+    }
+    return `<section class="dict-lineage"><div class="note info"><div class="body"><div class="t">${L('No raw-source mapping declared', '未声明原始来源映射')}</div><div class="d">${L('This concept may be derived or rule-based. No table or field is inferred.', '该概念可能是派生或规则输出；这里不会猜测表或字段。')}</div></div></div></section>`;
+  }
+  function inputChips(inputs) {
+    return `<div class="dict-lineage-inputs" data-dict-lineage-inputs>${inputs.map(input => `<button type="button" data-dict-concept="${html(input)}">${html(window.EU_LANG === 'zh' ? zhOf(input) : nameOf(input))} <span class="mono">${html(input)}</span></button>`).join('')}</div>`;
+  }
+  // Mapped in some databases, computed from its inputs in the others.
+  function derivedElsewhere() {
+    const where = dictLineage.derived_in || [];
+    const inputs = dictLineage.inputs || [];
+    if (!where.length || !inputs.length) return '';
+    const names = where.map(entry => entry.label).join(window.EU_LANG === 'zh' ? '、' : ', ');
+    return `<div class="dict-lineage-elsewhere" data-dict-derived-in><p class="dict-lineage-derived">${html(L(`In ${names} the dictionary declares no source row; it is computed from:`, `在 ${names} 中字典没有声明来源行，由以下变量计算：`))}${dictLineage.callback ? ` <span class="mono">${html(dictLineage.callback)}</span>` : ''}</p>${inputChips(inputs)}</div>`;
+  }
   function lineagePanel() {
     if (!dictSelected) return '';
     if (coverageOf(dictSelected).kind === 'unsupported') {
@@ -301,7 +334,7 @@
     if (dictLineageError) return `<section class="dict-lineage"><div class="note warn"><div class="body"><div class="t">${L('Lineage unavailable', '血缘暂不可用')}</div><div class="d">${html(dictLineageError)}</div></div></div></section>`;
     if (!dictLineage) return '';
     const lanes = dictLineage.lanes || [];
-    if (!lanes.length) return `<section class="dict-lineage"><div class="note info"><div class="body"><div class="t">${L('No raw-source mapping declared', '未声明原始来源映射')}</div><div class="d">${L('This concept may be derived or rule-based. No table or field is inferred.', '该概念可能是派生或规则输出；这里不会猜测表或字段。')}</div></div></div></section>`;
+    if (!lanes.length) return derivedLineage();
     const active = lanes.find(lane => lane.database === dictSelectedDb) || lanes[0];
     dictSelectedDb = active.database;
     const canonical = dictLineage.canonical || {};
@@ -324,9 +357,11 @@
     const substitute = substituteText(dictLineage.concept, substituteOf(dictLineage.concept, active.database));
     return `<section class="dict-lineage" data-dict-lineage>
       <div class="dict-lineage-head"><div><div class="eyebrow">${L('Feature provenance', '特征血缘')}</div><h2>${html(window.EU_LANG === 'zh' ? zhOf(dictLineage.concept) : dictLineage.name)} <span class="mono">${html(dictLineage.concept)}</span></h2><p>${L('Declared catalog mappings only. Fields marked “not declared” are left explicit instead of guessed.', '仅展示字典声明的映射；未声明的字段保持明确空缺，不做猜测。')}</p></div><span class="pill ok">${lanes.length} ${L('databases', '个数据库')}</span></div>
+      ${derivedElsewhere()}
       <div class="dict-lineage-tabs" role="tablist">${lanes.map(lane=>`<button type="button" class="${lane.database===active.database?'active':''}" data-dict-lineage-db="${html(lane.database)}">${html(lane.label)}</button>`).join('')}</div>
       <div class="dict-audit-track" data-dict-audit-track>${steps.map(([label,value],index)=>`<div class="dict-audit-step"><i>${index+1}</i><div><b>${html(label)}</b><span>${html(value)}</span></div></div>`).join('')}</div>
       <details data-dict-mapping-details><summary>${L('View complete source mappings', '查看完整来源映射')}</summary>${mappings}</details>
+      ${window.EU_DICT_TABLES && primary.table ? `<div class="dict-lineage-open-table"><button type="button" class="btn sm" data-dict-open-table="${html(primary.table)}" data-dict-open-db="${html(active.database)}">${icon('db', 13)} ${L(`All variables read from ${active.label} ${primary.table}`, `查看 ${active.label} ${primary.table} 表中的全部变量`)}</button></div>` : ''}
       ${substitute ? `<p class="dict-lineage-sub" data-dict-substitute>${html(`${active.label}${L(': ', '：')}${substitute}`)}</p>` : ''}
       ${sourceSemanticText(dictLineage.concept, active.database) ? `<p class="dict-lineage-sub" data-dict-source-semantics>${html(sourceSemanticText(dictLineage.concept, active.database))}</p>` : ''}
       <div class="dict-lineage-lanes" data-dict-lineage-lanes>${lanes.map((lane,index)=>`<article style="--dict-lane-color:${window.EU_PALETTE.color(index)}"><div><i></i><b>${html(lane.label)}</b><span>${html(lane.database)}</span></div><strong>${html(mappingSummary(lane))}</strong><em>${html(Array.from(new Set((lane.mappings||[]).map(mapping=>mapping.callback).filter(Boolean))).join('；') || L('no callback declared', '未声明回调'))}</em><small>→ ${html(dictLineage.concept)}${canonical.unit?` · ${html(canonical.unit)}`:''}</small></article>`).join('')}</div>
@@ -341,6 +376,15 @@
       ${cat.groups.filter(g => listedIn(g[0]).length).map(g => chip(g[0], groupNameOf(g[0]), listedIn(g[0]).length)).join('')}
     </div>`;
   }
+
+  // The source-table view opens a variable's lineage in the variable view.
+  window.EU_DICT_OPEN_CONCEPT = (concept, database) => {
+    dictSearch = String(concept || '');
+    dictCat = 'all';
+    if (isInternal(concept)) dictShowInternal = true;
+    dictPendingConcept = { concept, database };
+    showView('concepts');
+  };
 
   S.dictionary = {
     section: 'dictionary', nav: 'dictionary',
@@ -393,8 +437,9 @@
         <h1 style="margin-top:6px;">${t('Data dictionary', '数据字典')}</h1>
         ${instanceDbs() ? '' : `<p class="lead">${t(cat.totalConcepts + ' concepts across ' + cat.groups.length + ' feature groups — abbreviations, full names, units, and database coverage from the EasyICU concept dictionary.', cat.totalConcepts + ' 个概念，分属 ' + cat.groups.length + ' 个特征分组：缩写、全称、单位，以及 EasyICU 字典中的数据库覆盖。')}</p>`}
       </div>
-      ${window.EU_DICT_STUDIES ? `<div class="tabs dict-views" role="tablist" aria-label="${t('Dictionary views', '字典视图')}">${tab('concepts', 'Variables', '变量')}${tab('studies', 'Study types', '研究类型')}</div>` : ''}`;
+      ${window.EU_DICT_STUDIES ? `<div class="tabs dict-views" role="tablist" aria-label="${t('Dictionary views', '字典视图')}">${tab('concepts', 'Variables', '变量')}${window.EU_DICT_TABLES ? tab('tables', 'Source tables', '来源表') : ''}${tab('studies', 'Study types', '研究类型')}</div>` : ''}`;
       if (studies) return head + window.EU_DICT_STUDIES.html();
+      if (dictView === 'tables' && window.EU_DICT_TABLES) return head + window.EU_DICT_TABLES.html();
       const rows = matchedRows();
       return `${head}
 
@@ -424,6 +469,7 @@
         if (dictView !== b.dataset.dictView) showView(b.dataset.dictView);
       }));
       if (dictView === 'studies' && window.EU_DICT_STUDIES) { window.EU_DICT_STUDIES.bind(root); return; }
+      if (dictView === 'tables' && window.EU_DICT_TABLES) { window.EU_DICT_TABLES.bind(root); return; }
       const input = root.querySelector('#dictSearchInput');
       const clr = root.querySelector('[data-dict-clear]');
       // Never replace the search input from its own input event: a full
@@ -456,18 +502,35 @@
         if (event.target.closest('[data-dict-internal]')) { dictShowInternal = !dictShowInternal; window.__euRender(); return; }
         const dbButton = event.target.closest('[data-dict-lineage-db]');
         if (dbButton) { dictSelectedDb = dbButton.dataset.dictLineageDb; paintLineage(); return; }
+        const tableButton = event.target.closest('[data-dict-open-table]');
+        if (tableButton && window.EU_DICT_TABLES) {
+          window.EU_DICT_TABLES.open(tableButton.dataset.dictOpenDb, tableButton.dataset.dictOpenTable);
+          showView('tables');
+          return;
+        }
         const conceptButton = event.target.closest('[data-dict-concept]');
         if (!conceptButton) return;
-        const request = ++dictLineageRequest;
         // A second press on an open entry folds its variants away again.
         if (conceptButton.dataset.dictConcept === dictSelected && variantsOf(dictSelected).length) {
+          ++dictLineageRequest;
           dictSelected = null; dictLineage = null; dictLineageError = '';
           paintResults(); paintLineage();
           return;
         }
-        dictSelected = conceptButton.dataset.dictConcept;
+        // The lineage panel sits under the whole list; bring it into view.
+        await selectConcept(conceptButton.dataset.dictConcept, null, true);
+      });
+      // A variable opened from the source-table view arrives selected.
+      if (dictPendingConcept) {
+        const pending = dictPendingConcept;
+        dictPendingConcept = null;
+        void selectConcept(pending.concept, pending.database, true);
+      }
+      async function selectConcept(concept, database, reveal) {
+        const request = ++dictLineageRequest;
+        dictSelected = concept;
         const selected = dictSelected;
-        dictSelectedDb = null;
+        dictSelectedDb = database || null;
         dictLineage = null;
         dictLineageError = '';
         // An unsupported outcome's panel is its reason; it has no lineage to fetch.
@@ -490,9 +553,11 @@
           if (request === dictLineageRequest) {
             dictLineageLoading = false;
             paintResults(); paintLineage();
+            const panel = document.getElementById('dictLineage');
+            if (reveal && panel && typeof panel.scrollIntoView === 'function') panel.scrollIntoView({ block: 'start', behavior: 'smooth' });
           }
         }
-      });
+      }
     },
   };
 })();

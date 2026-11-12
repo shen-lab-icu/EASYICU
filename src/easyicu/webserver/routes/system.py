@@ -11,6 +11,7 @@ from easyicu.research_agent.method_skills import MethodSkillPackageNotFound
 from easyicu.webserver import capabilities
 from easyicu.webserver import settings as settings_store
 from easyicu.webserver.catalog import build_catalog, build_concept_lineage
+from easyicu.webserver.catalog_source_map import build_source_map
 from easyicu.webserver.routes.request_parsing import body_int
 from easyicu.webserver.research_workflows import research_workflow_catalog
 
@@ -41,6 +42,15 @@ def catalog_lineage(concept_id: str) -> dict:
     if lineage is None:
         raise HTTPException(status_code=404, detail="concept_not_found")
     return lineage
+
+
+@router.get("/api/catalog/source-map/{database}")
+def catalog_source_map(database: str) -> dict:
+    """Declared table → field → variable rows of one database's dictionary."""
+    source_map = build_source_map(database)
+    if source_map is None:
+        raise HTTPException(status_code=404, detail="database_not_mapped")
+    return source_map
 
 
 @router.get("/api/settings")

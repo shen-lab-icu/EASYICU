@@ -23,6 +23,8 @@ ROUTES_WITHOUT_SESSION = {
     "dictionary": "/#dictionary",
     # The data dictionary's study-type view (the retired Data map's links open it).
     "dictionary/studies": "/#dictionary/studies",
+    # Its source-table view: which tables and fields each variable is read from.
+    "dictionary/tables": "/#dictionary/tables",
     "tutorial": "/#tutorial",
 }
 SESSION_ROUTE = "guided"

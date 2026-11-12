@@ -47,15 +47,41 @@
      never repeats a (colour, stroke) pair. */
   const DASHES = [null, [7, 4], [2, 3], [11, 4, 2, 4], [5, 3, 1, 3], [14, 5]];
 
-  function accent() {
+  /* ECharts' canvas parser reads hex, rgb() and hsl() only. The appearance
+     tokens are oklch(), which it drops silently: the KM curve drawn in the
+     accent colour rendered as no line at all. Paint the colour once on a 1x1
+     canvas and read the pixel back as rgb(); the result is cached per string. */
+  const canvasSafe = new Map();
+  function canvasColor(value, fallback) {
+    const text = String(value || '').trim();
+    if (!text) return fallback;
+    if (/^(#|rgba?\(|hsla?\()/i.test(text) || /^[a-z]+$/i.test(text)) return text;
+    if (canvasSafe.has(text)) return canvasSafe.get(text);
+    let resolved = fallback;
     try {
-      const value = getComputedStyle(document.documentElement)
-        .getPropertyValue('--accent')
-        .trim();
-      return value || FALLBACK_ACCENT;
+      const context = document.createElement('canvas').getContext('2d', { willReadFrequently: true });
+      context.fillStyle = '#000';
+      context.fillStyle = text;
+      context.fillRect(0, 0, 1, 1);
+      const [red, green, blue, alpha] = context.getImageData(0, 0, 1, 1).data;
+      resolved = alpha >= 255 ? `rgb(${red}, ${green}, ${blue})` : `rgba(${red}, ${green}, ${blue}, ${(alpha / 255).toFixed(3)})`;
     } catch (_) {
-      return FALLBACK_ACCENT;
+      resolved = fallback;
     }
+    canvasSafe.set(text, resolved);
+    return resolved;
+  }
+
+  function cssColor(name, fallback) {
+    try {
+      return canvasColor(getComputedStyle(document.documentElement).getPropertyValue(name), fallback);
+    } catch (_) {
+      return fallback;
+    }
+  }
+
+  function accent() {
+    return cssColor('--accent', FALLBACK_ACCENT);
   }
 
   /* Returns concrete colour strings, never `var(--accent)`. ECharts parses
@@ -93,6 +119,8 @@
 
   window.EU_PALETTE = {
     SIZE: SERIES.length,
+    canvasColor,
+    cssColor,
     color,
     dashPattern,
     lineStyle,

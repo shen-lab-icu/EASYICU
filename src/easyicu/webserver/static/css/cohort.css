@@ -17,7 +17,7 @@
   grid-template-columns:repeat(3,minmax(0,1fr));
 }
 .surv-outcome-card{
-  background:#fff;
+  background:var(--surface);
   border:1px solid var(--line);
   border-radius:8px;
   min-height:76px;
@@ -29,7 +29,18 @@
   box-shadow:inset 3px 0 0 var(--accent);
 }
 .surv-outcome-card.muted{
-  background:#f7f7f4;
+  background:var(--surface-2);
+}
+/* "Not available" is a state, not a value: no headline-size figure for it. */
+.surv-outcome-card.muted strong{
+  color:var(--ink-4);
+  font-family:var(--font);
+  font-size:14px;
+  font-weight:650;
+}
+.surv-outcome-card.muted b{
+  font-family:var(--font);
+  font-weight:500;
 }
 .surv-outcome-card span,
 .surv-outcome-card b,
@@ -77,7 +88,7 @@
 }
 .surv-segments .seg-btn{
   align-items:flex-start;
-  background:#fff;
+  background:var(--surface);
   border:1px solid var(--line);
   border-radius:8px;
   color:var(--ink-2);
@@ -107,13 +118,13 @@
   box-shadow:0 0 0 2px rgba(79,184,197,.14);
 }
 .surv-segments .seg-btn.disabled{
-  background:#f7f7f4;
+  background:var(--surface-2);
   color:var(--ink-4);
   cursor:not-allowed;
   opacity:.72;
 }
 .surv-card{
-  background:#fff;
+  background:var(--surface);
   border:1px solid var(--line);
   border-radius:10px;
   padding:18px;
@@ -165,7 +176,7 @@
   margin-top:12px;
 }
 .cprof-domain{
-  background:#fff;
+  background:var(--surface);
   border:1px solid var(--line, #e5e2da);
   border-radius:10px;
   padding:12px;
@@ -322,7 +333,7 @@
   text-align:left;
 }
 .risk-table th{
-  background:#f7f7f4;
+  background:var(--surface-2);
   color:var(--ink-4);
   font-family:var(--font-mono);
   font-size:10.5px;
@@ -343,7 +354,7 @@
 }
 .sofa-matrix-toggle{
   align-items:center;
-  background:#f7f7f4;
+  background:var(--surface-2);
   border:1px solid var(--line);
   border-radius:8px;
   display:inline-flex;
@@ -387,7 +398,7 @@
   margin-top:1px;
 }
 .sofa-matrix-toggle button.active{
-  background:#fff;
+  background:var(--surface);
   box-shadow:0 1px 3px rgba(15,23,42,0.12);
   color:var(--ink-1);
 }
@@ -446,3 +457,21 @@
 .cohort-feature-picker[open] > summary::before{transform:rotate(45deg)}
 .cohort-feature-picker > summary b{font-size:13.5px;color:var(--ink)}
 .cohort-feature-picker > summary span{font-size:12px;color:var(--ink-4);font-variant-numeric:tabular-nums}
+/* Custom grouping form: labelled fields in one row, the app's control style. */
+[data-custom-group-editor] .row{align-items:flex-end}
+[data-custom-group-editor] label{display:grid;gap:5px;color:var(--ink-3);font-size:12px;font-weight:650}
+[data-custom-group-editor] select,
+[data-custom-group-editor] input[type="number"]{
+  min-width:150px;
+  height:34px;
+  padding:0 10px;
+  border:1px solid var(--hair-2);
+  border-radius:var(--r-2);
+  background:var(--surface);
+  color:var(--ink);
+  font:500 13px/1.2 var(--font);
+}
+[data-custom-group-editor] select[data-custom-feature]{min-width:260px;max-width:100%}
+[data-custom-group-editor] input[type="number"]{width:140px;min-width:0}
+[data-custom-group-editor] select:focus-visible,
+[data-custom-group-editor] input:focus-visible{outline:2px solid var(--accent);outline-offset:1px}

@@ -186,6 +186,21 @@
           "en": "When a run goes wrong you can download a problem report with versions, run state and reason codes only, no data, prompts or conversation text, and decide yourself whether to send it."
         },
         {
+          "code": "dictionary_source_tables",
+          "zh": "数据字典新增“来源表”视图：按数据库查看每张原始表、表中读取的值/单位/时间字段，以及从中读取的全部变量；由其他变量计算的变量列出其输入变量。",
+          "en": "The data dictionary has a Source tables view: for each database it shows every raw table, the value, unit and time fields read from it, and all variables read from it; a variable computed from other variables lists its inputs."
+        },
+        {
+          "code": "review_chart_colours",
+          "zh": "生存曲线及其他图表中使用主题色的第一条曲线此前不显示，现已修复。",
+          "en": "Fixed charts in which the first series, drawn in the theme colour, was not shown, including the first Kaplan–Meier curve."
+        },
+        {
+          "code": "review_page_labels",
+          "zh": "队列统计用目录中的变量名和单位代替列代码（如“乳酸 mmol/L”而不是 LACT）；跨库对比的病死率在部分结局缺失时注明已知人数；患者审阅的模块数和可用信号数与数据一致。",
+          "en": "Cohort statistics names variables by their catalog names and units instead of column codes (Lactate mmol/L, not LACT); a cross-database mortality rate states its known denominator when outcomes are partly missing; Patient review module and signal counts match the data."
+        },
+        {
           "code": "repository_history_rewritten",
           "zh": "仓库历史已重写，移除了不应公开的文件；此前的 0.1.x 预发布版本已撤回，由本版本取代。",
           "en": "The repository history was rewritten to remove files that should not have been published; earlier 0.1.x pre-releases were withdrawn and this release replaces them."

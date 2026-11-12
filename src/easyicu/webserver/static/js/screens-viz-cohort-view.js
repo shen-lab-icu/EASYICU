@@ -312,8 +312,8 @@
     const metric = String((row && row.metric) || '');
     const name = row && row.feature_id ? cohortFeatureName(row.column) : '';
     if (!name) return cohortText(metric);
-    if (/^Median /.test(metric)) return `${name} 中位数`;
-    if (/ available %$/.test(metric)) return `${name} 有记录比例 %`;
+    if (/^Median /.test(metric)) return t(`Median ${name}`, `${name} 中位数`);
+    if (/ available %$/.test(metric)) return t(`${name} available %`, `${name} 有记录比例 %`);
     return / %$/.test(metric) ? `${name} %` : name;
   }
   function cohortReason(value) {
@@ -884,11 +884,17 @@
     }
     if (row.kind === 'category') {
       const first = (row.bins || [])[0];
-      return first ? `${esc(first.label)} · ${fmtPct(first.pct)}` : '—';
+      return first ? `${esc(categoryLabel(first.label))} · ${fmtPct(first.pct)}` : '—';
     }
     return row.value == null ? '—' : esc(row.value);
   }
 
+  // Admission type categories are the dictionary's codes (med / surg / other).
+  const CATEGORY_LABELS = { med: ['Medical', '内科'], surg: ['Surgical', '外科'], other: ['Other', '其他'] };
+  function categoryLabel(label) {
+    const known = CATEGORY_LABELS[String(label || '').trim().toLowerCase()];
+    return known ? t(...known) : String(label == null ? '' : label);
+  }
   function cohortProfileDetail(item) {
     const row = item || {};
     if (row.status === 'unavailable') return cohortProfileReason(row) || t('Not present in this export.', '当前导出未提供。');
@@ -906,7 +912,7 @@
       return row.denominator ? `${fmtInt(row.count)} / ${fmtInt(row.denominator)}` : '';
     }
     if (row.kind === 'category') {
-      return (row.bins || []).slice(0, 3).map(bin => `${esc(bin.label)} ${fmtPct(bin.pct)}`).join(' · ') || t('No categorical column available.', '没有可用分类列。');
+      return (row.bins || []).slice(0, 3).map(bin => `${esc(categoryLabel(bin.label))} ${fmtPct(bin.pct)}`).join(' · ') || t('No categorical column available.', '没有可用分类列。');
     }
     return cohortProfileReason(row);
   }

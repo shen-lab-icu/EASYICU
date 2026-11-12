@@ -128,3 +128,21 @@ def test_default_table_one_fallback_skips_scoring_receipts_and_timestamps() -> N
     assert cohort_review._selected_feature_ids(
         catalog, ("sofa2_score:sofa2_cardio_available",)
     ) == ["sofa2_score:sofa2_cardio_available"]
+
+
+def test_cohort_statistics_names_a_variable_by_its_catalog_name() -> None:
+    """Short column codes were upper-cased ("LACT", "AGE") instead of named."""
+    assert cohort_review._feature_label("lact") == review_labels.concept_label("lact")
+    assert cohort_review._feature_label("lact") not in {"", "LACT"}
+    assert cohort_review._feature_label("age") == "Age"
+    # A column the catalog does not know keeps the readable fallback.
+    assert cohort_review._feature_label("zz_unknown_col") == "Zz Unknown Col"
+
+
+def test_a_selected_numeric_row_carries_its_catalog_unit() -> None:
+    feature = {"id": "lab:lact", "module": "chemistry", "column": "lact", "label": "Lactate",
+               "kind": "numeric", "mapping": {}}
+    rows = cohort_review._selected_feature_rows([[]], [feature], medians=None)
+    assert rows[0]["metric"] == "Median Lactate" and rows[0]["unit"] == review_labels.concept_unit("lact")
+    ratio = dict(feature, id="resp:pafi", column="pafi", label="PaO2/FiO2 Ratio")
+    assert cohort_review._selected_feature_rows([[]], [ratio], medians=None)[0]["unit"] is None

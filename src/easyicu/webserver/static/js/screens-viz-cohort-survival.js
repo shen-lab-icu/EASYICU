@@ -16,14 +16,16 @@
 
   // Name export columns by catalog concept, including SOFA evidence flags.
   function cohortFeatureName(column) {
-    if (window.EU_LANG !== 'zh' || !column) return '';
+    if (!column) return '';
     const dict = (window.EU_CATALOG || {}).dict || {};
     const id = String(column).toLowerCase();
-    const zhOf = key => (dict[key] && dict[key][1]) || (dict[`sofa2_${key}`] && dict[`sofa2_${key}`][1]) || '';
-    if (zhOf(id)) return zhOf(id);
+    const index = window.EU_LANG === 'zh' ? 1 : 0;
+    const nameOf = key => (dict[key] && dict[key][index]) || (dict[`sofa2_${key}`] && dict[`sofa2_${key}`][index]) || '';
+    if (nameOf(id)) return nameOf(id);
     const flag = id.match(/^(.+)_(observed|available|time)$/);
-    if (!flag || !zhOf(flag[1])) return '';
-    return `${zhOf(flag[1])}${{ observed: ' 已观测', available: ' 可用', time: '时间' }[flag[2]]}`;
+    if (!flag || !nameOf(flag[1])) return '';
+    const suffix = index ? { observed: ' 已观测', available: ' 可用', time: '时间' } : { observed: ' observed', available: ' available', time: ' time' };
+    return `${nameOf(flag[1])}${suffix[flag[2]]}`;
   }
 
   function customGroupFeatureLabel(group) {
@@ -122,7 +124,7 @@
         ${cohortSurvivalChart(curve)}
         <div class="muted">${t('The event-free estimate is specific to the selected endpoint and censoring rule. A same-time group difference requires an audited calculation.', '无事件估计仅对应所选结局及其删失规则；组间同一时点差值需要经审计的计算。')}</div>
         ${curve.outcome_id === 'hospital_death' ? `<div class="muted">${t('Discharge alive is censored: this is an in-hospital death analysis, not all-cause 30-day survival.', '存活出院按删失处理：这是院内死亡分析，并非全因 30 天生存。')}</div>` : ''}
-        ${cohortRiskTable(curve)}
+        ${/* The chart carries its own aligned at-risk row; this grid is for when it cannot render. */ cohortCharts && typeof cohortCharts.survivalSlot === 'function' ? '' : cohortRiskTable(curve)}
       </div>
       <div class="note warn mt-12"><div class="ico">${icon('shield', 14)}</div><div class="body"><div class="t">${cohortText('Not manuscript-ready by itself')}</div><div class="d">${t('KM/log-rank is computed from bounded cohort aggregates and marked exploratory. Any claim still needs the evidence-bound Agent check and human review.', 'KM 曲线和 log-rank 检验由队列汇总计算，属于探索性结果。要写进论文的结论，仍需在研究对话中核对证据并经人工审阅。')}</div></div></div>
       `;

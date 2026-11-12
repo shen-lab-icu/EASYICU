@@ -553,7 +553,7 @@
         ${[
           [t('Entities', '病例数'), fmtInt(loaded.entities != null ? loaded.entities : s.entities), 'ok'],
           [t('Review features', '审阅特征'), fmtInt(loaded.review_features), 'accent'],
-          [t('Modules', '模块'), fmtInt(loaded.module_count), 'accent'],
+          ...[s.modules != null && loaded.module_count != null && Number(s.modules) !== Number(loaded.module_count) ? [t('Modules exported / in catalog', '已导出 / 目录模块'), `${fmtInt(s.modules)} / ${fmtInt(loaded.module_count)}`, 'accent'] : [t('Modules', '模块'), fmtInt(loaded.module_count), 'accent']],
           [t('Observed features', '已观测特征'), fmtInt(loaded.observed_features), 'accent'],
         ].map(([l, v, c]) => `<div class="stat ${c}"><div class="label">${l}</div><div class="val">${v}</div></div>`).join('')}
       </div>

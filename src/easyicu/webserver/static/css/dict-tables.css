@@ -1,0 +1,83 @@
+/* Owner: the Data Dictionary's source-table view (js/screens-dict-tables.js). */
+.dtb{display:grid;gap:12px;min-width:0;--dtb-band:color-mix(in srgb,var(--ink-4) 22%,transparent)}
+.dtb-note{margin:0;color:var(--ink-3);font-size:12.5px;line-height:1.5}
+.dtb-dbs{display:flex;flex-wrap:wrap;gap:6px}
+.dtb-dbs button{min-height:32px;padding:6px 12px;border:1px solid var(--hair-2);border-radius:var(--r-pill);background:var(--surface);color:var(--ink-3);font:650 12.5px/1 var(--font);cursor:pointer}
+.dtb-dbs button.on{border-color:var(--accent);background:var(--accent-soft);color:var(--accent-ink)}
+.dtb-dbs button:focus-visible,.dtb-table:focus-visible,.dtb-concept:focus-visible,.dtb-input:focus-visible{outline:2px solid var(--accent);outline-offset:2px}
+.dtb-summary{margin:0;color:var(--ink-2);font-size:13px}
+.dtb-grid{display:grid;grid-template-columns:minmax(210px,260px) minmax(0,1fr);gap:14px;align-items:start}
+.dtb-tables{display:grid;gap:4px;position:sticky;top:12px;max-height:calc(100vh - 140px);overflow:auto;padding:6px;border:1px solid var(--hair);border-radius:var(--r-3);background:var(--surface)}
+.dtb-table{position:relative;display:grid;grid-template-columns:minmax(0,1fr) auto;align-items:center;gap:8px;min-height:34px;padding:6px 10px 9px;border:1px solid transparent;border-radius:var(--r-2);background:transparent;color:var(--ink-2);font:500 12.5px/1.3 var(--font);text-align:left;cursor:pointer}
+.dtb-table:hover{background:var(--surface-2)}
+.dtb-table.on{border-color:var(--accent-border);background:var(--accent-soft);color:var(--accent-ink)}
+.dtb-table-name{min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.dtb-table-n{color:var(--ink-4);font:600 11.5px/1 var(--font-mono)}
+.dtb-table i{position:absolute;left:10px;right:10px;bottom:3px;height:3px;border-radius:2px;background:var(--surface-3)}
+.dtb-table i::after{content:"";position:absolute;inset:0 auto 0 0;width:var(--dtb-share);border-radius:2px;background:var(--accent)}
+.dtb-table.is-derived{margin-top:6px;border-top:1px dashed var(--hair-2);border-radius:0 0 var(--r-2) var(--r-2);font-style:italic}
+.dtb-detail{display:grid;grid-template-columns:minmax(0,1fr);gap:12px;min-width:0;padding:14px 16px;border:1px solid var(--hair);border-radius:var(--r-3);background:var(--surface);box-shadow:var(--sh-1)}
+.dtb-filter{display:flex;align-items:center;gap:8px;max-width:360px;min-height:34px;padding:0 10px;border:1px solid var(--hair-2);border-radius:var(--r-2);background:var(--surface);color:var(--ink-4)}
+.dtb-filter input{flex:1;min-width:0;border:0;background:transparent;color:var(--ink);font:13px var(--font);outline:none}
+.dtb-detail>*{min-width:0}
+.dtb-detail-head h3{margin:0 0 4px;font-size:17px}
+.dtb-detail-head p{display:flex;flex-wrap:wrap;align-items:center;gap:8px;margin:0;color:var(--ink-3);font-size:12.5px;line-height:1.5}
+.dtb-flow{margin:0;min-width:0}
+.dtb-flow figcaption{margin-bottom:6px;color:var(--ink-4);font-size:11.5px}
+.dtb-flow{overflow-x:auto}
+.dtb-flow svg{display:block;width:100%;min-width:560px;height:auto;overflow:visible}
+.dtb-flow .dtb-band{opacity:.9}
+.dtb-flow .dtb-band.is-group{opacity:.42;cursor:pointer;transition:opacity .15s}
+.dtb-flow .dtb-band.is-group:hover{opacity:.7}
+.dtb-flow .is-dim{opacity:.12}
+.dtb-flow .dtb-node{fill:var(--ink-3);rx:2}
+.dtb-flow .dtb-node.is-group{cursor:pointer}
+.dtb-flow text{fill:var(--ink-2);font:12px var(--font)}
+.dtb-flow text.mono{font-family:var(--font-mono);font-size:11.5px}
+.dtb-flow .dtb-t{font-weight:700}
+.dtb-flow .dtb-g{cursor:pointer}
+.dtb-flow text.is-dim{opacity:.35}
+.dtb-sub{margin-bottom:6px;color:var(--ink-3);font-size:12px}
+.dtb-col-list{display:flex;flex-wrap:wrap;gap:5px}
+.dtb-col{display:inline-flex;align-items:baseline;gap:5px;padding:3px 7px;border:1px solid var(--hair);border-radius:6px;background:var(--surface-2);color:var(--ink-4);font:11.5px/1.3 var(--font-mono)}
+.dtb-col small{font:600 10px/1 var(--font);text-transform:uppercase;letter-spacing:.02em}
+.dtb-col.is-used{border-color:var(--accent-border);background:var(--accent-soft);color:var(--accent-ink)}
+.dtb-col.is-selector_field{border-color:color-mix(in srgb,var(--warn) 45%,transparent);background:var(--warn-soft);color:var(--warn)}
+.dtb-col.is-time_field{border-color:var(--hair-2);background:var(--surface-3);color:var(--ink-2)}
+.dtb-scroll{max-width:100%;overflow-x:auto;border:1px solid var(--hair);border-radius:var(--r-2)}
+.dtb-rows{width:100%;border-collapse:collapse;font-size:12.5px}
+.dtb-rows th,.dtb-rows td{padding:7px 10px;border-bottom:1px solid var(--hair);text-align:left;vertical-align:top}
+.dtb-rows thead th{position:sticky;top:0;z-index:1;background:var(--surface-2);color:var(--ink-3);font-size:11px;font-weight:700;white-space:nowrap}
+.dtb-rows tbody tr:last-child>*{border-bottom:0}
+.dtb-rows tbody tr:hover{background:var(--surface-2)}
+.dtb-rows .mono{font-family:var(--font-mono);font-size:11.5px;overflow-wrap:anywhere}
+.dtb-rows td:nth-child(n+3) .mono{white-space:nowrap;overflow-wrap:normal}
+.dtb-rows td:first-child{min-width:200px}
+.dtb-rows td:nth-child(2){min-width:150px}
+.dtb-concept{display:inline;padding:0;border:0;background:transparent;color:var(--ink);font:inherit;text-align:left;cursor:pointer}
+.dtb-concept b{font-weight:600}
+.dtb-concept .mono{margin-left:4px;color:var(--ink-4)}
+.dtb-concept:hover b{color:var(--accent-ink);text-decoration:underline}
+.dtb-inputs{display:flex;flex-wrap:wrap;gap:4px;min-width:220px}
+.dtb-input{padding:2px 8px;border:1px solid var(--hair-2);border-radius:var(--r-pill);background:var(--surface);color:var(--ink-2);font:12px/1.4 var(--font);cursor:pointer}
+.dtb-input:hover{border-color:var(--accent);color:var(--accent-ink)}
+.dtb-muted{color:var(--ink-4)}
+@media (max-width:900px){
+  .dtb-grid{grid-template-columns:minmax(0,1fr)}
+  .dtb-tables{position:static;max-height:none;grid-template-columns:repeat(auto-fill,minmax(160px,1fr))}
+}
+@media (max-width:600px){
+  .dtb-tables{display:flex;gap:6px;overflow-x:auto;scroll-snap-type:x proximity}
+  .dtb-table{flex:0 0 auto;min-width:150px;scroll-snap-align:start}
+  .dtb-table.is-derived{margin-top:0;border-top:1px solid transparent;border-left:1px dashed var(--hair-2);border-radius:var(--r-2)}
+  .dtb-detail{padding:12px}
+}
+/* Lineage panel additions in the variable view (js/screens-dict.js). */
+.dict-lineage-inputs{display:flex;flex-wrap:wrap;align-items:center;gap:6px;margin-top:12px}
+.dict-lineage-inputs button{padding:4px 10px;border:1px solid var(--hair-2);border-radius:var(--r-pill);background:var(--surface);color:var(--ink-2);font:12.5px/1.3 var(--font);cursor:pointer}
+.dict-lineage-inputs button:hover{border-color:var(--accent);color:var(--accent-ink)}
+.dict-lineage-open-table{margin-top:10px}
+.dict-lineage-derived{margin:12px 0 0;color:var(--ink-2);font-size:13.5px;line-height:1.5}
+.dict-lineage-elsewhere{margin-top:14px;padding:10px 12px 12px;border:1px dashed var(--hair-2);border-radius:var(--r-2);background:var(--surface-2)}
+.dict-lineage-elsewhere .dict-lineage-derived{margin:0}
+.dict-lineage-elsewhere .dict-lineage-inputs{margin-top:8px}

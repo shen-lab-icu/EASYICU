@@ -129,6 +129,14 @@
     return number.toFixed(2);
   }
 
+  /* A rate over the stays with a recorded outcome says so when that is not every stay. */
+  function knownNote(row, index, helpers) {
+    const known = Number((row.known_counts || [])[index]);
+    const total = Number((row.denominators || [])[index]);
+    if (!Number.isFinite(known) || !Number.isFinite(total) || total <= 0 || known >= total) return '';
+    return `<small class="xdb-known-note">${helpers.t(`${helpers.fmtInt(known)} of ${helpers.fmtInt(total)} known`, `已知 ${helpers.fmtInt(known)} / ${helpers.fmtInt(total)}`)}</small>`;
+  }
+
   function metricValue(key, value, helpers) {
     if (value == null) return '—';
     if (['stays', 'cohort_size', 'modules', 'total_rows', 'total_records', 'feature_rows', 'concepts_present'].includes(key)) {
@@ -140,8 +148,13 @@
     return helpers.fmtNum(value, 1);
   }
 
+  /* The short database names the size panel uses, unless two sources would
+     share one (two exports of one database); then their own labels. */
   function sourceLabels(payload) {
-    return (payload && payload.sources || []).map(source => source.label || source.database || 'local');
+    const sources = payload && payload.sources || [];
+    const full = sources.map(source => source.label || source.database || 'local');
+    const short = sources.map((source, index) => shortSourceName(source, full[index]));
+    return new Set(short).size === short.length ? short : full;
   }
 
   function catalogScope(payload, config) {
@@ -230,6 +243,7 @@
   // A demo registered under the full key (the MIMIC-IV demo is "miiv") says so in its label.
   function shortSourceName(source, label) {
     const names = window.EU_DATABASE_NAMES;
+    if (!names) return label;
     const db = String(source && source.database || '');
     const key = names.key(db);
     if (!key) return label;
@@ -322,7 +336,7 @@
           <span class="pill">${h.fmtInt(rows.length)}${scope.partial ? ` / ${h.fmtInt(scope.totalModules)}` : ''} ${h.t('modules audited', '个模块已审计')}</span>
         </div>
         ${partialScopeNotice(payload, config)}
-        ${labels.length === 2 ? `<div class="xdb-paired-coverage" data-crossdb-paired-coverage><div class="xdb-paired-axis"><span>0%</span><span>25%</span><span>50%</span><span>75%</span><span>100%</span></div>${rows.map(row => { const values=(row.values||[]).map(value=>value&&value.present&&Number.isFinite(Number(value.coverage_pct))?Math.max(0,Math.min(100,Number(value.coverage_pct))):null); return `<div class="xdb-paired-row"><b>${h.esc(scientificLabel(h.catalogModuleLabel(row.module)))}</b><div class="xdb-paired-track">${values[0]!=null&&values[1]!=null?`<i class="xdb-paired-link" style="left:${Math.min(values[0],values[1])}%;width:${Math.abs(values[1]-values[0])}%"></i>`:''}${values.map((value,index)=>value==null?'':`<i class="xdb-paired-point" style="left:${value}%;background:${palette(index)}" title="${h.esc(labels[index])}: ${h.fmtPct(value)}"></i>`).join('')}</div><span>${values.map((value,index)=>value==null?'—':`${h.esc(labels[index])} ${h.fmtPct(value)}`).join(' · ')}</span></div>`;}).join('')}<div class="xdb-paired-legend">${labels.map((label,index)=>`<span><i style="background:${palette(index)}"></i>${h.esc(label)}</span>`).join('')}</div></div>` : ''}
+        ${labels.length === 2 ? `<div class="xdb-paired-coverage" data-crossdb-paired-coverage><div class="xdb-paired-axis"><span>0%</span><span>25%</span><span>50%</span><span>75%</span><span>100%</span></div>${rows.map(row => { const values=(row.values||[]).map(value=>value&&value.present&&Number.isFinite(Number(value.coverage_pct))?Math.max(0,Math.min(100,Number(value.coverage_pct))):null); return `<div class="xdb-paired-row"><b>${h.esc(scientificLabel(h.catalogModuleLabel(row.module)))}</b><div class="xdb-paired-track">${values[0]!=null&&values[1]!=null?`<i class="xdb-paired-link" style="left:${Math.min(values[0],values[1])}%;width:${Math.abs(values[1]-values[0])}%"></i>`:''}${values.map((value,index)=>value==null?'':`<i class="xdb-paired-point" style="left:${value}%;background:${palette(index)}" title="${h.esc(labels[index])}: ${h.fmtPct(value)}"></i>`).join('')}</div><span>${values.map((value,index)=>value==null?'<em>—</em>':`<em title="${h.esc(labels[index])}"><i style="background:${palette(index)}"></i>${value.toFixed(1)}%</em>`).join('')}</span></div>`;}).join('')}<div class="xdb-paired-legend">${labels.map((label,index)=>`<span title="${h.esc(label)}"><i style="background:${palette(index)}"></i>${h.esc(shortSourceName((payload.sources || [])[index] || {}, label))}</span>`).join('')}</div></div>` : ''}
         <details class="xdb-exact-table"><summary>${h.t('Open exact coverage table', '展开精确覆盖表')}</summary><div class="table-wrap table-scroll mt-10">
           <table class="eu-table">
             <thead><tr><th>${h.t('Module', '模块')}</th>${labels.map(label => `<th class="num">${h.esc(label)}</th>`).join('')}<th class="num">${h.t('Shared', '共享')}</th></tr></thead>
@@ -432,7 +446,7 @@
         <div class="table-wrap table-scroll mt-16 xdb-table-one" data-crossdb-table-one>
           <table class="eu-table">
             <thead><tr><th>${h.t('Aggregate metric', '聚合指标')}</th>${labels.map(label => `<th class="num">${h.esc(label)}</th>`).join('')}<th class="num">${labels.length === 2 ? h.t(`${labels[1]} − ${labels[0]}`, `${labels[1]} − ${labels[0]}`) : h.t('Descriptive range', '描述范围')}</th></tr></thead>
-            <tbody>${(payload.rows || []).map(row => { const values=row.values||[]; const delta=values.length===2&&values.every(value=>Number.isFinite(Number(value)))?Number(values[1])-Number(values[0]):row.delta; const suffix=['female_pct','mortality','mortality_pct','sepsis_pct','coverage_median_pct'].includes(row.key)?' pp':''; return `<tr><td class="key">${h.esc(h.metricLabel(row.label || row.key))}</td>${values.map(value => `<td class="num">${metricValue(row.key, value, h)}</td>`).join('')}<td class="num">${delta==null?'—':`${delta>0?'+':''}${h.fmtNum(delta,1)}${suffix}`}</td></tr>`; }).join('')}</tbody>
+            <tbody>${(payload.rows || []).map(row => { const values=row.values||[]; const delta=values.length===2&&values.every(value=>Number.isFinite(Number(value)))?Number(values[1])-Number(values[0]):row.delta; const suffix=['female_pct','mortality','mortality_pct','sepsis_pct','coverage_median_pct'].includes(row.key)?' pp':''; return `<tr><td class="key">${h.esc(h.metricLabel(row.label || row.key))}</td>${values.map((value, index) => `<td class="num">${metricValue(row.key, value, h)}${knownNote(row, index, h)}</td>`).join('')}<td class="num">${delta==null?'—':`${delta>0?'+':''}${h.fmtNum(delta,1)}${suffix}`}</td></tr>`; }).join('')}</tbody>
           </table>
         </div>
         <div class="note warn mt-16">

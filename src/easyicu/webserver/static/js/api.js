@@ -188,6 +188,9 @@
     return cat;
   }
 
+  async function loadCatalogSourceMap(database) {
+    return getJSON('/api/catalog/source-map/' + encodeURIComponent(String(database || '')));
+  }
   async function loadConceptLineage(conceptId) {
     return getJSON('/api/catalog/lineage/' + encodeURIComponent(String(conceptId || '')));
   }
@@ -961,6 +964,7 @@
   window.EU_API.postBlob = postBlob;
   window.EU_API.hydrateCatalog = hydrateCatalog;
   window.EU_API.loadConceptLineage = loadConceptLineage;
+  window.EU_API.loadCatalogSourceMap = loadCatalogSourceMap;
   window.EU_API.hydrateSettings = hydrateSettings;
   window.EU_API.hydrateCapabilities = hydrateCapabilities;
   window.EU_API.hydrateWorkspaceRegistry = hydrateWorkspaceRegistry;

@@ -54,3 +54,21 @@ def module_label_i18n(module: str) -> Dict[str, str]:
 def module_label(module: str, lang: str = "en") -> str:
     labels = module_label_i18n(module)
     return labels.get(str(lang or "en")) or labels["en"]
+
+
+def concept_label(column: str) -> str:
+    """The catalog's English name for an export column, or ``""`` if unknown.
+
+    Cohort Statistics named variables by upper-casing short column codes, so
+    lactate rendered as "LACT" and age as "AGE".
+    """
+
+    labels = concept_catalog.CONCEPT_DICTIONARY.get(str(column or "").lower()) or ()
+    return plain_label(labels[0]) if labels else ""
+
+
+def concept_unit(column: str) -> str:
+    """The catalog's unit for an export column, or ``""``."""
+
+    labels = concept_catalog.CONCEPT_DICTIONARY.get(str(column or "").lower()) or ()
+    return str(labels[2]).strip() if len(labels) > 2 and labels[2] else ""

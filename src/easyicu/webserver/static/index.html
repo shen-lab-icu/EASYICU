@@ -6,19 +6,20 @@
 <meta name="viewport" content="width=device-width, initial-scale=1.0" />
 <title>EasyICU — ICU Research Workspace</title>
 <link rel="stylesheet" href="css/tokens.css?v=20261027-old1" />
-<link rel="stylesheet" href="css/app.css?v=20261027-old1" />
+<link rel="stylesheet" href="css/app.css?v=20261112-viz1" />
 <link rel="stylesheet" href="css/screens.css?v=20261027-old1" />
-<link rel="stylesheet" href="css/crossdb.css?v=20261026-src1" />
-<link rel="stylesheet" href="css/states.css?v=20261027-old1" />
+<link rel="stylesheet" href="css/crossdb.css?v=20261112-viz1" />
+<link rel="stylesheet" href="css/states.css?v=20261112-viz1" />
 <link rel="stylesheet" href="css/pages.css?v=20261027-old1" />
 <link rel="stylesheet" href="css/patient-navigation.css?v=20260710-bounded-pages" />
-<link rel="stylesheet" href="css/patient-tables.css?v=20261026-data1" />
+<link rel="stylesheet" href="css/patient-tables.css?v=20261112-viz1" />
 <link rel="stylesheet" href="css/settings.css?v=20261029-journey1" />
 <link rel="stylesheet" href="css/skills-hub.css?v=20261030-hub5" />
 <link rel="stylesheet" href="css/skills-implementation.css?v=20261029-fn5" />
 <link rel="stylesheet" href="css/skills-tools.css?v=20261026-tools1" />
 <link rel="stylesheet" href="css/skills-workflows.css?v=20261029-flow1" />
 <link rel="stylesheet" href="css/dict-studies.css?v=20261027-dmap1" />
+<link rel="stylesheet" href="css/dict-tables.css?v=20261112-viz1" />
 <link rel="stylesheet" href="css/patient.css?v=20261026-data1" />
 <link rel="stylesheet" href="css/patient-series.css?v=20261022-legacy1" />
 <link rel="stylesheet" href="css/official-demo-sources.css?v=20261028-prepfail1-cfg1" />
@@ -57,7 +58,7 @@
 <link rel="stylesheet" href="css/extraction.css?v=20261102-ui1" />
 <link rel="stylesheet" href="css/extraction-cohort-definition.css?v=20260921-owner-split1" />
 <link rel="stylesheet" href="css/extraction-output.css?v=20260824-local-open1" />
-<link rel="stylesheet" href="css/cohort.css?v=20261026-data1" />
+<link rel="stylesheet" href="css/cohort.css?v=20261112-viz1" />
 <link rel="stylesheet" href="css/cohort-charts.css?v=20260830-viz-final1" />
 <link rel="stylesheet" href="css/dock.css?v=20260827-no-fab1" />
 <link rel="stylesheet" href="css/redesign.css?v=20261027-old1" />
@@ -110,7 +111,7 @@
 <script src="js/database-names.js?v=20261026-dbnames1"></script>
 <script src="js/study-family-names.js?v=20261026-datamap1"></script>
 <script src="js/product-labels.js?v=20261027-dcl1"></script>
-<script src="js/chart-palette.js?v=20260816-palette-owner"></script>
+<script src="js/chart-palette.js?v=20261112-viz1"></script>
 <script src="js/composer-keyboard.js?v=20260823-ime-owner1"></script>
 <script src="js/popover-menus.js?v=20261101-pointer-focus"></script>
 <script src="js/i18n.js?v=20261027-nodemo1"></script>
@@ -118,7 +119,7 @@
 <script src="js/desktop-module-shell.js?v=20261102-ui1"></script>
 <script src="js/data-catalog.js?v=20261028-readm1"></script>
 <script src="js/hosted-session.js?v=20261021-account1"></script>
-<script src="js/api.js?v=20261102-demo2"></script>
+<script src="js/api.js?v=20261112-viz1"></script>
 <script src="js/study-context.js?v=20261023-demo-identity1"></script>
 <script src="js/screens-extraction-sepsis.js?v=20260629-sepsis-anchor-readonly"></script>
 <script src="js/screens-extraction-folder-picker.js?v=20261021-hosted1"></script>
@@ -130,24 +131,24 @@
 <script src="js/screens-viz-demo.js?v=20261027-nodemo2"></script>
 <script src="js/screens-viz-patient-features.js?v=20261022-zhlabels1"></script>
 <script src="vendor/echarts/echarts.common.min.js?v=6.1.0"></script>
-<script src="js/screens-viz-echarts.js?v=20261022-winfont1"></script>
-<script src="js/screens-viz-patient-charts.js?v=20261026-data1"></script>
+<script src="js/screens-viz-echarts.js?v=20261112-viz1"></script>
+<script src="js/screens-viz-patient-charts.js?v=20261112-viz1"></script>
 <script src="js/screens-viz-cohort-charts.js?v=20261022-winfont1"></script>
-<script src="js/screens-viz-cohort-survival.js?v=20261027-nodemo1"></script>
-<script src="js/screens-viz-cohort-view.js?v=20261027-nodemo1"></script>
+<script src="js/screens-viz-cohort-survival.js?v=20261112-viz1"></script>
+<script src="js/screens-viz-cohort-view.js?v=20261112-viz1"></script>
 <script src="js/screens-viz-patient-series.js?v=20261027-nodemo1"></script>
 <script src="js/screens-viz-patient-navigation.js?v=20261027-nodemo1"></script>
-<script src="js/screens-viz-patient-tables.js?v=20261027-nodemo1"></script>
+<script src="js/screens-viz-patient-tables.js?v=20261112-viz1"></script>
 <script src="js/screens-viz-patient-feature-loader.js?v=20261027-nodemo1"></script>
 <script src="js/screens-viz-patient-demo-sources.js?v=20261030-demo-refresh1"></script>
 <script src="js/screens-viz-crossdb-raw.js?v=20260728-feature-scope1"></script>
 <script src="js/screens-viz-crossdb-progress.js?v=20261026-xdbq1"></script>
 <script src="js/screens-viz-crossdb-setup.js?v=20261026-xdbq1"></script>
 <script src="js/screens-viz-crossdb-charts.js?v=20260830-viz-final1"></script>
-<script src="js/screens-viz-crossdb-results.js?v=20261026-dbnames1"></script>
-<script src="js/screens-viz-patient-overview.js?v=20261026-data1"></script>
+<script src="js/screens-viz-crossdb-results.js?v=20261112-viz1"></script>
+<script src="js/screens-viz-patient-overview.js?v=20261112-viz1"></script>
 <script src="js/screens-viz-context.js?v=20261026-src1"></script>
-<script src="js/screens-viz-patient.js?v=20261027-nodemo1"></script>
+<script src="js/screens-viz-patient.js?v=20261112-viz1"></script>
 <script src="js/screens-viz-cohort.js?v=20261027-nodemo1"></script>
 <script src="js/screens-viz.js?v=20261111-s872"></script>
 <script src="js/screens-viz-embedded.js?v=20260823-icd-preview1"></script>
@@ -176,7 +177,8 @@
 <script src="js/screens-skills.js?v=20261030-video1"></script>
 <script src="js/screens-help.js?v=20261027-help3"></script>
 <script src="js/screens-dict-studies.js?v=20261027-dmap1"></script>
-<script src="js/screens-dict.js?v=20261030-video2"></script>
+<script src="js/screens-dict-tables.js?v=20261112-viz1"></script>
+<script src="js/screens-dict.js?v=20261112-viz1"></script>
 <script src="js/screens-icd.js?v=20261027-icd-escape1"></script>
 <script src="js/screens-guided-projects.js?v=20261111-s872"></script>
 <script src="js/screens-guided-panels.js?v=20260829-bilateral-collapse1"></script>

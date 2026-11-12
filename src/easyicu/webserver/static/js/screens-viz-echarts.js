@@ -30,14 +30,13 @@
     return Number(number.toFixed(precision)).toLocaleString('en-US');
   }
 
+  /* The palette owner returns canvas-safe colours (oklch tokens become rgb). */
   function cssColor(name, fallback) {
-    try {
-      const value = getComputedStyle(document.documentElement).getPropertyValue(name).trim();
-      return value || fallback;
-    } catch (_) {
-      return fallback;
-    }
+    const owner = window.EU_PALETTE;
+    if (owner && typeof owner.cssColor === 'function') return owner.cssColor(name, fallback);
+    return fallback;
   }
+
 
   /* Categorical colours and strokes belong to chart-palette.js. This shell
      owns the chrome (ink, hairlines, surface) and re-exports the series list

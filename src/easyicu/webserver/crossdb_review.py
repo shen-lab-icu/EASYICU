@@ -1872,6 +1872,8 @@ def _source_aggregate(
             "file_count": summary.get("file_count"),
             "total_records": summary.get("total_records"),
             "mortality_pct": summary.get("mortality_pct"),
+            # The percentage's denominator: stays whose outcome is recorded.
+            "mortality_known_count": (summary.get("mortality") or {}).get("known_count"),
             "age_mean": (summary.get("age") or {}).get("mean"),
             "age_median": (summary.get("age") or {}).get("median"),
             "female_pct": (summary.get("sex") or {}).get("female_pct"),
@@ -2042,15 +2044,22 @@ def _comparison_rows(
         delta = (
             round(max(numeric) - min(numeric), digits) if len(numeric) >= 2 else None
         )
-        rows.append(
-            {
-                "key": key,
-                "label": label,
-                "values": values,
-                "delta": delta,
-                "comparison": "descriptive_range",
-            }
-        )
+        row: Dict[str, Any] = {
+            "key": key,
+            "label": label,
+            "values": values,
+            "delta": delta,
+            "comparison": "descriptive_range",
+        }
+        if key == "mortality_pct":
+            # A partly recorded outcome must not read as a whole-cohort rate.
+            row["known_counts"] = [
+                (source.get("summary") or {}).get("mortality_known_count") for source in sources
+            ]
+            row["denominators"] = [
+                (source.get("summary") or {}).get("cohort_size") for source in sources
+            ]
+        rows.append(row)
     return rows
 
 

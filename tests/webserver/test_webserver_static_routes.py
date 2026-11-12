@@ -133,7 +133,7 @@ def test_native_shell_language_icon_is_stateful() -> None:
     assert "window.EU_LANG = val;" not in settings_js
     assert "saveSetting('data_mode'" not in i18n_js
     assert "js/i18n.js?v=20261027-nodemo1" in index_html
-    assert "js/api.js?v=20261102-demo2" in index_html
+    assert "js/api.js?v=20261112-viz1" in index_html
 
 
 def test_floating_copilot_launcher_is_removed_but_shell_hooks_survive() -> None:
@@ -290,7 +290,7 @@ def test_native_page_guide_backend_is_retired_from_the_shell_entry() -> None:
     assert "sendCopilotMessage" not in dock_js
     assert "runCopilotAction" not in dock_js
     assert "page-guide dock intentionally is not constructed" in dock_js
-    assert "js/api.js?v=20261102-demo2" in index_html
+    assert "js/api.js?v=20261112-viz1" in index_html
     assert "js/copilot-dock.js?v=20261027-old1" in index_html
 
 
@@ -446,7 +446,7 @@ def test_native_guided_copilot_runs_extraction_inline_and_answers_catalog_questi
     assert "css/guided.css?v=20261027-old1" in index_html
     assert "css/guided-projects.css?v=20261027-proj1" in index_html
     assert "css/guided-idea-plan.css?v=20260827-type-scale1" in index_html
-    assert "js/api.js?v=20261102-demo2" in index_html
+    assert "js/api.js?v=20261112-viz1" in index_html
     assert (
         "js/screens-guided-projects.js?v=20261111-s872" in index_html
     )
@@ -1794,9 +1794,9 @@ def test_native_crossdb_uses_progressive_setup_and_one_chart_results() -> None:
 
     assert "js/screens-viz-crossdb-setup.js?v=20261026-xdbq1" in index_html
     assert "js/screens-viz-crossdb-charts.js?v=20260830-viz-final1" in index_html
-    assert "js/screens-viz-crossdb-results.js?v=20261026-dbnames1" in index_html
+    assert "js/screens-viz-crossdb-results.js?v=20261112-viz1" in index_html
     assert "js/screens-viz.js?v=20261111-s872" in index_html
-    assert "css/crossdb.css?v=20261026-src1" in index_html
+    assert "css/crossdb.css?v=20261112-viz1" in index_html
     for selector in (
         ".crossdb-method-grid",
         ".xdb-result-tabs",
@@ -1887,8 +1887,8 @@ def test_native_patient_time_series_uses_module_grouped_single_feature_charts() 
         assert ".pt-echart" not in _static_css(unrelated_css)
     assert (
         index_html.index("vendor/echarts/echarts.common.min.js?v=6.1.0")
-        < index_html.index("js/screens-viz-echarts.js?v=20261022-winfont1")
-        < index_html.index("js/screens-viz-patient-charts.js?v=20261026-data1")
+        < index_html.index("js/screens-viz-echarts.js?v=20261112-viz1")
+        < index_html.index("js/screens-viz-patient-charts.js?v=20261112-viz1")
         < index_html.index("js/screens-viz-patient-series.js?v=20261027-nodemo1")
     )
     assert ".pt-module-card" in patient_css
@@ -2033,8 +2033,8 @@ def test_native_dictionary_distinguishes_mapping_audit_from_export_coverage(monk
     assert ".cov-badge.derived" in deepdive_css
     assert ".cov-badge.unaudited" in deepdive_css
     assert "data-catalog.js?v=20261028-readm1" in index_html
-    assert "api.js?v=20261102-demo2" in index_html
-    assert "screens-dict.js?v=20261030-video2" in index_html
+    assert "api.js?v=20261112-viz1" in index_html
+    assert "screens-dict.js?v=20261112-viz1" in index_html
     # A listed concept without declared lineage (SOFA-2) reads as no raw-source mapping.
     assert "error.code === 'concept_not_found'" in _static_js("screens-dict.js")
     assert "deepdive.css?v=20261028-unsup1" in index_html
@@ -2329,7 +2329,7 @@ def test_native_guided_local_rail_shows_only_real_local_context() -> None:
         assert foreign not in projects_css
     assert "!important" not in projects_css
     assert ":has(" not in projects_css
-    assert "api.js?v=20261102-demo2" in index_html
+    assert "api.js?v=20261112-viz1" in index_html
     assert "screens-guided-projects.js?v=20261111-s872" in index_html
     assert (
         "screens-guided-idea-provider.js?v=20260627-ideas-feasibility-plan"
@@ -2515,13 +2515,13 @@ def test_native_patient_source_radios_are_real_controls() -> None:
     assert ".patient-flow-card" not in _static_css("cohort.css")
     assert "css/pages.css?v=20261027-old1" in index_html
     assert "css/patient-navigation.css?v=20260710-bounded-pages" in index_html
-    assert "css/patient-tables.css?v=20261026-data1" in index_html
+    assert "css/patient-tables.css?v=20261112-viz1" in index_html
     assert "css/patient.css?v=20261026-data1" in index_html
     assert "css/patient-series.css?v=20261022-legacy1" in index_html
     assert "js/screens-viz-demo.js?v=20261027-nodemo2" in index_html
     assert "js/screens-viz-demo-drilldown.js" not in index_html
     assert "js/screens-viz-patient-features.js?v=20261022-zhlabels1" in index_html
-    assert "js/screens-viz-patient-charts.js?v=20261026-data1" in index_html
+    assert "js/screens-viz-patient-charts.js?v=20261112-viz1" in index_html
     assert "js/screens-viz-patient-series.js?v=20261027-nodemo1" in index_html
     assert (
         "js/screens-viz-patient-demo-sources.js?v=20261030-demo-refresh1"
@@ -2532,9 +2532,9 @@ def test_native_patient_source_radios_are_real_controls() -> None:
         "js/screens-viz-patient-navigation.js?v=20261027-nodemo1"
         in index_html
     )
-    assert "js/screens-viz-patient-tables.js?v=20261027-nodemo1" in index_html
-    assert "js/screens-viz-patient-overview.js?v=20261026-data1" in index_html
-    assert "js/screens-viz-patient.js?v=20261027-nodemo1" in index_html
+    assert "js/screens-viz-patient-tables.js?v=20261112-viz1" in index_html
+    assert "js/screens-viz-patient-overview.js?v=20261112-viz1" in index_html
+    assert "js/screens-viz-patient.js?v=20261112-viz1" in index_html
     assert index_html.index("js/screens-viz-patient-navigation.js?") < index_html.index(
         "js/screens-viz.js?"
     )
@@ -2739,7 +2739,7 @@ def test_native_cohort_comparison_radios_are_stateful_controls() -> None:
     redesign_css = _static_css("redesign.css")
     index_html = _static_html("index.html")
 
-    assert "css/cohort.css?v=20261026-data1" in index_html
+    assert "css/cohort.css?v=20261112-viz1" in index_html
     assert "js/screens-viz.js?v=20261111-s872" in index_html
     assert "view: 'idle'," in cohort_js
     assert "featureScope: 'recommended'," in cohort_js
@@ -3115,8 +3115,8 @@ def test_review_routes_share_echarts_theme_without_cross_route_owner_leaks() -> 
     crossdb_css = _static_css("crossdb.css")
 
     vendor = index_html.index("vendor/echarts/echarts.common.min.js?v=6.1.0")
-    shared = index_html.index("js/screens-viz-echarts.js?v=20261022-winfont1")
-    patient = index_html.index("js/screens-viz-patient-charts.js?v=20261026-data1")
+    shared = index_html.index("js/screens-viz-echarts.js?v=20261112-viz1")
+    patient = index_html.index("js/screens-viz-patient-charts.js?v=20261112-viz1")
     cohort = index_html.index("js/screens-viz-cohort-charts.js?v=20261022-winfont1")
     crossdb = index_html.index("js/screens-viz-crossdb-charts.js?v=20260830-viz-final1")
     assert vendor < shared < patient < cohort < crossdb

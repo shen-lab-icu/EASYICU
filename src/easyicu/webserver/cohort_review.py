@@ -1675,6 +1675,9 @@ def _module_label(module: str, lang: str = "en") -> str:
 
 
 def _feature_label(column: str) -> str:
+    named = review_labels.concept_label(column)
+    if named:
+        return named
     return (
         column.replace("_", " ").upper()
         if len(column) <= 4
@@ -1976,6 +1979,10 @@ def _selected_feature_rows(
                     "module": module,
                     "column": feature.get("column"),
                     "kind": "numeric",
+                    # The catalog unit, unless the name already says it ("… Ratio").
+                    "unit": (lambda unit: unit if unit and unit.lower() not in label.lower() else None)(
+                        review_labels.concept_unit(str(feature.get("column") or ""))
+                    ),
                     "values": medians[id(mapping)]
                     if medians is not None
                     else [_median_for(members, mapping) for members in member_sets],

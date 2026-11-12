@@ -159,3 +159,18 @@ def test_feature_scan_calls_cancel_checkpoint_between_batches(tmp_path, monkeypa
 
     with pytest.raises(c._CrossdbSummaryAbandoned):
         c._read_feature_columns(p, ["x"], checkpoint=check)
+
+
+def test_a_partly_recorded_mortality_carries_its_known_denominator() -> None:
+    """An export whose death column records only deaths read as 100% mortality."""
+    from easyicu.webserver import crossdb_review
+
+    sources = [
+        {"summary": {"cohort_size": 140, "mortality_pct": 100.0, "mortality_known_count": 15}},
+        {"summary": {"cohort_size": 2520, "mortality_pct": 8.4, "mortality_known_count": 2520}},
+    ]
+    rows = crossdb_review._comparison_rows(sources, {"comparable_metrics": ["mortality_pct"]})
+    mortality = next(row for row in rows if row["key"] == "mortality_pct")
+    assert mortality["values"] == [100.0, 8.4]
+    assert mortality["known_counts"] == [15, 2520]
+    assert mortality["denominators"] == [140, 2520]

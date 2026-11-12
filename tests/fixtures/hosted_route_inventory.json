@@ -454,6 +454,15 @@
     "write_owner": "Read-only handler or in-memory response; no filesystem destination."
   },
   {
+    "method": "GET",
+    "route": "/api/catalog/source-map/{database}",
+    "fields": [],
+    "reaches": "fixed packaged or instance resources; request names are metadata/catalog keys only",
+    "protection": "no path inputs",
+    "writes": "none",
+    "write_owner": "Read-only handler or in-memory response; no filesystem destination."
+  },
+  {
     "method": "POST",
     "route": "/api/cohort-review/summary",
     "fields": [

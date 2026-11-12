@@ -286,6 +286,9 @@ button.chip{ appearance:none; cursor:pointer; line-height:1; }
 
 /* ---------- Stat tiles ---------- */
 .stat-grid{ display: grid; grid-template-columns: repeat(auto-fit, minmax(180px, 1fr)); gap: 12px; }
+/* Six tiles: one row when wide, two even rows otherwise — never five plus an orphan. */
+.stat-grid:has(> :nth-child(6):last-child){ grid-template-columns: repeat(3, minmax(0, 1fr)); }
+@media (min-width: 1440px){ .stat-grid:has(> :nth-child(6):last-child){ grid-template-columns: repeat(6, minmax(0, 1fr)); } }
 .stat{
   background: var(--surface);
   border: 1px solid var(--hair);

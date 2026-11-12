@@ -72,15 +72,13 @@
       : (numbers[middle - 1] + numbers[middle]) / 2;
   }
 
+  /* The palette owner returns canvas-safe colours (oklch tokens become rgb). */
   function cssColor(name, fallback) {
-    try {
-      const root = document.documentElement;
-      const value = getComputedStyle(root).getPropertyValue(name).trim();
-      return value || fallback;
-    } catch (_) {
-      return fallback;
-    }
+    const owner = window.EU_PALETTE;
+    if (owner && typeof owner.cssColor === 'function') return owner.cssColor(name, fallback);
+    return fallback;
   }
+
 
   function palette() {
     const core = chartCore();
@@ -296,6 +294,8 @@
       yAxis: {
         type: 'value',
         scale: true,
+        // Scores and counts take whole values; never tick them at 0.2.
+        ...(values.every(Number.isInteger) ? { minInterval: 1 } : {}),
         axisLine: { show: false },
         axisTick: { show: false },
         axisLabel: {
@@ -395,6 +395,7 @@
       yAxis: {
         type: 'value',
         scale: true,
+        ...((Array.isArray(spec.traces) ? spec.traces : []).every(trace => (trace.values || []).map(finite).every(value => value == null || Number.isInteger(value))) ? { minInterval: 1 } : {}),
         name: unit,
         nameTextStyle: { color: colors.muted, fontSize: 12 },
         axisLine: { show: false },

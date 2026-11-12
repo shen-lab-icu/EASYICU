@@ -163,7 +163,7 @@
           ${rows.map(row => {
             const share = row.rows / total * 100;
             const width = row.rows / largest * 100;
-            return `<button type="button" class="${row.module === activeModule ? 'is-active' : ''}" aria-pressed="${row.module === activeModule ? 'true' : 'false'}" data-pt-pareto-module="${row.module.replace(/"/g, '&quot;')}"><span class="pt-pareto-name" title="${row.module.replace(/"/g, '&quot;')}">${row.name.replace(/[&<>"]/g, ch => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' })[ch])}</span><span class="pt-pareto-track"><i style="width:${Math.max(0.5, width).toFixed(1)}%"></i></span><b>${numberLabel(row.rows)}</b><em>${share < 0.1 && share > 0 ? '<0.1' : share.toFixed(1)}%</em></button>`;
+            return `<button type="button" class="${row.module === activeModule ? 'is-active' : ''}" aria-pressed="${row.module === activeModule ? 'true' : 'false'}" data-pt-pareto-module="${row.module.replace(/"/g, '&quot;')}"><span class="pt-pareto-name" title="${row.name.replace(/[&"]/g, ch => (ch === '&' ? '&amp;' : '&quot;'))}">${row.name.replace(/[&<>"]/g, ch => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' })[ch])}</span><span class="pt-pareto-track"><i style="width:${Math.max(0.5, width).toFixed(1)}%"></i></span><b>${numberLabel(row.rows)}</b><em>${share < 0.1 && share > 0 ? '<0.1' : share.toFixed(1)}%</em></button>`;
           }).join('')}
         </div>
       </div>`;
