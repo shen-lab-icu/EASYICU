@@ -7,6 +7,17 @@ answers is in brackets.
 lead-r13 (0.1.0) is validated on SICdb 1.0.8, the default release, and
 remains compatible with SICdb 1.0.6 (the release is detected from the schema).
 
+## 2026-11-12 — twelfth dictionary reseal for the v0.1.0 re-release [S732]
+
+**What changed.** Values do not move. The dictionary bytes that earlier commits
+changed while "pending the user's reseal" (exact SI factors `c747d1900`, SICdb
+1.0.8 RASS and O2 flow `ec2f10a6f`, the S740 `weight_admit_strict*` concepts)
+are now the sealed identity: `concept-dict.LOCK.json` records concept-dict
+`cba28bf1…` (317 concepts) and data-sources `534288ee…`, and the AUDIT12
+research profiles (SICdb overlay v14) pin them. The AUDIT11 generation stays
+registered as history. Before this, every research launch on 0.1.0 was refused
+with `research_pipeline_profile_dictionary_mismatch`.
+
 ## 2026-11-06 — sharing one resolver across threads needs `copy_context` [lead-r13, B-STAY-SCOPE `0feee4fed`, B18-REENTRY-DEADLOCK `723edab14`, resolver pool `3802ddf70`, delta27s, delta35t, delta38t]
 
 **What changed.** Values do not move. A `ConceptResolver` runs one top-level

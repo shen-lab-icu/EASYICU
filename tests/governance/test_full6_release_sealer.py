@@ -794,7 +794,8 @@ def test_release_gate_rejects_clinical_contract_registry_drift(
 
 def test_harmonized_minimum_includes_aumc_rrt_interval_fix() -> None:
     assert sealer.MINIMUM_HARMONIZED_EASYICU_COMMIT == (
-        "187c6123ea59b4d904a2594d755de4186dc249b5"
+        # 187c6123ea59 before the 2026-11-12 history rewrite.
+        "4c68253f26dfd10953598ff069ece1b8017564d8"
     )
     assert (
         "aumc_rrt_derived_from_processitem_treatment_intervals"
@@ -827,7 +828,8 @@ def test_harmonized_ancestry_rejects_old_and_unknown_runtime_commits() -> None:
     sealer._validate_harmonized_commit_ancestry(commits)
 
     commits = {
-        database: "ebb802598c8c6d2ae55715dde1699075260f9429"
+        # ebb802598c8c before the 2026-11-12 history rewrite.
+        database: "5b80b36c2ee538893b4c1598b247bb10660b7c99"
         for database in sealer.DATABASES
     }
     with pytest.raises(sealer.ReleaseValidationError, match="predates required"):
@@ -846,7 +848,7 @@ def test_harmonized_gate_requires_one_identical_six_database_commit() -> None:
         database: sealer.MINIMUM_HARMONIZED_EASYICU_COMMIT
         for database in sealer.DATABASES
     }
-    commits["sic"] = "ebb802598c8c6d2ae55715dde1699075260f9429"
+    commits["sic"] = "5b80b36c2ee538893b4c1598b247bb10660b7c99"  # ebb802598c8c before the rewrite
     with pytest.raises(sealer.ReleaseValidationError, match="one identical clean"):
         sealer._validate_harmonized_commit_ancestry(commits)
 

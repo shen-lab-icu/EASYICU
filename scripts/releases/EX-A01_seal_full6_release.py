@@ -52,7 +52,9 @@ NATIVE_SCHEMA_VERSION = "easyicu_native_export_v2"
 CONTRACT_REVISION = "native_v2_clinical_contract_provenance_20260812"
 RELEASE_SCHEMA_VERSION = "easyicu_full6_release_v3"
 RELEASE_GATE_CONTRACT = "easyicu_harmonized_semantics_release_gate_v4"
-MINIMUM_HARMONIZED_EASYICU_COMMIT = "187c6123ea59b4d904a2594d755de4186dc249b5"
+# The same commit as 187c6123ea59 before the 2026-11-12 history rewrite; the
+# ancestry check resolves it in the published history.
+MINIMUM_HARMONIZED_EASYICU_COMMIT = "4c68253f26dfd10953598ff069ece1b8017564d8"
 REQUIRED_HARMONIZED_CORRECTIONS = (
     "aumc_relative_time_bucketed_before_admission_alignment",
     "eicu_susp_inf_uses_antibiotic_event_time",

@@ -18,7 +18,8 @@ import pytest
 import scripts.build_itemid_bucket_cache as builder
 from easyicu.storage_layout import MANIFEST, ORDINAL
 
-SEAL_SHA = "70e5ad2c99ab8a8cc030bfe31063234d98599bd4"
+# 70e5ad2c99ab before the 2026-11-12 history rewrite.
+SEAL_SHA = "27018fea1e8988aa98a85ef71a11e040f22f5808"
 
 
 def _source(root, shape="many"):

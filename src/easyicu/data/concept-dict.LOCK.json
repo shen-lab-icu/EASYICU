@@ -2,9 +2,9 @@
   "finalized": true,
   "finalized_note": "2026-09-21 v6 数据基础已完成重建与质控：六库受影响模块均从原始数据刷新，全部 114 个 native-v2 模块由同一 clean runtime 97f508c6 重新发布。MIMIC-III/IV 住院死亡状态逐 stay 与原始 admissions 完全一致，death_time 的缺失性逐行一致，非缺失值仅有 float32 写出误差（最大分别 0.000115/0.000228 小时）。其余字典、临床合同、数据源与运行时修复均由候选包 provenance 和封存门禁绑定。",
   "locked_for_extraction_run": "full6_native_v6_clean_rebuild_97f508c6_20260921",
-  "concept_dict_sha256": "53e00e365c1912504c0b049bfea3de13f5a4c20daf9f626742a99045d17c051f",
+  "concept_dict_sha256": "cba28bf1bce980395a7db43b8280fa7e71385072bdfa74181b3304aa6eca06c4",
   "sofa2_dict_sha256": "a3f64f28dbf704a6d4822376a6778620eff455f1e703ee9081e51c85a750b118",
-  "total_concepts": 308,
+  "total_concepts": 317,
   "new_this_round": [],
   "pending_foundation_changes": [],
   "previous_published_lock": {
@@ -95,7 +95,7 @@
   },
   "clinical_contracts_sha256": "9b2cb43b86a3763b32be9ab010308177d3f8b1c03da0318fd88a7af946533647",
   "clinical_contract_validator_sha256": "b17da6b29d089d17a99c4107199a8597952bdf102a0477bde44b533676be469e",
-  "data_sources_sha256": "28f838b0ccf848cc71a7024df2cffd1394fc0f6e1c4c3d68e18d302f87fc0378",
+  "data_sources_sha256": "534288eecb0487aeef9fcedfc4b82ea3dc7e9117c6b29cda91fb49f6991a6a32",
   "finalized_foundation_changes": [
     {
       "git_commit": "6fd51234447ddd9fafafc0d34dc7f762c2a529e2",
@@ -168,6 +168,10 @@
     {
       "git_commit": "f4e4a848a13658b5c6063b0f5785f8e83b765099",
       "change": "User-requested 2026-11-05 eleventh reseal of concept-dict.json and sofa2-dict.json under the round-5 consent (auditor round 7 on 91858ef31): MIMIC-III CareVue 582 RRT starts/stops replayed as treatment courses; MIIV prescriptions need a positive dose or given status on a valid half-open interval; CareVue vasopressin/phenylephrine stops close support; AUMC pH 7.4 corrected ionized calcium published as cai_ph74; _comment on dex (eICU D50 pushes have no execution record) and on mech_vent/vent_ind (source clocks, MIT-LCP end rule, R5 half-open overlap)."
+    },
+    {
+      "git_commit": "10f0912339e0ae127d9b890be275ce5d7443265f",
+      "change": "User-approved 20261112-audit12 reseal: v0.1.0 re-release: bind the installed dictionaries so research launches pass the strict dictionary gate (S732) Consent: 同意重新封存并重新发布"
     }
   ]
 }

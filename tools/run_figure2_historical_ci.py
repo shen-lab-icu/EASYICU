@@ -20,8 +20,9 @@ import tarfile
 import tempfile
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
-HISTORY_COMMIT = "dbbdae6a54893f0efad0466d1aac85b00e2ef6d1"
-HISTORY_TREE = "8d751c8ae88f9dd3674e963a62388124403d677d"
+# dbbdae6a5489 (tree 8d751c8ae88f) before the 2026-11-12 history rewrite.
+HISTORY_COMMIT = "cde6fe4e820564c99275f82d1519cdef7eed6bff"
+HISTORY_TREE = "b02d4b6a5766e3cd99d282a13dc6edf6e030242f"
 HISTORY_SCORER = "8d146e10dfa02f43af1540dd4a018df5e6b6bf05838e1f55db30806884593911"
 HISTORY_TESTS = "tests/benchmarks/figure2_canonical9/evaluator"
 
