@@ -4097,6 +4097,10 @@ def load_bucketed_table_aggregated(
         time_round_expr = (
             f'FLOOR((o."Offset" - c.ICUOffset) / {_interval_seconds})'
         )
+        if _interval_seconds != 3600.0:
+            # charttime is ICU-relative hours: scale the bucket index by the
+            # bucket length. The hourly SQL is left byte-identical.
+            time_round_expr = f"({time_round_expr} * {_interval_seconds / 3600.0!r})"
         output_time_expr = f"{time_round_expr} as charttime"
         receipt_select = source_time_select('(o."Offset" - c.ICUOffset) / 3600.0', time_round_expr)
 

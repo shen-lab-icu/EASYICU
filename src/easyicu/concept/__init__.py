@@ -598,6 +598,13 @@ from .errors import (  # noqa: F401
 )
 from .relative_time import coerce_mixed_time_column
 from .aggregation_route import duckdb_aggregation_enabled, note_duckdb_route
+from .minute_resolution import (
+    SICDB_MINUTE_COLUMNS,
+    SICDB_RECEIPT_ATTR,
+    expand_sicdb_minute_rows,
+    minute_resolution_requested,
+    sicdb_minute_rows_apply,
+)
 
 
 
@@ -2216,6 +2223,10 @@ class ConceptResolver:
                 # batch read is a failure, not a cue to re-read per concept.
                 and str(getattr(data_source.config, "name", "")).replace("_demo", "")
                 in {"miiv", "mimic", "nwicu", "hirid", "aumc", "sic", "eicu"}
+                # SICdb minute rows come from rawdata, read per concept.
+                and not sicdb_minute_rows_apply(
+                    getattr(data_source.config, "name", ""), shared_table, kwargs, interval,
+                )
             ):
                 try:
                     from ..datasource import load_bucketed_table_multi_aggregated
@@ -3357,6 +3368,8 @@ class ConceptResolver:
             cached_required = source.params.get("extra_vars", [])
             cached_required = [cached_required] if isinstance(cached_required, str) else list(cached_required)
             cached_required = {column for column in [source.value_var, source.dur_var, *cached_required] if column}
+            if sicdb_minute_rows_apply(getattr(getattr(data_source, 'config', None), 'name', ''), source.table, kwargs, interval):
+                cached_required |= set(SICDB_MINUTE_COLUMNS)
             if cached_table is not None and not cached_required.issubset(cached_table.data.columns):
                 cached_table = None
             if cached_table is not None:
@@ -3480,6 +3493,9 @@ class ConceptResolver:
                     # 支持所有数据库（AUMC/HiRID/MIIV/MIMIC/SIC/eICU），只要表有分桶目录
                     # 性能提升：MIIV 6 vitals 50 patients 从 545s → ~10s
                     db_name = data_source.config.name if hasattr(data_source, 'config') and hasattr(data_source.config, 'name') else ''
+                    _sicdb_minutes = sicdb_minute_rows_apply(db_name, source.table, kwargs, interval)
+                    if _sicdb_minutes:
+                        extra_columns = list(dict.fromkeys([*extra_columns, *SICDB_MINUTE_COLUMNS]))
                     use_duckdb_aggregation = False
                     _convert_unit_callback_for_duckdb = False
                     _convert_unit_factor = None
@@ -3595,6 +3611,10 @@ class ConceptResolver:
                         if signed_sum_bounds and interval is None:
                             # Preserve native timestamps when no grid is requested.
                             _can_inline_callback = False
+                        if _sicdb_minutes:
+                            # The minute values are in rawdata, which the SQL
+                            # aggregation does not read.
+                            _can_inline_callback = False
                         # id_tbl concepts always take the raw path. The former DuckDB fast path
                         # (directory/bucketed tables only) read the string ``value`` column instead
                         # of the table's val_var and took MEDIAN before the concept bounds, so a
@@ -3665,8 +3685,13 @@ class ConceptResolver:
                             table_cfg = data_source.config.get_table(source.table)
                             value_col = table_cfg.defaults.val_var or 'value'
                         
+                        # The hourly exports aggregate here at one hour even
+                        # for a concept-declared one-minute grid (sealed
+                        # output); only the explicit minute opt-in uses the
+                        # requested grid (owner: concept/minute_resolution.py).
+                        _minute_grid = minute_resolution_requested(kwargs, interval)
                         duckdb_interval = (
-                            interval if signed_sum_bounds
+                            pd.to_timedelta(interval) if signed_sum_bounds or _minute_grid
                             else kwargs.get('interval', pd.Timedelta(hours=1))
                         )
                         if not signed_sum_bounds:
@@ -4205,6 +4230,21 @@ class ConceptResolver:
                         
                         frame = table.data.copy()
                     
+                    if _sicdb_minutes and 'rawdata' in frame.columns:
+                        frame = expand_sicdb_minute_rows(
+                            frame,
+                            value_column=getattr(source, 'value_var', None) or 'Val',
+                            time_column=getattr(source, 'index_var', None) or table.index_column or 'Offset',
+                        )
+                        logger.info("SICdb minute rows %s: %s", concept_name, frame.attrs.get(SICDB_RECEIPT_ATTR))
+                        table = ICUTable(
+                            data=frame,
+                            id_columns=table.id_columns,
+                            index_column=table.index_column,
+                            value_column=table.value_column,
+                            unit_column=table.unit_column,
+                        )
+
                     # 🔍 DEBUG: 检查 datasource 返回的数据（只在调试模式下显示）
                     if DEBUG_MODE and source.table in ['labevents', 'microbiologyevents', 'inputevents']:
                         has_stay_id = 'stay_id' in frame.columns

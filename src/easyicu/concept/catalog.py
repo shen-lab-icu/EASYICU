@@ -684,6 +684,11 @@ BOUNDS_AUDIT_CONCEPTS = tuple(
 # the unchanged ``weight``. Exported only by the opt-in ``weight_strict`` module.
 WEIGHT_STRICT_CONCEPTS = ('weight_admit_strict', 'weight_admit_strict_source', 'weight_admit_strict_time_h')
 
+# S853/S863 (2026-11-12): public signals at a one-minute grid, exported only by
+# the opt-in ``subhour_signals`` module (owner: concept/minute_resolution.py).
+# The hourly modules that also carry these concepts are unchanged.
+SUBHOUR_SIGNAL_CONCEPTS = ('map_invasive', 'cvp', 'peep_set')
+
 HIDDEN_DICTIONARY_CONCEPTS = {
     # R5C-HIRID-013: native U/L CK-MB remains explicitly loadable, but its
     # unresolved assay identity cannot enter the cross-source mass catalog.

@@ -28,7 +28,17 @@ from ..source_bounds import (
     public_bounds,
     strip_private_ledgers,
 )
-from ..concept.catalog import BOUNDS_AUDIT_CONCEPTS, CONCEPT_GROUPS_INTERNAL, WEIGHT_STRICT_CONCEPTS
+from ..concept.catalog import (
+    BOUNDS_AUDIT_CONCEPTS,
+    CONCEPT_GROUPS_INTERNAL,
+    SUBHOUR_SIGNAL_CONCEPTS,
+    WEIGHT_STRICT_CONCEPTS,
+)
+from ..concept.minute_resolution import (
+    MINUTE_RESOLUTION_KWARG,
+    SUBHOUR_MODULE_INTERVALS,
+    resolution_summary,
+)
 from ..concept.merge_time_index import merge_fill_scope
 from ..config import DATABASE_ID_CONFIG
 from ..resources import load_dictionary
@@ -129,6 +139,9 @@ EXTRACT_MODULES["sic_case_landmark"] = [
 EXTRACT_MODULES["bounds_audit"] = list(BOUNDS_AUDIT_CONCEPTS)
 # S740: leakage-free stay weight fields, exported only when explicitly requested.
 EXTRACT_MODULES["weight_strict"] = list(WEIGHT_STRICT_CONCEPTS)
+# S853: map_invasive/cvp/peep_set at a one-minute grid (SICdb from rawdata),
+# exported only when explicitly requested.
+EXTRACT_MODULES["subhour_signals"] = list(SUBHOUR_SIGNAL_CONCEPTS)
 
 # Production cohort boundary used only to admit a calibrated one-shot fast
 # path on sufficiently large-memory hosts.  Crossing it always uses streaming.
@@ -3928,6 +3941,10 @@ def _run_module_extraction(
     )
     if patient_ids_filter:
         kwargs["patient_ids"] = patient_ids_filter
+    if module_name in SUBHOUR_MODULE_INTERVALS:
+        # Explicit minute opt-in: the hourly modules never set it.
+        kwargs["interval"] = SUBHOUR_MODULE_INTERVALS[module_name]
+        kwargs[MINUTE_RESOLUTION_KWARG] = True
 
     # ── 一个模块一次 load、合并成一个宽表、写一个 {module}.parquet（不重复 io）──
     # load_concepts 一次拿到该模块**所有概念**（chartevents/labevents 等共享源表只扫
@@ -8379,6 +8396,17 @@ def _publish_native_export_v2(
                 "column_metadata_columns": list(binding.columns),
             }
         )
+        if module in SUBHOUR_MODULE_INTERVALS:
+            # Resolution evidence for a sub-hour gate: per-signal gaps in
+            # minutes, aggregates only (owner: concept/minute_resolution.py).
+            files[-1]["time_resolution"] = {
+                "interval_minutes": SUBHOUR_MODULE_INTERVALS[module].total_seconds() / 60.0,
+                "signals": resolution_summary(
+                    temporary_parquet,
+                    id_column=row_grain_audit["primary_key"][0],
+                    concepts=requested_concept_plan[module],
+                ),
+            }
         # Prevent the previous fallback frame from overlapping the next
         # ``read_parquet`` RHS. Return unused Arrow pages as well so a 19-file
         # package does not appear cumulatively resident to the OS.
