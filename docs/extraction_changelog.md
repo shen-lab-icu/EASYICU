@@ -7,6 +7,30 @@ answers is in brackets.
 lead-r13 (0.1.0) is validated on SICdb 1.0.8, the default release, and
 remains compatible with SICdb 1.0.6 (the release is detected from the schema).
 
+## Unreleased (0.1.1, pending the user's dictionary reseal) — urine sodium and creatinine for AUMCdb and SICdb, FENa and FEUrea [S907]
+
+**What changed.** `renal_urine_chem` gains values; no other module moves.
+
+- `urine_na` adds AUMCdb `numericitems` 7848 and 10269 (urine sodium,
+  mmol/l, unit gated per row).
+- `urine_crea` adds AUMCdb 10279 (mmol/l, converted at 113.12 g/mol: 1 mmol/L
+  = 11.312 mg/dL) and SICdb laboratory 370 (spot urine, mg/dl, unchanged).
+  SICdb's reference LOINC for 370 names a 24-hour excretion rate. The spot-urine
+  name, the mg/dl unit and the value distribution contradict it, so they decide.
+- New derived concepts `fena` and `feurea` (owner
+  `concept/fractional_excretion.py`) compute 100 · (U_x · P_cr) / (P_x · U_cr):
+  - The urine solute and urine creatinine come from the same hour.
+  - Plasma `na`/`bun` and `crea` are the latest values in the same or an
+    earlier hour, at most 24 h old.
+  - Nothing is imputed.
+  - Bounds are 0–100 %, inclusive.
+- In SICdb the module now publishes timed urine-creatinine rows plus the
+  untimed id-level `sic_precondition_renal_dysfunction` rows. The two grains are
+  loaded separately because one merge axis cannot hold both.
+- AUMCdb rows publish their hourly time as `charttime`.
+
+`concept-dict.json` changed, so this needs the user's reseal before it can land.
+
 ## 2026-11-12 — twelfth dictionary reseal for the v0.1.0 re-release [S732]
 
 **What changed.** Values do not move. The dictionary bytes that earlier commits

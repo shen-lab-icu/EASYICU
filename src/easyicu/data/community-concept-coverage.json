@@ -1,5 +1,5 @@
 {
-  "concept_count": 336,
+  "concept_count": 338,
   "concepts": {
     "abx": {
       "category": "medications",
@@ -2722,6 +2722,69 @@
       },
       "description": "invasive airway (endotracheal tube or tracheostomy)"
     },
+    "fena": {
+      "category": "renal",
+      "databases": {
+        "jinhua": {
+          "dependencies": [
+            "urine_na",
+            "urine_crea",
+            "na",
+            "crea"
+          ],
+          "missing_dependencies": [
+            "urine_na",
+            "urine_crea"
+          ],
+          "reason": "some declared dependencies are available; full definition is not",
+          "status": "partial"
+        },
+        "nwicu": {
+          "dependencies": [
+            "urine_na",
+            "urine_crea",
+            "na",
+            "crea"
+          ],
+          "missing_dependencies": [
+            "urine_na",
+            "urine_crea"
+          ],
+          "reason": "some declared dependencies are available; full definition is not",
+          "status": "partial"
+        },
+        "zhejiang_eicu": {
+          "dependencies": [
+            "urine_na",
+            "urine_crea",
+            "na",
+            "crea"
+          ],
+          "missing_dependencies": [
+            "urine_na",
+            "urine_crea",
+            "na"
+          ],
+          "reason": "some declared dependencies are available; full definition is not",
+          "status": "partial"
+        },
+        "zigong": {
+          "dependencies": [
+            "urine_na",
+            "urine_crea",
+            "na",
+            "crea"
+          ],
+          "missing_dependencies": [
+            "urine_na",
+            "urine_crea"
+          ],
+          "reason": "some declared dependencies are available; full definition is not",
+          "status": "partial"
+        }
+      },
+      "description": "fractional excretion of sodium (FENa)"
+    },
     "fentanyl": {
       "category": "medications",
       "databases": {
@@ -2793,6 +2856,68 @@
         }
       },
       "description": "ferritin (blood)"
+    },
+    "feurea": {
+      "category": "renal",
+      "databases": {
+        "jinhua": {
+          "dependencies": [
+            "urine_urea",
+            "urine_crea",
+            "bun",
+            "crea"
+          ],
+          "missing_dependencies": [
+            "urine_urea",
+            "urine_crea"
+          ],
+          "reason": "some declared dependencies are available; full definition is not",
+          "status": "partial"
+        },
+        "nwicu": {
+          "dependencies": [
+            "urine_urea",
+            "urine_crea",
+            "bun",
+            "crea"
+          ],
+          "missing_dependencies": [
+            "urine_urea",
+            "urine_crea"
+          ],
+          "reason": "some declared dependencies are available; full definition is not",
+          "status": "partial"
+        },
+        "zhejiang_eicu": {
+          "dependencies": [
+            "urine_urea",
+            "urine_crea",
+            "bun",
+            "crea"
+          ],
+          "missing_dependencies": [
+            "urine_urea",
+            "urine_crea"
+          ],
+          "reason": "some declared dependencies are available; full definition is not",
+          "status": "partial"
+        },
+        "zigong": {
+          "dependencies": [
+            "urine_urea",
+            "urine_crea",
+            "bun",
+            "crea"
+          ],
+          "missing_dependencies": [
+            "urine_urea",
+            "urine_crea"
+          ],
+          "reason": "some declared dependencies are available; full definition is not",
+          "status": "partial"
+        }
+      },
+      "description": "fractional excretion of urea (FEUrea)"
     },
     "ffp": {
       "category": "medications",
@@ -10688,25 +10813,25 @@
     "jinhua": {
       "derived": 19,
       "direct": 135,
-      "partial": 32,
+      "partial": 34,
       "unavailable": 150
     },
     "nwicu": {
       "derived": 19,
       "direct": 137,
-      "partial": 35,
+      "partial": 37,
       "unavailable": 145
     },
     "zhejiang_eicu": {
       "derived": 39,
       "direct": 128,
-      "partial": 23,
+      "partial": 25,
       "unavailable": 146
     },
     "zigong": {
       "derived": 27,
       "direct": 125,
-      "partial": 39,
+      "partial": 41,
       "unavailable": 145
     }
   },

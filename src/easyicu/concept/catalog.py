@@ -290,6 +290,8 @@ CONCEPT_DICTIONARY = {
     'urine_crea': ('Urine Creatinine', '尿肌酐', 'mg/dL'),
     'urine_osm': ('Urine Osmolality', '尿渗透压', 'mOsm/kg'),
     'urine_urea': ('Urine Urea Nitrogen', '尿尿素氮', 'mg/dL'),
+    'fena': ('Fractional Excretion of Sodium', '钠排泄分数', '%'),
+    'feurea': ('Fractional Excretion of Urea', '尿素排泄分数', '%'),
     'sic_precondition_renal_dysfunction': ('SICdb Pre-existing Renal Dysfunction', 'SICdb既往肾功能障碍', 'boolean'),
     'rrt': ('Renal Replacement Therapy', '肾脏替代治疗', 'boolean'),
     'rrt_criteria': ('RRT Criteria Met', '满足RRT标准', 'boolean'),
@@ -505,6 +507,8 @@ CONCEPT_DESCRIPTIONS = {
     'urine_crea': ('Urine creatinine concentration, separate from serum creatinine', '尿肌酐浓度，与血清肌酐分开'),
     'urine_osm': ('Urine osmolality in mOsm/kg; eICU mOsm/L is not pooled', '尿渗透压（mOsm/kg）；不混合eICU的mOsm/L记录'),
     'urine_urea': ('Urine urea nitrogen concentration in mg/dL of nitrogen, not whole urea', '尿尿素氮浓度（mg/dL氮），不按全尿素质量计算'),
+    'fena': ('FENa from a spot urine pair and the latest plasma sodium and creatinine within 24 h', '同一次尿样的尿钠/尿肌酐与24小时内最近的血钠、血肌酐计算'),
+    'feurea': ('FEUrea from a spot urine pair and the latest BUN and plasma creatinine within 24 h', '同一次尿样的尿尿素氮/尿肌酐与24小时内最近的血尿素氮、血肌酐计算'),
     'sic_precondition_renal_dysfunction': ('SICdb Yes/No renal precondition; unknown stays missing; distinct from hospital ICD comorbidity flags', 'SICdb既往肾功能障碍Yes/No标志；未知保留缺失，与住院ICD合并症标志分开'),
     'crea': ('Serum creatinine - kidney function marker, key for SOFA renal scoring', '血清肌酐 - 肾功能标志物，SOFA肾脏评分关键指标'),
     'bili': ('Total bilirubin - liver function marker, key for SOFA liver scoring', '总胆红素 - 肝功能标志物，SOFA肝脏评分关键指标'),
@@ -662,7 +666,7 @@ CONCEPT_GROUPS_INTERNAL = {
               'fluid_balance', 'fluid_balance_cumulative', 'total_input_ml',
               # 衍生肾功能指数 (Tier 1, 2026-06-22)
               'bun_creatinine_ratio', 'egfr'],
-    'renal_urine_chem': ['urine_na', 'urine_crea', 'urine_osm', 'urine_urea',
+    'renal_urine_chem': ['urine_na', 'urine_crea', 'urine_osm', 'urine_urea', 'fena', 'feurea',
                          'sic_precondition_renal_dysfunction'],
     'neurological': ['avpu', 'egcs', 'gcs', 'mgcs', 'rass', 'tgcs', 'vgcs', 'sedated_gcs', 'motor_response', 'delirium_positive', 'delirium_tx_proxy', 'delirium_tx_evidence', 'delirium_tx', 'icp'],
     'circulatory': ['mech_circ_support', 'circ_failure', 'circ_event', 'pap_sys', 'pap_dia', 'pap_mean', 'co', 'svo2', 'scvo2', 'pawp'],  # 🔧 添加循环衰竭特征 + 肺动脉压/心输出量 + 静脉血氧/楔压 (2026-07-04)
@@ -853,7 +857,7 @@ CLINICAL_LANES = {
 
 # 跨库概念可用性（用于 harmonization badge）
 CONCEPT_DB_COVERAGE = {
-    'urine_na': 3, 'urine_crea': 3, 'urine_osm': 2, 'urine_urea': 2,
+    'urine_na': 4, 'urine_crea': 5, 'urine_osm': 2, 'urine_urea': 2, 'fena': 4, 'feurea': 2,
     'sic_precondition_renal_dysfunction': 1,
     'hr': 6, 'map': 6, 'sbp': 6, 'dbp': 6, 'resp': 6, 'spo2': 6, 'temp': 6,
     'glu': 6, 'crea': 6, 'bili': 6, 'plt': 6, 'hgb': 6, 'wbc': 6, 'na': 6, 'k': 6,

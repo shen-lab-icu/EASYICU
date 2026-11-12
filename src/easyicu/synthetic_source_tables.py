@@ -252,6 +252,9 @@ def source_tables(database: str, stays: int):
             yield f"{converted}.parquet", table
 
 
+_AUMC_SOURCE_UNITS = ("mmol/l", "umol/l", "mg/l")
+
+
 def _aumc_unit(name, source, definition):
     """The unit label of an AUMC synthetic row.
 
@@ -264,6 +267,10 @@ def _aumc_unit(name, source, definition):
     if required_unit:
         units = definition.get("unit") or []
         units = [units] if isinstance(units, str) else units
+        if "convert_unit(" in (source.get("callback") or ""):
+            # A converting source selects rows in its own unit (values are
+            # already inverse-converted): label them with an AUMC spelling.
+            units = [*units, *_AUMC_SOURCE_UNITS]
         for unit in units:
             if re.search(required_unit, unit):
                 return unit

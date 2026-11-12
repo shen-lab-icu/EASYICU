@@ -76,6 +76,7 @@ from ..utils.unit_conversion import convert_vaso_rate
 from ..utils.exact_sum import exact_groupby_agg, exact_groupby_sum
 from ..utils.thresholds import ge, gt, le, lt
 from .errors import ConceptTableReadError
+from . import fractional_excretion as _FE
 from .availability_signal import (
     ConceptAvailabilityRecord,
     ConceptEvaluationReason,
@@ -8842,6 +8843,21 @@ def _callback_bun_creatinine_ratio(tables, ctx):
     )
 
 
+def _callback_fractional_excretion(tables, ctx, spec):
+    """FENa / FEUrea from a spot urine pair; the owner is fractional_excretion.py."""
+    merged, id_columns, index_column = _merge_tables(tables, ctx=ctx, how="outer")
+    lookback = (ctx.kwargs or {}).get("plasma_lookback", _FE.DEFAULT_PLASMA_LOOKBACK)
+    if isinstance(lookback, (int, float)):
+        lookback = pd.Timedelta(hours=lookback)
+    out = _FE.fractional_excretion(
+        merged, spec=spec, id_columns=id_columns, index_column=index_column,
+        lookback=pd.Timedelta(lookback),
+    )
+    return _as_icutbl(
+        out, id_columns=id_columns, index_column=index_column, value_column=spec.value_name,
+    )
+
+
 def _callback_nlr(tables, ctx):
     """Neutrophil-to-lymphocyte ratio (inflammation / stress marker)."""
     return _derive_rowwise(
@@ -9109,6 +9125,8 @@ CALLBACK_REGISTRY: MutableMapping[str, CallbackFn] = {
     "modified_shock_index": _callback_modified_shock_index,
     "diastolic_shock_index": _callback_diastolic_shock_index,
     "bun_creatinine_ratio": _callback_bun_creatinine_ratio,
+    "fena": lambda tables, ctx: _callback_fractional_excretion(tables, ctx, _FE.FENA),
+    "feurea": lambda tables, ctx: _callback_fractional_excretion(tables, ctx, _FE.FEUREA),
     "nlr": _callback_nlr,
     "plr": _callback_plr,
     "corrected_calcium": _callback_corrected_calcium,

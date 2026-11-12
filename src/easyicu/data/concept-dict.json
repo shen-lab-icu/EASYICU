@@ -38057,7 +38057,7 @@
   "max": 400,
   "description": "urine sodium",
   "category": "renal",
-  "_comment": "2026-11-05 UC1-K5: urine concentration only, never serum chemistry or 24-hour excretion. AUMC, HiRID and SICdb remain unmapped: no checked-in source dictionary verifies an item name, urine specimen and unit together. Community databases remain unavailable without validated urine-specific mappings. FENa/FEUrea are not derived: the existing arithmetic callbacks do not provide a nearest plasma sample within 24 hours. Bounds are broad analytical limits in canonical units; zero is retained, negative and above-limit values are missing. Only explicitly labelled compatible units are accepted. Sodium is monovalent: mEq/L equals mmol/L (explicit identity conversion); no mass-to-molar conversion is inferred.",
+  "_comment": "2026-11-05 UC1-K5: urine concentration only, never serum chemistry or 24-hour excretion. 2026-11-12 S907: AUMC numericitems 10269 'Natrium (urine)' and 7848 'Natrium in urine' are mapped; each row carries the urine item name and unit mmol/l, and the unit is gated per row. Server aggregate check (counts rounded to 10): 10269 4970 rows, median 51 mmol/L; 7848 110 rows, median 58 mmol/L. HiRID has no urine sodium item. SICdb has none either: laboratory 469 'Natrium (ZL)' is serum or plasma (LOINC 2951-2). Community databases remain unavailable without validated urine-specific mappings. 2026-11-12 S907: FENa and FEUrea are now derived by the fena and feurea concepts (fractional_excretion.py: same-bucket urine pair, most recent plasma value at or before it within 24 hours). Bounds are broad analytical limits in canonical units; zero is retained, negative and above-limit values are missing. Only explicitly labelled compatible units are accepted. Sodium is monovalent: mEq/L equals mmol/L (explicit identity conversion); no mass-to-molar conversion is inferred.",
   "sources": {
    "miiv": [
     {
@@ -38117,6 +38117,20 @@
       "labmeasurenameinterface": "(?i)^\\s*(?:mmol|meq)\\s*/\\s*l\\s*$"
      },
      "callback": "convert_unit(binary_op(`*`, 1), 'mmol/L', '(?i)^\\s*meq\\s*/\\s*l\\s*$')"
+    }
+   ],
+   "aumc": [
+    {
+     "ids": [
+      7848,
+      10269
+     ],
+     "table": "numericitems",
+     "sub_var": "itemid",
+     "unit_var": "unit",
+     "require_regex": {
+      "unit": "(?i)^\\s*mmol\\s*/\\s*l\\s*$"
+     }
     }
    ]
   }
@@ -38127,7 +38141,7 @@
   "max": 1000,
   "description": "urine creatinine",
   "category": "renal",
-  "_comment": "2026-11-05 UC1-K5: urine concentration only, never serum chemistry or 24-hour excretion. AUMC, HiRID and SICdb remain unmapped: no checked-in source dictionary verifies an item name, urine specimen and unit together. Community databases remain unavailable without validated urine-specific mappings. FENa/FEUrea are not derived: the existing arithmetic callbacks do not provide a nearest plasma sample within 24 hours. Bounds are broad analytical limits in canonical units; zero is retained, negative and above-limit values are missing. Only explicitly labelled compatible units are accepted. Native mg/dL values are unchanged; molar units require an explicit conversion and are excluded here.",
+  "_comment": "2026-11-05 UC1-K5: urine concentration only, never serum chemistry or 24-hour excretion. 2026-11-12 S907: AUMC numericitems 10279 'Kreatinine (urine)' is mapped from mmol/l (unit gated per row) at 113.12 g/mol, so 1 mmol/L = 11.312 mg/dL; server aggregate check: 3340 rows, median 4.15 mmol/L (47 mg/dL). SICdb laboratory 370 'Kreatinin im Spontanurin (ZL)' (spot urine, dictionary unit mg/dl) is mapped without conversion: 1880 rows, median 80 mg/dL. Its d_references LOINC 2162-6 names a 24-hour excretion rate, which contradicts the spot-urine name, the mg/dl unit and the value distribution; the name, unit and values decide. SICdb 340 'Kreatinin im Urin(CKR)' has no rows and stays unmapped. HiRID has no urine creatinine item. Community databases remain unavailable without validated urine-specific mappings. 2026-11-12 S907: FENa and FEUrea are now derived by the fena and feurea concepts (fractional_excretion.py: same-bucket urine pair, most recent plasma value at or before it within 24 hours). Bounds are broad analytical limits in canonical units; zero is retained, negative and above-limit values are missing. Only explicitly labelled compatible units are accepted. Native mg/dL values are unchanged; molar units require an explicit conversion and are excluded here.",
   "sources": {
    "miiv": [
     {
@@ -38183,6 +38197,29 @@
       "labmeasurenameinterface": "(?i)^\\s*mg\\s*/\\s*dl\\s*$"
      }
     }
+   ],
+   "aumc": [
+    {
+     "ids": [
+      10279
+     ],
+     "table": "numericitems",
+     "sub_var": "itemid",
+     "unit_var": "unit",
+     "require_regex": {
+      "unit": "(?i)^\\s*mmol\\s*/\\s*l\\s*$"
+     },
+     "callback": "convert_unit(binary_op(`*`, 11.312217194570135), 'mg/dL', '(?i)^\\s*mmol\\s*/\\s*l\\s*$')"
+    }
+   ],
+   "sic": [
+    {
+     "ids": [
+      370
+     ],
+     "table": "laboratory",
+     "sub_var": "LaboratoryID"
+    }
    ]
   }
  },
@@ -38192,7 +38229,7 @@
   "max": 2000,
   "description": "urine osmolality",
   "category": "renal",
-  "_comment": "2026-11-05 UC1-K5: urine concentration only, never serum chemistry or 24-hour excretion. AUMC, HiRID and SICdb remain unmapped: no checked-in source dictionary verifies an item name, urine specimen and unit together. Community databases remain unavailable without validated urine-specific mappings. FENa/FEUrea are not derived: the existing arithmetic callbacks do not provide a nearest plasma sample within 24 hours. Bounds are broad analytical limits in canonical units; zero is retained, negative and above-limit values are missing. Only explicitly labelled compatible units are accepted. eICU urinary osmolality is reported in mOsm/L; the repository has no policy equating osmolarity with mOsm/kg, so eICU and its demo are deliberately unmapped. mOsm/L rows in MIMIC are also excluded.",
+  "_comment": "2026-11-05 UC1-K5: urine concentration only, never serum chemistry or 24-hour excretion. AUMC, HiRID and SICdb remain unmapped: no checked-in source dictionary verifies an item name, urine specimen and unit together. Community databases remain unavailable without validated urine-specific mappings. 2026-11-12 S907: FENa and FEUrea are now derived by the fena and feurea concepts (fractional_excretion.py: same-bucket urine pair, most recent plasma value at or before it within 24 hours). Bounds are broad analytical limits in canonical units; zero is retained, negative and above-limit values are missing. Only explicitly labelled compatible units are accepted. eICU urinary osmolality is reported in mOsm/L; the repository has no policy equating osmolarity with mOsm/kg, so eICU and its demo are deliberately unmapped. mOsm/L rows in MIMIC are also excluded.",
   "sources": {
    "miiv": [
     {
@@ -38235,7 +38272,7 @@
   "max": 5000,
   "description": "urine urea nitrogen",
   "category": "renal",
-  "_comment": "2026-11-05 UC1-K5: urine concentration only, never serum chemistry or 24-hour excretion. AUMC, HiRID and SICdb remain unmapped: no checked-in source dictionary verifies an item name, urine specimen and unit together. Community databases remain unavailable without validated urine-specific mappings. FENa/FEUrea are not derived: the existing arithmetic callbacks do not provide a nearest plasma sample within 24 hours. Bounds are broad analytical limits in canonical units; zero is retained, negative and above-limit values are missing. Only explicitly labelled compatible units are accepted. MIMIC item 51104 reports urea nitrogen mass, not whole urea mass; mg/dL is nitrogen-equivalent and is never multiplied by a whole-urea factor.",
+  "_comment": "2026-11-05 UC1-K5: urine concentration only, never serum chemistry or 24-hour excretion. AUMC, HiRID and SICdb remain unmapped: no checked-in source dictionary verifies an item name, urine specimen and unit together. Community databases remain unavailable without validated urine-specific mappings. 2026-11-12 S907: FENa and FEUrea are now derived by the fena and feurea concepts (fractional_excretion.py: same-bucket urine pair, most recent plasma value at or before it within 24 hours). Bounds are broad analytical limits in canonical units; zero is retained, negative and above-limit values are missing. Only explicitly labelled compatible units are accepted. MIMIC item 51104 reports urea nitrogen mass, not whole urea mass; mg/dL is nitrogen-equivalent and is never multiplied by a whole-urea factor.",
   "sources": {
    "miiv": [
     {
@@ -38271,6 +38308,54 @@
     }
    ]
   }
+ },
+ "fena": {
+  "unit": [
+   "%"
+  ],
+  "min": 0.0,
+  "max": 100.0,
+  "description": "fractional excretion of sodium (FENa)",
+  "category": "renal",
+  "concepts": [
+   "urine_na",
+   "urine_crea",
+   "na",
+   "crea"
+  ],
+  "aggregate": [
+   "median",
+   "median",
+   "median",
+   "median"
+  ],
+  "callback": "fena",
+  "class_name": "rec_cncpt",
+  "_comment": "2026-11-12 S907: fractional excretion from a spot urine sample, 100 * (U_Na * P_cr) / (P_Na * U_cr). The urine solute and urine creatinine come from the same time bucket; plasma na and crea are the most recent values in the same or an earlier bucket, no older than 24 hours (callback kwarg plasma_lookback). A urine pair without plasma values in the lookback has no result; nothing is imputed. Units cancel because every input is normalised to its canonical unit first (sodium mmol/L or mEq/L, creatinine mg/dL). Bounds 0-100 % are inclusive; the owner logs how many urine pairs lacked plasma values, had a non-positive denominator or fell outside the bounds."
+ },
+ "feurea": {
+  "unit": [
+   "%"
+  ],
+  "min": 0.0,
+  "max": 100.0,
+  "description": "fractional excretion of urea (FEUrea)",
+  "category": "renal",
+  "concepts": [
+   "urine_urea",
+   "urine_crea",
+   "bun",
+   "crea"
+  ],
+  "aggregate": [
+   "median",
+   "median",
+   "median",
+   "median"
+  ],
+  "callback": "feurea",
+  "class_name": "rec_cncpt",
+  "_comment": "2026-11-12 S907: fractional excretion from a spot urine sample, 100 * (U_urea * P_cr) / (P_urea * U_cr). The urine solute and urine creatinine come from the same time bucket; plasma bun and crea are the most recent values in the same or an earlier bucket, no older than 24 hours (callback kwarg plasma_lookback). A urine pair without plasma values in the lookback has no result; nothing is imputed. Units cancel because every input is normalised to its canonical unit first (urea nitrogen mg/dL against BUN mg/dL, creatinine mg/dL). Bounds 0-100 % are inclusive; the owner logs how many urine pairs lacked plasma values, had a non-positive denominator or fell outside the bounds."
  },
  "sic_precondition_renal_dysfunction": {
   "unit": "boolean",

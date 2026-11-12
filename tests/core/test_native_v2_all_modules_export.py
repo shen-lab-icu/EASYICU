@@ -48,7 +48,8 @@ def _assert_published(database: str, output: Path, result: dict) -> None:
     assert "renal_urine_chem" in EXTRACT_MODULE_ORDER
     urine = next(row for row in manifest["files"] if row["module"] == "renal_urine_chem")
     assert urine["physical_concept_ids"] == [
-        "urine_na", "urine_crea", "urine_osm", "urine_urea", "sic_precondition_renal_dysfunction",
+        "urine_na", "urine_crea", "urine_osm", "urine_urea", "fena", "feurea",
+        "sic_precondition_renal_dysfunction",
     ]
     for module in EXTRACT_MODULE_ORDER:
         path = output / f"{module}.parquet"

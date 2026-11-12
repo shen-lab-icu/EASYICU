@@ -49,8 +49,17 @@ def test_urine_lab_sources_have_only_verified_specimens_and_canonical_units(name
     for database in ("miiv", "mimic", "mimic_demo"):
         source, = definition.sources[database]
         assert source.table == "labevents" and source.sub_var == "itemid" and source.ids == [item]
-    # No checked-in AUMC/HiRID/SICdb dictionary proves a urine-specific item.
-    assert not {"aumc", "hirid", "sic"} & definition.sources.keys()
+    # S907 (2026-11-12): AUMC items carry the urine name and a per-row unit;
+    # SICdb 370 is the spot-urine creatinine. HiRID has no urine item.
+    verified = {"urine_na": {"aumc"}, "urine_crea": {"aumc", "sic"}}.get(name, set())
+    assert {"aumc", "hirid", "sic"} & definition.sources.keys() == verified
+    if "aumc" in verified:
+        source, = definition.sources["aumc"]
+        assert source.table == "numericitems" and source.unit_var == "unit"
+        assert source.ids == {"urine_na": [7848, 10269], "urine_crea": [10279]}[name]
+    if "sic" in verified:
+        source, = definition.sources["sic"]
+        assert source.table == "laboratory" and source.ids == [370]
     if name in {"urine_na", "urine_crea"}:
         label = {"urine_na": "urinary sodium", "urine_crea": "urinary creatinine"}[name]
         for database in ("eicu", "eicu_demo"):
@@ -172,7 +181,7 @@ def test_urine_and_history_concepts_are_registered_once_in_their_own_module(name
     assert EXTRACT_MODULES["renal_urine_chem"].count(name) == 1
     assert name not in EXTRACT_MODULES["renal"]
     assert name in CONCEPT_DICTIONARY and name in CONCEPT_DESCRIPTIONS
-    assert CONCEPT_DB_COVERAGE[name] == (1 if name == HISTORY else 3 if name in {"urine_na", "urine_crea"} else 2)
+    assert CONCEPT_DB_COVERAGE[name] == {HISTORY: 1, "urine_na": 4, "urine_crea": 5}.get(name, 2)
     payload = json.loads((ROOT / "src/easyicu/data/concept-dict.json").read_text())
     assert payload[name]["category"] == "renal"
     assert payload[name]["_comment"]

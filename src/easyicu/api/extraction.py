@@ -2727,6 +2727,20 @@ def _attach_stream_derived_columns(base, addition, value_columns):
     return base
 
 
+def _native_charttime_axis(frame):
+    """Publish a source-native time name (AUMC ``measuredat``) as ``charttime``.
+
+    Without the R-compatible projection the loader keeps the source's time
+    name, but its values are already ICU-relative hours; only the name changes.
+    """
+    if not isinstance(frame, pd.DataFrame) or "charttime" in frame.columns:
+        return frame
+    from ..concept.catalog import PREVIEW_TIME_COLUMNS
+
+    native = [column for column in PREVIEW_TIME_COLUMNS if column in frame.columns]
+    return frame.rename(columns={native[0]: "charttime"}) if len(native) == 1 else frame
+
+
 def _load_module_concepts(load_concepts_fn, *, module_name: str, load_kwargs: Dict):
     """Load native observations and coherent SOFA callback components.
 
@@ -2742,7 +2756,16 @@ def _load_module_concepts(load_concepts_fn, *, module_name: str, load_kwargs: Di
         # unknown case with False. Exclude unmapped lab tables before merging
         # so the id-level flag retains its own grain and nullable meaning.
         dictionary = load_dictionary(source_name=kwargs["database"])
-        mapped = [name for name in concepts if kwargs["database"] in dictionary[name].sources]
+
+        def _is_mapped(name):
+            # A derived concept (fena, feurea) has no own sources: it is mapped
+            # when every input it is computed from is mapped.
+            definition = dictionary[name]
+            if definition.sub_concepts:
+                return all(_is_mapped(sub) for sub in definition.sub_concepts)
+            return kwargs["database"] in definition.sources
+
+        mapped = [name for name in concepts if _is_mapped(name)]
         sink = kwargs.get("availability_sink")
         if sink is not None:
             # The excluded concepts are not loaded, so record them as the
@@ -2758,7 +2781,14 @@ def _load_module_concepts(load_concepts_fn, *, module_name: str, load_kwargs: Di
                     )
         if not mapped:
             return pd.DataFrame()
-        result = load_concepts_fn(**{**kwargs, "concepts": mapped, "r_compatible": False})
+        # An id-level flag and timed lab rows cannot share one merge axis
+        # (SICdb maps both). Each grain is loaded on its own and keeps its own
+        # rows: observations carry a charttime, the id-level flag none.
+        id_level = [name for name in mapped if dictionary[name].target == "id_tbl"]
+        groups = [g for g in ([n for n in mapped if n not in id_level], id_level) if g]
+        frames = [_native_charttime_axis(load_concepts_fn(**{**kwargs, "concepts": g, "r_compatible": False}))
+                  for g in groups]
+        result = frames[0] if len(frames) == 1 else pd.concat(frames, ignore_index=True, sort=False)
         result = result.dropna(subset=mapped, how="all")
         if result.empty:
             # Zero-row concept frames are placed side by side rather than

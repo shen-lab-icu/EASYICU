@@ -1,7 +1,7 @@
 # Community database concept coverage
 
 Generated from `tools/build_community_concept_registry.py`. The matrix covers every standard
-concept (base dictionary plus SOFA-2 overlay): **336 concepts × 4 databases**.
+concept (base dictionary plus SOFA-2 overlay): **338 concepts × 4 databases**.
 
 `partial` is deliberately not advertised as extractable: it records useful ingredients while preventing an incomplete score or phenotype from being mistaken for a complete definition.
 
@@ -9,10 +9,10 @@ concept (base dictionary plus SOFA-2 overlay): **336 concepts × 4 databases**.
 
 | Database | Direct | Derived | Partial | Unavailable |
 |---|---:|---:|---:|---:|
-| nwicu | 137 | 19 | 35 | 145 |
-| zhejiang_eicu | 128 | 39 | 23 | 146 |
-| jinhua | 135 | 19 | 32 | 150 |
-| zigong | 125 | 27 | 39 | 145 |
+| nwicu | 137 | 19 | 37 | 145 |
+| zhejiang_eicu | 128 | 39 | 25 | 146 |
+| jinhua | 135 | 19 | 34 | 150 |
+| zigong | 125 | 27 | 41 | 145 |
 
 ## Complete matrix
 
@@ -112,9 +112,11 @@ concept (base dictionary plus SOFA-2 overlay): **336 concepts × 4 databases**.
 | `etco2_qc` | ventilator | unavailable | unavailable | unavailable | unavailable |
 | `etco2_raw` | ventilator | unavailable | unavailable | unavailable | unavailable |
 | `ett_gcs` | respiratory | unavailable | unavailable | unavailable | unavailable |
+| `fena` | renal | partial | partial | partial | partial |
 | `fentanyl` | medications | direct | direct | direct | direct |
 | `fentanyl_rate` | medications | unavailable | unavailable | unavailable | unavailable |
 | `ferritin` | chemistry | direct | unavailable | direct | unavailable |
+| `feurea` | renal | partial | partial | partial | partial |
 | `ffp` | medications | unavailable | unavailable | direct | unavailable |
 | `fgn` | hematology | direct | unavailable | direct | direct |
 | `fio2` | blood gas | direct | direct | direct | unavailable |

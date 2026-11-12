@@ -183,7 +183,8 @@ def test_web_catalog_groups_are_unique_and_complete() -> None:
     # UC1-K5/K6: four urine chemistry concepts and one SICdb precondition.
     # Round 12: norepi_order_dur, the order-derived companion of norepi_dur,
     # and three mort_<h>_assumption_based outcome flags.
-    assert len(CONCEPT_DICTIONARY) == 371
+    # S907: fena and feurea, derived in renal_urine_chem. 371 -> 373.
+    assert len(CONCEPT_DICTIONARY) == 373
     assert set(CONCEPT_GROUP_NAMES) >= set(CONCEPT_GROUPS_INTERNAL)
     assert len(grouped) == len(set(grouped))
     assert set(grouped) == set(CONCEPT_DICTIONARY)
