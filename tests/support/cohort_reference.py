@@ -493,6 +493,10 @@ def _selected_feature_rows(
                     "module": module,
                     "column": feature.get("column"),
                     "kind": "numeric",
+                    # Display contract shared with the owner: the catalog unit.
+                    "unit": (lambda unit: unit if unit and unit.lower() not in label.lower() else None)(
+                        owner.review_labels.concept_unit(str(feature.get("column") or ""))
+                    ),
                     "values": [
                         _median_for(members, mapping) for members in member_sets
                     ],
