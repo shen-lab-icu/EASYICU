@@ -601,7 +601,9 @@ from .aggregation_route import duckdb_aggregation_enabled, note_duckdb_route
 from .minute_resolution import (
     SICDB_MINUTE_COLUMNS,
     SICDB_RECEIPT_ATTR,
+    active_minute_rate_grid,
     expand_sicdb_minute_rows,
+    minute_rate_grid,
     minute_resolution_requested,
     sicdb_minute_rows_apply,
 )
@@ -2904,6 +2906,15 @@ class ConceptResolver:
         availability_context: Optional[_AvailabilityLoadContext] = None,
         **kwargs,  # Additional parameters for callbacks
     ) -> ICUTable:
+        if minute_resolution_requested(kwargs, interval) and active_minute_rate_grid() is None:
+            # Rate callbacks bin at the opt-in grid inside this load (and its
+            # sub-concept loads); owner: concept/minute_resolution.py.
+            with minute_rate_grid(kwargs, interval):
+                return self._load_single_concept(
+                    concept_name, data_source, aggregator=aggregator, patient_ids=patient_ids,
+                    verbose=verbose, interval=interval, align_to_admission=align_to_admission,
+                    availability_context=availability_context, **kwargs,
+                )
         storage: ConceptDataSourceStorage = data_source
         # 🔧 批量加载模式：减少诊断输出
         batch_loading = kwargs.get('_batch_loading', False)

@@ -187,7 +187,7 @@ def test_subhour_module_keeps_measured_peep_apart_from_the_setting(hirid_minute_
     from easyicu.api import extraction as api
     from easyicu.concept.catalog import SUBHOUR_SIGNAL_CONCEPTS
 
-    assert SUBHOUR_SIGNAL_CONCEPTS == ("map_invasive", "cvp", "peep_set", "peep_total")
+    assert SUBHOUR_SIGNAL_CONCEPTS[:4] == ("map_invasive", "cvp", "peep_set", "peep_total")
     source, patient = hirid_minute_source
     api._run_module_extraction(
         module_name="subhour_signals", concepts=api.EXTRACT_MODULES["subhour_signals"],

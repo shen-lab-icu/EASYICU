@@ -4706,6 +4706,61 @@ def _hirid_apportion_hourly(df: pd.DataFrame, time_col: str, dose_col: str) -> p
     return out.drop(columns=['_prev_t'], errors='ignore')
 
 
+def _hirid_apportion_grid(df: pd.DataFrame, time_col: str, dose_col: str, grid: pd.Timedelta) -> pd.DataFrame:
+    """Sub-hour bins of each givendose; used only by the minute opt-in (S853c).
+
+    A dose with a usable interval [previous record, record] (longer than zero and
+    at most HIRID_APPORTION_MAX_HOURS) is split over the bins it overlaps in
+    proportion to the overlap, so each bin carries that interval's constant
+    rate. A dose without one has no known interval. The hourly bins assign it to
+    its record's clock hour, so here it is spread evenly over that hour's bins.
+    In both cases the bins of every hour sum to the hourly bins' mass.
+    """
+    from ..concept.minute_resolution import grid_bin_hours
+
+    g = grid.total_seconds() / 3600.0
+    per_hour = int(round(1.0 / g))
+    if per_hour < 1 or abs(per_hour * g - 1.0) > 1e-12:
+        raise ValueError(f"rate grid {grid} must divide one hour")
+    t = pd.to_numeric(df[time_col], errors='coerce').to_numpy(dtype=float)
+    prev = (
+        pd.to_numeric(df['_prev_t'], errors='coerce').to_numpy(dtype=float)
+        if '_prev_t' in df.columns else np.full(len(df), np.nan)
+    )
+    span = t - prev
+    timed = np.isfinite(span) & (span > 0) & (span <= HIRID_APPORTION_MAX_HOURS)
+    parts = []
+    if timed.any():
+        part = df.loc[timed]
+        lo, hi = prev[timed] / g, t[timed] / g
+        first = np.floor(lo)
+        n_bins = (np.ceil(hi) - first).astype(int)
+        rows = np.repeat(np.arange(len(part)), n_bins)
+        offset = np.arange(n_bins.sum()) - np.repeat(np.cumsum(n_bins) - n_bins, n_bins)
+        k = first[rows] + offset
+        overlap = np.minimum(hi[rows], k + 1.0) - np.maximum(lo[rows], k)
+        keep = overlap > 0
+        spread = part.iloc[rows[keep]].copy()
+        spread[dose_col] = spread[dose_col].to_numpy(dtype=float) * overlap[keep] / (hi - lo)[rows[keep]]
+        spread['_time_bin'] = grid_bin_hours(k[keep], grid)
+        parts.append(spread)
+    untimed = np.isfinite(t) & ~timed
+    if untimed.any():
+        part = df.loc[untimed]
+        rows = np.repeat(np.arange(len(part)), per_hour)
+        k = np.floor(t[untimed])[rows] * per_hour + np.tile(np.arange(per_hour), len(part))
+        spread = part.iloc[rows].copy()
+        spread[dose_col] = spread[dose_col].to_numpy(dtype=float) / per_hour
+        spread['_time_bin'] = grid_bin_hours(k, grid)
+        parts.append(spread)
+    if not parts:
+        out = df.iloc[:0].copy()
+        out['_time_bin'] = pd.Series(dtype=float)
+    else:
+        out = pd.concat(parts, ignore_index=True)
+    return out.drop(columns=['_prev_t'], errors='ignore')
+
+
 # A HiRID givendose at or below this is floating-point residue, not a dose
 # (2026-11-04 audit round 4, R4-030).
 HIRID_DOSE_EPSILON = 1e-6
@@ -4722,9 +4777,13 @@ def hirid_rate_kg(
     interval_minutes: float = 60.0,
     value_min: Optional[float] = None,
     value_max: Optional[float] = None,
+    rate_grid: Optional[pd.Timedelta] = None,
 ) -> pd.DataFrame:
     """
     HiRID rate per kg callback - converts dose to mcg/kg/min.
+
+    ``rate_grid`` (minute opt-in only) bins each dose by
+    :func:`_hirid_apportion_grid` and divides by the bin length instead.
     
     Implements R ricu's hirid_rate_kg:
     1. Convert mg to µg (multiply by 1000)
@@ -4822,7 +4881,10 @@ def hirid_rate_kg(
     if index_col and index_col in df.columns:
         # Floor time based on interval_minutes to match R ricu's change_interval behavior
         time_series = df[index_col]
-        if pd.api.types.is_numeric_dtype(time_series):
+        if rate_grid is not None and pd.api.types.is_numeric_dtype(time_series):
+            df = _hirid_apportion_grid(df, index_col, actual_val_col, rate_grid)
+            interval_minutes = rate_grid.total_seconds() / 60.0
+        elif pd.api.types.is_numeric_dtype(time_series):
             if interval_minutes >= 60:
                 df = _hirid_apportion_hourly(df, index_col, actual_val_col)
             else:
@@ -4915,9 +4977,13 @@ def hirid_rate(
     unit_col: Optional[str],
     grp_var: Optional[str],
     index_col: Optional[str],
+    rate_grid: Optional[pd.Timedelta] = None,
 ) -> pd.DataFrame:
     """
     HiRID rate callback - converts dose to rate per minute (no weight normalization).
+
+    ``rate_grid`` (minute opt-in only) bins each dose by
+    :func:`_hirid_apportion_grid` and divides by the bin length instead.
     
     Implements R ricu's hirid_rate:
     1. Get the most frequent unit in the data
@@ -5000,7 +5066,10 @@ def hirid_rate(
     if index_col and index_col in df.columns:
         # Floor time to hours
         time_series = df[index_col]
-        if pd.api.types.is_numeric_dtype(time_series):
+        if rate_grid is not None and pd.api.types.is_numeric_dtype(time_series):
+            df = _hirid_apportion_grid(df, index_col, actual_val_col, rate_grid)
+            df = df.rename(columns={'_time_bin': '_hour'})
+        elif pd.api.types.is_numeric_dtype(time_series):
             df = _hirid_apportion_hourly(df, index_col, actual_val_col)
             df = df.rename(columns={'_time_bin': '_hour'})
         else:
@@ -5018,8 +5087,8 @@ def hirid_rate(
     })
     
     # Step 4: Calculate rate = dose / interval_minutes
-    # HiRID interval is 1 hour = 60 minutes
-    interval_minutes = 60.0
+    # HiRID interval is 1 hour = 60 minutes (the bin length under rate_grid)
+    interval_minutes = rate_grid.total_seconds() / 60.0 if rate_grid is not None else 60.0
     grouped[concept_name] = grouped[actual_val_col] / interval_minutes
     
     # Rename _hour to datetime for consistency

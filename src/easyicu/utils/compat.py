@@ -326,6 +326,13 @@ def round_to_interval(time_series: pd.Series, interval_hours: float = 1.0) -> pd
         return time_series
     
     # 使用floor而非round，与ricu行为一致
+    if interval_hours < 1.0:
+        # A sub-hour grid point k*h can divide back to k - 1e-15 and would
+        # move to the previous bin (S853c); hourly grids keep the plain floor.
+        from ..concept.minute_resolution import grid_floor_index
+
+        floored = grid_floor_index(time_series, interval_hours) * interval_hours
+        return pd.Series(floored, index=time_series.index, name=time_series.name)
     return np.floor(time_series / interval_hours) * interval_hours
 
 

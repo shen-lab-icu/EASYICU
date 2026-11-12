@@ -60,6 +60,7 @@ from ..value_failures import TYPED_VALUE_FAILURES
 from ..storage_layout import StorageIntegrityError
 from ..utils.thresholds import gt, lt
 from .schema import ConceptSource
+from .minute_resolution import active_minute_rate_grid
 from .blood_gas_specimen import (
     parse_arterial_specimen_callback,
     parse_mixed_venous_specimen_callback,
@@ -3606,6 +3607,7 @@ def _apply_callback_body(
             interval_minutes=interval_minutes,
             value_min=_get_concept_bounds(concept_name, 'min'),
             value_max=_get_concept_bounds(concept_name, 'max'),
+            rate_grid=active_minute_rate_grid(),
         )
 
     # Handle hirid_rate callback - HiRID dose rate (no weight normalization)
@@ -3628,6 +3630,7 @@ def _apply_callback_body(
             unit_col=unit_var,
             grp_var=grp_var,
             index_col=index_var,
+            rate_grid=active_minute_rate_grid(),
         )
 
     # Handle hirid_rate_mass(target_unit = "mcg/hour") - HiRID mass-rate (non-kg)
@@ -4179,6 +4182,7 @@ def _apply_callback_body(
         frame = frame.loc[parse_source_numeric(frame[val_var], frame=frame).gt(0)].copy()
         frame = materialize_intervals(
             frame, start=index_var, stop=stop_var, data_source=data_source,
+            grid=active_minute_rate_grid(),
         )
 
         return frame

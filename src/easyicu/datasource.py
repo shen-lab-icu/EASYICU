@@ -54,6 +54,19 @@ class SourceTimeFormatError(storage_layout.StorageIntegrityError):
         )
 
 
+def _epoch_hours_floor_sql(epoch_seconds: str, interval_hours: float) -> str:
+    """SQL: floor an elapsed-seconds expression to the grid, in ICU hours.
+
+    Hourly grids keep the established ``FLOOR(s / 3600.0 / h) * h``. A sub-hour
+    grid (the minute opt-in) floors exact seconds instead: ``s / 3600 / (1/60)``
+    can land just below an integer for a sample exactly on a minute boundary
+    (k = 31, 62, 123, ...) and move it into the previous minute (S853c).
+    """
+    if interval_hours >= 1.0:
+        return f"FLOOR({epoch_seconds} / 3600.0 / {interval_hours}) * {interval_hours}"
+    return f"FLOOR({epoch_seconds} / {round(interval_hours * 3600.0, 6)!r}) * {interval_hours}"
+
+
 def _consumed_clock_table(data_source: Any, table: str, path) -> Path:
     """Record a clock/identity table a DuckDB query opens by name as consumed.
 
@@ -3711,7 +3724,7 @@ def load_bucketed_table_aggregated(
         _consumed_clock_table(data_source, "general", general_path)
 
         # HiRID: 使用 general 表的 admissiontime 计算相对小时数
-        time_round_expr = f"FLOOR(EPOCH(o.{time_col} - CAST(a.admissiontime AS TIMESTAMP)) / 3600.0 / {interval_minutes / 60}) * {interval_minutes / 60}"
+        time_round_expr = _epoch_hours_floor_sql(f"EPOCH(o.{time_col} - CAST(a.admissiontime AS TIMESTAMP))", interval_minutes / 60)
         output_time_expr = f"{time_round_expr} as charttime"
         receipt_select = source_time_select(
             f'EPOCH(o.{time_col} - CAST(a.admissiontime AS TIMESTAMP)) / 3600.0', time_round_expr,
@@ -3795,7 +3808,7 @@ def load_bucketed_table_aggregated(
 
         # Compute hours from admission: FLOOR(EPOCH(charttime - intime) / 3600)
         _interval_hours = interval_minutes / 60.0
-        time_round_expr = f"FLOOR(EPOCH(TRY_CAST(o.{time_col} AS TIMESTAMP) - CAST(a.intime AS TIMESTAMP)) / 3600.0 / {_interval_hours}) * {_interval_hours}"
+        time_round_expr = _epoch_hours_floor_sql(f"EPOCH(TRY_CAST(o.{time_col} AS TIMESTAMP) - CAST(a.intime AS TIMESTAMP))", _interval_hours)
         output_time_expr = f"{time_round_expr} as charttime"
         receipt_select = source_time_select(
             f'EPOCH(TRY_CAST(o.{time_col} AS TIMESTAMP) - CAST(a.intime AS TIMESTAMP)) / 3600.0', time_round_expr,
@@ -4539,7 +4552,7 @@ def load_bucketed_table_multi_aggregated(
                 data_source, table_name, itemid_col, all_itemids, target_files,
                 id_col, patient_ids,
             )
-        time_round_expr = f"FLOOR(EPOCH(o.{time_col} - CAST(a.intime AS TIMESTAMP)) / 3600.0 / {_interval_hours}) * {_interval_hours}"
+        time_round_expr = _epoch_hours_floor_sql(f"EPOCH(o.{time_col} - CAST(a.intime AS TIMESTAMP))", _interval_hours)
 
         if _base_db == 'miiv' and table_name == 'labevents':
             query = miiv_lab_aggregation_sql(
@@ -4680,7 +4693,7 @@ def load_bucketed_table_multi_aggregated(
         p_clause = _patient_clause(id_col, patient_ids) + _window_sql.condition(
             f"EPOCH(o.{time_col} - CAST(a.admissiontime AS TIMESTAMP)) / 3600.0", f"o.{id_col}",
         )
-        time_round_expr = f"FLOOR(EPOCH(o.{time_col} - CAST(a.admissiontime AS TIMESTAMP)) / 3600.0 / {_interval_hours}) * {_interval_hours}"
+        time_round_expr = _epoch_hours_floor_sql(f"EPOCH(o.{time_col} - CAST(a.admissiontime AS TIMESTAMP))", _interval_hours)
         query = f"""
         WITH adm AS (
             SELECT patientid, CAST(admissiontime AS TIMESTAMP) as admissiontime

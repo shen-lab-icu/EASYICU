@@ -689,7 +689,10 @@ WEIGHT_STRICT_CONCEPTS = ('weight_admit_strict', 'weight_admit_strict_source', '
 # The hourly modules that also carry these concepts are unchanged.
 # peep_total (measured/total PEEP; HiRID 2610, AUMC 12301, MIIV/MIMIC 224700)
 # is kept apart from the ventilator setting peep_set (S853b).
-SUBHOUR_SIGNAL_CONCEPTS = ('map_invasive', 'cvp', 'peep_set', 'peep_total')
+# E3 (S853c): hr, fio2_chart (bedside/ventilator FiO2 without the blood-gas
+# lab value) and norepi_equiv, whose infusion rates are binned per minute under
+# the opt-in (owner: concept/minute_resolution.py).
+SUBHOUR_SIGNAL_CONCEPTS = ('map_invasive', 'cvp', 'peep_set', 'peep_total', 'hr', 'fio2_chart', 'norepi_equiv')
 
 HIDDEN_DICTIONARY_CONCEPTS = {
     # R5C-HIRID-013: native U/L CK-MB remains explicitly loadable, but its

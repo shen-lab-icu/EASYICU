@@ -3252,7 +3252,14 @@ def round_to_interval(
             )
         step = interval_td / pd.Timedelta(1, unit=normalized_unit)
         numeric = pd.to_numeric(values, errors="coerce")
-        floored = np.floor(numeric / step) * step
+        if interval_td < pd.Timedelta(hours=1):
+            # A sub-hour grid point k*step can divide back to k - 1e-15; it is
+            # already on the grid (S853c). Hourly grids keep the plain floor.
+            from ..concept.minute_resolution import grid_floor_index
+
+            floored = grid_floor_index(numeric, step) * step
+        else:
+            floored = np.floor(numeric / step) * step
         result = pd.Series(floored, index=values.index, name=values.name)
         result[numeric.isna()] = np.nan
         return result

@@ -20,7 +20,9 @@ are dropped and counted, never guessed.
 
 from __future__ import annotations
 
-from typing import Mapping, Optional
+from contextlib import contextmanager
+from contextvars import ContextVar
+from typing import Iterator, Mapping, Optional
 
 import numpy as np
 import pandas as pd
@@ -44,6 +46,51 @@ def minute_resolution_requested(options: Optional[Mapping], interval) -> bool:
     if not options or options.get(MINUTE_RESOLUTION_KWARG) is not True or interval is None:
         return False
     return pd.to_timedelta(interval) < pd.Timedelta(hours=1)
+
+
+# Infusion rates (HiRID pharma doses, SICdb start/stop intervals) are binned by
+# their source callbacks, which see no load options. The opt-in load scopes the
+# requested grid here; outside it the callbacks keep their hourly bins.
+_RATE_GRID: ContextVar[Optional[pd.Timedelta]] = ContextVar("easyicu_minute_rate_grid", default=None)
+
+
+@contextmanager
+def minute_rate_grid(options: Optional[Mapping], interval) -> Iterator[Optional[pd.Timedelta]]:
+    """Scope the minute rate grid for one opt-in load (a no-op otherwise)."""
+    if not minute_resolution_requested(options, interval) or _RATE_GRID.get() is not None:
+        yield _RATE_GRID.get()
+        return
+    token = _RATE_GRID.set(pd.to_timedelta(interval))
+    try:
+        yield _RATE_GRID.get()
+    finally:
+        _RATE_GRID.reset(token)
+
+
+def active_minute_rate_grid() -> Optional[pd.Timedelta]:
+    """The scoped sub-hour grid for rate callbacks, or None (hourly bins)."""
+    return _RATE_GRID.get()
+
+
+def grid_bin_hours(index: np.ndarray, grid: pd.Timedelta) -> np.ndarray:
+    """Bin index -> ICU-relative hours, with the DuckDB minute-grid arithmetic.
+
+    The DuckDB paths compute ``FLOOR(x / g) * g`` with ``g = minutes / 60``, so a
+    bin is ``k * g`` (not ``k / 60``); equal floats keep (stay, minute) joins exact.
+    """
+    step = (grid.total_seconds() / 60.0) / 60
+    return np.asarray(index, dtype=float) * step
+
+
+def grid_floor_index(values, step: float):
+    """``floor(values / step)`` that keeps a grid point ``k * step`` at ``k``.
+
+    ``(k * step) / step`` can round to just below ``k`` (k = 31, 62, 123, ... for
+    one minute in hours), which a plain floor moves into the previous bin.
+    """
+    q = np.asarray(values, dtype=float) / step
+    nearest = np.round(q)
+    return np.floor(np.where(np.abs(q - nearest) <= 1e-9, nearest, q))
 
 
 def sicdb_minute_rows_apply(database: str, table: str, options: Optional[Mapping], interval) -> bool:

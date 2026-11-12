@@ -78,23 +78,35 @@ def icu_seconds(frame, data_source, columns):
     return out.drop(columns="ICUOffset")
 
 
-def materialize_intervals(frame, *, start="Offset", stop="OffsetDrugEnd", data_source=None, relative=False):
-    """Return hourly observations and per-interval overlap seconds, without aggregation."""
+def materialize_intervals(frame, *, start="Offset", stop="OffsetDrugEnd", data_source=None, relative=False,
+                          grid=None):
+    """Return hourly observations and per-interval overlap seconds, without aggregation.
+
+    ``grid`` (the minute opt-in only, S853c) uses bins of that length instead of
+    hours: each bin an interval overlaps carries its rate, and the time is the
+    bin start in ICU hours computed as the DuckDB minute grid computes it.
+    """
+    width = HOUR if grid is None else pd.to_timedelta(grid).total_seconds()
     raw = frame.copy() if relative else icu_seconds(frame, data_source, [start, stop])
     starts = pd.to_numeric(raw[start], errors="coerce").to_numpy(dtype=float)
     stops = pd.to_numeric(raw[stop], errors="coerce").to_numpy(dtype=float)
     valid = np.isfinite(starts) & np.isfinite(stops) & (stops > starts)
     rows = np.flatnonzero(valid)
-    first = np.floor(starts[valid] / HOUR).astype(np.int64)
-    last = np.ceil(stops[valid] / HOUR).astype(np.int64)
+    first = np.floor(starts[valid] / width).astype(np.int64)
+    last = np.ceil(stops[valid] / width).astype(np.int64)
     counts = last - first
     repeated = np.repeat(rows, counts)
     offsets = np.arange(len(repeated)) - np.repeat(np.r_[0, np.cumsum(counts)[:-1]], counts) if len(rows) else np.array([], dtype=int)
     hours = np.repeat(first, counts) + offsets
-    overlap_start = np.maximum(starts[repeated], hours * HOUR)
-    overlap_stop = np.minimum(stops[repeated], (hours + 1) * HOUR)
+    overlap_start = np.maximum(starts[repeated], hours * width)
+    overlap_stop = np.minimum(stops[repeated], (hours + 1) * width)
     out = raw.iloc[repeated].copy().reset_index(drop=True)
-    out[start] = hours.astype(float)
+    if grid is None:
+        out[start] = hours.astype(float)
+    else:
+        from .minute_resolution import grid_bin_hours
+
+        out[start] = grid_bin_hours(hours, pd.to_timedelta(grid))
     out = out.drop(columns=[stop, "dur_var"], errors="ignore")
     out.attrs["easyicu_time_columns"] = {start: "icu_relative_hours"}
     out.attrs[COVERAGE_ATTR] = {
