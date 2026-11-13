@@ -73,6 +73,24 @@ def test_aumc_boolean_category_and_fluidin_through_loader(tmp_path, name):
     assert result.charttime.tolist() == [0., 1.]
 
 
+@pytest.mark.parametrize("name", NAMES)
+def test_aumc_integer_isadditive_as_in_the_converted_source(tmp_path, name):
+    """The converted AUMCdb drugitems store isadditive as BIGINT 0/1 (TB1 real-data check)."""
+    entry = DICTIONARY[name]["sources"]["aumc"][0]
+    import re
+    category = int(re.search(r"\(\?:([0-9]+)", entry["require_regex"]["ordercategoryid"]).group(1))
+    pd.DataFrame({"admissionid": [1], "patientid": [1], "admittedat": [0],
+        "dischargedat": [24 * 3600000]}).to_parquet(tmp_path / "admissions.parquet", index=False)
+    frame = pd.DataFrame({"admissionid": 1, "itemid": entry["ids"][0],
+        "start": 1800000, "stop": 7200000, "fluidin": 150., "dose": 999., "doseunit": "mg",
+        "isadditive": pd.Series([0, 1, 0, None], dtype="Int64"),
+        "ordercategoryid": [category, category, -1, category]})
+    frame.to_parquet(tmp_path / "drugitems.parquet", index=False)
+    result = _load(tmp_path, "aumc", [name])[name].data
+    assert result[name].tolist() == pytest.approx([50., 100.])
+    assert result.charttime.tolist() == [0., 1.]
+
+
 @pytest.mark.parametrize("name", [n for n in NAMES if "sic" in DICTIONARY[n]["sources"]])
 def test_sic_loader_retains_bolus_and_conserves_continuous_volume(tmp_path, name):
     entry = DICTIONARY[name]["sources"]["sic"][0]

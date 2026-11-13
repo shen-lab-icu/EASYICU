@@ -41559,7 +41559,7 @@
       "isadditive"
      ],
      "require_regex": {
-      "isadditive": "^False$",
+      "isadditive": "^(?:0(?:\\.0)?|[Ff]alse)$",
       "ordercategoryid": "^(?:17)(?:\\.0)?$"
      }
     },
@@ -41580,7 +41580,7 @@
       "isadditive"
      ],
      "require_regex": {
-      "isadditive": "^False$",
+      "isadditive": "^(?:0(?:\\.0)?|[Ff]alse)$",
       "ordercategoryid": "^(?:17)(?:\\.0)?$"
      }
     },
@@ -41601,7 +41601,7 @@
       "isadditive"
      ],
      "require_regex": {
-      "isadditive": "^False$",
+      "isadditive": "^(?:0(?:\\.0)?|[Ff]alse)$",
       "ordercategoryid": "^(?:17)(?:\\.0)?$"
      }
     },
@@ -41622,7 +41622,7 @@
       "isadditive"
      ],
      "require_regex": {
-      "isadditive": "^False$",
+      "isadditive": "^(?:0(?:\\.0)?|[Ff]alse)$",
       "ordercategoryid": "^(?:17)(?:\\.0)?$"
      }
     },
@@ -41643,7 +41643,7 @@
       "isadditive"
      ],
      "require_regex": {
-      "isadditive": "^False$",
+      "isadditive": "^(?:0(?:\\.0)?|[Ff]alse)$",
       "ordercategoryid": "^(?:17)(?:\\.0)?$"
      }
     }
@@ -41967,7 +41967,7 @@
       "isadditive"
      ],
      "require_regex": {
-      "isadditive": "^False$",
+      "isadditive": "^(?:0(?:\\.0)?|[Ff]alse)$",
       "ordercategoryid": "^(?:55)(?:\\.0)?$"
      }
     },
@@ -41988,7 +41988,7 @@
       "isadditive"
      ],
      "require_regex": {
-      "isadditive": "^False$",
+      "isadditive": "^(?:0(?:\\.0)?|[Ff]alse)$",
       "ordercategoryid": "^(?:55)(?:\\.0)?$"
      }
     },
@@ -42009,7 +42009,7 @@
       "isadditive"
      ],
      "require_regex": {
-      "isadditive": "^False$",
+      "isadditive": "^(?:0(?:\\.0)?|[Ff]alse)$",
       "ordercategoryid": "^(?:55)(?:\\.0)?$"
      }
     },
@@ -42030,7 +42030,7 @@
       "isadditive"
      ],
      "require_regex": {
-      "isadditive": "^False$",
+      "isadditive": "^(?:0(?:\\.0)?|[Ff]alse)$",
       "ordercategoryid": "^(?:65)(?:\\.0)?$"
      }
     },
@@ -42051,7 +42051,7 @@
       "isadditive"
      ],
      "require_regex": {
-      "isadditive": "^False$",
+      "isadditive": "^(?:0(?:\\.0)?|[Ff]alse)$",
       "ordercategoryid": "^(?:55)(?:\\.0)?$"
      }
     },
@@ -42072,7 +42072,7 @@
       "isadditive"
      ],
      "require_regex": {
-      "isadditive": "^False$",
+      "isadditive": "^(?:0(?:\\.0)?|[Ff]alse)$",
       "ordercategoryid": "^(?:55)(?:\\.0)?$"
      }
     },
@@ -42093,7 +42093,7 @@
       "isadditive"
      ],
      "require_regex": {
-      "isadditive": "^False$",
+      "isadditive": "^(?:0(?:\\.0)?|[Ff]alse)$",
       "ordercategoryid": "^(?:55)(?:\\.0)?$"
      }
     },
@@ -42114,7 +42114,7 @@
       "isadditive"
      ],
      "require_regex": {
-      "isadditive": "^False$",
+      "isadditive": "^(?:0(?:\\.0)?|[Ff]alse)$",
       "ordercategoryid": "^(?:55)(?:\\.0)?$"
      }
     },
@@ -42135,7 +42135,7 @@
       "isadditive"
      ],
      "require_regex": {
-      "isadditive": "^False$",
+      "isadditive": "^(?:0(?:\\.0)?|[Ff]alse)$",
       "ordercategoryid": "^(?:55)(?:\\.0)?$"
      }
     },
@@ -42156,7 +42156,7 @@
       "isadditive"
      ],
      "require_regex": {
-      "isadditive": "^False$",
+      "isadditive": "^(?:0(?:\\.0)?|[Ff]alse)$",
       "ordercategoryid": "^(?:55)(?:\\.0)?$"
      }
     },
@@ -42177,7 +42177,7 @@
       "isadditive"
      ],
      "require_regex": {
-      "isadditive": "^False$",
+      "isadditive": "^(?:0(?:\\.0)?|[Ff]alse)$",
       "ordercategoryid": "^(?:55)(?:\\.0)?$"
      }
     },
@@ -42198,7 +42198,7 @@
       "isadditive"
      ],
      "require_regex": {
-      "isadditive": "^False$",
+      "isadditive": "^(?:0(?:\\.0)?|[Ff]alse)$",
       "ordercategoryid": "^(?:55)(?:\\.0)?$"
      }
     },
@@ -42219,7 +42219,7 @@
       "isadditive"
      ],
      "require_regex": {
-      "isadditive": "^False$",
+      "isadditive": "^(?:0(?:\\.0)?|[Ff]alse)$",
       "ordercategoryid": "^(?:55)(?:\\.0)?$"
      }
     },
@@ -42240,7 +42240,7 @@
       "isadditive"
      ],
      "require_regex": {
-      "isadditive": "^False$",
+      "isadditive": "^(?:0(?:\\.0)?|[Ff]alse)$",
       "ordercategoryid": "^(?:55)(?:\\.0)?$"
      }
     },
@@ -42261,7 +42261,7 @@
       "isadditive"
      ],
      "require_regex": {
-      "isadditive": "^False$",
+      "isadditive": "^(?:0(?:\\.0)?|[Ff]alse)$",
       "ordercategoryid": "^(?:55)(?:\\.0)?$"
      }
     },
@@ -42282,7 +42282,7 @@
       "isadditive"
      ],
      "require_regex": {
-      "isadditive": "^False$",
+      "isadditive": "^(?:0(?:\\.0)?|[Ff]alse)$",
       "ordercategoryid": "^(?:55)(?:\\.0)?$"
      }
     },
@@ -42303,7 +42303,7 @@
       "isadditive"
      ],
      "require_regex": {
-      "isadditive": "^False$",
+      "isadditive": "^(?:0(?:\\.0)?|[Ff]alse)$",
       "ordercategoryid": "^(?:55)(?:\\.0)?$"
      }
     },
@@ -42324,7 +42324,7 @@
       "isadditive"
      ],
      "require_regex": {
-      "isadditive": "^False$",
+      "isadditive": "^(?:0(?:\\.0)?|[Ff]alse)$",
       "ordercategoryid": "^(?:55)(?:\\.0)?$"
      }
     },
@@ -42345,7 +42345,7 @@
       "isadditive"
      ],
      "require_regex": {
-      "isadditive": "^False$",
+      "isadditive": "^(?:0(?:\\.0)?|[Ff]alse)$",
       "ordercategoryid": "^(?:55)(?:\\.0)?$"
      }
     },
@@ -42366,7 +42366,7 @@
       "isadditive"
      ],
      "require_regex": {
-      "isadditive": "^False$",
+      "isadditive": "^(?:0(?:\\.0)?|[Ff]alse)$",
       "ordercategoryid": "^(?:55)(?:\\.0)?$"
      }
     },
@@ -42387,7 +42387,7 @@
       "isadditive"
      ],
      "require_regex": {
-      "isadditive": "^False$",
+      "isadditive": "^(?:0(?:\\.0)?|[Ff]alse)$",
       "ordercategoryid": "^(?:55)(?:\\.0)?$"
      }
     },
@@ -42408,7 +42408,7 @@
       "isadditive"
      ],
      "require_regex": {
-      "isadditive": "^False$",
+      "isadditive": "^(?:0(?:\\.0)?|[Ff]alse)$",
       "ordercategoryid": "^(?:55)(?:\\.0)?$"
      }
     },
@@ -42429,7 +42429,7 @@
       "isadditive"
      ],
      "require_regex": {
-      "isadditive": "^False$",
+      "isadditive": "^(?:0(?:\\.0)?|[Ff]alse)$",
       "ordercategoryid": "^(?:55|65)(?:\\.0)?$"
      }
     },
@@ -42450,7 +42450,7 @@
       "isadditive"
      ],
      "require_regex": {
-      "isadditive": "^False$",
+      "isadditive": "^(?:0(?:\\.0)?|[Ff]alse)$",
       "ordercategoryid": "^(?:65)(?:\\.0)?$"
      }
     },
@@ -42471,7 +42471,7 @@
       "isadditive"
      ],
      "require_regex": {
-      "isadditive": "^False$",
+      "isadditive": "^(?:0(?:\\.0)?|[Ff]alse)$",
       "ordercategoryid": "^(?:65)(?:\\.0)?$"
      }
     },
@@ -42492,7 +42492,7 @@
       "isadditive"
      ],
      "require_regex": {
-      "isadditive": "^False$",
+      "isadditive": "^(?:0(?:\\.0)?|[Ff]alse)$",
       "ordercategoryid": "^(?:65)(?:\\.0)?$"
      }
     },
@@ -42513,7 +42513,7 @@
       "isadditive"
      ],
      "require_regex": {
-      "isadditive": "^False$",
+      "isadditive": "^(?:0(?:\\.0)?|[Ff]alse)$",
       "ordercategoryid": "^(?:27)(?:\\.0)?$"
      }
     }
@@ -43554,7 +43554,7 @@
       "isadditive"
      ],
      "require_regex": {
-      "isadditive": "^False$",
+      "isadditive": "^(?:0(?:\\.0)?|[Ff]alse)$",
       "ordercategoryid": "^(?:61)(?:\\.0)?$"
      }
     }
@@ -43725,7 +43725,7 @@
       "isadditive"
      ],
      "require_regex": {
-      "isadditive": "^False$",
+      "isadditive": "^(?:0(?:\\.0)?|[Ff]alse)$",
       "ordercategoryid": "^(?:61)(?:\\.0)?$"
      }
     }
@@ -43823,7 +43823,7 @@
       "isadditive"
      ],
      "require_regex": {
-      "isadditive": "^False$",
+      "isadditive": "^(?:0(?:\\.0)?|[Ff]alse)$",
       "ordercategoryid": "^(?:39)(?:\\.0)?$"
      }
     },
@@ -43844,7 +43844,7 @@
       "isadditive"
      ],
      "require_regex": {
-      "isadditive": "^False$",
+      "isadditive": "^(?:0(?:\\.0)?|[Ff]alse)$",
       "ordercategoryid": "^(?:39)(?:\\.0)?$"
      }
     },
@@ -43865,7 +43865,7 @@
       "isadditive"
      ],
      "require_regex": {
-      "isadditive": "^False$",
+      "isadditive": "^(?:0(?:\\.0)?|[Ff]alse)$",
       "ordercategoryid": "^(?:39)(?:\\.0)?$"
      }
     },
@@ -43886,7 +43886,7 @@
       "isadditive"
      ],
      "require_regex": {
-      "isadditive": "^False$",
+      "isadditive": "^(?:0(?:\\.0)?|[Ff]alse)$",
       "ordercategoryid": "^(?:39)(?:\\.0)?$"
      }
     },
@@ -43907,7 +43907,7 @@
       "isadditive"
      ],
      "require_regex": {
-      "isadditive": "^False$",
+      "isadditive": "^(?:0(?:\\.0)?|[Ff]alse)$",
       "ordercategoryid": "^(?:39)(?:\\.0)?$"
      }
     },
@@ -43928,7 +43928,7 @@
       "isadditive"
      ],
      "require_regex": {
-      "isadditive": "^False$",
+      "isadditive": "^(?:0(?:\\.0)?|[Ff]alse)$",
       "ordercategoryid": "^(?:39)(?:\\.0)?$"
      }
     },
@@ -43949,7 +43949,7 @@
       "isadditive"
      ],
      "require_regex": {
-      "isadditive": "^False$",
+      "isadditive": "^(?:0(?:\\.0)?|[Ff]alse)$",
       "ordercategoryid": "^(?:39)(?:\\.0)?$"
      }
     },
@@ -43970,7 +43970,7 @@
       "isadditive"
      ],
      "require_regex": {
-      "isadditive": "^False$",
+      "isadditive": "^(?:0(?:\\.0)?|[Ff]alse)$",
       "ordercategoryid": "^(?:39)(?:\\.0)?$"
      }
     },
@@ -43991,7 +43991,7 @@
       "isadditive"
      ],
      "require_regex": {
-      "isadditive": "^False$",
+      "isadditive": "^(?:0(?:\\.0)?|[Ff]alse)$",
       "ordercategoryid": "^(?:39)(?:\\.0)?$"
      }
     },
@@ -44012,7 +44012,7 @@
       "isadditive"
      ],
      "require_regex": {
-      "isadditive": "^False$",
+      "isadditive": "^(?:0(?:\\.0)?|[Ff]alse)$",
       "ordercategoryid": "^(?:39)(?:\\.0)?$"
      }
     },
@@ -44033,7 +44033,7 @@
       "isadditive"
      ],
      "require_regex": {
-      "isadditive": "^False$",
+      "isadditive": "^(?:0(?:\\.0)?|[Ff]alse)$",
       "ordercategoryid": "^(?:39)(?:\\.0)?$"
      }
     },
@@ -44054,7 +44054,7 @@
       "isadditive"
      ],
      "require_regex": {
-      "isadditive": "^False$",
+      "isadditive": "^(?:0(?:\\.0)?|[Ff]alse)$",
       "ordercategoryid": "^(?:39)(?:\\.0)?$"
      }
     },
@@ -44075,7 +44075,7 @@
       "isadditive"
      ],
      "require_regex": {
-      "isadditive": "^False$",
+      "isadditive": "^(?:0(?:\\.0)?|[Ff]alse)$",
       "ordercategoryid": "^(?:39)(?:\\.0)?$"
      }
     },
@@ -44096,7 +44096,7 @@
       "isadditive"
      ],
      "require_regex": {
-      "isadditive": "^False$",
+      "isadditive": "^(?:0(?:\\.0)?|[Ff]alse)$",
       "ordercategoryid": "^(?:39)(?:\\.0)?$"
      }
     },
@@ -44117,7 +44117,7 @@
       "isadditive"
      ],
      "require_regex": {
-      "isadditive": "^False$",
+      "isadditive": "^(?:0(?:\\.0)?|[Ff]alse)$",
       "ordercategoryid": "^(?:39)(?:\\.0)?$"
      }
     }
@@ -44391,7 +44391,7 @@
       "isadditive"
      ],
      "require_regex": {
-      "isadditive": "^False$",
+      "isadditive": "^(?:0(?:\\.0)?|[Ff]alse)$",
       "ordercategoryid": "^(?:61)(?:\\.0)?$"
      }
     }
