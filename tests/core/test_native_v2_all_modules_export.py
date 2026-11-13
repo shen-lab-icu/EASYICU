@@ -253,3 +253,23 @@ def test_opt_in_sedation_analgesia_publishes_on_native_hours(tmp_path, database)
     assert {"stay_id", "charttime"} <= set(frame.columns)
     assert pd.api.types.is_numeric_dtype(frame.charttime)
     assert frame["remifentanil"].notna().any()
+
+
+@pytest.mark.parametrize("database", ["hirid", "sic"])
+def test_opt_in_diuretic_nephrotoxin_publishes_on_native_hours(tmp_path, database):
+    from easyicu.api.extraction import extract_database
+    from easyicu.synthetic_sources import generate_source
+
+    source = tmp_path / "source"
+    generate_source(source, database, stays=12)
+    output = tmp_path / "out"
+    result = extract_database(
+        database, data_path=str(source), output_dir=str(output),
+        modules=["outcome", "diuretic_nephrotoxin"], native_export_v2=True, verbose=False,
+    )
+    assert not result["modules"]["diuretic_nephrotoxin"].get("errors")
+    frame = pd.read_parquet(output / "diuretic_nephrotoxin.parquet")
+    assert {"stay_id", "charttime"} <= set(frame.columns)
+    assert pd.api.types.is_numeric_dtype(frame.charttime)
+    assert frame["vancomycin_piperacillin_tazobactam"].notna().any()
+    assert "vancomycin_iv" not in frame.columns

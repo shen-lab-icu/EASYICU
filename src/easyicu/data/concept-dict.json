@@ -40758,5 +40758,326 @@
     }
    ]
   }
+ },
+ "furosemide_active": {
+  "class_name": "lgl_cncpt",
+  "description": "furosemide given in the hour: an administration at that hour or a running infusion covering it (any route)",
+  "category": "medications",
+  "aggregate": "max",
+  "sources": {
+   "miiv": [
+    {
+     "ids": [
+      221794,
+      228340
+     ],
+     "table": "inputevents",
+     "sub_var": "itemid",
+     "callback": "mimic_positive_dose",
+     "val_var": "rate",
+     "extra_vars": [
+      "amount",
+      "statusdescription"
+     ],
+     "status_var": "statusdescription",
+     "excluded_statuses": [
+      "Rewritten"
+     ],
+     "index_var": "starttime",
+     "dur_var": "endtime"
+    }
+   ],
+   "aumc": [
+    {
+     "ids": [
+      7244
+     ],
+     "table": "drugitems",
+     "sub_var": "itemid",
+     "callback": "aumc_positive_dose",
+     "val_var": "dose",
+     "index_var": "start",
+     "dur_var": "stop"
+    }
+   ],
+   "hirid": [
+    {
+     "ids": [
+      4,
+      482,
+      1000232,
+      1000747
+     ],
+     "table": "pharma",
+     "sub_var": "pharmaid",
+     "callback": "transform_fun(comp_na(`>`, 0.000001))"
+    }
+   ],
+   "sic": [
+    {
+     "ids": [
+      1417,
+      1654
+     ],
+     "table": "medication",
+     "sub_var": "DrugID",
+     "val_var": "Amount",
+     "callback": "sicdb_active_exposure",
+     "extra_vars": [
+      "OffsetDrugEnd"
+     ]
+    }
+   ],
+   "eicu": [
+    {
+     "table": "infusiondrug",
+     "sub_var": "drugname",
+     "val_var": "drugrate",
+     "callback": "eicu_positive_infusion",
+     "extra_vars": [
+      "drugrate",
+      "drugname"
+     ],
+     "ids": [
+      "Furosemide",
+      "Furosemide ()",
+      "Furosemide (Lasix) MAX 500 mg Sodium Chloride 0.9% 100 ml (mg/hr)",
+      "Furosemide (Lasix) STD 250 mg Sodium Chloride 0.9% 250 ml (mg/hr)",
+      "Furosemide (mg/hr)",
+      "Furosemide (ml/hr)",
+      "LASIX",
+      "LASIX (ml/hr)",
+      "Lasix (mg/hr)"
+     ]
+    }
+   ]
+  }
+ },
+ "torasemide": {
+  "class_name": "lgl_cncpt",
+  "description": "torasemide (torsemide) administration, any route",
+  "category": "medications",
+  "aggregate": "max",
+  "sources": {
+   "hirid": [
+    {
+     "ids": [
+      1000520,
+      1000521,
+      1000522,
+      1000986
+     ],
+     "table": "pharma",
+     "sub_var": "pharmaid",
+     "callback": "transform_fun(comp_na(`>`, 0.000001))"
+    }
+   ],
+   "sic": [
+    {
+     "ids": [
+      1450
+     ],
+     "table": "medication",
+     "sub_var": "DrugID",
+     "callback": "transform_fun(comp_na(`>`, 0))"
+    }
+   ]
+  }
+ },
+ "piperacillin_tazobactam": {
+  "class_name": "lgl_cncpt",
+  "description": "piperacillin-tazobactam intravenous administration",
+  "category": "medications",
+  "aggregate": "max",
+  "sources": {
+   "miiv": [
+    {
+     "ids": [
+      225893
+     ],
+     "table": "inputevents",
+     "sub_var": "itemid",
+     "callback": "mimic_positive_dose",
+     "val_var": "rate",
+     "extra_vars": [
+      "amount",
+      "statusdescription"
+     ],
+     "status_var": "statusdescription",
+     "excluded_statuses": [
+      "Rewritten"
+     ]
+    }
+   ],
+   "hirid": [
+    {
+     "ids": [
+      405,
+      1000837
+     ],
+     "table": "pharma",
+     "sub_var": "pharmaid",
+     "callback": "transform_fun(comp_na(`>`, 0.000001))",
+     "extra_vars": [
+      "route"
+     ],
+     "require_regex": {
+      "route": "(?i)^\\s*(?:[ci]v(?:-(?:inf|inj))?|i\\.?v\\.?|intravenous)\\s*$"
+     }
+    }
+   ],
+   "sic": [
+    {
+     "ids": [
+      1459
+     ],
+     "table": "medication",
+     "sub_var": "DrugID",
+     "callback": "sicdb_exposure",
+     "val_var": "Amount"
+    }
+   ]
+  }
+ },
+ "vancomycin_piperacillin_tazobactam": {
+  "class_name": "rec_cncpt",
+  "description": "vancomycin and piperacillin-tazobactam co-exposure: TRUE at an administration hour of either agent when the other agent was given in the same or the preceding 23 hours",
+  "category": "medications",
+  "aggregate": "max",
+  "unit": "boolean",
+  "concepts": [
+   "vancomycin_iv",
+   "piperacillin_tazobactam"
+  ],
+  "callback": "vpt_coexposure",
+  "target": "ts_tbl",
+  "sources": {}
+ },
+ "nsaid": {
+  "class_name": "lgl_cncpt",
+  "description": "systemic non-steroidal anti-inflammatory drug administration (non-aspirin COX inhibitors)",
+  "category": "medications",
+  "aggregate": "max",
+  "sources": {
+   "miiv": [
+    {
+     "ids": [
+      229072
+     ],
+     "table": "inputevents",
+     "sub_var": "itemid",
+     "callback": "mimic_positive_dose",
+     "val_var": "rate",
+     "extra_vars": [
+      "amount",
+      "statusdescription"
+     ],
+     "status_var": "statusdescription",
+     "excluded_statuses": [
+      "Rewritten"
+     ]
+    }
+   ],
+   "aumc": [
+    {
+     "ids": [
+      7407,
+      9063,
+      9064,
+      9081,
+      9103,
+      19162
+     ],
+     "table": "drugitems",
+     "sub_var": "itemid",
+     "callback": "aumc_positive_dose",
+     "val_var": "dose"
+    }
+   ],
+   "hirid": [
+    {
+     "ids": [
+      1000401,
+      1000809,
+      1000859,
+      1000883,
+      1000884,
+      1000885
+     ],
+     "table": "pharma",
+     "sub_var": "pharmaid",
+     "callback": "transform_fun(comp_na(`>`, 0.000001))"
+    }
+   ],
+   "sic": [
+    {
+     "ids": [
+      1575,
+      1732,
+      1733,
+      1753,
+      1804,
+      1865,
+      1971,
+      1972
+     ],
+     "table": "medication",
+     "sub_var": "DrugID",
+     "callback": "transform_fun(comp_na(`>`, 0))"
+    }
+   ]
+  }
+ },
+ "vancomycin_iv": {
+  "class_name": "lgl_cncpt",
+  "description": "vancomycin systemic (intravenous) administration; input of vancomycin_piperacillin_tazobactam",
+  "category": "medications",
+  "aggregate": "max",
+  "sources": {
+   "miiv": [
+    {
+     "ids": 225798,
+     "table": "inputevents",
+     "sub_var": "itemid",
+     "callback": "mimic_positive_dose",
+     "val_var": "rate",
+     "extra_vars": [
+      "amount",
+      "statusdescription"
+     ],
+     "status_var": "statusdescription",
+     "excluded_statuses": [
+      "Rewritten"
+     ]
+    }
+   ],
+   "hirid": [
+    {
+     "ids": [
+      189
+     ],
+     "table": "pharma",
+     "sub_var": "pharmaid",
+     "callback": "transform_fun(comp_na(`>`, 0.000001))",
+     "extra_vars": [
+      "route"
+     ],
+     "require_regex": {
+      "route": "(?i)^\\s*(?:[ci]v(?:-(?:inf|inj))?|i\\.?v\\.?|intravenous)\\s*$"
+     }
+    }
+   ],
+   "sic": [
+    {
+     "ids": [
+      1461
+     ],
+     "table": "medication",
+     "sub_var": "DrugID",
+     "callback": "sicdb_exposure",
+     "val_var": "Amount"
+    }
+   ]
+  }
  }
 }

@@ -29,6 +29,7 @@ from ..source_bounds import (
     strip_private_ledgers,
 )
 from ..concept.catalog import (
+    DIURETIC_NEPHROTOXIN_CONCEPTS,
     SEDATION_ANALGESIA_CONCEPTS,
     VENT_MECHANICS_CONCEPTS,
     HAEMO_ADVANCED_CONCEPTS,
@@ -138,6 +139,7 @@ EXTRACT_MODULES["weight_strict"] = list(WEIGHT_STRICT_CONCEPTS)
 EXTRACT_MODULES["cardiac_markers"] = list(CARDIAC_MARKERS_CONCEPTS)
 EXTRACT_MODULES["inflam_detail"] = list(INFLAM_DETAIL_CONCEPTS)
 EXTRACT_MODULES["renal_detail"] = list(RENAL_DETAIL_CONCEPTS)
+EXTRACT_MODULES['diuretic_nephrotoxin'] = list(DIURETIC_NEPHROTOXIN_CONCEPTS)
 EXTRACT_MODULES['sedation_analgesia'] = list(SEDATION_ANALGESIA_CONCEPTS)
 EXTRACT_MODULES['vent_mechanics'] = list(VENT_MECHANICS_CONCEPTS)
 EXTRACT_MODULES['haemo_advanced'] = list(HAEMO_ADVANCED_CONCEPTS)

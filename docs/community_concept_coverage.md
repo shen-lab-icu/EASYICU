@@ -1,7 +1,7 @@
 # Community database concept coverage
 
 Generated from `tools/build_community_concept_registry.py`. The matrix covers every standard
-concept (base dictionary plus SOFA-2 overlay): **390 concepts × 4 databases**.
+concept (base dictionary plus SOFA-2 overlay): **396 concepts × 4 databases**.
 
 `partial` is deliberately not advertised as extractable: it records useful ingredients while preventing an incomplete score or phenotype from being mistaken for a complete definition.
 
@@ -9,10 +9,10 @@ concept (base dictionary plus SOFA-2 overlay): **390 concepts × 4 databases**.
 
 | Database | Direct | Derived | Partial | Unavailable |
 |---|---:|---:|---:|---:|
-| nwicu | 137 | 19 | 37 | 197 |
-| zhejiang_eicu | 128 | 39 | 25 | 198 |
-| jinhua | 135 | 19 | 34 | 202 |
-| zigong | 125 | 27 | 41 | 197 |
+| nwicu | 137 | 19 | 37 | 203 |
+| zhejiang_eicu | 128 | 39 | 25 | 204 |
+| jinhua | 135 | 19 | 34 | 208 |
+| zigong | 125 | 27 | 41 | 203 |
 
 ## Complete matrix
 
@@ -148,6 +148,7 @@ concept (base dictionary plus SOFA-2 overlay): **390 concepts × 4 databases**.
 | `fluid_balance_cumulative` | output | unavailable | partial | unavailable | partial |
 | `ft4` | chemistry | direct | direct | direct | unavailable |
 | `furosemide` | medications | direct | direct | direct | direct |
+| `furosemide_active` | medications | unavailable | unavailable | unavailable | unavailable |
 | `gcs` | neurological | unavailable | unavailable | unavailable | partial |
 | `gedvi` | cardiovascular | unavailable | unavailable | unavailable | unavailable |
 | `gef` | cardiovascular | unavailable | unavailable | unavailable | unavailable |
@@ -246,6 +247,7 @@ concept (base dictionary plus SOFA-2 overlay): **390 concepts × 4 databases**.
 | `norepi_equiv` | medications | unavailable | unavailable | unavailable | unavailable |
 | `norepi_order_dur` | medications | unavailable | unavailable | unavailable | unavailable |
 | `norepi_rate` | medications | unavailable | unavailable | unavailable | unavailable |
+| `nsaid` | medications | unavailable | unavailable | unavailable | unavailable |
 | `ntprobnp` | chemistry | direct | unavailable | direct | unavailable |
 | `o2_flow` | respiratory | unavailable | unavailable | unavailable | unavailable |
 | `o2sat` | respiratory | direct | direct | direct | direct |
@@ -277,6 +279,7 @@ concept (base dictionary plus SOFA-2 overlay): **390 concepts × 4 databases**.
 | `phn_rate` | medications | unavailable | unavailable | unavailable | unavailable |
 | `phos` | chemistry | direct | direct | direct | direct |
 | `pip` | ventilator | unavailable | direct | unavailable | unavailable |
+| `piperacillin_tazobactam` | medications | unavailable | unavailable | unavailable | unavailable |
 | `piritramide` | medications | unavailable | unavailable | unavailable | unavailable |
 | `plateau_pres` | ventilator | partial | partial | unavailable | unavailable |
 | `plateau_pres_raw` | ventilator | unavailable | unavailable | unavailable | unavailable |
@@ -358,6 +361,7 @@ concept (base dictionary plus SOFA-2 overlay): **390 concepts × 4 databases**.
 | `tidal_vol_spont` | ventilator | unavailable | unavailable | unavailable | unavailable |
 | `tnt` | chemistry | direct | unavailable | unavailable | unavailable |
 | `tnt_hs` | chemistry | unavailable | unavailable | unavailable | unavailable |
+| `torasemide` | medications | unavailable | unavailable | unavailable | unavailable |
 | `total_input_ml` | output | unavailable | unavailable | unavailable | unavailable |
 | `total_protein` | chemistry | direct | direct | direct | direct |
 | `tramadol` | medications | unavailable | unavailable | unavailable | unavailable |
@@ -392,6 +396,8 @@ concept (base dictionary plus SOFA-2 overlay): **390 concepts × 4 databases**.
 | `urine_osm` | renal | unavailable | unavailable | unavailable | unavailable |
 | `urine_urea` | renal | unavailable | unavailable | unavailable | unavailable |
 | `vancomycin` | medications | direct | direct | direct | direct |
+| `vancomycin_iv` | medications | unavailable | unavailable | unavailable | unavailable |
+| `vancomycin_piperacillin_tazobactam` | medications | unavailable | unavailable | unavailable | unavailable |
 | `vaso_ind` | medications | unavailable | unavailable | unavailable | unavailable |
 | `vco2` | ventilator | unavailable | unavailable | unavailable | unavailable |
 | `vecuronium` | medications | direct | direct | direct | direct |

@@ -821,7 +821,25 @@ SEDATION_ANALGESIA_METADATA = {
     'tramadol': ('tramadol given in the hour, any systemic route', '曲马多给药时段', 'boolean'),
 }
 
+DIURETIC_NEPHROTOXIN_CONCEPTS = (
+    'furosemide_active',
+    'torasemide',
+    'piperacillin_tazobactam',
+    'vancomycin_piperacillin_tazobactam',
+    'nsaid',
+)
+DIURETIC_NEPHROTOXIN_METADATA = {
+    'furosemide_active': ('furosemide given in the hour: an administration at that hour or a running infusion covering it (any route)', '呋塞米给药时段', 'boolean'),
+    'torasemide': ('torasemide (torsemide) administration, any route', '托拉塞米给药', 'boolean'),
+    'piperacillin_tazobactam': ('piperacillin-tazobactam intravenous administration', '哌拉西林他唑巴坦给药', 'boolean'),
+    'vancomycin_piperacillin_tazobactam': ('vancomycin and piperacillin-tazobactam co-exposure: TRUE at an administration hour of either agent when the other agent was given in the same or the preceding 23 hours', '万古霉素与哌拉西林他唑巴坦联合暴露', 'boolean'),
+    'nsaid': ('systemic non-steroidal anti-inflammatory drug administration (non-aspirin COX inhibitors)', '全身用非甾体抗炎药', 'boolean'),
+    'vancomycin_iv': ('vancomycin systemic (intravenous) administration; input of vancomycin_piperacillin_tazobactam', '静脉万古霉素给药', 'boolean'),
+}
+
 HIDDEN_DICTIONARY_CONCEPTS = {
+    'vancomycin_iv',
+    *DIURETIC_NEPHROTOXIN_CONCEPTS,
     *SEDATION_ANALGESIA_CONCEPTS,
     *VENT_MECHANICS_CONCEPTS,
     *HAEMO_ADVANCED_CONCEPTS,

@@ -1,5 +1,5 @@
 {
-  "concept_count": 390,
+  "concept_count": 396,
   "concepts": {
     "abdominal_circumference": {
       "category": "ventilator",
@@ -3677,6 +3677,28 @@
       },
       "description": "furosemide (Lasix) administration, any route (IV bolus, continuous infusion or enteral)"
     },
+    "furosemide_active": {
+      "category": "medications",
+      "databases": {
+        "jinhua": {
+          "reason": "no validated native field/event in this release",
+          "status": "unavailable"
+        },
+        "nwicu": {
+          "reason": "no validated native field/event in this release",
+          "status": "unavailable"
+        },
+        "zhejiang_eicu": {
+          "reason": "no validated native field/event in this release",
+          "status": "unavailable"
+        },
+        "zigong": {
+          "reason": "no validated native field/event in this release",
+          "status": "unavailable"
+        }
+      },
+      "description": "furosemide given in the hour: an administration at that hour or a running infusion covering it (any route)"
+    },
     "gcs": {
       "category": "neurological",
       "databases": {
@@ -6480,6 +6502,28 @@
       },
       "description": "norepinephrine rate"
     },
+    "nsaid": {
+      "category": "medications",
+      "databases": {
+        "jinhua": {
+          "reason": "no validated native field/event in this release",
+          "status": "unavailable"
+        },
+        "nwicu": {
+          "reason": "no validated native field/event in this release",
+          "status": "unavailable"
+        },
+        "zhejiang_eicu": {
+          "reason": "no validated native field/event in this release",
+          "status": "unavailable"
+        },
+        "zigong": {
+          "reason": "no validated native field/event in this release",
+          "status": "unavailable"
+        }
+      },
+      "description": "systemic non-steroidal anti-inflammatory drug administration (non-aspirin COX inhibitors)"
+    },
     "ntprobnp": {
       "category": "chemistry",
       "databases": {
@@ -7291,6 +7335,28 @@
         }
       },
       "description": "Peak Inspiratory Pressure"
+    },
+    "piperacillin_tazobactam": {
+      "category": "medications",
+      "databases": {
+        "jinhua": {
+          "reason": "no validated native field/event in this release",
+          "status": "unavailable"
+        },
+        "nwicu": {
+          "reason": "no validated native field/event in this release",
+          "status": "unavailable"
+        },
+        "zhejiang_eicu": {
+          "reason": "no validated native field/event in this release",
+          "status": "unavailable"
+        },
+        "zigong": {
+          "reason": "no validated native field/event in this release",
+          "status": "unavailable"
+        }
+      },
+      "description": "piperacillin-tazobactam intravenous administration"
     },
     "piritramide": {
       "category": "medications",
@@ -10337,6 +10403,28 @@
       },
       "description": "High-sensitivity cardiac troponin T; assay subset of tnt"
     },
+    "torasemide": {
+      "category": "medications",
+      "databases": {
+        "jinhua": {
+          "reason": "no validated native field/event in this release",
+          "status": "unavailable"
+        },
+        "nwicu": {
+          "reason": "no validated native field/event in this release",
+          "status": "unavailable"
+        },
+        "zhejiang_eicu": {
+          "reason": "no validated native field/event in this release",
+          "status": "unavailable"
+        },
+        "zigong": {
+          "reason": "no validated native field/event in this release",
+          "status": "unavailable"
+        }
+      },
+      "description": "torasemide (torsemide) administration, any route"
+    },
     "total_input_ml": {
       "category": "output",
       "databases": {
@@ -11438,6 +11526,82 @@
       },
       "description": "vancomycin administration (glycopeptide antibiotic)"
     },
+    "vancomycin_iv": {
+      "category": "medications",
+      "databases": {
+        "jinhua": {
+          "reason": "no validated native field/event in this release",
+          "status": "unavailable"
+        },
+        "nwicu": {
+          "reason": "no validated native field/event in this release",
+          "status": "unavailable"
+        },
+        "zhejiang_eicu": {
+          "reason": "no validated native field/event in this release",
+          "status": "unavailable"
+        },
+        "zigong": {
+          "reason": "no validated native field/event in this release",
+          "status": "unavailable"
+        }
+      },
+      "description": "vancomycin systemic (intravenous) administration; input of vancomycin_piperacillin_tazobactam"
+    },
+    "vancomycin_piperacillin_tazobactam": {
+      "category": "medications",
+      "databases": {
+        "jinhua": {
+          "dependencies": [
+            "vancomycin_iv",
+            "piperacillin_tazobactam"
+          ],
+          "missing_dependencies": [
+            "vancomycin_iv",
+            "piperacillin_tazobactam"
+          ],
+          "reason": "declared dependencies are unavailable",
+          "status": "unavailable"
+        },
+        "nwicu": {
+          "dependencies": [
+            "vancomycin_iv",
+            "piperacillin_tazobactam"
+          ],
+          "missing_dependencies": [
+            "vancomycin_iv",
+            "piperacillin_tazobactam"
+          ],
+          "reason": "declared dependencies are unavailable",
+          "status": "unavailable"
+        },
+        "zhejiang_eicu": {
+          "dependencies": [
+            "vancomycin_iv",
+            "piperacillin_tazobactam"
+          ],
+          "missing_dependencies": [
+            "vancomycin_iv",
+            "piperacillin_tazobactam"
+          ],
+          "reason": "declared dependencies are unavailable",
+          "status": "unavailable"
+        },
+        "zigong": {
+          "dependencies": [
+            "vancomycin_iv",
+            "piperacillin_tazobactam"
+          ],
+          "missing_dependencies": [
+            "vancomycin_iv",
+            "piperacillin_tazobactam"
+          ],
+          "reason": "declared dependencies are unavailable",
+          "status": "unavailable"
+        }
+      },
+      "description": "vancomycin and piperacillin-tazobactam co-exposure: TRUE at an administration hour of either agent when the other agent was given in the same or the preceding 23 hours"
+    },
     "vaso_ind": {
       "category": "medications",
       "databases": {
@@ -11958,25 +12122,25 @@
       "derived": 19,
       "direct": 135,
       "partial": 34,
-      "unavailable": 202
+      "unavailable": 208
     },
     "nwicu": {
       "derived": 19,
       "direct": 137,
       "partial": 37,
-      "unavailable": 197
+      "unavailable": 203
     },
     "zhejiang_eicu": {
       "derived": 39,
       "direct": 128,
       "partial": 25,
-      "unavailable": 198
+      "unavailable": 204
     },
     "zigong": {
       "derived": 27,
       "direct": 125,
       "partial": 41,
-      "unavailable": 197
+      "unavailable": 203
     }
   },
   "databases": [

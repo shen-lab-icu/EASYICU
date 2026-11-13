@@ -14,6 +14,7 @@ from ..value_failures import TYPED_VALUE_FAILURES
 from ..scores.urine_windows import assess_urine_windows, urine_evidence_columns
 from ..scores.urine_output import DAILY_COLUMNS, daily_volume_batch as _urine24_batch, rate_daily
 from .free_days import free_days_callback
+from .nephrotoxin_coexposure import vpt_coexposure_callback
 
 import logging
 import os
@@ -9115,6 +9116,7 @@ def apply_vent_mode_frame(frame, value_column, db_name, axis, out_column):
 
 CALLBACK_REGISTRY: MutableMapping[str, CallbackFn] = {
     "free_days": free_days_callback,
+    "vpt_coexposure": vpt_coexposure_callback,
     "bmi": _callback_bmi,
     "anion_gap": _callback_anion_gap,
     "plateau_pressure": _callback_plateau_pressure,
