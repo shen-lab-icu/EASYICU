@@ -1056,6 +1056,18 @@
      "table": "numericitems",
      "sub_var": "itemid",
      "callback": "convert_unit(binary_op(`*`, 0.1), 'g/dL')"
+    },
+    {
+     "ids": [
+      9975
+     ],
+     "table": "numericitems",
+     "sub_var": "itemid",
+     "unit_var": "unit",
+     "require_regex": {
+      "unit": "(?i)^\\s*g/l\\s*$"
+     },
+     "callback": "convert_unit(binary_op(`*`, 0.1), 'g/dL')"
     }
    ],
    "eicu": [
@@ -34085,6 +34097,18 @@
      ],
      "table": "numericitems",
      "sub_var": "itemid"
+    },
+    {
+     "ids": [
+      15565
+     ],
+     "table": "numericitems",
+     "sub_var": "itemid",
+     "unit_var": "unit",
+     "require_regex": {
+      "unit": "(?i)^\\s*µg/l\\s*$"
+     },
+     "callback": "convert_unit(binary_op(`*`, 1), 'ng/mL')"
     }
    ],
    "hirid": [
@@ -34127,6 +34151,19 @@
      "ids": "BNP",
      "table": "lab",
      "sub_var": "labname"
+    }
+   ],
+   "miiv": [
+    {
+     "ids": [
+      227446
+     ],
+     "table": "chartevents",
+     "sub_var": "itemid",
+     "unit_var": "valueuom",
+     "require_regex": {
+      "valueuom": "(?i)^\\s*pg/mL\\s*$"
+     }
     }
    ]
   }
