@@ -1119,10 +1119,13 @@ def _apply_callback_body(
         result.attrs["mimic_mass_rate_audit"] = audit
         return result
 
-    # A SICdb medication source that declares IsSingleDose keeps continuous
-    # rows only, whatever its value callback; nested callbacks then see a
-    # source without the declaration and do not filter (or fail) again.
-    if _SIC_SINGLE_DOSE_FLAG in _declared_extra_vars(source):
+    # Declared SIC flags normally admit continuous rows only. The volume
+    # allocator alone owns both bolus and continuous amounts. Nested rate
+    # callbacks see the flag removed and do not filter (or fail) again.
+    if (
+        _SIC_SINGLE_DOSE_FLAG in _declared_extra_vars(source)
+        and expr != "sicdb_volume_allocate"
+    ):
         frame = _drop_sic_single_doses(frame, source, concept_name)
         source = _without_single_dose_flag(source)
 
@@ -2613,16 +2616,21 @@ def _apply_callback_body(
         return frame
     
     # 匹配 apply_map(c(...), var = 'sub_var') 或 apply_map(c(...))
-    match = re.fullmatch(r"apply_map\(\s*c\((.+?)\)\s*(?:,\s*var\s*=\s*['\"](.+?)['\"])?\s*\)", expr, flags=re.DOTALL)
+    match = re.fullmatch(
+        r"apply_map\(\s*c\((.+?)\)\s*"
+        r"(?:,\s*var\s*=\s*['\"](.+?)['\"])?\s*"
+        r"(?:,\s*strict\s*=\s*(TRUE|FALSE))?\s*\)",
+        expr, flags=re.DOTALL,
+    )
     if match:
         mapping = _parse_mapping(match.group(1))
         var_param = match.group(2) if match.group(2) else None
         # A logical map (every target TRUE/FALSE) leaves an unmapped value
         # missing, as ricu's map[x] does: eICU 'NO', 'CAM-ICU' or an ICDSC
         # score reached delirium_positive as text (2026-11-04 audit round 4,
-        # R4-041).  Other maps keep an unmapped value for later checks.
+        # R4-041). Other maps preserve unknowns unless strict = TRUE is set.
         logical_map = bool(mapping) and all(isinstance(v, (bool, np.bool_)) for v in mapping.values())
-        unmapped = None if logical_map else _KEEP_UNMAPPED
+        unmapped = None if logical_map or match.group(3) == "TRUE" else _KEEP_UNMAPPED
 
         frame = frame.copy()
         

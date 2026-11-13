@@ -284,7 +284,6 @@ CONCEPT_DICTIONARY = {
     'norepi60': ('Norepinephrine Rate (>60min)', '去甲肾上腺素速率（持续>60分钟）', 'mcg/kg/min'),
     'epi60': ('Epinephrine Rate (>60min)', '肾上腺素速率（持续>60分钟）', 'mcg/kg/min'),
     'phn_rate': ('Phenylephrine Rate', '去氧肾上腺素速率', 'mcg/kg/min'),
-
     # 肾脏与尿量率
     'urine_na': ('Urine Sodium', '尿钠', 'mmol/L'),
     'urine_crea': ('Urine Creatinine', '尿肌酐', 'mg/dL'),
@@ -726,14 +725,18 @@ RRT_DETAIL_CONCEPTS = (
     'crrt_blood_flow_set',
     'crrt_citrate_flow',
     'crrt_dialysate_flow',
+    'crrt_dilution_mode_set',
     'crrt_replacement_flow',
     'crrt_replacement_flow_set',
     'crrt_replacement_post_flow',
     'crrt_replacement_post_flow_set',
     'crrt_replacement_pre_flow',
     'crrt_replacement_pre_flow_set',
+    'rrt_modality',
 )
 RRT_DETAIL_METADATA = {
+    'crrt_dilution_mode_set': ('Prescribed CRRT dilution mode', '医嘱设置的CRRT稀释方式', 'category'),
+    'rrt_modality': ('Charted CRRT modality', '记录的CRRT模式', 'category'),
     'crrt_blood_flow': ('Charted CRRT blood flow', '记录的CRRT血流量', 'mL/min'),
     'crrt_blood_flow_set': ('Prescribed CRRT blood flow', '医嘱设置的CRRT血流量', 'mL/min'),
     'crrt_citrate_flow': ('Charted CRRT citrate solution flow', '记录的CRRT枸橼酸溶液流量', 'mL/h'),
@@ -752,6 +755,7 @@ HAEMO_ADVANCED_CONCEPTS = (
     'ecmo_fio2',
     'ecmo_pump_speed',
     'ecmo_sweep_flow',
+    'ecmo_type',
     'evlwi',
     'gedvi',
     'gef',
@@ -760,6 +764,7 @@ HAEMO_ADVANCED_CONCEPTS = (
     'svv',
 )
 HAEMO_ADVANCED_METADATA = {
+    'ecmo_type': ('ECMO circuit configuration', 'ECMO回路类型', 'category'),
     'ci': ('Cardiac index', '心脏指数', 'L/min/m2'),
     'ecmo_blood_flow': ('ECMO blood flow', 'ECMO血流量', 'L/min'),
     'ecmo_fio2': ('ECMO oxygenator oxygen concentration', 'ECMO氧合器氧浓度', '%'),
@@ -810,8 +815,17 @@ SEDATION_ANALGESIA_CONCEPTS = (
     'oxycodone',
     'tramadol',
     'bps',
+    'cam_icu',
+    'ramsay',
+    'remifentanil_rate',
+    'sas',
 )
 SEDATION_ANALGESIA_METADATA = {
+    'cam_icu': ('Explicit CAM-ICU result; unassessable stays missing', '明确的CAM-ICU结果（无法评估保留缺失）', 'boolean'),
+    'ramsay': ('Ramsay sedation score', 'Ramsay镇静评分', 'score'),
+    'remifentanil_rate': ('Continuous intravenous remifentanil infusion rate', '瑞芬太尼持续静脉输注速率', 'mcg/kg/min'),
+    'sas': ('Riker Sedation-Agitation Scale', 'Riker镇静躁动评分', 'score'),
+
     'remifentanil': ('remifentanil given in the hour (administration or running infusion)', '瑞芬太尼给药时段', 'boolean'),
     'sufentanil': ('sufentanil (intravenous) given in the hour', '舒芬太尼静脉给药时段', 'boolean'),
     'piritramide': ('piritramide given in the hour', '哌腈米特给药时段', 'boolean'),
@@ -840,11 +854,15 @@ DIURETIC_NEPHROTOXIN_METADATA = {
 }
 
 VIS_INPUT_CONCEPTS = (
+    'milrinone_rate',
     'angiotensin_ii_rate',
+    'enoximone_rate',
     'levosimendan',
     'terlipressin',
 )
 VIS_INPUT_METADATA = {
+    'enoximone_rate': ('Continuous intravenous enoximone infusion rate', '依诺昔酮持续静脉输注速率', 'mcg/kg/min'),
+    'milrinone_rate': ('milrinone rate', '米力农持续输注速率', 'mcg/kg/min'),
     'angiotensin_ii_rate': ('Continuous intravenous angiotensin II infusion rate', '血管紧张素II持续静脉输注速率', 'ng/kg/min'),
     'levosimendan': ('Levosimendan administration exposure', '左西孟旦给药暴露', 'boolean'),
     'terlipressin': ('Terlipressin administration exposure', '特利加压素给药暴露', 'boolean'),
@@ -871,7 +889,27 @@ GAS_SPECIMEN_METADATA = {
     'po2_venous': ('Venous O2 partial pressure', '静脉血（采样部位未指定）氧分压', 'mmHg'),
 }
 
+FLUID_IO_CONCEPTS = (
+    'crystalloid_input_ml',
+    'colloid_input_ml',
+    'other_output_ml',
+    'ffp_input_ml',
+    'packed_rbc_input_ml',
+    'parenteral_input_ml',
+    'platelet_input_ml',
+)
+FLUID_IO_METADATA = {
+    'other_output_ml': ('Recorded non-urine output volume', '记录的非尿液输出量', 'mL'),
+    'colloid_input_ml': ('hourly IV colloid volume (mL): human albumin, gelatin, hydroxyethyl starch and dextran solutions. Blood products and crystalloids are excluded. MIIV inputevents amounts and AUMC drugitems.fluidin are overlap-allocated to ICU hours with volume conservation; HiRID uses increments of the daily colloid counter 30005080; SICdb uses medication Amount (mL), infusions allocated over Offset..OffsetDrugEnd. Not additive with total_input_ml, which already contains colloids in MIIV, AUMC and HiRID.', '胶体输入量', 'mL'),
+    'crystalloid_input_ml': ('hourly IV crystalloid volume (mL): saline (0.45-23.4%), balanced (lactated Ringer and similar), dextrose, sodium bicarbonate and, where the source charts their volume, crystalloid drug carriers and pressure-bag flushes. Colloids, blood products, parenteral and enteral nutrition are excluded. MIIV inputevents amounts and AUMC drugitems.fluidin are overlap-allocated to ICU hours with volume conservation; HiRID uses increments of the daily saline counter 30005075 (it charts no other crystalloid counter); SICdb uses medication Amount (mL), infusions allocated over Offset..OffsetDrugEnd. Not additive with total_input_ml.', '晶体输入量', 'mL'),
+    'ffp_input_ml': ('Fresh frozen plasma volume per ICU hour', '新鲜冰冻血浆输入量（每ICU小时）', 'mL'),
+    'packed_rbc_input_ml': ('Packed red-cell volume per ICU hour', '红细胞输入量（每ICU小时）', 'mL'),
+    'parenteral_input_ml': ('Complete parenteral nutrition bag volume per ICU hour', '完整肠外营养袋输入量（每ICU小时）', 'mL'),
+    'platelet_input_ml': ('Platelet product volume per ICU hour', '血小板制品输入量（每ICU小时）', 'mL'),
+}
+
 HIDDEN_DICTIONARY_CONCEPTS = {
+    *FLUID_IO_CONCEPTS,
     *GAS_SPECIMEN_CONCEPTS,
     *VIS_INPUT_CONCEPTS,
     'vancomycin_iv',

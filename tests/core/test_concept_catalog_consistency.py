@@ -20,6 +20,7 @@ from easyicu.concept.catalog import (
     CONCEPT_DICTIONARY,
     CONCEPT_GROUP_NAMES,
     CONCEPT_GROUPS_INTERNAL,
+    FLUID_IO_CONCEPTS,
     HIDDEN_DICTIONARY_CONCEPTS,
 )
 
@@ -276,6 +277,7 @@ def test_extract_database_modules_use_the_shared_catalog() -> None:
        'vent_mechanics': list(VENT_MECHANICS_CONCEPTS),
        'sedation_analgesia': list(SEDATION_ANALGESIA_CONCEPTS),
        'diuretic_nephrotoxin': list(DIURETIC_NEPHROTOXIN_CONCEPTS),
+       'fluid_io': list(FLUID_IO_CONCEPTS),
        'vis_inputs': list(VIS_INPUT_CONCEPTS),
        'gas_specimen': list(GAS_SPECIMEN_CONCEPTS)}
     # The SIC case module is explicitly selected, not part of the six-source

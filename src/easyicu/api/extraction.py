@@ -32,6 +32,7 @@ from ..concept.catalog import (
     GAS_SPECIMEN_CONCEPTS,
     VIS_INPUT_CONCEPTS,
     DIURETIC_NEPHROTOXIN_CONCEPTS,
+    FLUID_IO_CONCEPTS,
     SEDATION_ANALGESIA_CONCEPTS,
     VENT_MECHANICS_CONCEPTS,
     HAEMO_ADVANCED_CONCEPTS,
@@ -138,6 +139,7 @@ EXTRACT_MODULES["sic_case_landmark"] = [
 EXTRACT_MODULES["bounds_audit"] = list(BOUNDS_AUDIT_CONCEPTS)
 # S740: leakage-free stay weight fields, exported only when explicitly requested.
 EXTRACT_MODULES["weight_strict"] = list(WEIGHT_STRICT_CONCEPTS)
+EXTRACT_MODULES["fluid_io"] = list(FLUID_IO_CONCEPTS)
 EXTRACT_MODULES["cardiac_markers"] = list(CARDIAC_MARKERS_CONCEPTS)
 EXTRACT_MODULES["inflam_detail"] = list(INFLAM_DETAIL_CONCEPTS)
 EXTRACT_MODULES["renal_detail"] = list(RENAL_DETAIL_CONCEPTS)
@@ -649,6 +651,12 @@ _MEASURED_BATCH_PROFILES: Mapping[str, Mapping[str, Mapping[str, float]]] = {
         },
     },
     "hirid": {
+        # B1's opt-in fluid-counter module retains its own measured profile.
+        "fluid_io": {
+            "cohort_stays": 33_905,
+            "batch_size": 10_000,
+            "peak_rss_mb": 5_032.5,
+        },
         # Full v6 refresh closure at 4f42b51e under the deterministic
         # 8,192-MiB envelope. These profiles replace the older renal one-shot
         # evidence because the HiRID source-time boundary semantics changed.

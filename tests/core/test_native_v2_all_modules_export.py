@@ -311,3 +311,26 @@ def test_opt_in_venous_gases_publish_on_native_hours(tmp_path, database):
     assert {"stay_id", "charttime"} <= set(frame.columns)
     assert pd.api.types.is_numeric_dtype(frame.charttime)
     assert frame["lact_venous" if database == "hirid" else "ph_venous"].notna().any()
+
+
+@pytest.mark.parametrize("database", ["aumc", "hirid", "sic"])
+@pytest.mark.parametrize("streamed", [False, True])
+def test_opt_in_fluid_io_publishes_on_native_hours(tmp_path, database, streamed):
+    from easyicu.api.extraction import extract_database
+    from easyicu.concept.catalog import FLUID_IO_CONCEPTS
+    from easyicu.synthetic_sources import generate_source
+
+    source = tmp_path / "source"
+    generate_source(source, database, stays=12)
+    output = tmp_path / "out"
+    result = extract_database(
+        database, data_path=str(source), output_dir=str(output), modules=["outcome", "fluid_io"],
+        batch_size=4, native_export_v2=True, stream_output_batches=streamed, verbose=False,
+    )
+    assert not result["modules"]["fluid_io"].get("errors")
+    frame = pd.read_parquet(output / "fluid_io.parquet")
+    assert frame.columns.tolist() == ["stay_id", "charttime", *FLUID_IO_CONCEPTS]
+    assert pd.api.types.is_numeric_dtype(frame.charttime)
+    assert frame.crystalloid_input_ml.notna().any()
+    assert frame.colloid_input_ml.notna().any()
+    assert frame.charttime.min() >= 0

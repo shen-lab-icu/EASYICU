@@ -48,7 +48,10 @@ def numeric_values(name, definition, pop, index, hour, rng):
     }
     lower = definition.get("min", 0)
     upper = definition.get("max", max(lower + 10, 20))
-    centre = centres.get(name, np.full(len(index), lower + (upper - lower) * .25))
+    # Site-specific analytes share the parent quantity's canonical curve.
+    # Their source selectors, units and inclusion bounds still stay distinct.
+    parent = re.sub(r"_(?:mixed_)?venous$", "", name)
+    centre = centres.get(parent, np.full(len(index), lower + (upper - lower) * .25))
     noise = .02 * np.maximum(np.abs(centre), .1) * rng.normal(size=len(index))
     values = np.clip(centre + noise, lower, upper).astype(float)
     if name in {"egcs", "mgcs", "vgcs", "rass", "gcs", "sedated_gcs", "bps"}:

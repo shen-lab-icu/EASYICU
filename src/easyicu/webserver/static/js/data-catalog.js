@@ -709,6 +709,39 @@
   };
 
   // Explicit opt-in concepts; default groups and catalog are unchanged.
+  const optInFluidIo = {
+  "colloid_input_ml": [
+    "hourly IV colloid volume (mL): human albumin, gelatin, hydroxyethyl starch and dextran solutions. Blood products and crystalloids are excluded. MIIV inputevents amounts and AUMC drugitems.fluidin are overlap-allocated to ICU hours with volume conservation; HiRID uses increments of the daily colloid counter 30005080; SICdb uses medication Amount (mL), infusions allocated over Offset..OffsetDrugEnd. Not additive with total_input_ml, which already contains colloids in MIIV, AUMC and HiRID.",
+    "胶体输入量",
+    "mL"
+  ],
+  "crystalloid_input_ml": [
+    "hourly IV crystalloid volume (mL): saline (0.45-23.4%), balanced (lactated Ringer and similar), dextrose, sodium bicarbonate and, where the source charts their volume, crystalloid drug carriers and pressure-bag flushes. Colloids, blood products, parenteral and enteral nutrition are excluded. MIIV inputevents amounts and AUMC drugitems.fluidin are overlap-allocated to ICU hours with volume conservation; HiRID uses increments of the daily saline counter 30005075 (it charts no other crystalloid counter); SICdb uses medication Amount (mL), infusions allocated over Offset..OffsetDrugEnd. Not additive with total_input_ml.",
+    "晶体输入量",
+    "mL"
+  ],
+  "ffp_input_ml": [
+    "Fresh frozen plasma volume per ICU hour",
+    "新鲜冰冻血浆输入量（每ICU小时）",
+    "mL"
+  ],
+  "packed_rbc_input_ml": [
+    "Packed red-cell volume per ICU hour",
+    "红细胞输入量（每ICU小时）",
+    "mL"
+  ],
+  "parenteral_input_ml": [
+    "Complete parenteral nutrition bag volume per ICU hour",
+    "完整肠外营养袋输入量（每ICU小时）",
+    "mL"
+  ],
+  "platelet_input_ml": [
+    "Platelet product volume per ICU hour",
+    "血小板制品输入量（每ICU小时）",
+    "mL"
+  ]
+};
+
   const optInCardiacMarkers = {
   "ckmb_activity": [
     "CK-MB enzymatic activity; separate from mass",
@@ -828,6 +861,16 @@
     "Prescribed prefilter CRRT replacement flow",
     "医嘱设置的CRRT前稀释置换液流量",
     "mL/h"
+  ],
+  "crrt_dilution_mode_set": [
+    "Prescribed CRRT dilution mode",
+    "医嘱设置的CRRT稀释方式",
+    "category"
+  ],
+  "rrt_modality": [
+    "Charted CRRT modality",
+    "记录的CRRT模式",
+    "category"
   ]
 };
 
@@ -886,6 +929,11 @@
     "Stroke volume variation",
     "每搏量变异度",
     "%"
+  ],
+  "ecmo_type": [
+    "ECMO circuit configuration",
+    "ECMO回路类型",
+    "category"
   ]
 };
 
@@ -992,6 +1040,26 @@
     "Behavioral Pain Scale total; invalid 0–2 remain missing",
     "行为疼痛量表总分（0至2为无效值）",
     "score"
+  ],
+  "cam_icu": [
+    "Explicit CAM-ICU result; unassessable stays missing",
+    "明确的CAM-ICU结果（无法评估保留缺失）",
+    "boolean"
+  ],
+  "ramsay": [
+    "Ramsay sedation score",
+    "Ramsay镇静评分",
+    "score"
+  ],
+  "remifentanil_rate": [
+    "Continuous intravenous remifentanil infusion rate",
+    "瑞芬太尼持续静脉输注速率",
+    "mcg/kg/min"
+  ],
+  "sas": [
+    "Riker Sedation-Agitation Scale",
+    "Riker镇静躁动评分",
+    "score"
   ]
 };
 
@@ -1043,6 +1111,16 @@
     "Terlipressin administration exposure",
     "特利加压素给药暴露",
     "boolean"
+  ],
+  "enoximone_rate": [
+    "Continuous intravenous enoximone infusion rate",
+    "依诺昔酮持续静脉输注速率",
+    "mcg/kg/min"
+  ],
+  "milrinone_rate": [
+    "milrinone rate",
+    "米力农持续输注速率",
+    "mcg/kg/min"
   ]
 };
 
@@ -1092,6 +1170,7 @@
   window.EU_CATALOG = {
     groups,
     groupConcepts,
+    optInFluidIo,
     optInCardiacMarkers,
     optInInflamDetail,
     optInRenalDetail,

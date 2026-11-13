@@ -14,8 +14,8 @@ CONCEPTS = ["urine_na", "urine_crea", "urine_osm", "urine_urea", "fena", "feurea
             "sic_precondition_renal_dysfunction"]
 HISTORY = CONCEPTS[-1]
 MODULE = "renal_urine_chem"
-# S907: a derived concept is mapped when every input is mapped.
-EICU_MAPPED = ["urine_na", "urine_crea", "fena"]
+# S732 adds eICU urine osmolality. Derived concepts still need every input.
+EICU_MAPPED = ["urine_na", "urine_crea", "urine_osm", "fena"]
 
 
 @pytest.mark.parametrize("database", ["miiv", "mimic", "eicu", "aumc", "hirid", "sic"])
@@ -51,12 +51,14 @@ def test_native_urine_module_preserves_existing_module_bytes(tmp_path, monkeypat
         assert list(frame) == ["stay_id", "charttime", *CONCEPTS]
         assert frame[CONCEPTS].notna().any(axis=1).all()
         if database == "hirid":
-            assert frame.empty
-        elif database == "aumc":
-            # S907: AUMC urine sodium/creatinine on the hourly axis, FENa derived.
             assert frame.charttime.notna().all()
-            assert frame[["urine_na", "urine_crea"]].notna().all().all()
-            assert frame.fena.notna().any() and frame[["urine_osm", "urine_urea", "feurea"]].isna().all().all()
+            assert frame[["urine_na", "urine_crea", "urine_urea", "fena", "feurea"]].notna().any().all()
+            assert frame.urine_osm.isna().all()
+        elif database == "aumc":
+            # S732 extends S907's timed urine inputs; both fractions can derive.
+            assert frame.charttime.notna().all()
+            assert frame[CONCEPTS[:4]].notna().all().all()
+            assert frame[["fena", "feurea"]].notna().any().all()
         elif database == "sic":
             # Spot-urine creatinine rows are timed; the id-level flag keeps its own untimed rows.
             flags = frame.dropna(subset=[HISTORY])
@@ -142,7 +144,8 @@ def test_module_with_rows_keeps_its_columns_and_records_unmapped_concepts():
 
     def load(**kwargs):
         return pd.DataFrame({"patientunitstayid": [1], "charttime": [1.0],
-                             "urine_na": [40.0], "urine_crea": [120.0], "fena": [0.24]})
+                             "urine_na": [40.0], "urine_crea": [120.0],
+                             "urine_osm": [600.0], "fena": [0.24]})
 
     sink = {}
     frame = api._load_module_concepts(
@@ -164,14 +167,15 @@ def test_sic_lab_rows_and_id_level_flag_keep_their_own_grain():
         if kwargs["concepts"] == [HISTORY]:
             return pd.DataFrame({"stay_id": [1, 2, 3],
                                  HISTORY: pd.Series([True, False, pd.NA], dtype="boolean")})
-        return pd.DataFrame({"stay_id": [1, 1], "charttime": [0.0, 6.0], "urine_crea": [80.0, 0.0]})
+        return pd.DataFrame({"stay_id": [1, 1], "charttime": [0.0, 6.0],
+                             **{name: [80.0, 0.0] for name in CONCEPTS[:6]}})
 
     frame = api._load_module_concepts(
         load, module_name=MODULE,
         load_kwargs={"concepts": CONCEPTS, "database": "sic", "merge": True},
     )
     # One merge axis cannot hold both grains: each group is loaded on its own.
-    assert calls == [["urine_crea"], [HISTORY]]
+    assert calls == [CONCEPTS[:6], [HISTORY]]
     assert frame.charttime.tolist()[:2] == [0.0, 6.0] and frame.charttime.iloc[2:].isna().all()
     assert frame.urine_crea.tolist()[:2] == [80.0, 0.0]
     flags = frame.dropna(subset=[HISTORY])

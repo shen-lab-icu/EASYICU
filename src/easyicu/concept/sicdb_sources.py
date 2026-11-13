@@ -166,6 +166,27 @@ def allocate_amounts(frame, *, concept_name, start, stop, single, data_source):
     return out
 
 
+def allocate_volumes(frame, *, concept_name, value, start, stop, data_source):
+    """Allocate positive delivered mL, retaining single doses at their start.
+
+    Only documented flags 0 (continuous) and 1 (single dose) are eligible.
+    The existing amount allocator owns ICU alignment and interval overlap.
+    """
+    required = ["CaseID", start, stop, value, "IsSingleDose"]
+    missing = [column for column in required if column not in frame]
+    if missing:
+        raise ValueError(f"SICdb volume allocation requires columns {missing}")
+    amount = pd.to_numeric(frame[value], errors="coerce")
+    starts = pd.to_numeric(frame[start], errors="coerce")
+    keep = amount.gt(0) & np.isfinite(amount) & np.isfinite(starts)
+    raw = frame.loc[keep].copy()
+    raw[concept_name] = amount.loc[keep]
+    return allocate_amounts(
+        raw, concept_name=concept_name, start=start, stop=stop,
+        single="IsSingleDose", data_source=data_source,
+    )
+
+
 def exposure(frame, value):
     """Observed zero is false, positive amount true, missing/negative unknown."""
     out = frame.copy()
@@ -268,6 +289,11 @@ def apply_source(frame, *, source, concept_name, data_source):
         return precondition(frame, value=value, concept_name=concept_name, data_source=data_source)
     if callback == "sicdb_cvp_raw":
         return frame
+    if callback == "sicdb_volume_allocate":
+        return allocate_volumes(
+            frame, concept_name=concept_name, value=value, start=source.index_var or "Offset",
+            stop=source.params.get("stop_var", "OffsetDrugEnd"), data_source=data_source,
+        )
     if callback == "sicdb_active_exposure":
         return active_hours(
             frame, concept_name=concept_name, value=value, start=source.index_var or "Offset",

@@ -26,7 +26,9 @@ CENSUS = {
 def test_module_is_opt_in_and_its_concepts_are_hidden():
     assert EXTRACT_MODULES["sedation_analgesia"] == list(SEDATION_ANALGESIA_CONCEPTS)
     assert "sedation_analgesia" not in EXTRACT_MODULE_ORDER
-    assert set(SEDATION_ANALGESIA_CONCEPTS) == set(CENSUS) | {"bps"}
+    assert set(SEDATION_ANALGESIA_CONCEPTS) == set(CENSUS) | {
+        "bps", "cam_icu", "ramsay", "remifentanil_rate", "sas",
+    }
     grouped = {c for members in CONCEPT_GROUPS_INTERNAL.values() for c in members}
     for concept in SEDATION_ANALGESIA_CONCEPTS:
         assert concept in HIDDEN_DICTIONARY_CONCEPTS
