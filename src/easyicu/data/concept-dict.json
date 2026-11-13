@@ -33248,6 +33248,28 @@
      "table": "numericitems",
      "sub_var": "itemid",
      "_comment": "2026-11-04 audit round 3 (full-dictionary M): 20955 'CCO' continuous cardiac output (187,823 rows) added."
+    },
+    {
+     "ids": [
+      14060
+     ],
+     "table": "numericitems",
+     "sub_var": "itemid",
+     "unit_var": "unit",
+     "require_regex": {
+      "unit": "(?i)^\\s*l/min\\s*$"
+     }
+    },
+    {
+     "ids": [
+      14062
+     ],
+     "table": "numericitems",
+     "sub_var": "itemid",
+     "unit_var": "unit",
+     "require_regex": {
+      "unit": "(?i)^\\s*l/min\\s*$"
+     }
     }
    ],
    "hirid": [
