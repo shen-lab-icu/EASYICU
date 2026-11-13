@@ -889,12 +889,71 @@
   ]
 };
 
+  const optInVentMechanics = {
+  "co2_tidal": [
+    "Exhaled CO2 volume per breath",
+    "每次呼吸呼出二氧化碳量",
+    "mL"
+  ],
+  "insp_time": [
+    "Charted inspiratory time",
+    "记录的吸气时间",
+    "s"
+  ],
+  "minute_vol_spont": [
+    "Spontaneous minute ventilation",
+    "自主呼吸分钟通气量",
+    "L/min"
+  ],
+  "pc_above_peep_set": [
+    "Set inspiratory pressure above PEEP",
+    "PEEP以上的吸气压力设置",
+    "cmH2O"
+  ],
+  "peep_intrinsic": [
+    "Measured intrinsic PEEP",
+    "测量的内源性PEEP",
+    "cmH2O"
+  ],
+  "prone": [
+    "Recorded prone positioning evidence",
+    "记录的俯卧位证据",
+    "boolean"
+  ],
+  "resp_spont": [
+    "Spontaneous respiratory rate",
+    "自主呼吸频率",
+    "breaths/min"
+  ],
+  "tidal_vol_spont": [
+    "Spontaneous tidal volume",
+    "自主呼吸潮气量",
+    "mL"
+  ],
+  "transpulm_pres_exp": [
+    "Expiratory-hold transpulmonary pressure",
+    "呼气末阻断跨肺压",
+    "cmH2O"
+  ],
+  "transpulm_pres_insp": [
+    "Inspiratory-hold transpulmonary pressure",
+    "吸气末阻断跨肺压",
+    "cmH2O"
+  ],
+  "vco2": [
+    "Exhaled CO2 production per minute",
+    "每分钟呼出二氧化碳生成量",
+    "mL/min"
+  ]
+};
+
   window.EU_CATALOG = {
     groups,
     groupConcepts,
     optInCardiacMarkers,
     optInInflamDetail,
     optInRenalDetail,
+    optInVentMechanics,
     optInHaemoAdvanced,
     optInRrtDetail,
     dict,

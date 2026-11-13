@@ -1,5 +1,5 @@
 {
-  "concept_count": 371,
+  "concept_count": 382,
   "concepts": {
     "abdominal_circumference": {
       "category": "ventilator",
@@ -1318,6 +1318,28 @@
         }
       },
       "description": "cardiac output (thermodilution / continuous / PiCCO)"
+    },
+    "co2_tidal": {
+      "category": "ventilator",
+      "databases": {
+        "jinhua": {
+          "reason": "no validated native field/event in this release",
+          "status": "unavailable"
+        },
+        "nwicu": {
+          "reason": "no validated native field/event in this release",
+          "status": "unavailable"
+        },
+        "zhejiang_eicu": {
+          "reason": "no validated native field/event in this release",
+          "status": "unavailable"
+        },
+        "zigong": {
+          "reason": "no validated native field/event in this release",
+          "status": "unavailable"
+        }
+      },
+      "description": "Exhaled CO2 volume per breath"
     },
     "compliance": {
       "category": "ventilator",
@@ -4304,6 +4326,28 @@
       },
       "description": "Insulin administered per hour bin; for HiRID, units/hr is the total U in a one hour bin, not an instantaneous continuous IV infusion rate"
     },
+    "insp_time": {
+      "category": "ventilator",
+      "databases": {
+        "jinhua": {
+          "reason": "no validated native field/event in this release",
+          "status": "unavailable"
+        },
+        "nwicu": {
+          "reason": "no validated native field/event in this release",
+          "status": "unavailable"
+        },
+        "zhejiang_eicu": {
+          "reason": "no validated native field/event in this release",
+          "status": "unavailable"
+        },
+        "zigong": {
+          "reason": "no validated native field/event in this release",
+          "status": "unavailable"
+        }
+      },
+      "description": "Charted inspiratory time"
+    },
     "insulin": {
       "category": "medications",
       "databases": {
@@ -5574,6 +5618,28 @@
       },
       "description": "SICdb charted minute ventilation before the analytical gate"
     },
+    "minute_vol_spont": {
+      "category": "ventilator",
+      "databases": {
+        "jinhua": {
+          "reason": "no validated native field/event in this release",
+          "status": "unavailable"
+        },
+        "nwicu": {
+          "reason": "no validated native field/event in this release",
+          "status": "unavailable"
+        },
+        "zhejiang_eicu": {
+          "reason": "no validated native field/event in this release",
+          "status": "unavailable"
+        },
+        "zigong": {
+          "reason": "no validated native field/event in this release",
+          "status": "unavailable"
+        }
+      },
+      "description": "Spontaneous minute ventilation"
+    },
     "modified_shock_index": {
       "category": "cardiovascular",
       "databases": {
@@ -6750,6 +6816,28 @@
       },
       "description": "pulmonary artery wedge / occlusion pressure (PCWP/PAOP)"
     },
+    "pc_above_peep_set": {
+      "category": "ventilator",
+      "databases": {
+        "jinhua": {
+          "reason": "no validated native field/event in this release",
+          "status": "unavailable"
+        },
+        "nwicu": {
+          "reason": "no validated native field/event in this release",
+          "status": "unavailable"
+        },
+        "zhejiang_eicu": {
+          "reason": "no validated native field/event in this release",
+          "status": "unavailable"
+        },
+        "zigong": {
+          "reason": "no validated native field/event in this release",
+          "status": "unavailable"
+        }
+      },
+      "description": "Set inspiratory pressure above PEEP"
+    },
     "pco2": {
       "category": "blood gas",
       "databases": {
@@ -6822,6 +6910,28 @@
         }
       },
       "description": "Positive End Expiratory Pressure"
+    },
+    "peep_intrinsic": {
+      "category": "ventilator",
+      "databases": {
+        "jinhua": {
+          "reason": "no validated native field/event in this release",
+          "status": "unavailable"
+        },
+        "nwicu": {
+          "reason": "no validated native field/event in this release",
+          "status": "unavailable"
+        },
+        "zhejiang_eicu": {
+          "reason": "no validated native field/event in this release",
+          "status": "unavailable"
+        },
+        "zigong": {
+          "reason": "no validated native field/event in this release",
+          "status": "unavailable"
+        }
+      },
+      "description": "Measured intrinsic PEEP"
     },
     "peep_set": {
       "category": "ventilator",
@@ -7412,6 +7522,28 @@
       },
       "description": "prealbumin (transthyretin)"
     },
+    "prone": {
+      "category": "ventilator",
+      "databases": {
+        "jinhua": {
+          "reason": "no validated native field/event in this release",
+          "status": "unavailable"
+        },
+        "nwicu": {
+          "reason": "no validated native field/event in this release",
+          "status": "unavailable"
+        },
+        "zhejiang_eicu": {
+          "reason": "no validated native field/event in this release",
+          "status": "unavailable"
+        },
+        "zigong": {
+          "reason": "no validated native field/event in this release",
+          "status": "unavailable"
+        }
+      },
+      "description": "Recorded prone positioning evidence"
+    },
     "propofol": {
       "category": "medications",
       "databases": {
@@ -7749,6 +7881,28 @@
         }
       },
       "description": "respiratory rate"
+    },
+    "resp_spont": {
+      "category": "ventilator",
+      "databases": {
+        "jinhua": {
+          "reason": "no validated native field/event in this release",
+          "status": "unavailable"
+        },
+        "nwicu": {
+          "reason": "no validated native field/event in this release",
+          "status": "unavailable"
+        },
+        "zhejiang_eicu": {
+          "reason": "no validated native field/event in this release",
+          "status": "unavailable"
+        },
+        "zigong": {
+          "reason": "no validated native field/event in this release",
+          "status": "unavailable"
+        }
+      },
+      "description": "Spontaneous respiratory rate"
     },
     "retic": {
       "category": "hematology",
@@ -9962,6 +10116,28 @@
       },
       "description": "Tidal volume setting [2026-07-17 official-code audit: SIC has NO tidal-volume setting — its RespiratorSetting namespace (2278 PEEP, 2282 RespRate, 2283 FIO2, 2284 PressureSupport, 2285 IERatio, 3040 PressureOverPeep) contains no TV. The previous sic source mapped 717 'TV (insp)', a SignalFloat MEASURED channel already used by tidal_vol — it was doing double duty as both measured and set. Source removed rather than fabricate a setting.]"
     },
+    "tidal_vol_spont": {
+      "category": "ventilator",
+      "databases": {
+        "jinhua": {
+          "reason": "no validated native field/event in this release",
+          "status": "unavailable"
+        },
+        "nwicu": {
+          "reason": "no validated native field/event in this release",
+          "status": "unavailable"
+        },
+        "zhejiang_eicu": {
+          "reason": "no validated native field/event in this release",
+          "status": "unavailable"
+        },
+        "zigong": {
+          "reason": "no validated native field/event in this release",
+          "status": "unavailable"
+        }
+      },
+      "description": "Spontaneous tidal volume"
+    },
     "tnt": {
       "category": "chemistry",
       "databases": {
@@ -10078,6 +10254,50 @@
         }
       },
       "description": "transferrin (blood)"
+    },
+    "transpulm_pres_exp": {
+      "category": "ventilator",
+      "databases": {
+        "jinhua": {
+          "reason": "no validated native field/event in this release",
+          "status": "unavailable"
+        },
+        "nwicu": {
+          "reason": "no validated native field/event in this release",
+          "status": "unavailable"
+        },
+        "zhejiang_eicu": {
+          "reason": "no validated native field/event in this release",
+          "status": "unavailable"
+        },
+        "zigong": {
+          "reason": "no validated native field/event in this release",
+          "status": "unavailable"
+        }
+      },
+      "description": "Expiratory-hold transpulmonary pressure"
+    },
+    "transpulm_pres_insp": {
+      "category": "ventilator",
+      "databases": {
+        "jinhua": {
+          "reason": "no validated native field/event in this release",
+          "status": "unavailable"
+        },
+        "nwicu": {
+          "reason": "no validated native field/event in this release",
+          "status": "unavailable"
+        },
+        "zhejiang_eicu": {
+          "reason": "no validated native field/event in this release",
+          "status": "unavailable"
+        },
+        "zigong": {
+          "reason": "no validated native field/event in this release",
+          "status": "unavailable"
+        }
+      },
+      "description": "Inspiratory-hold transpulmonary pressure"
     },
     "tri": {
       "category": "chemistry",
@@ -11168,6 +11388,28 @@
       },
       "description": "vasopressor indicator"
     },
+    "vco2": {
+      "category": "ventilator",
+      "databases": {
+        "jinhua": {
+          "reason": "no validated native field/event in this release",
+          "status": "unavailable"
+        },
+        "nwicu": {
+          "reason": "no validated native field/event in this release",
+          "status": "unavailable"
+        },
+        "zhejiang_eicu": {
+          "reason": "no validated native field/event in this release",
+          "status": "unavailable"
+        },
+        "zigong": {
+          "reason": "no validated native field/event in this release",
+          "status": "unavailable"
+        }
+      },
+      "description": "Exhaled CO2 production per minute"
+    },
     "vecuronium": {
       "category": "medications",
       "databases": {
@@ -11540,25 +11782,25 @@
       "derived": 19,
       "direct": 135,
       "partial": 34,
-      "unavailable": 183
+      "unavailable": 194
     },
     "nwicu": {
       "derived": 19,
       "direct": 137,
       "partial": 37,
-      "unavailable": 178
+      "unavailable": 189
     },
     "zhejiang_eicu": {
       "derived": 39,
       "direct": 128,
       "partial": 25,
-      "unavailable": 179
+      "unavailable": 190
     },
     "zigong": {
       "derived": 27,
       "direct": 125,
       "partial": 41,
-      "unavailable": 178
+      "unavailable": 189
     }
   },
   "databases": [

@@ -39880,5 +39880,421 @@
     }
    ]
   }
+ },
+ "co2_tidal": {
+  "unit": "mL",
+  "min": 0,
+  "max": 200,
+  "description": "Exhaled CO2 volume per breath",
+  "category": "ventilator",
+  "sources": {
+   "aumc": [
+    {
+     "ids": [
+      12270
+     ],
+     "table": "numericitems",
+     "sub_var": "itemid",
+     "unit_var": "unit",
+     "require_regex": {
+      "unit": "(?i)^\\s*ml\\s*$"
+     }
+    },
+    {
+     "ids": [
+      12352
+     ],
+     "table": "numericitems",
+     "sub_var": "itemid",
+     "unit_var": "unit",
+     "require_regex": {
+      "unit": "(?i)^\\s*ml\\s*$"
+     }
+    }
+   ]
+  }
+ },
+ "insp_time": {
+  "unit": "s",
+  "min": 0,
+  "max": 20,
+  "description": "Charted inspiratory time",
+  "category": "ventilator",
+  "sources": {
+   "miiv": [
+    {
+     "ids": [
+      224738
+     ],
+     "table": "chartevents",
+     "sub_var": "itemid",
+     "unit_var": "valueuom",
+     "require_regex": {
+      "valueuom": "(?i)^\\s*sec\\s*$"
+     },
+     "callback": "convert_unit(binary_op(`*`, 1), 's')"
+    }
+   ]
+  }
+ },
+ "minute_vol_spont": {
+  "unit": "L/min",
+  "min": 0,
+  "max": 100,
+  "description": "Spontaneous minute ventilation",
+  "category": "ventilator",
+  "sources": {
+   "aumc": [
+    {
+     "ids": [
+      12578
+     ],
+     "table": "numericitems",
+     "sub_var": "itemid",
+     "unit_var": "unit",
+     "require_regex": {
+      "unit": "(?i)^\\s*l/min\\s*$"
+     }
+    },
+    {
+     "ids": [
+      8875
+     ],
+     "table": "numericitems",
+     "sub_var": "itemid",
+     "unit_var": "unit",
+     "require_regex": {
+      "unit": "(?i)^\\s*l/min\\s*$"
+     }
+    },
+    {
+     "ids": [
+      9663
+     ],
+     "table": "numericitems",
+     "sub_var": "itemid",
+     "unit_var": "unit",
+     "require_regex": {
+      "unit": "(?i)^\\s*l/min\\s*$"
+     }
+    }
+   ]
+  }
+ },
+ "pc_above_peep_set": {
+  "unit": "cmH2O",
+  "min": 0,
+  "max": 100,
+  "description": "Set inspiratory pressure above PEEP",
+  "category": "ventilator",
+  "sources": {
+   "aumc": [
+    {
+     "ids": [
+      12285
+     ],
+     "table": "numericitems",
+     "sub_var": "itemid",
+     "unit_var": "unit",
+     "require_regex": {
+      "unit": "(?i)^\\s*cmH2O\\s*$"
+     }
+    },
+    {
+     "ids": [
+      12335
+     ],
+     "table": "numericitems",
+     "sub_var": "itemid",
+     "unit_var": "unit",
+     "require_regex": {
+      "unit": "(?i)^\\s*cmH2O\\s*$"
+     }
+    }
+   ],
+   "sic": [
+    {
+     "ids": [
+      3040
+     ],
+     "table": "data_float_h",
+     "sub_var": "DataID",
+     "callback": "convert_unit(binary_op(`*`, 1.0197162129779282), 'cmH2O')"
+    }
+   ]
+  }
+ },
+ "peep_intrinsic": {
+  "unit": "cmH2O",
+  "min": 0,
+  "max": 60,
+  "description": "Measured intrinsic PEEP",
+  "category": "ventilator",
+  "sources": {
+   "aumc": [
+    {
+     "ids": [
+      8882
+     ],
+     "table": "numericitems",
+     "sub_var": "itemid",
+     "unit_var": "unit",
+     "require_regex": {
+      "unit": "(?i)^\\s*mbar\\s*$"
+     },
+     "callback": "convert_unit(binary_op(`*`, 1.0197162129779282), 'cmH2O')"
+    },
+    {
+     "ids": [
+      9661
+     ],
+     "table": "numericitems",
+     "sub_var": "itemid",
+     "unit_var": "unit",
+     "require_regex": {
+      "unit": "(?i)^\\s*mbar\\s*$"
+     },
+     "callback": "convert_unit(binary_op(`*`, 1.0197162129779282), 'cmH2O')"
+    }
+   ]
+  }
+ },
+ "prone": {
+  "unit": "boolean",
+  "description": "Recorded prone positioning evidence",
+  "category": "ventilator",
+  "class_name": "lgl_cncpt",
+  "aggregate": "max",
+  "sources": {
+   "aumc": [
+    {
+     "ids": [
+      7927
+     ],
+     "table": "processitems",
+     "sub_var": "itemid",
+     "val_var": "item",
+     "index_var": "start",
+     "dur_var": "stop",
+     "callback": "transform_fun(set_val(TRUE))"
+    }
+   ],
+   "eicu": [
+    {
+     "ids": [
+      "pulmonary|ventilation and oxygenation|prone position"
+     ],
+     "table": "treatment",
+     "sub_var": "treatmentstring",
+     "val_var": "treatmentstring",
+     "index_var": "treatmentoffset",
+     "callback": "transform_fun(set_val(TRUE))"
+    }
+   ]
+  }
+ },
+ "resp_spont": {
+  "unit": "breaths/min",
+  "min": 0,
+  "max": 100,
+  "description": "Spontaneous respiratory rate",
+  "category": "ventilator",
+  "sources": {
+   "aumc": [
+    {
+     "ids": [
+      12577
+     ],
+     "table": "numericitems",
+     "sub_var": "itemid",
+     "unit_var": "unit",
+     "require_regex": {
+      "unit": "(?i)^\\s*/min\\s*$"
+     },
+     "callback": "convert_unit(binary_op(`*`, 1), 'breaths/min')"
+    }
+   ],
+   "eicu": [
+    {
+     "ids": [
+      "Spontaneous Rate"
+     ],
+     "table": "lab",
+     "sub_var": "labname",
+     "unit_var": "labmeasurenameinterface",
+     "require_regex": {
+      "labmeasurenameinterface": "(?i)^\\s*Breaths\\s*$"
+     },
+     "callback": "convert_unit(binary_op(`*`, 1), 'breaths/min')"
+    }
+   ],
+   "miiv": [
+    {
+     "ids": [
+      224422
+     ],
+     "table": "chartevents",
+     "sub_var": "itemid",
+     "unit_var": "valueuom",
+     "require_regex": {
+      "valueuom": "(?i)^\\s*bpm\\s*$"
+     },
+     "callback": "convert_unit(binary_op(`*`, 1), 'breaths/min')"
+    },
+    {
+     "ids": [
+      224689
+     ],
+     "table": "chartevents",
+     "sub_var": "itemid",
+     "unit_var": "valueuom",
+     "require_regex": {
+      "valueuom": "(?i)^\\s*insp/min\\s*$"
+     },
+     "callback": "convert_unit(binary_op(`*`, 1), 'breaths/min')"
+    }
+   ],
+   "sic": [
+    {
+     "ids": [
+      2280
+     ],
+     "table": "data_float_h",
+     "sub_var": "DataID",
+     "callback": "convert_unit(binary_op(`*`, 1), 'breaths/min')"
+    }
+   ]
+  }
+ },
+ "tidal_vol_spont": {
+  "unit": "mL",
+  "min": 0,
+  "max": 3000,
+  "description": "Spontaneous tidal volume",
+  "category": "ventilator",
+  "sources": {
+   "eicu": [
+    {
+     "ids": [
+      "Vt Spontaneous (mL)"
+     ],
+     "table": "respiratorycharting",
+     "sub_var": "respchartvaluelabel",
+     "val_var": "respchartvalue"
+    }
+   ],
+   "miiv": [
+    {
+     "ids": [
+      224421
+     ],
+     "table": "chartevents",
+     "sub_var": "itemid",
+     "unit_var": "valueuom",
+     "require_regex": {
+      "valueuom": "(?i)^\\s*mL\\s*$"
+     }
+    },
+    {
+     "ids": [
+      224686
+     ],
+     "table": "chartevents",
+     "sub_var": "itemid",
+     "unit_var": "valueuom",
+     "require_regex": {
+      "valueuom": "(?i)^\\s*mL\\s*$"
+     }
+    }
+   ]
+  }
+ },
+ "transpulm_pres_exp": {
+  "unit": "cmH2O",
+  "min": -100,
+  "max": 100,
+  "description": "Expiratory-hold transpulmonary pressure",
+  "category": "ventilator",
+  "sources": {
+   "miiv": [
+    {
+     "ids": [
+      224746
+     ],
+     "table": "chartevents",
+     "sub_var": "itemid",
+     "unit_var": "valueuom",
+     "require_regex": {
+      "valueuom": "(?i)^\\s*cmH2O\\s*$"
+     }
+    }
+   ]
+  }
+ },
+ "transpulm_pres_insp": {
+  "unit": "cmH2O",
+  "min": -100,
+  "max": 100,
+  "description": "Inspiratory-hold transpulmonary pressure",
+  "category": "ventilator",
+  "sources": {
+   "miiv": [
+    {
+     "ids": [
+      224747
+     ],
+     "table": "chartevents",
+     "sub_var": "itemid",
+     "unit_var": "valueuom",
+     "require_regex": {
+      "valueuom": "(?i)^\\s*cmH2O\\s*$"
+     }
+    }
+   ]
+  }
+ },
+ "vco2": {
+  "unit": "mL/min",
+  "min": 0,
+  "max": 3000,
+  "description": "Exhaled CO2 production per minute",
+  "category": "ventilator",
+  "sources": {
+   "aumc": [
+    {
+     "ids": [
+      12350
+     ],
+     "table": "numericitems",
+     "sub_var": "itemid",
+     "unit_var": "unit",
+     "require_regex": {
+      "unit": "(?i)^\\s*ml/min\\s*$"
+     }
+    },
+    {
+     "ids": [
+      12432
+     ],
+     "table": "numericitems",
+     "sub_var": "itemid",
+     "unit_var": "unit",
+     "require_regex": {
+      "unit": "(?i)^\\s*ml/min\\s*$"
+     }
+    },
+    {
+     "ids": [
+      8080
+     ],
+     "table": "numericitems",
+     "sub_var": "itemid",
+     "unit_var": "unit",
+     "require_regex": {
+      "unit": "(?i)^\\s*ml/min\\s*$"
+     }
+    }
+   ]
+  }
  }
 }

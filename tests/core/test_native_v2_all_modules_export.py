@@ -215,3 +215,22 @@ def test_opt_in_haemo_advanced_publishes_on_native_hours(tmp_path, database):
     assert {"stay_id", "charttime"} <= set(frame.columns)
     assert pd.api.types.is_numeric_dtype(frame.charttime)
     assert frame["ecmo_fio2"].notna().any()
+
+
+@pytest.mark.parametrize("database", ["aumc", "sic"])
+def test_opt_in_vent_mechanics_publishes_on_native_hours(tmp_path, database):
+    from easyicu.api.extraction import extract_database
+    from easyicu.synthetic_sources import generate_source
+
+    source = tmp_path / "source"
+    generate_source(source, database, stays=12)
+    output = tmp_path / "out"
+    result = extract_database(
+        database, data_path=str(source), output_dir=str(output),
+        modules=["outcome", "vent_mechanics"], native_export_v2=True, verbose=False,
+    )
+    assert not result["modules"]["vent_mechanics"].get("errors")
+    frame = pd.read_parquet(output / "vent_mechanics.parquet")
+    assert {"stay_id", "charttime"} <= set(frame.columns)
+    assert pd.api.types.is_numeric_dtype(frame.charttime)
+    assert frame["pc_above_peep_set"].notna().any()
