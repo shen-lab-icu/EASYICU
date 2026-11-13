@@ -6253,7 +6253,7 @@ class ConceptResolver:
             # mimic_rate_cv/mimic_rate_mv, expand_intervals, etc. already handle time expansion
             # Re-expanding would cause issues (e.g., NaN endtime from inputevents_cv merge with inputevents_mv)
             callbacks_that_expand = [
-                'mimic_rate_cv', 'mimic_rate_mv', 'expand_intervals',
+                'mimic_rate_cv', 'mimic_rate_mv', 'batch1_angiotensin_rate', 'expand_intervals',
                 'hirid_rate', 'hirid_rate_kg', 'hirid_duration',
                 'eicu_rate', 'eicu_rate_kg',
                 # Plain ``aumc_rate`` (AUMC insulin) only converts units, so

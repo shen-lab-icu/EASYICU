@@ -1023,12 +1023,31 @@
   ]
 };
 
+  const optInVisInputs = {
+  "angiotensin_ii_rate": [
+    "Continuous intravenous angiotensin II infusion rate",
+    "血管紧张素II持续静脉输注速率",
+    "ng/kg/min"
+  ],
+  "levosimendan": [
+    "Levosimendan administration exposure",
+    "左西孟旦给药暴露",
+    "boolean"
+  ],
+  "terlipressin": [
+    "Terlipressin administration exposure",
+    "特利加压素给药暴露",
+    "boolean"
+  ]
+};
+
   window.EU_CATALOG = {
     groups,
     groupConcepts,
     optInCardiacMarkers,
     optInInflamDetail,
     optInRenalDetail,
+    optInVisInputs,
     optInDiureticNephrotoxin,
     optInSedationAnalgesia,
     optInVentMechanics,

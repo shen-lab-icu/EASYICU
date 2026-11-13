@@ -41079,5 +41079,157 @@
     }
    ]
   }
+ },
+ "angiotensin_ii_rate": {
+  "unit": "ng/kg/min",
+  "min": 0,
+  "max": 1000,
+  "description": "Continuous intravenous angiotensin II infusion rate",
+  "category": "cardiovascular",
+  "sources": {
+   "miiv": [
+    {
+     "ids": [
+      229709
+     ],
+     "table": "inputevents",
+     "sub_var": "itemid",
+     "stop_var": "endtime",
+     "callback": "batch1_angiotensin_rate",
+     "extra_vars": [
+      "ordercategorydescription",
+      "rateuom",
+      "statusdescription"
+     ],
+     "status_var": "statusdescription",
+     "excluded_statuses": [
+      "Rewritten",
+      "Cancelled",
+      "Canceled",
+      "Bolus"
+     ],
+     "require_regex": {
+      "rateuom": "(?i)^\\s*mcg/kg/min\\s*$",
+      "ordercategorydescription": "^Continuous Med$"
+     }
+    },
+    {
+     "ids": [
+      229764
+     ],
+     "table": "inputevents",
+     "sub_var": "itemid",
+     "stop_var": "endtime",
+     "callback": "batch1_angiotensin_rate",
+     "extra_vars": [
+      "ordercategorydescription",
+      "rateuom",
+      "statusdescription"
+     ],
+     "status_var": "statusdescription",
+     "excluded_statuses": [
+      "Rewritten",
+      "Cancelled",
+      "Canceled",
+      "Bolus"
+     ],
+     "require_regex": {
+      "rateuom": "(?i)^\\s*ng/kg/min\\s*$",
+      "ordercategorydescription": "^Continuous Med$"
+     }
+    }
+   ]
+  }
+ },
+ "levosimendan": {
+  "unit": "boolean",
+  "description": "Levosimendan administration exposure",
+  "category": "cardiovascular",
+  "class_name": "lgl_cncpt",
+  "aggregate": "max",
+  "sources": {
+   "hirid": [
+    {
+     "ids": [
+      1000606
+     ],
+     "table": "pharma",
+     "sub_var": "pharmaid",
+     "callback": "transform_fun(comp_na(`>`, 0.000001))",
+     "extra_vars": [
+      "route"
+     ],
+     "require_regex": {
+      "route": "(?i)^\\s*(?:[ci]v(?:-(?:inf|inj))?|i\\.?v\\.?|intravenous)\\s*$"
+     }
+    }
+   ],
+   "sic": [
+    {
+     "ids": [
+      1548
+     ],
+     "table": "medication",
+     "sub_var": "DrugID",
+     "val_var": "Amount",
+     "callback": "sicdb_exposure"
+    }
+   ]
+  }
+ },
+ "terlipressin": {
+  "unit": "boolean",
+  "description": "Terlipressin administration exposure",
+  "category": "cardiovascular",
+  "class_name": "lgl_cncpt",
+  "aggregate": "max",
+  "sources": {
+   "aumc": [
+    {
+     "ids": [
+      12467
+     ],
+     "table": "drugitems",
+     "sub_var": "itemid",
+     "val_var": "dose",
+     "callback": "aumc_positive_dose",
+     "index_var": "start",
+     "dur_var": "stop",
+     "extra_vars": [
+      "ordercategory"
+     ],
+     "exclude_regex": {
+      "ordercategory": "(?i)^\\s*niet iv"
+     }
+    }
+   ],
+   "hirid": [
+    {
+     "ids": [
+      1000793
+     ],
+     "table": "pharma",
+     "sub_var": "pharmaid",
+     "callback": "transform_fun(comp_na(`>`, 0.000001))",
+     "extra_vars": [
+      "route"
+     ],
+     "require_regex": {
+      "route": "(?i)^\\s*(?:[ci]v(?:-(?:inf|inj))?|i\\.?v\\.?|intravenous)\\s*$"
+     }
+    }
+   ],
+   "sic": [
+    {
+     "ids": [
+      1483
+     ],
+     "table": "medication",
+     "sub_var": "DrugID",
+     "val_var": "Amount",
+     "callback": "sicdb_exposure"
+    }
+   ]
+  }
  }
 }

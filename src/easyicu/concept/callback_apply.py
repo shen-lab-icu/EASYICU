@@ -2990,6 +2990,11 @@ def _apply_callback_body(
 
         return frame
     
+    if expr == "batch1_angiotensin_rate":
+        from .batch1_sources import angiotensin_rate
+
+        return angiotensin_rate(frame, source, concept_name, data_source)
+
     # Handle mimic_rate_mv callback (for infusion rates)
     if expr.strip() == "mimic_rate_mv":
         from ..utils.callback_utils import mimic_rate_mv

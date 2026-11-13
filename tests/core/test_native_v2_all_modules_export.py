@@ -273,3 +273,22 @@ def test_opt_in_diuretic_nephrotoxin_publishes_on_native_hours(tmp_path, databas
     assert pd.api.types.is_numeric_dtype(frame.charttime)
     assert frame["vancomycin_piperacillin_tazobactam"].notna().any()
     assert "vancomycin_iv" not in frame.columns
+
+
+@pytest.mark.parametrize("database", ["hirid", "sic"])
+def test_opt_in_vis_inputs_publishes_on_native_hours(tmp_path, database):
+    from easyicu.api.extraction import extract_database
+    from easyicu.synthetic_sources import generate_source
+
+    source = tmp_path / "source"
+    generate_source(source, database, stays=12)
+    output = tmp_path / "out"
+    result = extract_database(
+        database, data_path=str(source), output_dir=str(output),
+        modules=["outcome", "vis_inputs"], native_export_v2=True, verbose=False,
+    )
+    assert not result["modules"]["vis_inputs"].get("errors")
+    frame = pd.read_parquet(output / "vis_inputs.parquet")
+    assert {"stay_id", "charttime"} <= set(frame.columns)
+    assert pd.api.types.is_numeric_dtype(frame.charttime)
+    assert frame["terlipressin"].notna().any()

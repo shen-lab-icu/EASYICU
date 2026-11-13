@@ -837,7 +837,19 @@ DIURETIC_NEPHROTOXIN_METADATA = {
     'vancomycin_iv': ('vancomycin systemic (intravenous) administration; input of vancomycin_piperacillin_tazobactam', '静脉万古霉素给药', 'boolean'),
 }
 
+VIS_INPUT_CONCEPTS = (
+    'angiotensin_ii_rate',
+    'levosimendan',
+    'terlipressin',
+)
+VIS_INPUT_METADATA = {
+    'angiotensin_ii_rate': ('Continuous intravenous angiotensin II infusion rate', '血管紧张素II持续静脉输注速率', 'ng/kg/min'),
+    'levosimendan': ('Levosimendan administration exposure', '左西孟旦给药暴露', 'boolean'),
+    'terlipressin': ('Terlipressin administration exposure', '特利加压素给药暴露', 'boolean'),
+}
+
 HIDDEN_DICTIONARY_CONCEPTS = {
+    *VIS_INPUT_CONCEPTS,
     'vancomycin_iv',
     *DIURETIC_NEPHROTOXIN_CONCEPTS,
     *SEDATION_ANALGESIA_CONCEPTS,

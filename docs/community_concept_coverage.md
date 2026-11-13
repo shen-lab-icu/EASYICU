@@ -1,7 +1,7 @@
 # Community database concept coverage
 
 Generated from `tools/build_community_concept_registry.py`. The matrix covers every standard
-concept (base dictionary plus SOFA-2 overlay): **396 concepts × 4 databases**.
+concept (base dictionary plus SOFA-2 overlay): **399 concepts × 4 databases**.
 
 `partial` is deliberately not advertised as extractable: it records useful ingredients while preventing an incomplete score or phenotype from being mistaken for a complete definition.
 
@@ -9,10 +9,10 @@ concept (base dictionary plus SOFA-2 overlay): **396 concepts × 4 databases**.
 
 | Database | Direct | Derived | Partial | Unavailable |
 |---|---:|---:|---:|---:|
-| nwicu | 137 | 19 | 37 | 203 |
-| zhejiang_eicu | 128 | 39 | 25 | 204 |
-| jinhua | 135 | 19 | 34 | 208 |
-| zigong | 125 | 27 | 41 | 203 |
+| nwicu | 137 | 19 | 37 | 206 |
+| zhejiang_eicu | 128 | 39 | 25 | 207 |
+| jinhua | 135 | 19 | 34 | 211 |
+| zigong | 125 | 27 | 41 | 206 |
 
 ## Complete matrix
 
@@ -33,6 +33,7 @@ concept (base dictionary plus SOFA-2 overlay): **396 concepts × 4 databases**.
 | `amiodarone` | medications | direct | direct | direct | direct |
 | `ammonia` | chemistry | direct | unavailable | direct | unavailable |
 | `amylase` | chemistry | direct | direct | direct | unavailable |
+| `angiotensin_ii_rate` | cardiovascular | unavailable | unavailable | unavailable | unavailable |
 | `anion_gap` | chemistry | direct | partial | derived | direct |
 | `apache_iv` | severity | unavailable | unavailable | unavailable | unavailable |
 | `apache_iv_pred_hosp_mort` | severity | unavailable | unavailable | unavailable | unavailable |
@@ -190,6 +191,7 @@ concept (base dictionary plus SOFA-2 overlay): **396 concepts × 4 databases**.
 | `ldh` | chemistry | unavailable | direct | direct | direct |
 | `ldl` | chemistry | direct | direct | direct | direct |
 | `levetiracetam` | medications | direct | unavailable | direct | direct |
+| `levosimendan` | cardiovascular | unavailable | unavailable | unavailable | unavailable |
 | `lipase` | chemistry | direct | unavailable | direct | unavailable |
 | `loop_diuretic` | medications | unavailable | unavailable | unavailable | unavailable |
 | `loop_diuretic_furosemide_eq` | medications | unavailable | unavailable | unavailable | unavailable |
@@ -353,6 +355,7 @@ concept (base dictionary plus SOFA-2 overlay): **396 concepts × 4 databases**.
 | `temp` | vitals | direct | direct | direct | direct |
 | `temp_qc` | vitals | unavailable | unavailable | unavailable | unavailable |
 | `temp_raw` | vitals | unavailable | unavailable | unavailable | unavailable |
+| `terlipressin` | cardiovascular | unavailable | unavailable | unavailable | unavailable |
 | `tgcs` | neurological | unavailable | unavailable | unavailable | unavailable |
 | `thiazide_diuretic` | medications | unavailable | unavailable | unavailable | unavailable |
 | `tibc` | chemistry | direct | unavailable | direct | unavailable |
