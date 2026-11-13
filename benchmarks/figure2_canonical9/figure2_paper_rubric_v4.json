@@ -99,6 +99,7 @@
     "src/easyicu/concept/aumc_intervals.py",
     "src/easyicu/concept/aumc_sources.py",
     "src/easyicu/concept/availability_signal.py",
+    "src/easyicu/concept/batch1_sources.py",
     "src/easyicu/concept/blood_gas_specimen.py",
     "src/easyicu/concept/builder.py",
     "src/easyicu/concept/callback_apply.py",
@@ -133,6 +134,7 @@
     "src/easyicu/concept/metadata_sidecar.py",
     "src/easyicu/concept/mimic_prescription_time.py",
     "src/easyicu/concept/mimic_support.py",
+    "src/easyicu/concept/nephrotoxin_coexposure.py",
     "src/easyicu/concept/parser.py",
     "src/easyicu/concept/provenance.py",
     "src/easyicu/concept/provenance_capture.py",
@@ -1561,7 +1563,7 @@
     "src/easyicu/webserver/zotero_probe.py"
   ],
   "scorer_tree_root": "benchmarks/figure2_canonical9/successor_v4",
-  "scorer_tree_sha256": "5b5fb2c1931597ce38a7e03a03daa9dd7ecf90e0cc6ba4bd1a4e12d2e8ca8771",
+  "scorer_tree_sha256": "28c4556f59a3b7c1283b9da4853ffc6b55382630d582fa23ff00df5ead290ca3",
   "suite_projection_sha256": "11c39afac69c9a0b560c6aa92be19f05725f04c66b9d2c499cfdb353c40295ab",
   "suite_ref": "easyicu_evaluation_protocol_suite/v2",
   "tasks": [

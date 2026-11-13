@@ -7,6 +7,49 @@ answers is in brackets.
 lead-r13 (0.1.0) is validated on SICdb 1.0.8, the default release, and
 remains compatible with SICdb 1.0.6 (the release is detected from the schema).
 
+## Unreleased — thesis batch 1 opt-in measures and reviewed source extensions [S732]
+
+Implementation completion: `6a1f24af5`.
+
+Batch 1 adds explicit opt-in `fluid_io`, `sedation_analgesia`,
+`diuretic_nephrotoxin`, `vis_inputs`, `vent_mechanics`, `haemo_advanced`,
+`rrt_detail`, `gas_specimen`, `inflam_detail`, `cardiac_markers` and
+`renal_detail` measures. Default catalog groups, module order and physical
+column contracts stay fixed. The `gas_specimen` module currently exports
+site-specific numeric gases only; the specimen-category concept is deferred.
+
+The accepted default source extensions are `(alb, aumc)`, `(bnp, miiv)`,
+`(co, aumc)`, `(inr_pt, aumc)`, `(inr_pt, sic)`, `(pct, aumc)`,
+`(urine_crea, aumc)`, `(urine_crea, hirid)`, `(urine_na, aumc)`,
+`(urine_na, hirid)`, `(urine_na, sic)`, `(urine_osm, aumc)`,
+`(urine_osm, eicu)`, `(urine_osm, sic)`, `(urine_urea, aumc)`,
+`(urine_urea, hirid)` and `(urine_urea, sic)`. Urine concentrations retain
+S907's time pairing and look-back rules; FENa/FEUrea availability can increase
+where the accepted inputs become available. Physical-data parity has not
+been tested in this synthetic-only implementation.
+
+CAM-ICU, Ramsay, SAS, CRRT modality, prescribed dilution mode and ECMO type use
+opt-in strict maps: an unrecognized label becomes missing. Existing map users
+retain their behavior. Weight-normalized rate declarations follow the
+working table defaults without changing rate dispatch.
+
+Fluid components are delivered volumes, never automatic additions to a fluid
+balance or to total input. AUMC gates the converted logical non-additive flag
+and exact IV categories; MIMIC-IV allocates mL interval amounts and excludes
+rejected statuses and non-ICU locations; SIC retains documented single doses
+and conserves continuous amounts; HiRID uses counter increments; eICU uses
+only the accepted exact cellpaths. Missing evidence stays missing.
+
+Assay-specific markers, absolute counts, urine concentrations, charted/set
+CRRT flows and abdominal-circumference proxies remain distinct. No arterial
+PiCCO additions to MAP/SBP/DBP, ambiguous specimen-panel timing, flagged SIC
+rate states, mixed-unit SIC ECMO flow, unvalidated medication orders or broad
+fluid aliases were admitted. Sparse or unavailable source coverage is not
+filled or extrapolated. The community registry records the new dictionary
+keys without adding community evidence. The v4 scorer binds the final source
+tree; the existing dictionary lock/seal is intentionally unchanged pending
+a separately authorized release.
+
 ## Unreleased (0.1.1, pending the user's dictionary reseal) — urine sodium and creatinine for AUMCdb and SICdb, FENa and FEUrea [S907]
 
 **What changed.** `renal_urine_chem` gains values; no other module moves.
