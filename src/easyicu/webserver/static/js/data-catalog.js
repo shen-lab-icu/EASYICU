@@ -708,9 +708,24 @@
     payload_scope: 'aggregate_only_no_rows',
   };
 
+  // Explicit opt-in concepts; default groups and catalog are unchanged.
+  const optInCardiacMarkers = {
+  "ckmb_activity": [
+    "CK-MB enzymatic activity; separate from mass",
+    "CK-MB酶活性（与质量浓度分开）",
+    "U/L"
+  ],
+  "tnt_hs": [
+    "High-sensitivity cardiac troponin T; assay subset of tnt",
+    "高敏肌钙蛋白T（tnt的检测方法子集）",
+    "ng/mL"
+  ]
+};
+
   window.EU_CATALOG = {
     groups,
     groupConcepts,
+    optInCardiacMarkers,
     dict,
     cov,
     conceptCoverage,

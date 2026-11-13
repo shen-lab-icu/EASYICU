@@ -38502,5 +38502,66 @@
     }
    ]
   }
+ },
+ "ckmb_activity": {
+  "unit": "U/L",
+  "min": 0,
+  "description": "CK-MB enzymatic activity; separate from mass",
+  "category": "chemistry",
+  "sources": {
+   "aumc": [
+    {
+     "ids": [
+      6824
+     ],
+     "table": "numericitems",
+     "sub_var": "itemid",
+     "unit_var": "unit",
+     "require_regex": {
+      "unit": "(?i)^\\s*IE/l\\s*$"
+     },
+     "callback": "convert_unit(binary_op(`*`, 1), 'U/L')"
+    }
+   ],
+   "sic": [
+    {
+     "ids": [
+      612
+     ],
+     "table": "laboratory",
+     "sub_var": "LaboratoryID",
+     "callback": "convert_unit(binary_op(`*`, 1), 'U/L')"
+    }
+   ]
+  }
+ },
+ "tnt_hs": {
+  "unit": "ng/mL",
+  "min": 0,
+  "description": "High-sensitivity cardiac troponin T; assay subset of tnt",
+  "category": "chemistry",
+  "sources": {
+   "hirid": [
+    {
+     "ids": [
+      24000806
+     ],
+     "table": "observations",
+     "sub_var": "variableid",
+     "class_name": "hrd_itm",
+     "callback": "convert_unit(binary_op(`*`, 0.001), 'ng/mL')"
+    }
+   ],
+   "sic": [
+    {
+     "ids": [
+      481
+     ],
+     "table": "laboratory",
+     "sub_var": "LaboratoryID",
+     "callback": "convert_unit(binary_op(`*`, 0.001), 'ng/mL')"
+    }
+   ]
+  }
  }
 }

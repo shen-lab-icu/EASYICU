@@ -688,7 +688,15 @@ BOUNDS_AUDIT_CONCEPTS = tuple(
 # the unchanged ``weight``. Exported only by the opt-in ``weight_strict`` module.
 WEIGHT_STRICT_CONCEPTS = ('weight_admit_strict', 'weight_admit_strict_source', 'weight_admit_strict_time_h')
 
+# S732: explicit opt-in markers retain their separate assay semantics.
+CARDIAC_MARKERS_CONCEPTS = ('ckmb_activity', 'tnt_hs')
+CARDIAC_MARKERS_METADATA = {
+    'ckmb_activity': ('CK-MB enzymatic activity; separate from mass', 'CK-MB酶活性（与质量浓度分开）', 'U/L'),
+    'tnt_hs': ('High-sensitivity cardiac troponin T; assay subset of tnt', '高敏肌钙蛋白T（tnt的检测方法子集）', 'ng/mL'),
+}
+
 HIDDEN_DICTIONARY_CONCEPTS = {
+    *CARDIAC_MARKERS_CONCEPTS,
     # R5C-HIRID-013: native U/L CK-MB remains explicitly loadable, but its
     # unresolved assay identity cannot enter the cross-source mass catalog.
     'ckmb_hirid_raw',

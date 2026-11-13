@@ -1,7 +1,7 @@
 # Community database concept coverage
 
 Generated from `tools/build_community_concept_registry.py`. The matrix covers every standard
-concept (base dictionary plus SOFA-2 overlay): **338 concepts × 4 databases**.
+concept (base dictionary plus SOFA-2 overlay): **340 concepts × 4 databases**.
 
 `partial` is deliberately not advertised as extractable: it records useful ingredients while preventing an incomplete score or phenotype from being mistaken for a complete definition.
 
@@ -9,10 +9,10 @@ concept (base dictionary plus SOFA-2 overlay): **338 concepts × 4 databases**.
 
 | Database | Direct | Derived | Partial | Unavailable |
 |---|---:|---:|---:|---:|
-| nwicu | 137 | 19 | 37 | 145 |
-| zhejiang_eicu | 128 | 39 | 25 | 146 |
-| jinhua | 135 | 19 | 34 | 150 |
-| zigong | 125 | 27 | 41 | 145 |
+| nwicu | 137 | 19 | 37 | 147 |
+| zhejiang_eicu | 128 | 39 | 25 | 148 |
+| jinhua | 135 | 19 | 34 | 152 |
+| zigong | 125 | 27 | 41 | 147 |
 
 ## Complete matrix
 
@@ -61,6 +61,7 @@ concept (base dictionary plus SOFA-2 overlay): **338 concepts × 4 databases**.
 | `cisatracurium` | medications | direct | direct | direct | direct |
 | `ck` | chemistry | direct | direct | direct | direct |
 | `ckmb` | chemistry | direct | unavailable | unavailable | unavailable |
+| `ckmb_activity` | chemistry | unavailable | unavailable | unavailable | unavailable |
 | `ckmb_hirid_raw` | chemistry | unavailable | unavailable | unavailable | unavailable |
 | `cl` | chemistry | direct | unavailable | direct | direct |
 | `co` | cardiovascular | unavailable | unavailable | unavailable | unavailable |
@@ -312,6 +313,7 @@ concept (base dictionary plus SOFA-2 overlay): **338 concepts × 4 databases**.
 | `tidal_vol` | ventilator | direct | direct | unavailable | direct |
 | `tidal_vol_set` | ventilator | unavailable | direct | unavailable | direct |
 | `tnt` | chemistry | direct | unavailable | unavailable | unavailable |
+| `tnt_hs` | chemistry | unavailable | unavailable | unavailable | unavailable |
 | `total_input_ml` | output | unavailable | unavailable | unavailable | unavailable |
 | `total_protein` | chemistry | direct | direct | direct | direct |
 | `transferrin` | chemistry | direct | unavailable | direct | unavailable |
