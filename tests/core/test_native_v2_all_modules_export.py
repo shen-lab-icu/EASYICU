@@ -177,3 +177,22 @@ def test_opt_in_renal_detail_publishes_on_native_hours(tmp_path, database):
     assert {"stay_id", "charttime"} <= set(frame.columns)
     assert pd.api.types.is_numeric_dtype(frame.charttime)
     assert frame["urine_k"].notna().any()
+
+
+@pytest.mark.parametrize("database", ["aumc", "sic"])
+def test_opt_in_rrt_detail_publishes_on_native_hours(tmp_path, database):
+    from easyicu.api.extraction import extract_database
+    from easyicu.synthetic_sources import generate_source
+
+    source = tmp_path / "source"
+    generate_source(source, database, stays=12)
+    output = tmp_path / "out"
+    result = extract_database(
+        database, data_path=str(source), output_dir=str(output),
+        modules=["outcome", "rrt_detail"], native_export_v2=True, verbose=False,
+    )
+    assert not result["modules"]["rrt_detail"].get("errors")
+    frame = pd.read_parquet(output / "rrt_detail.parquet")
+    assert {"stay_id", "charttime"} <= set(frame.columns)
+    assert pd.api.types.is_numeric_dtype(frame.charttime)
+    assert frame["crrt_blood_flow"].notna().any()

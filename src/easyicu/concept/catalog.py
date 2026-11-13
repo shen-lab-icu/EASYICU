@@ -721,7 +721,33 @@ RENAL_DETAIL_METADATA = {
     'urine_k': ('Urine potassium concentration', '尿钾浓度', 'mmol/L'),
 }
 
+RRT_DETAIL_CONCEPTS = (
+    'crrt_blood_flow',
+    'crrt_blood_flow_set',
+    'crrt_citrate_flow',
+    'crrt_dialysate_flow',
+    'crrt_replacement_flow',
+    'crrt_replacement_flow_set',
+    'crrt_replacement_post_flow',
+    'crrt_replacement_post_flow_set',
+    'crrt_replacement_pre_flow',
+    'crrt_replacement_pre_flow_set',
+)
+RRT_DETAIL_METADATA = {
+    'crrt_blood_flow': ('Charted CRRT blood flow', '记录的CRRT血流量', 'mL/min'),
+    'crrt_blood_flow_set': ('Prescribed CRRT blood flow', '医嘱设置的CRRT血流量', 'mL/min'),
+    'crrt_citrate_flow': ('Charted CRRT citrate solution flow', '记录的CRRT枸橼酸溶液流量', 'mL/h'),
+    'crrt_dialysate_flow': ('Charted CRRT dialysate flow', '记录的CRRT透析液流量', 'mL/h'),
+    'crrt_replacement_flow': ('Charted total CRRT replacement flow', '记录的CRRT总置换液流量', 'mL/h'),
+    'crrt_replacement_flow_set': ('Prescribed total CRRT replacement flow', '医嘱设置的CRRT总置换液流量', 'mL/h'),
+    'crrt_replacement_post_flow': ('Charted postfilter CRRT replacement flow', '记录的CRRT后稀释置换液流量', 'mL/h'),
+    'crrt_replacement_post_flow_set': ('Prescribed postfilter CRRT replacement flow', '医嘱设置的CRRT后稀释置换液流量', 'mL/h'),
+    'crrt_replacement_pre_flow': ('Charted prefilter CRRT replacement flow', '记录的CRRT前稀释置换液流量', 'mL/h'),
+    'crrt_replacement_pre_flow_set': ('Prescribed prefilter CRRT replacement flow', '医嘱设置的CRRT前稀释置换液流量', 'mL/h'),
+}
+
 HIDDEN_DICTIONARY_CONCEPTS = {
+    *RRT_DETAIL_CONCEPTS,
     *CARDIAC_MARKERS_CONCEPTS,
     *INFLAM_DETAIL_CONCEPTS,
     *RENAL_DETAIL_CONCEPTS,

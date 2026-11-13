@@ -39162,5 +39162,341 @@
     }
    ]
   }
+ },
+ "crrt_blood_flow": {
+  "unit": "mL/min",
+  "min": 0,
+  "max": 1000,
+  "description": "Charted CRRT blood flow",
+  "category": "renal",
+  "sources": {
+   "aumc": [
+    {
+     "ids": [
+      10736
+     ],
+     "table": "numericitems",
+     "sub_var": "itemid",
+     "unit_var": "unit",
+     "require_regex": {
+      "unit": "(?i)^\\s*ml/min\\s*$"
+     }
+    },
+    {
+     "ids": [
+      12460
+     ],
+     "table": "numericitems",
+     "sub_var": "itemid",
+     "unit_var": "unit",
+     "require_regex": {
+      "unit": "(?i)^\\s*ml/min\\s*$"
+     }
+    }
+   ],
+   "miiv": [
+    {
+     "ids": [
+      224144
+     ],
+     "table": "chartevents",
+     "sub_var": "itemid",
+     "unit_var": "valueuom",
+     "require_regex": {
+      "valueuom": "(?i)^\\s*ml/min\\s*$"
+     }
+    }
+   ],
+   "sic": [
+    {
+     "ids": [
+      723
+     ],
+     "table": "data_float_h",
+     "sub_var": "DataID"
+    }
+   ]
+  }
+ },
+ "crrt_blood_flow_set": {
+  "unit": "mL/min",
+  "min": 0,
+  "max": 1000,
+  "description": "Prescribed CRRT blood flow",
+  "category": "renal",
+  "sources": {
+   "aumc": [
+    {
+     "ids": [
+      12444
+     ],
+     "table": "numericitems",
+     "sub_var": "itemid",
+     "unit_var": "unit",
+     "require_regex": {
+      "unit": "(?i)^\\s*ml/min\\s*$"
+     }
+    },
+    {
+     "ids": [
+      14850
+     ],
+     "table": "numericitems",
+     "sub_var": "itemid",
+     "unit_var": "unit",
+     "require_regex": {
+      "unit": "(?i)^\\s*ml/min\\s*$"
+     }
+    },
+    {
+     "ids": [
+      20538
+     ],
+     "table": "numericitems",
+     "sub_var": "itemid",
+     "unit_var": "unit",
+     "require_regex": {
+      "unit": "(?i)^\\s*ml/min\\s*$"
+     }
+    }
+   ]
+  }
+ },
+ "crrt_citrate_flow": {
+  "unit": "mL/h",
+  "min": 0,
+  "max": 3000,
+  "description": "Charted CRRT citrate solution flow",
+  "category": "renal",
+  "sources": {
+   "miiv": [
+    {
+     "ids": [
+      228004
+     ],
+     "table": "chartevents",
+     "sub_var": "itemid",
+     "unit_var": "valueuom",
+     "require_regex": {
+      "valueuom": "(?i)^\\s*ml/hr\\s*$"
+     },
+     "callback": "convert_unit(binary_op(`*`, 1), 'mL/h')"
+    }
+   ]
+  }
+ },
+ "crrt_dialysate_flow": {
+  "unit": "mL/h",
+  "min": 0,
+  "max": 15000,
+  "description": "Charted CRRT dialysate flow",
+  "category": "renal",
+  "sources": {
+   "miiv": [
+    {
+     "ids": [
+      224154
+     ],
+     "table": "chartevents",
+     "sub_var": "itemid",
+     "unit_var": "valueuom",
+     "require_regex": {
+      "valueuom": "(?i)^\\s*ml/hr\\s*$"
+     },
+     "callback": "convert_unit(binary_op(`*`, 1), 'mL/h')"
+    }
+   ],
+   "sic": [
+    {
+     "ids": [
+      730
+     ],
+     "table": "data_float_h",
+     "sub_var": "DataID"
+    }
+   ]
+  }
+ },
+ "crrt_replacement_flow": {
+  "unit": "mL/h",
+  "min": 0,
+  "max": 15000,
+  "description": "Charted total CRRT replacement flow",
+  "category": "renal",
+  "sources": {
+   "aumc": [
+    {
+     "ids": [
+      10735
+     ],
+     "table": "numericitems",
+     "sub_var": "itemid",
+     "unit_var": "unit",
+     "require_regex": {
+      "unit": "(?i)^\\s*ml/uur\\s*$"
+     },
+     "callback": "convert_unit(binary_op(`*`, 1), 'mL/h')"
+    },
+    {
+     "ids": [
+      12461
+     ],
+     "table": "numericitems",
+     "sub_var": "itemid",
+     "unit_var": "unit",
+     "require_regex": {
+      "unit": "(?i)^\\s*ml/uur\\s*$"
+     },
+     "callback": "convert_unit(binary_op(`*`, 1), 'mL/h')"
+    }
+   ],
+   "miiv": [
+    {
+     "ids": [
+      224153
+     ],
+     "table": "chartevents",
+     "sub_var": "itemid",
+     "unit_var": "valueuom",
+     "require_regex": {
+      "valueuom": "(?i)^\\s*ml/hr\\s*$"
+     },
+     "callback": "convert_unit(binary_op(`*`, 1), 'mL/h')"
+    }
+   ]
+  }
+ },
+ "crrt_replacement_flow_set": {
+  "unit": "mL/h",
+  "min": 0,
+  "max": 15000,
+  "description": "Prescribed total CRRT replacement flow",
+  "category": "renal",
+  "sources": {
+   "aumc": [
+    {
+     "ids": [
+      12452
+     ],
+     "table": "numericitems",
+     "sub_var": "itemid",
+     "unit_var": "unit",
+     "require_regex": {
+      "unit": "(?i)^\\s*ml/uur\\s*$"
+     },
+     "callback": "convert_unit(binary_op(`*`, 1), 'mL/h')"
+    }
+   ]
+  }
+ },
+ "crrt_replacement_post_flow": {
+  "unit": "mL/h",
+  "min": 0,
+  "max": 15000,
+  "description": "Charted postfilter CRRT replacement flow",
+  "category": "renal",
+  "sources": {
+   "miiv": [
+    {
+     "ids": [
+      228006
+     ],
+     "table": "chartevents",
+     "sub_var": "itemid",
+     "unit_var": "valueuom",
+     "require_regex": {
+      "valueuom": "(?i)^\\s*ml/hr\\s*$"
+     },
+     "callback": "convert_unit(binary_op(`*`, 1), 'mL/h')"
+    }
+   ],
+   "sic": [
+    {
+     "ids": [
+      732
+     ],
+     "table": "data_float_h",
+     "sub_var": "DataID"
+    }
+   ]
+  }
+ },
+ "crrt_replacement_post_flow_set": {
+  "unit": "mL/h",
+  "min": 0,
+  "max": 15000,
+  "description": "Prescribed postfilter CRRT replacement flow",
+  "category": "renal",
+  "sources": {
+   "aumc": [
+    {
+     "ids": [
+      20716
+     ],
+     "table": "numericitems",
+     "sub_var": "itemid",
+     "unit_var": "unit",
+     "require_regex": {
+      "unit": "(?i)^\\s*ml/uur\\s*$"
+     },
+     "callback": "convert_unit(binary_op(`*`, 1), 'mL/h')"
+    }
+   ]
+  }
+ },
+ "crrt_replacement_pre_flow": {
+  "unit": "mL/h",
+  "min": 0,
+  "max": 15000,
+  "description": "Charted prefilter CRRT replacement flow",
+  "category": "renal",
+  "sources": {
+   "miiv": [
+    {
+     "ids": [
+      228005
+     ],
+     "table": "chartevents",
+     "sub_var": "itemid",
+     "unit_var": "valueuom",
+     "require_regex": {
+      "valueuom": "(?i)^\\s*ml/hr\\s*$"
+     },
+     "callback": "convert_unit(binary_op(`*`, 1), 'mL/h')"
+    }
+   ],
+   "sic": [
+    {
+     "ids": [
+      731
+     ],
+     "table": "data_float_h",
+     "sub_var": "DataID"
+    }
+   ]
+  }
+ },
+ "crrt_replacement_pre_flow_set": {
+  "unit": "mL/h",
+  "min": 0,
+  "max": 15000,
+  "description": "Prescribed prefilter CRRT replacement flow",
+  "category": "renal",
+  "sources": {
+   "aumc": [
+    {
+     "ids": [
+      20710
+     ],
+     "table": "numericitems",
+     "sub_var": "itemid",
+     "unit_var": "unit",
+     "require_regex": {
+      "unit": "(?i)^\\s*ml/uur\\s*$"
+     },
+     "callback": "convert_unit(binary_op(`*`, 1), 'mL/h')"
+    }
+   ]
+  }
  }
 }

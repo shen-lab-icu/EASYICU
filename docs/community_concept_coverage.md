@@ -1,7 +1,7 @@
 # Community database concept coverage
 
 Generated from `tools/build_community_concept_registry.py`. The matrix covers every standard
-concept (base dictionary plus SOFA-2 overlay): **350 concepts × 4 databases**.
+concept (base dictionary plus SOFA-2 overlay): **360 concepts × 4 databases**.
 
 `partial` is deliberately not advertised as extractable: it records useful ingredients while preventing an incomplete score or phenotype from being mistaken for a complete definition.
 
@@ -9,10 +9,10 @@ concept (base dictionary plus SOFA-2 overlay): **350 concepts × 4 databases**.
 
 | Database | Direct | Derived | Partial | Unavailable |
 |---|---:|---:|---:|---:|
-| nwicu | 137 | 19 | 37 | 157 |
-| zhejiang_eicu | 128 | 39 | 25 | 158 |
-| jinhua | 135 | 19 | 34 | 162 |
-| zigong | 125 | 27 | 41 | 157 |
+| nwicu | 137 | 19 | 37 | 167 |
+| zhejiang_eicu | 128 | 39 | 25 | 168 |
+| jinhua | 135 | 19 | 34 | 172 |
+| zigong | 125 | 27 | 41 | 167 |
 
 ## Complete matrix
 
@@ -76,7 +76,17 @@ concept (base dictionary plus SOFA-2 overlay): **350 concepts × 4 databases**.
 | `crea_qc` | chemistry | unavailable | unavailable | unavailable | unavailable |
 | `crea_raw` | chemistry | unavailable | unavailable | unavailable | unavailable |
 | `crp` | chemistry | direct | direct | direct | direct |
+| `crrt_blood_flow` | renal | unavailable | unavailable | unavailable | unavailable |
+| `crrt_blood_flow_set` | renal | unavailable | unavailable | unavailable | unavailable |
+| `crrt_citrate_flow` | renal | unavailable | unavailable | unavailable | unavailable |
+| `crrt_dialysate_flow` | renal | unavailable | unavailable | unavailable | unavailable |
 | `crrt_mode_input` | renal | unavailable | unavailable | unavailable | unavailable |
+| `crrt_replacement_flow` | renal | unavailable | unavailable | unavailable | unavailable |
+| `crrt_replacement_flow_set` | renal | unavailable | unavailable | unavailable | unavailable |
+| `crrt_replacement_post_flow` | renal | unavailable | unavailable | unavailable | unavailable |
+| `crrt_replacement_post_flow_set` | renal | unavailable | unavailable | unavailable | unavailable |
+| `crrt_replacement_pre_flow` | renal | unavailable | unavailable | unavailable | unavailable |
+| `crrt_replacement_pre_flow_set` | renal | unavailable | unavailable | unavailable | unavailable |
 | `cvp` | vitals | partial | derived | partial | derived |
 | `cvp_qc` | vitals | partial | derived | partial | derived |
 | `cvp_raw` | vitals | unavailable | direct | unavailable | direct |
