@@ -987,6 +987,11 @@
     "tramadol given in the hour, any systemic route",
     "曲马多给药时段",
     "boolean"
+  ],
+  "bps": [
+    "Behavioral Pain Scale total; invalid 0–2 remain missing",
+    "行为疼痛量表总分（0至2为无效值）",
+    "score"
   ]
 };
 

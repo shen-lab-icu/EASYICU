@@ -187,7 +187,18 @@ EXPECTED = {'remifentanil': {'class_name': 'lgl_cncpt',
                                    'sub_var': 'DrugID',
                                    'val_var': 'Amount',
                                    'callback': 'sicdb_active_exposure',
-                                   'extra_vars': ['OffsetDrugEnd']}]}}}
+                                   'extra_vars': ['OffsetDrugEnd']}]}},
+ 'bps': {'unit': 'score',
+         'min': 3,
+         'max': 12,
+         'description': 'Behavioral Pain Scale total; invalid 0–2 remain missing',
+         'category': 'neurological',
+         'sources': {'aumc': [{'ids': [19609],
+                               'table': 'numericitems',
+                               'sub_var': 'itemid',
+                               'unit_var': 'unit',
+                               'require_regex': {'unit': '(?i)^\\s*Geen\\s*$'},
+                               'callback': "convert_unit(binary_op(`*`, 1), 'score')"}]}}}
 
 
 @pytest.mark.parametrize("name", list(EXPECTED))
@@ -199,7 +210,7 @@ def test_dictionary_contract(name):
     assert all(name not in EXTRACT_MODULES[module] for module in EXTRACT_MODULE_ORDER)
 
 
-@pytest.mark.parametrize("name", [n for n, d in EXPECTED.items() if "aumc" in d["sources"]])
+@pytest.mark.parametrize("name", [n for n, d in EXPECTED.items() if d["sources"].get("aumc", [{}])[0].get("callback") == "aumc_positive_dose"])
 def test_aumc_positive_administered_dose(name):
     source = load_dictionary()[name].sources["aumc"][0]
     frame = pd.DataFrame({name: [0., -1., None, 2.], "ordercategory": ["Infuus"] * 4})
@@ -274,3 +285,34 @@ def test_hirid_positive_threshold(name):
     frame = pd.DataFrame({name: [0., 0.000001, 0.000002], "route": ["i.v."] * 3})
     result = _apply_callback(frame, source, name)[name]
     assert result.iloc[:3].tolist() == [False, False, True]
+
+
+def test_bps_unit_gate_and_boundaries():
+    from easyicu.concept.callback_apply import _drop_declared_row_exclusions
+
+    source = load_dictionary()["bps"].sources["aumc"][0]
+    frame = pd.DataFrame({"bps": [3., 12., 4.], "unit": ["Geen", "Geen", "wrong"]})
+    filtered = _drop_declared_row_exclusions(frame, source, "bps")
+    result = _apply_callback(filtered, source, "bps", unit_column="unit")
+    assert result.bps.tolist() == [3., 12.]
+    assert result.unit.tolist() == ["score", "score"]
+
+
+def test_bps_loader_excludes_invalid_scores_and_units(tmp_path):
+    from easyicu.concept import ConceptResolver
+    from easyicu.config import load_src_cfg
+    from easyicu.datasource import ICUDataSource
+
+    pd.DataFrame({"admissionid": [1], "patientid": [1], "admittedat": [0],
+                  "dischargedat": [24 * 3600000]}).to_parquet(tmp_path / "admissions.parquet", index=False)
+    frame = pd.DataFrame({"admissionid": [1] * 5, "itemid": [19609] * 5,
+        "measuredat": [300000 + i * 3600000 for i in range(5)],
+        "registeredat": [300000 + i * 3600000 for i in range(5)],
+        "value": [2., 3., 12., 13., 4.], "unit": ["Geen", "Geen", "Geen", "Geen", "wrong"]})
+    (tmp_path / "numericitems").mkdir()
+    frame.to_parquet(tmp_path / "numericitems" / "part.parquet", index=False)
+    source = ICUDataSource(load_src_cfg("aumc"), base_path=tmp_path, enable_cache=False)
+    result = ConceptResolver(load_dictionary()).load_concepts(
+        ["bps"], source, merge=False, r_compatible=False, interval=pd.Timedelta(hours=1),
+        concept_workers=1, verbose=False)["bps"].data.bps.dropna()
+    assert result.tolist() == [3., 12.]

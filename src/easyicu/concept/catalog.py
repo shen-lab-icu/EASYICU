@@ -809,6 +809,7 @@ SEDATION_ANALGESIA_CONCEPTS = (
     'methadone',
     'oxycodone',
     'tramadol',
+    'bps',
 )
 SEDATION_ANALGESIA_METADATA = {
     'remifentanil': ('remifentanil given in the hour (administration or running infusion)', '瑞芬太尼给药时段', 'boolean'),
@@ -819,6 +820,7 @@ SEDATION_ANALGESIA_METADATA = {
     'methadone': ('methadone given in the hour, any systemic route', '美沙酮给药时段', 'boolean'),
     'oxycodone': ('oxycodone given in the hour (enteral; immediate or prolonged release, alone or combined)', '羟考酮给药时段', 'boolean'),
     'tramadol': ('tramadol given in the hour, any systemic route', '曲马多给药时段', 'boolean'),
+    'bps': ('Behavioral Pain Scale total; invalid 0–2 remain missing', '行为疼痛量表总分（0至2为无效值）', 'score'),
 }
 
 DIURETIC_NEPHROTOXIN_CONCEPTS = (

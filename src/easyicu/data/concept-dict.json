@@ -41231,5 +41231,28 @@
     }
    ]
   }
+ },
+ "bps": {
+  "unit": "score",
+  "min": 3,
+  "max": 12,
+  "description": "Behavioral Pain Scale total; invalid 0–2 remain missing",
+  "category": "neurological",
+  "sources": {
+   "aumc": [
+    {
+     "ids": [
+      19609
+     ],
+     "table": "numericitems",
+     "sub_var": "itemid",
+     "unit_var": "unit",
+     "require_regex": {
+      "unit": "(?i)^\\s*Geen\\s*$"
+     },
+     "callback": "convert_unit(binary_op(`*`, 1), 'score')"
+    }
+   ]
+  }
  }
 }

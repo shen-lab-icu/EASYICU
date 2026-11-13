@@ -1,7 +1,7 @@
 # Community database concept coverage
 
 Generated from `tools/build_community_concept_registry.py`. The matrix covers every standard
-concept (base dictionary plus SOFA-2 overlay): **399 concepts × 4 databases**.
+concept (base dictionary plus SOFA-2 overlay): **400 concepts × 4 databases**.
 
 `partial` is deliberately not advertised as extractable: it records useful ingredients while preventing an incomplete score or phenotype from being mistaken for a complete definition.
 
@@ -9,10 +9,10 @@ concept (base dictionary plus SOFA-2 overlay): **399 concepts × 4 databases**.
 
 | Database | Direct | Derived | Partial | Unavailable |
 |---|---:|---:|---:|---:|
-| nwicu | 137 | 19 | 37 | 206 |
-| zhejiang_eicu | 128 | 39 | 25 | 207 |
-| jinhua | 135 | 19 | 34 | 211 |
-| zigong | 125 | 27 | 41 | 206 |
+| nwicu | 137 | 19 | 37 | 207 |
+| zhejiang_eicu | 128 | 39 | 25 | 208 |
+| jinhua | 135 | 19 | 34 | 212 |
+| zigong | 125 | 27 | 41 | 207 |
 
 ## Complete matrix
 
@@ -52,6 +52,7 @@ concept (base dictionary plus SOFA-2 overlay): **399 concepts × 4 databases**.
 | `bmi` | demographics | derived | derived | direct | unavailable |
 | `bnd` | hematology | unavailable | unavailable | unavailable | unavailable |
 | `bnp` | chemistry | unavailable | unavailable | direct | direct |
+| `bps` | neurological | unavailable | unavailable | unavailable | unavailable |
 | `bun` | chemistry | direct | direct | direct | direct |
 | `bun_creatinine_ratio` | renal | derived | derived | derived | derived |
 | `bun_qc` | chemistry | unavailable | unavailable | unavailable | unavailable |
