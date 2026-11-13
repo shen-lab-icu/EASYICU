@@ -694,6 +694,13 @@ WEIGHT_STRICT_CONCEPTS = ('weight_admit_strict', 'weight_admit_strict_source', '
 # the opt-in (owner: concept/minute_resolution.py).
 SUBHOUR_SIGNAL_CONCEPTS = ('map_invasive', 'cvp', 'peep_set', 'peep_total', 'hr', 'fio2_chart', 'norepi_equiv')
 
+# S2RECR (2026-11-13): respiratory mechanics and the PaO2/FiO2 inputs at the
+# one-minute grid, exported only by the opt-in ``vent_native`` module (owner:
+# concept/minute_resolution.py). Charted plateau pressure before the PIP/PEEP
+# consistency rule, measured expiratory tidal volume, set and total PEEP kept
+# apart, charted static compliance, arterial pO2 and bedside FiO2.
+VENT_NATIVE_CONCEPTS = ('plateau_pres_raw', 'tidal_vol', 'peep_set', 'peep_total', 'compliance', 'po2', 'fio2_chart')
+
 HIDDEN_DICTIONARY_CONCEPTS = {
     # R5C-HIRID-013: native U/L CK-MB remains explicitly loadable, but its
     # unresolved assay identity cannot enter the cross-source mass catalog.

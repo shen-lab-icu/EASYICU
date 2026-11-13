@@ -254,6 +254,7 @@ def test_extract_database_modules_use_the_shared_catalog() -> None:
     from easyicu.concept.catalog import (
         BOUNDS_AUDIT_CONCEPTS,
         SUBHOUR_SIGNAL_CONCEPTS,
+        VENT_NATIVE_CONCEPTS,
         WEIGHT_STRICT_CONCEPTS,
     )
 
@@ -263,7 +264,7 @@ def test_extract_database_modules_use_the_shared_catalog() -> None:
     } | {"sic_case_landmark": [
         "care_unit_to_case_closure_days", "death_time_during_case_hours", "death_during_case",
     ], "bounds_audit": list(BOUNDS_AUDIT_CONCEPTS), "weight_strict": list(WEIGHT_STRICT_CONCEPTS),
-       "subhour_signals": list(SUBHOUR_SIGNAL_CONCEPTS)}
+       "subhour_signals": list(SUBHOUR_SIGNAL_CONCEPTS), "vent_native": list(VENT_NATIVE_CONCEPTS)}
     # The SIC case module is explicitly selected, not part of the six-source
     # default extraction order.
     assert set(EXTRACT_MODULE_ORDER) == set(CONCEPT_GROUPS_INTERNAL)
@@ -275,6 +276,7 @@ def test_extract_database_modules_use_the_shared_catalog() -> None:
     assert "weight_strict" not in EXTRACT_MODULE_ORDER
     # S853: minute-grid signals are an explicitly selected module.
     assert "subhour_signals" not in EXTRACT_MODULE_ORDER
+    assert "vent_native" not in EXTRACT_MODULE_ORDER
 
 
 def test_web_catalog_aligns_with_merged_extraction_dictionary() -> None:

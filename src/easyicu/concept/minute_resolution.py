@@ -32,6 +32,7 @@ MINUTE_RESOLUTION_KWARG = "_minute_resolution"
 # Opt-in export modules that load at a sub-hour grid: module -> grid.
 SUBHOUR_MODULE_INTERVALS: Mapping[str, pd.Timedelta] = {
     "subhour_signals": pd.Timedelta(minutes=1),
+    "vent_native": pd.Timedelta(minutes=1),
 }
 
 SICDB_MINUTE_TABLE = "data_float_h"

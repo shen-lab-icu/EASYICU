@@ -32,6 +32,7 @@ from ..concept.catalog import (
     BOUNDS_AUDIT_CONCEPTS,
     CONCEPT_GROUPS_INTERNAL,
     SUBHOUR_SIGNAL_CONCEPTS,
+    VENT_NATIVE_CONCEPTS,
     WEIGHT_STRICT_CONCEPTS,
 )
 from ..concept.minute_resolution import (
@@ -142,6 +143,8 @@ EXTRACT_MODULES["weight_strict"] = list(WEIGHT_STRICT_CONCEPTS)
 # S853: map_invasive/cvp/peep_set/peep_total/hr/fio2_chart/norepi_equiv at a one-minute grid (SICdb from rawdata),
 # exported only when explicitly requested.
 EXTRACT_MODULES["subhour_signals"] = list(SUBHOUR_SIGNAL_CONCEPTS)
+# S2RECR: plateau/tidal volume/PEEP/compliance/pO2/FiO2 at a one-minute grid, explicitly requested only.
+EXTRACT_MODULES["vent_native"] = list(VENT_NATIVE_CONCEPTS)
 
 # Production cohort boundary used only to admit a calibrated one-shot fast
 # path on sufficiently large-memory hosts.  Crossing it always uses streaming.
