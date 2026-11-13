@@ -30,7 +30,7 @@ from ..source_bounds import (
 )
 from ..concept.catalog import (
     BOUNDS_AUDIT_CONCEPTS, CARDIAC_MARKERS_CONCEPTS, CONCEPT_GROUPS_INTERNAL,
-    WEIGHT_STRICT_CONCEPTS,
+    INFLAM_DETAIL_CONCEPTS, WEIGHT_STRICT_CONCEPTS,
 )
 from ..concept.merge_time_index import merge_fill_scope
 from ..config import DATABASE_ID_CONFIG
@@ -133,6 +133,7 @@ EXTRACT_MODULES["bounds_audit"] = list(BOUNDS_AUDIT_CONCEPTS)
 # S740: leakage-free stay weight fields, exported only when explicitly requested.
 EXTRACT_MODULES["weight_strict"] = list(WEIGHT_STRICT_CONCEPTS)
 EXTRACT_MODULES["cardiac_markers"] = list(CARDIAC_MARKERS_CONCEPTS)
+EXTRACT_MODULES["inflam_detail"] = list(INFLAM_DETAIL_CONCEPTS)
 
 # Production cohort boundary used only to admit a calibrated one-shot fast
 # path on sufficiently large-memory hosts.  Crossing it always uses streaming.

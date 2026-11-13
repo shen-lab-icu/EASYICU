@@ -263,6 +263,9 @@ def _aumc_unit(name, source, definition):
     would be read as mmHg. A required unit filter selects a matching declared
     concept unit; incompatible declarations stop generation.
     """
+    # Absolute cell channels also feed the existing differential ratio callback.
+    if name in {"lymph", "neut"} and source.get("ids") in (14258, 14254):
+        return "10^9/L"
     required_unit = (source.get("require_regex") or {}).get("unit")
     if required_unit:
         units = definition.get("unit") or []

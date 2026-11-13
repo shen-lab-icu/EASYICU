@@ -1,7 +1,7 @@
 # Community database concept coverage
 
 Generated from `tools/build_community_concept_registry.py`. The matrix covers every standard
-concept (base dictionary plus SOFA-2 overlay): **340 concepts × 4 databases**.
+concept (base dictionary plus SOFA-2 overlay): **343 concepts × 4 databases**.
 
 `partial` is deliberately not advertised as extractable: it records useful ingredients while preventing an incomplete score or phenotype from being mistaken for a complete definition.
 
@@ -9,10 +9,10 @@ concept (base dictionary plus SOFA-2 overlay): **340 concepts × 4 databases**.
 
 | Database | Direct | Derived | Partial | Unavailable |
 |---|---:|---:|---:|---:|
-| nwicu | 137 | 19 | 37 | 147 |
-| zhejiang_eicu | 128 | 39 | 25 | 148 |
-| jinhua | 135 | 19 | 34 | 152 |
-| zigong | 125 | 27 | 41 | 147 |
+| nwicu | 137 | 19 | 37 | 150 |
+| zhejiang_eicu | 128 | 39 | 25 | 151 |
+| jinhua | 135 | 19 | 34 | 155 |
+| zigong | 125 | 27 | 41 | 150 |
 
 ## Complete matrix
 
@@ -145,6 +145,7 @@ concept (base dictionary plus SOFA-2 overlay): **340 concepts × 4 databases**.
 | `icp` | neurological | unavailable | unavailable | unavailable | unavailable |
 | `icu_stay_is_readmission` | demographics | unavailable | unavailable | unavailable | unavailable |
 | `icu_unit_type` | demographics | direct | unavailable | unavailable | unavailable |
+| `il6` | chemistry | unavailable | unavailable | unavailable | unavailable |
 | `infection_icd` | outcome | unavailable | unavailable | unavailable | unavailable |
 | `inr_pt` | hematology | direct | direct | direct | direct |
 | `ins` | medications | unavailable | unavailable | unavailable | unavailable |
@@ -169,6 +170,7 @@ concept (base dictionary plus SOFA-2 overlay): **340 concepts × 4 databases**.
 | `los_hosp` | outcome | direct | direct | direct | unavailable |
 | `los_icu` | outcome | direct | unavailable | direct | direct |
 | `lymph` | hematology | direct | direct | direct | direct |
+| `lymph_abs` | hematology | unavailable | unavailable | unavailable | unavailable |
 | `magnesium_iv` | medications | direct | direct | direct | direct |
 | `mannitol` | medications | direct | direct | direct | unavailable |
 | `map` | vitals | unavailable | unavailable | unavailable | direct |
@@ -206,6 +208,7 @@ concept (base dictionary plus SOFA-2 overlay): **340 concepts × 4 databases**.
 | `na_raw` | chemistry | unavailable | unavailable | unavailable | unavailable |
 | `neostigmine` | medications | direct | direct | direct | direct |
 | `neut` | hematology | direct | direct | direct | direct |
+| `neut_abs` | hematology | unavailable | unavailable | unavailable | unavailable |
 | `news` | outcome | partial | partial | partial | partial |
 | `nicardipine` | medications | direct | direct | unavailable | direct |
 | `nitroglycerin` | medications | direct | direct | direct | direct |

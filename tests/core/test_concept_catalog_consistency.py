@@ -253,7 +253,8 @@ def test_static_data_catalog_js_matches_python_catalog() -> None:
 def test_extract_database_modules_use_the_shared_catalog() -> None:
     from easyicu.api import EXTRACT_MODULE_ORDER, EXTRACT_MODULES
     from easyicu.concept.catalog import (
-        BOUNDS_AUDIT_CONCEPTS, CARDIAC_MARKERS_CONCEPTS, WEIGHT_STRICT_CONCEPTS,
+        BOUNDS_AUDIT_CONCEPTS, CARDIAC_MARKERS_CONCEPTS, INFLAM_DETAIL_CONCEPTS,
+        WEIGHT_STRICT_CONCEPTS,
     )
 
     assert EXTRACT_MODULES == {
@@ -262,7 +263,8 @@ def test_extract_database_modules_use_the_shared_catalog() -> None:
     } | {"sic_case_landmark": [
         "care_unit_to_case_closure_days", "death_time_during_case_hours", "death_during_case",
     ], "bounds_audit": list(BOUNDS_AUDIT_CONCEPTS), "weight_strict": list(WEIGHT_STRICT_CONCEPTS),
-       "cardiac_markers": list(CARDIAC_MARKERS_CONCEPTS)}
+       "cardiac_markers": list(CARDIAC_MARKERS_CONCEPTS),
+       "inflam_detail": list(INFLAM_DETAIL_CONCEPTS)}
     # The SIC case module is explicitly selected, not part of the six-source
     # default extraction order.
     assert set(EXTRACT_MODULE_ORDER) == set(CONCEPT_GROUPS_INTERNAL)

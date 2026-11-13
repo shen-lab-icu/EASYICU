@@ -38563,5 +38563,174 @@
     }
    ]
   }
+ },
+ "il6": {
+  "unit": "pg/mL",
+  "min": 0,
+  "description": "Interleukin-6 concentration in blood",
+  "category": "chemistry",
+  "sources": {
+   "sic": [
+    {
+     "ids": [
+      569
+     ],
+     "table": "laboratory",
+     "sub_var": "LaboratoryID"
+    }
+   ]
+  }
+ },
+ "lymph_abs": {
+  "unit": "10^9/L",
+  "min": 0,
+  "max": 1000,
+  "description": "Absolute blood lymphocyte count",
+  "category": "hematology",
+  "sources": {
+   "aumc": [
+    {
+     "ids": [
+      14258
+     ],
+     "table": "numericitems",
+     "sub_var": "itemid",
+     "unit_var": "unit",
+     "require_regex": {
+      "unit": "(?i)^\\s*10\\^9/l\\s*$"
+     },
+     "callback": "convert_unit(binary_op(`*`, 1), '10^9/L')"
+    },
+    {
+     "ids": [
+      6780
+     ],
+     "table": "numericitems",
+     "sub_var": "itemid",
+     "unit_var": "unit",
+     "require_regex": {
+      "unit": "(?i)^\\s*10\\^9/l\\s*$"
+     },
+     "callback": "convert_unit(binary_op(`*`, 1), '10^9/L')"
+    }
+   ],
+   "miiv": [
+    {
+     "ids": [
+      229358
+     ],
+     "table": "chartevents",
+     "sub_var": "itemid",
+     "unit_var": "valueuom",
+     "require_regex": {
+      "valueuom": "(?i)^\\s*K/uL\\s*$"
+     },
+     "callback": "convert_unit(binary_op(`*`, 1), '10^9/L')"
+    },
+    {
+     "ids": [
+      51133
+     ],
+     "table": "labevents",
+     "sub_var": "itemid",
+     "unit_var": "valueuom",
+     "require_regex": {
+      "valueuom": "(?i)^\\s*K/uL\\s*$"
+     },
+     "callback": "convert_unit(binary_op(`*`, 1), '10^9/L')"
+    },
+    {
+     "ids": [
+      52769
+     ],
+     "table": "labevents",
+     "sub_var": "itemid",
+     "unit_var": "valueuom",
+     "require_regex": {
+      "valueuom": "(?i)^\\s*\\#/uL\\s*$"
+     },
+     "callback": "convert_unit(binary_op(`*`, 0.001), '10^9/L')"
+    }
+   ],
+   "sic": [
+    {
+     "ids": [
+      302
+     ],
+     "table": "laboratory",
+     "sub_var": "LaboratoryID",
+     "callback": "convert_unit(binary_op(`*`, 1), '10^9/L')"
+    },
+    {
+     "ids": [
+      303
+     ],
+     "table": "laboratory",
+     "sub_var": "LaboratoryID",
+     "callback": "convert_unit(binary_op(`*`, 1), '10^9/L')"
+    }
+   ]
+  }
+ },
+ "neut_abs": {
+  "unit": "10^9/L",
+  "min": 0,
+  "max": 1000,
+  "description": "Absolute blood neutrophil count",
+  "category": "hematology",
+  "sources": {
+   "aumc": [
+    {
+     "ids": [
+      14254
+     ],
+     "table": "numericitems",
+     "sub_var": "itemid",
+     "unit_var": "unit",
+     "require_regex": {
+      "unit": "(?i)^\\s*10\\^9/l\\s*$"
+     },
+     "callback": "convert_unit(binary_op(`*`, 1), '10^9/L')"
+    }
+   ],
+   "miiv": [
+    {
+     "ids": [
+      229355
+     ],
+     "table": "chartevents",
+     "sub_var": "itemid",
+     "unit_var": "valueuom",
+     "require_regex": {
+      "valueuom": "(?i)^\\s*K/uL\\s*$"
+     },
+     "callback": "convert_unit(binary_op(`*`, 1), '10^9/L')"
+    },
+    {
+     "ids": [
+      229357
+     ],
+     "table": "chartevents",
+     "sub_var": "itemid",
+     "unit_var": "valueuom",
+     "require_regex": {
+      "valueuom": "(?i)^\\s*K/uL\\s*$"
+     },
+     "callback": "convert_unit(binary_op(`*`, 1), '10^9/L')"
+    },
+    {
+     "ids": [
+      52075
+     ],
+     "table": "labevents",
+     "sub_var": "itemid",
+     "unit_var": "valueuom",
+     "require_regex": {
+      "valueuom": "(?i)^\\s*K/uL\\s*$"
+     },
+     "callback": "convert_unit(binary_op(`*`, 1), '10^9/L')"
+    }
+   ]
+  }
  }
 }

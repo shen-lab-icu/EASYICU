@@ -722,10 +722,29 @@
   ]
 };
 
+  const optInInflamDetail = {
+  "il6": [
+    "Interleukin-6 concentration in blood",
+    "血白细胞介素6浓度",
+    "pg/mL"
+  ],
+  "lymph_abs": [
+    "Absolute blood lymphocyte count",
+    "血淋巴细胞绝对计数",
+    "10^9/L"
+  ],
+  "neut_abs": [
+    "Absolute blood neutrophil count",
+    "血中性粒细胞绝对计数",
+    "10^9/L"
+  ]
+};
+
   window.EU_CATALOG = {
     groups,
     groupConcepts,
     optInCardiacMarkers,
+    optInInflamDetail,
     dict,
     cov,
     conceptCoverage,

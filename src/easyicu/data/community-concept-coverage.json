@@ -1,5 +1,5 @@
 {
-  "concept_count": 340,
+  "concept_count": 343,
   "concepts": {
     "abx": {
       "category": "medications",
@@ -3750,6 +3750,28 @@
       },
       "description": "ICU unit type"
     },
+    "il6": {
+      "category": "chemistry",
+      "databases": {
+        "jinhua": {
+          "reason": "no validated native field/event in this release",
+          "status": "unavailable"
+        },
+        "nwicu": {
+          "reason": "no validated native field/event in this release",
+          "status": "unavailable"
+        },
+        "zhejiang_eicu": {
+          "reason": "no validated native field/event in this release",
+          "status": "unavailable"
+        },
+        "zigong": {
+          "reason": "no validated native field/event in this release",
+          "status": "unavailable"
+        }
+      },
+      "description": "Interleukin-6 concentration in blood"
+    },
     "infection_icd": {
       "category": "outcome",
       "databases": {
@@ -4435,6 +4457,28 @@
         }
       },
       "description": "lymphocytes"
+    },
+    "lymph_abs": {
+      "category": "hematology",
+      "databases": {
+        "jinhua": {
+          "reason": "no validated native field/event in this release",
+          "status": "unavailable"
+        },
+        "nwicu": {
+          "reason": "no validated native field/event in this release",
+          "status": "unavailable"
+        },
+        "zhejiang_eicu": {
+          "reason": "no validated native field/event in this release",
+          "status": "unavailable"
+        },
+        "zigong": {
+          "reason": "no validated native field/event in this release",
+          "status": "unavailable"
+        }
+      },
+      "description": "Absolute blood lymphocyte count"
     },
     "magnesium_iv": {
       "category": "medications",
@@ -5428,6 +5472,28 @@
         }
       },
       "description": "neutrophils"
+    },
+    "neut_abs": {
+      "category": "hematology",
+      "databases": {
+        "jinhua": {
+          "reason": "no validated native field/event in this release",
+          "status": "unavailable"
+        },
+        "nwicu": {
+          "reason": "no validated native field/event in this release",
+          "status": "unavailable"
+        },
+        "zhejiang_eicu": {
+          "reason": "no validated native field/event in this release",
+          "status": "unavailable"
+        },
+        "zigong": {
+          "reason": "no validated native field/event in this release",
+          "status": "unavailable"
+        }
+      },
+      "description": "Absolute blood neutrophil count"
     },
     "news": {
       "category": "outcome",
@@ -10858,25 +10924,25 @@
       "derived": 19,
       "direct": 135,
       "partial": 34,
-      "unavailable": 152
+      "unavailable": 155
     },
     "nwicu": {
       "derived": 19,
       "direct": 137,
       "partial": 37,
-      "unavailable": 147
+      "unavailable": 150
     },
     "zhejiang_eicu": {
       "derived": 39,
       "direct": 128,
       "partial": 25,
-      "unavailable": 148
+      "unavailable": 151
     },
     "zigong": {
       "derived": 27,
       "direct": 125,
       "partial": 41,
-      "unavailable": 147
+      "unavailable": 150
     }
   },
   "databases": [

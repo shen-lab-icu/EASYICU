@@ -695,8 +695,16 @@ CARDIAC_MARKERS_METADATA = {
     'tnt_hs': ('High-sensitivity cardiac troponin T; assay subset of tnt', '高敏肌钙蛋白T（tnt的检测方法子集）', 'ng/mL'),
 }
 
+INFLAM_DETAIL_CONCEPTS = ('il6', 'lymph_abs', 'neut_abs')
+INFLAM_DETAIL_METADATA = {
+    'il6': ('Interleukin-6 concentration in blood', '血白细胞介素6浓度', 'pg/mL'),
+    'lymph_abs': ('Absolute blood lymphocyte count', '血淋巴细胞绝对计数', '10^9/L'),
+    'neut_abs': ('Absolute blood neutrophil count', '血中性粒细胞绝对计数', '10^9/L'),
+}
+
 HIDDEN_DICTIONARY_CONCEPTS = {
     *CARDIAC_MARKERS_CONCEPTS,
+    *INFLAM_DETAIL_CONCEPTS,
     # R5C-HIRID-013: native U/L CK-MB remains explicitly loadable, but its
     # unresolved assay identity cannot enter the cross-source mass catalog.
     'ckmb_hirid_raw',
