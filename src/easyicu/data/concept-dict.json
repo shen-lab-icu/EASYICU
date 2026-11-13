@@ -38732,5 +38732,267 @@
     }
    ]
   }
+ },
+ "abdominal_circumference": {
+  "unit": "cm",
+  "min": 0,
+  "max": 300,
+  "description": "Abdominal circumference; flagged proxy, not pressure",
+  "category": "ventilator",
+  "sources": {
+   "aumc": [
+    {
+     "ids": [
+      12087
+     ],
+     "table": "numericitems",
+     "sub_var": "itemid",
+     "unit_var": "unit",
+     "require_regex": {
+      "unit": "(?i)^\\s*cm\\s*$"
+     }
+    }
+   ]
+  }
+ },
+ "beta2_microglobulin_urine": {
+  "unit": "ug/L",
+  "min": 0,
+  "description": "Urinary beta-2 microglobulin concentration",
+  "category": "renal",
+  "sources": {
+   "aumc": [
+    {
+     "ids": [
+      10164
+     ],
+     "table": "numericitems",
+     "sub_var": "itemid",
+     "unit_var": "unit",
+     "require_regex": {
+      "unit": "(?i)^\\s*\u00b5g/l\\s*$"
+     },
+     "callback": "convert_unit(binary_op(`*`, 1), 'ug/L')"
+    },
+    {
+     "ids": [
+      10165
+     ],
+     "table": "numericitems",
+     "sub_var": "itemid",
+     "unit_var": "unit",
+     "require_regex": {
+      "unit": "(?i)^\\s*\u00b5g/l\\s*$"
+     },
+     "callback": "convert_unit(binary_op(`*`, 1), 'ug/L')"
+    }
+   ]
+  }
+ },
+ "crea_clearance_measured": {
+  "unit": "mL/min",
+  "min": 0,
+  "max": 500,
+  "description": "Measured urinary creatinine clearance",
+  "category": "renal",
+  "sources": {
+   "aumc": [
+    {
+     "ids": [
+      7108
+     ],
+     "table": "numericitems",
+     "sub_var": "itemid",
+     "unit_var": "unit",
+     "require_regex": {
+      "unit": "(?i)^\\s*ml/min\\s*$"
+     }
+    }
+   ],
+   "miiv": [
+    {
+     "ids": [
+      51080
+     ],
+     "table": "labevents",
+     "sub_var": "itemid",
+     "unit_var": "valueuom",
+     "require_regex": {
+      "valueuom": "(?i)^\\s*mL/min\\s*$"
+     }
+    }
+   ]
+  }
+ },
+ "intra_abdominal_pres": {
+  "unit": "mmHg",
+  "min": 0,
+  "max": 100,
+  "description": "Intra-abdominal pressure measured through bladder",
+  "category": "cardiovascular",
+  "sources": {
+   "aumc": [
+    {
+     "ids": [
+      8463
+     ],
+     "table": "numericitems",
+     "sub_var": "itemid",
+     "unit_var": "unit",
+     "require_regex": {
+      "unit": "(?i)^\\s*mmHg\\s*$"
+     }
+    }
+   ]
+  }
+ },
+ "renal_resistive_index": {
+  "unit": "ratio",
+  "min": 0,
+  "max": 1,
+  "description": "Renal Doppler resistive index",
+  "category": "renal",
+  "sources": {
+   "aumc": [
+    {
+     "ids": [
+      20631
+     ],
+     "table": "numericitems",
+     "sub_var": "itemid",
+     "unit_var": "unit",
+     "require_regex": {
+      "unit": "(?i)^\\s*Geen\\s*$"
+     },
+     "callback": "convert_unit(binary_op(`*`, 1), 'ratio')"
+    }
+   ]
+  }
+ },
+ "urine_cl": {
+  "unit": "mmol/L",
+  "min": 0,
+  "max": 400,
+  "description": "Urine chloride concentration",
+  "category": "renal",
+  "sources": {
+   "aumc": [
+    {
+     "ids": [
+      10273
+     ],
+     "table": "numericitems",
+     "sub_var": "itemid",
+     "unit_var": "unit",
+     "require_regex": {
+      "unit": "(?i)^\\s*mmol/l\\s*$"
+     }
+    },
+    {
+     "ids": [
+      10274
+     ],
+     "table": "numericitems",
+     "sub_var": "itemid",
+     "unit_var": "unit",
+     "require_regex": {
+      "unit": "(?i)^\\s*mmol/l\\s*$"
+     }
+    },
+    {
+     "ids": [
+      8917
+     ],
+     "table": "numericitems",
+     "sub_var": "itemid",
+     "unit_var": "unit",
+     "require_regex": {
+      "unit": "(?i)^\\s*mol/l\\s*$"
+     },
+     "callback": "convert_unit(binary_op(`*`, 1000), 'mmol/L')"
+    }
+   ],
+   "miiv": [
+    {
+     "ids": [
+      51078
+     ],
+     "table": "labevents",
+     "sub_var": "itemid",
+     "unit_var": "valueuom",
+     "require_regex": {
+      "valueuom": "(?i)^\\s*mEq/L\\s*$"
+     },
+     "callback": "convert_unit(binary_op(`*`, 1), 'mmol/L')"
+    }
+   ]
+  }
+ },
+ "urine_k": {
+  "unit": "mmol/L",
+  "min": 0,
+  "max": 400,
+  "description": "Urine potassium concentration",
+  "category": "renal",
+  "sources": {
+   "aumc": [
+    {
+     "ids": [
+      10271
+     ],
+     "table": "numericitems",
+     "sub_var": "itemid",
+     "unit_var": "unit",
+     "require_regex": {
+      "unit": "(?i)^\\s*mmol/l\\s*$"
+     }
+    },
+    {
+     "ids": [
+      10272
+     ],
+     "table": "numericitems",
+     "sub_var": "itemid",
+     "unit_var": "unit",
+     "require_regex": {
+      "unit": "(?i)^\\s*mmol/l\\s*$"
+     }
+    },
+    {
+     "ids": [
+      7101
+     ],
+     "table": "numericitems",
+     "sub_var": "itemid",
+     "unit_var": "unit",
+     "require_regex": {
+      "unit": "(?i)^\\s*mmol/l\\s*$"
+     }
+    }
+   ],
+   "miiv": [
+    {
+     "ids": [
+      51097
+     ],
+     "table": "labevents",
+     "sub_var": "itemid",
+     "unit_var": "valueuom",
+     "require_regex": {
+      "valueuom": "(?i)^\\s*mEq/L\\s*$"
+     },
+     "callback": "convert_unit(binary_op(`*`, 1), 'mmol/L')"
+    }
+   ],
+   "sic": [
+    {
+     "ids": [
+      464
+     ],
+     "table": "laboratory",
+     "sub_var": "LaboratoryID"
+    }
+   ]
+  }
  }
 }

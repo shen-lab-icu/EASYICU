@@ -740,11 +740,50 @@
   ]
 };
 
+  const optInRenalDetail = {
+  "abdominal_circumference": [
+    "Abdominal circumference; flagged proxy, not pressure",
+    "腹围（代理指标，不代表腹内压）",
+    "cm"
+  ],
+  "beta2_microglobulin_urine": [
+    "Urinary beta-2 microglobulin concentration",
+    "尿β2微球蛋白浓度",
+    "ug/L"
+  ],
+  "crea_clearance_measured": [
+    "Measured urinary creatinine clearance",
+    "实测尿肌酐清除率",
+    "mL/min"
+  ],
+  "intra_abdominal_pres": [
+    "Intra-abdominal pressure measured through bladder",
+    "经膀胱测量的腹内压",
+    "mmHg"
+  ],
+  "renal_resistive_index": [
+    "Renal Doppler resistive index",
+    "肾多普勒阻力指数",
+    "ratio"
+  ],
+  "urine_cl": [
+    "Urine chloride concentration",
+    "尿氯浓度",
+    "mmol/L"
+  ],
+  "urine_k": [
+    "Urine potassium concentration",
+    "尿钾浓度",
+    "mmol/L"
+  ]
+};
+
   window.EU_CATALOG = {
     groups,
     groupConcepts,
     optInCardiacMarkers,
     optInInflamDetail,
+    optInRenalDetail,
     dict,
     cov,
     conceptCoverage,

@@ -1,6 +1,28 @@
 {
-  "concept_count": 343,
+  "concept_count": 350,
   "concepts": {
+    "abdominal_circumference": {
+      "category": "ventilator",
+      "databases": {
+        "jinhua": {
+          "reason": "no validated native field/event in this release",
+          "status": "unavailable"
+        },
+        "nwicu": {
+          "reason": "no validated native field/event in this release",
+          "status": "unavailable"
+        },
+        "zhejiang_eicu": {
+          "reason": "no validated native field/event in this release",
+          "status": "unavailable"
+        },
+        "zigong": {
+          "reason": "no validated native field/event in this release",
+          "status": "unavailable"
+        }
+      },
+      "description": "Abdominal circumference; flagged proxy, not pressure"
+    },
     "abx": {
       "category": "medications",
       "databases": {
@@ -613,6 +635,28 @@
         }
       },
       "description": "arterial base excess"
+    },
+    "beta2_microglobulin_urine": {
+      "category": "renal",
+      "databases": {
+        "jinhua": {
+          "reason": "no validated native field/event in this release",
+          "status": "unavailable"
+        },
+        "nwicu": {
+          "reason": "no validated native field/event in this release",
+          "status": "unavailable"
+        },
+        "zhejiang_eicu": {
+          "reason": "no validated native field/event in this release",
+          "status": "unavailable"
+        },
+        "zigong": {
+          "reason": "no validated native field/event in this release",
+          "status": "unavailable"
+        }
+      },
+      "description": "Urinary beta-2 microglobulin concentration"
     },
     "bicar": {
       "category": "chemistry",
@@ -1387,6 +1431,28 @@
         }
       },
       "description": "creatinine"
+    },
+    "crea_clearance_measured": {
+      "category": "renal",
+      "databases": {
+        "jinhua": {
+          "reason": "no validated native field/event in this release",
+          "status": "unavailable"
+        },
+        "nwicu": {
+          "reason": "no validated native field/event in this release",
+          "status": "unavailable"
+        },
+        "zhejiang_eicu": {
+          "reason": "no validated native field/event in this release",
+          "status": "unavailable"
+        },
+        "zigong": {
+          "reason": "no validated native field/event in this release",
+          "status": "unavailable"
+        }
+      },
+      "description": "Measured urinary creatinine clearance"
     },
     "crea_qc": {
       "category": "chemistry",
@@ -3867,6 +3933,28 @@
         }
       },
       "description": "insulin administration (boolean) — companion to ins rate concept"
+    },
+    "intra_abdominal_pres": {
+      "category": "cardiovascular",
+      "databases": {
+        "jinhua": {
+          "reason": "no validated native field/event in this release",
+          "status": "unavailable"
+        },
+        "nwicu": {
+          "reason": "no validated native field/event in this release",
+          "status": "unavailable"
+        },
+        "zhejiang_eicu": {
+          "reason": "no validated native field/event in this release",
+          "status": "unavailable"
+        },
+        "zigong": {
+          "reason": "no validated native field/event in this release",
+          "status": "unavailable"
+        }
+      },
+      "description": "Intra-abdominal pressure measured through bladder"
     },
     "iron": {
       "category": "chemistry",
@@ -7196,6 +7284,28 @@
       },
       "description": "erythrocyte distribution width"
     },
+    "renal_resistive_index": {
+      "category": "renal",
+      "databases": {
+        "jinhua": {
+          "reason": "no validated native field/event in this release",
+          "status": "unavailable"
+        },
+        "nwicu": {
+          "reason": "no validated native field/event in this release",
+          "status": "unavailable"
+        },
+        "zhejiang_eicu": {
+          "reason": "no validated native field/event in this release",
+          "status": "unavailable"
+        },
+        "zigong": {
+          "reason": "no validated native field/event in this release",
+          "status": "unavailable"
+        }
+      },
+      "description": "Renal Doppler resistive index"
+    },
     "resp": {
       "category": "respiratory",
       "databases": {
@@ -10312,6 +10422,28 @@
       },
       "description": "Daily urine value depends on a record charted after the evaluation hour"
     },
+    "urine_cl": {
+      "category": "renal",
+      "databases": {
+        "jinhua": {
+          "reason": "no validated native field/event in this release",
+          "status": "unavailable"
+        },
+        "nwicu": {
+          "reason": "no validated native field/event in this release",
+          "status": "unavailable"
+        },
+        "zhejiang_eicu": {
+          "reason": "no validated native field/event in this release",
+          "status": "unavailable"
+        },
+        "zigong": {
+          "reason": "no validated native field/event in this release",
+          "status": "unavailable"
+        }
+      },
+      "description": "Urine chloride concentration"
+    },
     "urine_crea": {
       "category": "renal",
       "databases": {
@@ -10333,6 +10465,28 @@
         }
       },
       "description": "urine creatinine"
+    },
+    "urine_k": {
+      "category": "renal",
+      "databases": {
+        "jinhua": {
+          "reason": "no validated native field/event in this release",
+          "status": "unavailable"
+        },
+        "nwicu": {
+          "reason": "no validated native field/event in this release",
+          "status": "unavailable"
+        },
+        "zhejiang_eicu": {
+          "reason": "no validated native field/event in this release",
+          "status": "unavailable"
+        },
+        "zigong": {
+          "reason": "no validated native field/event in this release",
+          "status": "unavailable"
+        }
+      },
+      "description": "Urine potassium concentration"
     },
     "urine_na": {
       "category": "renal",
@@ -10924,25 +11078,25 @@
       "derived": 19,
       "direct": 135,
       "partial": 34,
-      "unavailable": 155
+      "unavailable": 162
     },
     "nwicu": {
       "derived": 19,
       "direct": 137,
       "partial": 37,
-      "unavailable": 150
+      "unavailable": 157
     },
     "zhejiang_eicu": {
       "derived": 39,
       "direct": 128,
       "partial": 25,
-      "unavailable": 151
+      "unavailable": 158
     },
     "zigong": {
       "derived": 27,
       "direct": 125,
       "partial": 41,
-      "unavailable": 150
+      "unavailable": 157
     }
   },
   "databases": [

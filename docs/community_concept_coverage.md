@@ -1,7 +1,7 @@
 # Community database concept coverage
 
 Generated from `tools/build_community_concept_registry.py`. The matrix covers every standard
-concept (base dictionary plus SOFA-2 overlay): **343 concepts × 4 databases**.
+concept (base dictionary plus SOFA-2 overlay): **350 concepts × 4 databases**.
 
 `partial` is deliberately not advertised as extractable: it records useful ingredients while preventing an incomplete score or phenotype from being mistaken for a complete definition.
 
@@ -9,15 +9,16 @@ concept (base dictionary plus SOFA-2 overlay): **343 concepts × 4 databases**.
 
 | Database | Direct | Derived | Partial | Unavailable |
 |---|---:|---:|---:|---:|
-| nwicu | 137 | 19 | 37 | 150 |
-| zhejiang_eicu | 128 | 39 | 25 | 151 |
-| jinhua | 135 | 19 | 34 | 155 |
-| zigong | 125 | 27 | 41 | 150 |
+| nwicu | 137 | 19 | 37 | 157 |
+| zhejiang_eicu | 128 | 39 | 25 | 158 |
+| jinhua | 135 | 19 | 34 | 162 |
+| zigong | 125 | 27 | 41 | 157 |
 
 ## Complete matrix
 
 | Concept | Category | NWICU | Zhejiang eICU | Jinhua | Zigong |
 |---|---|---|---|---|---|
+| `abdominal_circumference` | ventilator | unavailable | unavailable | unavailable | unavailable |
 | `abx` | medications | direct | direct | direct | direct |
 | `acetazolamide` | medications | unavailable | unavailable | unavailable | unavailable |
 | `acute_rrt_input` | renal | derived | derived | derived | unavailable |
@@ -41,6 +42,7 @@ concept (base dictionary plus SOFA-2 overlay): **343 concepts × 4 databases**.
 | `avpu` | neurological | unavailable | unavailable | unavailable | partial |
 | `basos` | hematology | direct | direct | direct | direct |
 | `be` | blood gas | unavailable | direct | direct | direct |
+| `beta2_microglobulin_urine` | renal | unavailable | unavailable | unavailable | unavailable |
 | `bicar` | chemistry | direct | direct | direct | direct |
 | `bicarb` | chemistry | direct | direct | direct | direct |
 | `bicarbonate` | medications | direct | direct | direct | direct |
@@ -70,6 +72,7 @@ concept (base dictionary plus SOFA-2 overlay): **343 concepts × 4 databases**.
 | `cort` | medications | direct | direct | direct | direct |
 | `cortisol` | chemistry | direct | unavailable | unavailable | unavailable |
 | `crea` | chemistry | direct | direct | direct | direct |
+| `crea_clearance_measured` | renal | unavailable | unavailable | unavailable | unavailable |
 | `crea_qc` | chemistry | unavailable | unavailable | unavailable | unavailable |
 | `crea_raw` | chemistry | unavailable | unavailable | unavailable | unavailable |
 | `crp` | chemistry | direct | direct | direct | direct |
@@ -150,6 +153,7 @@ concept (base dictionary plus SOFA-2 overlay): **343 concepts × 4 databases**.
 | `inr_pt` | hematology | direct | direct | direct | direct |
 | `ins` | medications | unavailable | unavailable | unavailable | unavailable |
 | `insulin` | medications | direct | direct | direct | direct |
+| `intra_abdominal_pres` | cardiovascular | unavailable | unavailable | unavailable | unavailable |
 | `iron` | chemistry | direct | unavailable | direct | unavailable |
 | `k` | chemistry | direct | unavailable | direct | direct |
 | `kdigo_aki` | renal | partial | partial | partial | partial |
@@ -266,6 +270,7 @@ concept (base dictionary plus SOFA-2 overlay): **343 concepts × 4 databases**.
 | `rass` | neurological | unavailable | unavailable | unavailable | direct |
 | `rbc` | hematology | direct | direct | direct | direct |
 | `rdw` | hematology | direct | direct | direct | direct |
+| `renal_resistive_index` | renal | unavailable | unavailable | unavailable | unavailable |
 | `resp` | respiratory | direct | direct | direct | direct |
 | `retic` | hematology | unavailable | direct | direct | unavailable |
 | `rocuronium` | medications | direct | direct | unavailable | direct |
@@ -341,7 +346,9 @@ concept (base dictionary plus SOFA-2 overlay): **343 concepts × 4 databases**.
 | `urine24_est_available_at` | output | unavailable | derived | unavailable | derived |
 | `urine24_observed_ml` | output | unavailable | derived | unavailable | derived |
 | `urine24_uses_future` | output | unavailable | derived | unavailable | derived |
+| `urine_cl` | renal | unavailable | unavailable | unavailable | unavailable |
 | `urine_crea` | renal | unavailable | unavailable | unavailable | unavailable |
+| `urine_k` | renal | unavailable | unavailable | unavailable | unavailable |
 | `urine_na` | renal | unavailable | unavailable | unavailable | unavailable |
 | `urine_osm` | renal | unavailable | unavailable | unavailable | unavailable |
 | `urine_urea` | renal | unavailable | unavailable | unavailable | unavailable |
