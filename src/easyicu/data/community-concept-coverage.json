@@ -1,5 +1,5 @@
 {
-  "concept_count": 382,
+  "concept_count": 390,
   "concepts": {
     "abdominal_circumference": {
       "category": "ventilator",
@@ -3000,6 +3000,28 @@
       },
       "description": "epinephrine rate"
     },
+    "esketamine": {
+      "category": "medications",
+      "databases": {
+        "jinhua": {
+          "reason": "no validated native field/event in this release",
+          "status": "unavailable"
+        },
+        "nwicu": {
+          "reason": "no validated native field/event in this release",
+          "status": "unavailable"
+        },
+        "zhejiang_eicu": {
+          "reason": "no validated native field/event in this release",
+          "status": "unavailable"
+        },
+        "zigong": {
+          "reason": "no validated native field/event in this release",
+          "status": "unavailable"
+        }
+      },
+      "description": "esketamine (S-ketamine) given in the hour"
+    },
     "esmolol": {
       "category": "medications",
       "databases": {
@@ -4166,6 +4188,28 @@
         }
       },
       "description": "heart rate"
+    },
+    "hydromorphone": {
+      "category": "medications",
+      "databases": {
+        "jinhua": {
+          "reason": "no validated native field/event in this release",
+          "status": "unavailable"
+        },
+        "nwicu": {
+          "reason": "no validated native field/event in this release",
+          "status": "unavailable"
+        },
+        "zhejiang_eicu": {
+          "reason": "no validated native field/event in this release",
+          "status": "unavailable"
+        },
+        "zigong": {
+          "reason": "no validated native field/event in this release",
+          "status": "unavailable"
+        }
+      },
+      "description": "hydromorphone given in the hour, any systemic route"
     },
     "icp": {
       "category": "neurological",
@@ -5341,6 +5385,28 @@
         }
       },
       "description": "meropenem administration (carbapenem antibiotic)"
+    },
+    "methadone": {
+      "category": "medications",
+      "databases": {
+        "jinhua": {
+          "reason": "no validated native field/event in this release",
+          "status": "unavailable"
+        },
+        "nwicu": {
+          "reason": "no validated native field/event in this release",
+          "status": "unavailable"
+        },
+        "zhejiang_eicu": {
+          "reason": "no validated native field/event in this release",
+          "status": "unavailable"
+        },
+        "zigong": {
+          "reason": "no validated native field/event in this release",
+          "status": "unavailable"
+        }
+      },
+      "description": "methadone given in the hour, any systemic route"
     },
     "methb": {
       "category": "blood gas",
@@ -6579,6 +6645,28 @@
       },
       "description": "Other vasoactive medication: phenylephrine, vasopressin or milrinone"
     },
+    "oxycodone": {
+      "category": "medications",
+      "databases": {
+        "jinhua": {
+          "reason": "no validated native field/event in this release",
+          "status": "unavailable"
+        },
+        "nwicu": {
+          "reason": "no validated native field/event in this release",
+          "status": "unavailable"
+        },
+        "zhejiang_eicu": {
+          "reason": "no validated native field/event in this release",
+          "status": "unavailable"
+        },
+        "zigong": {
+          "reason": "no validated native field/event in this release",
+          "status": "unavailable"
+        }
+      },
+      "description": "oxycodone given in the hour (enteral; immediate or prolonged release, alone or combined)"
+    },
     "oxygenation_index": {
       "category": "respiratory",
       "databases": {
@@ -7203,6 +7291,28 @@
         }
       },
       "description": "Peak Inspiratory Pressure"
+    },
+    "piritramide": {
+      "category": "medications",
+      "databases": {
+        "jinhua": {
+          "reason": "no validated native field/event in this release",
+          "status": "unavailable"
+        },
+        "nwicu": {
+          "reason": "no validated native field/event in this release",
+          "status": "unavailable"
+        },
+        "zhejiang_eicu": {
+          "reason": "no validated native field/event in this release",
+          "status": "unavailable"
+        },
+        "zigong": {
+          "reason": "no validated native field/event in this release",
+          "status": "unavailable"
+        }
+      },
+      "description": "piritramide given in the hour"
     },
     "plateau_pres": {
       "category": "ventilator",
@@ -7833,6 +7943,28 @@
         }
       },
       "description": "erythrocyte distribution width"
+    },
+    "remifentanil": {
+      "category": "medications",
+      "databases": {
+        "jinhua": {
+          "reason": "no validated native field/event in this release",
+          "status": "unavailable"
+        },
+        "nwicu": {
+          "reason": "no validated native field/event in this release",
+          "status": "unavailable"
+        },
+        "zhejiang_eicu": {
+          "reason": "no validated native field/event in this release",
+          "status": "unavailable"
+        },
+        "zigong": {
+          "reason": "no validated native field/event in this release",
+          "status": "unavailable"
+        }
+      },
+      "description": "remifentanil given in the hour (administration or running infusion)"
     },
     "renal_resistive_index": {
       "category": "renal",
@@ -9672,6 +9804,28 @@
       },
       "description": "oxygen saturation"
     },
+    "sufentanil": {
+      "category": "medications",
+      "databases": {
+        "jinhua": {
+          "reason": "no validated native field/event in this release",
+          "status": "unavailable"
+        },
+        "nwicu": {
+          "reason": "no validated native field/event in this release",
+          "status": "unavailable"
+        },
+        "zhejiang_eicu": {
+          "reason": "no validated native field/event in this release",
+          "status": "unavailable"
+        },
+        "zigong": {
+          "reason": "no validated native field/event in this release",
+          "status": "unavailable"
+        }
+      },
+      "description": "sufentanil (intravenous) given in the hour"
+    },
     "supp_o2": {
       "category": "respiratory",
       "databases": {
@@ -10230,6 +10384,28 @@
         }
       },
       "description": "total serum protein; MIMIC/eICU/SIC in g/dL, AUMC/HiRID in g/L"
+    },
+    "tramadol": {
+      "category": "medications",
+      "databases": {
+        "jinhua": {
+          "reason": "no validated native field/event in this release",
+          "status": "unavailable"
+        },
+        "nwicu": {
+          "reason": "no validated native field/event in this release",
+          "status": "unavailable"
+        },
+        "zhejiang_eicu": {
+          "reason": "no validated native field/event in this release",
+          "status": "unavailable"
+        },
+        "zigong": {
+          "reason": "no validated native field/event in this release",
+          "status": "unavailable"
+        }
+      },
+      "description": "tramadol given in the hour, any systemic route"
     },
     "transferrin": {
       "category": "chemistry",
@@ -11782,25 +11958,25 @@
       "derived": 19,
       "direct": 135,
       "partial": 34,
-      "unavailable": 194
+      "unavailable": 202
     },
     "nwicu": {
       "derived": 19,
       "direct": 137,
       "partial": 37,
-      "unavailable": 189
+      "unavailable": 197
     },
     "zhejiang_eicu": {
       "derived": 39,
       "direct": 128,
       "partial": 25,
-      "unavailable": 190
+      "unavailable": 198
     },
     "zigong": {
       "derived": 27,
       "direct": 125,
       "partial": 41,
-      "unavailable": 189
+      "unavailable": 197
     }
   },
   "databases": [

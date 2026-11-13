@@ -947,12 +947,56 @@
   ]
 };
 
+  const optInSedationAnalgesia = {
+  "remifentanil": [
+    "remifentanil given in the hour (administration or running infusion)",
+    "瑞芬太尼给药时段",
+    "boolean"
+  ],
+  "sufentanil": [
+    "sufentanil (intravenous) given in the hour",
+    "舒芬太尼静脉给药时段",
+    "boolean"
+  ],
+  "piritramide": [
+    "piritramide given in the hour",
+    "哌腈米特给药时段",
+    "boolean"
+  ],
+  "esketamine": [
+    "esketamine (S-ketamine) given in the hour",
+    "艾司氯胺酮给药时段",
+    "boolean"
+  ],
+  "hydromorphone": [
+    "hydromorphone given in the hour, any systemic route",
+    "氢吗啡酮给药时段",
+    "boolean"
+  ],
+  "methadone": [
+    "methadone given in the hour, any systemic route",
+    "美沙酮给药时段",
+    "boolean"
+  ],
+  "oxycodone": [
+    "oxycodone given in the hour (enteral; immediate or prolonged release, alone or combined)",
+    "羟考酮给药时段",
+    "boolean"
+  ],
+  "tramadol": [
+    "tramadol given in the hour, any systemic route",
+    "曲马多给药时段",
+    "boolean"
+  ]
+};
+
   window.EU_CATALOG = {
     groups,
     groupConcepts,
     optInCardiacMarkers,
     optInInflamDetail,
     optInRenalDetail,
+    optInSedationAnalgesia,
     optInVentMechanics,
     optInHaemoAdvanced,
     optInRrtDetail,

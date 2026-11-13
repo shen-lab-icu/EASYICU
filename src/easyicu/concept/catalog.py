@@ -800,7 +800,29 @@ VENT_MECHANICS_METADATA = {
     'vco2': ('Exhaled CO2 production per minute', '每分钟呼出二氧化碳生成量', 'mL/min'),
 }
 
+SEDATION_ANALGESIA_CONCEPTS = (
+    'remifentanil',
+    'sufentanil',
+    'piritramide',
+    'esketamine',
+    'hydromorphone',
+    'methadone',
+    'oxycodone',
+    'tramadol',
+)
+SEDATION_ANALGESIA_METADATA = {
+    'remifentanil': ('remifentanil given in the hour (administration or running infusion)', '瑞芬太尼给药时段', 'boolean'),
+    'sufentanil': ('sufentanil (intravenous) given in the hour', '舒芬太尼静脉给药时段', 'boolean'),
+    'piritramide': ('piritramide given in the hour', '哌腈米特给药时段', 'boolean'),
+    'esketamine': ('esketamine (S-ketamine) given in the hour', '艾司氯胺酮给药时段', 'boolean'),
+    'hydromorphone': ('hydromorphone given in the hour, any systemic route', '氢吗啡酮给药时段', 'boolean'),
+    'methadone': ('methadone given in the hour, any systemic route', '美沙酮给药时段', 'boolean'),
+    'oxycodone': ('oxycodone given in the hour (enteral; immediate or prolonged release, alone or combined)', '羟考酮给药时段', 'boolean'),
+    'tramadol': ('tramadol given in the hour, any systemic route', '曲马多给药时段', 'boolean'),
+}
+
 HIDDEN_DICTIONARY_CONCEPTS = {
+    *SEDATION_ANALGESIA_CONCEPTS,
     *VENT_MECHANICS_CONCEPTS,
     *HAEMO_ADVANCED_CONCEPTS,
     *RRT_DETAIL_CONCEPTS,

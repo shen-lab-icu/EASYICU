@@ -40376,5 +40376,387 @@
     }
    ]
   }
+ },
+ "remifentanil": {
+  "class_name": "lgl_cncpt",
+  "description": "remifentanil given in the hour (administration or running infusion)",
+  "category": "medications",
+  "aggregate": "max",
+  "sources": {
+   "aumc": [
+    {
+     "ids": [
+      12402
+     ],
+     "table": "drugitems",
+     "sub_var": "itemid",
+     "index_var": "start",
+     "dur_var": "stop",
+     "callback": "aumc_positive_dose",
+     "val_var": "dose"
+    }
+   ],
+   "hirid": [
+    {
+     "ids": [
+      1000705
+     ],
+     "table": "pharma",
+     "sub_var": "pharmaid",
+     "callback": "transform_fun(comp_na(`>`, 0.000001))"
+    }
+   ],
+   "sic": [
+    {
+     "ids": [
+      1546
+     ],
+     "table": "medication",
+     "sub_var": "DrugID",
+     "val_var": "Amount",
+     "callback": "sicdb_active_exposure",
+     "extra_vars": [
+      "OffsetDrugEnd"
+     ]
+    }
+   ]
+  }
+ },
+ "sufentanil": {
+  "class_name": "lgl_cncpt",
+  "description": "sufentanil (intravenous) given in the hour",
+  "category": "medications",
+  "aggregate": "max",
+  "sources": {
+   "aumc": [
+    {
+     "ids": [
+      7014
+     ],
+     "table": "drugitems",
+     "sub_var": "itemid",
+     "index_var": "start",
+     "dur_var": "stop",
+     "callback": "aumc_positive_dose",
+     "val_var": "dose",
+     "extra_vars": [
+      "ordercategory"
+     ],
+     "exclude_regex": {
+      "ordercategory": "(?i)niet iv|epidura|intratheca"
+     }
+    }
+   ],
+   "hirid": [
+    {
+     "ids": [
+      1000771
+     ],
+     "table": "pharma",
+     "sub_var": "pharmaid",
+     "callback": "transform_fun(comp_na(`>`, 0.000001))",
+     "extra_vars": [
+      "route"
+     ],
+     "require_regex": {
+      "route": "(?i)^\\s*(?:[ci]v(?:-(?:inf|inj))?|i\\.?v\\.?|intravenous)\\s*$"
+     }
+    }
+   ],
+   "sic": [
+    {
+     "ids": [
+      1547
+     ],
+     "table": "medication",
+     "sub_var": "DrugID",
+     "val_var": "Amount",
+     "callback": "sicdb_active_exposure",
+     "extra_vars": [
+      "OffsetDrugEnd"
+     ]
+    }
+   ]
+  }
+ },
+ "piritramide": {
+  "class_name": "lgl_cncpt",
+  "description": "piritramide given in the hour",
+  "category": "medications",
+  "aggregate": "max",
+  "sources": {
+   "aumc": [
+    {
+     "ids": [
+      6910
+     ],
+     "table": "drugitems",
+     "sub_var": "itemid",
+     "index_var": "start",
+     "dur_var": "stop",
+     "callback": "aumc_positive_dose",
+     "val_var": "dose"
+    }
+   ],
+   "sic": [
+    {
+     "ids": [
+      1521
+     ],
+     "table": "medication",
+     "sub_var": "DrugID",
+     "val_var": "Amount",
+     "callback": "sicdb_active_exposure",
+     "extra_vars": [
+      "OffsetDrugEnd"
+     ]
+    }
+   ]
+  }
+ },
+ "esketamine": {
+  "class_name": "lgl_cncpt",
+  "description": "esketamine (S-ketamine) given in the hour",
+  "category": "medications",
+  "aggregate": "max",
+  "sources": {
+   "aumc": [
+    {
+     "ids": [
+      9018
+     ],
+     "table": "drugitems",
+     "sub_var": "itemid",
+     "index_var": "start",
+     "dur_var": "stop",
+     "callback": "aumc_positive_dose",
+     "val_var": "dose"
+    }
+   ],
+   "sic": [
+    {
+     "ids": [
+      1578
+     ],
+     "table": "medication",
+     "sub_var": "DrugID",
+     "val_var": "Amount",
+     "callback": "sicdb_active_exposure",
+     "extra_vars": [
+      "OffsetDrugEnd"
+     ]
+    }
+   ]
+  }
+ },
+ "hydromorphone": {
+  "class_name": "lgl_cncpt",
+  "description": "hydromorphone given in the hour, any systemic route",
+  "category": "medications",
+  "aggregate": "max",
+  "sources": {
+   "miiv": [
+    {
+     "ids": [
+      221833
+     ],
+     "table": "inputevents",
+     "sub_var": "itemid",
+     "index_var": "starttime",
+     "dur_var": "endtime",
+     "callback": "mimic_positive_dose",
+     "val_var": "rate",
+     "extra_vars": [
+      "amount",
+      "statusdescription"
+     ],
+     "status_var": "statusdescription",
+     "excluded_statuses": [
+      "Rewritten"
+     ]
+    }
+   ],
+   "sic": [
+    {
+     "ids": [
+      1652,
+      1671
+     ],
+     "table": "medication",
+     "sub_var": "DrugID",
+     "val_var": "Amount",
+     "callback": "sicdb_active_exposure",
+     "extra_vars": [
+      "OffsetDrugEnd"
+     ]
+    }
+   ]
+  }
+ },
+ "methadone": {
+  "class_name": "lgl_cncpt",
+  "description": "methadone given in the hour, any systemic route",
+  "category": "medications",
+  "aggregate": "max",
+  "sources": {
+   "miiv": [
+    {
+     "ids": [
+      227520
+     ],
+     "table": "inputevents",
+     "sub_var": "itemid",
+     "index_var": "starttime",
+     "dur_var": "endtime",
+     "callback": "mimic_positive_dose",
+     "val_var": "rate",
+     "extra_vars": [
+      "amount",
+      "statusdescription"
+     ],
+     "status_var": "statusdescription",
+     "excluded_statuses": [
+      "Rewritten"
+     ]
+    }
+   ],
+   "aumc": [
+    {
+     "ids": [
+      9090,
+      12750
+     ],
+     "table": "drugitems",
+     "sub_var": "itemid",
+     "index_var": "start",
+     "dur_var": "stop",
+     "callback": "aumc_positive_dose",
+     "val_var": "dose"
+    }
+   ],
+   "hirid": [
+    {
+     "ids": [
+      215,
+      1000427
+     ],
+     "table": "pharma",
+     "sub_var": "pharmaid",
+     "callback": "transform_fun(comp_na(`>`, 0.000001))"
+    }
+   ],
+   "sic": [
+    {
+     "ids": [
+      1855
+     ],
+     "table": "medication",
+     "sub_var": "DrugID",
+     "val_var": "Amount",
+     "callback": "sicdb_active_exposure",
+     "extra_vars": [
+      "OffsetDrugEnd"
+     ]
+    }
+   ]
+  }
+ },
+ "oxycodone": {
+  "class_name": "lgl_cncpt",
+  "description": "oxycodone given in the hour (enteral; immediate or prolonged release, alone or combined)",
+  "category": "medications",
+  "aggregate": "max",
+  "sources": {
+   "aumc": [
+    {
+     "ids": [
+      13883,
+      19221
+     ],
+     "table": "drugitems",
+     "sub_var": "itemid",
+     "index_var": "start",
+     "dur_var": "stop",
+     "callback": "aumc_positive_dose",
+     "val_var": "dose"
+    }
+   ],
+   "hirid": [
+    {
+     "ids": [
+      1000935,
+      1000936,
+      1000937,
+      1000989,
+      1000990
+     ],
+     "table": "pharma",
+     "sub_var": "pharmaid",
+     "callback": "transform_fun(comp_na(`>`, 0.000001))"
+    }
+   ],
+   "sic": [
+    {
+     "ids": [
+      1639,
+      1640
+     ],
+     "table": "medication",
+     "sub_var": "DrugID",
+     "val_var": "Amount",
+     "callback": "sicdb_active_exposure",
+     "extra_vars": [
+      "OffsetDrugEnd"
+     ]
+    }
+   ]
+  }
+ },
+ "tramadol": {
+  "class_name": "lgl_cncpt",
+  "description": "tramadol given in the hour, any systemic route",
+  "category": "medications",
+  "aggregate": "max",
+  "sources": {
+   "aumc": [
+    {
+     "ids": [
+      7052
+     ],
+     "table": "drugitems",
+     "sub_var": "itemid",
+     "index_var": "start",
+     "dur_var": "stop",
+     "callback": "aumc_positive_dose",
+     "val_var": "dose"
+    }
+   ],
+   "hirid": [
+    {
+     "ids": [
+      1000523,
+      1000984,
+      1000985
+     ],
+     "table": "pharma",
+     "sub_var": "pharmaid",
+     "callback": "transform_fun(comp_na(`>`, 0.000001))"
+    }
+   ],
+   "sic": [
+    {
+     "ids": [
+      1634
+     ],
+     "table": "medication",
+     "sub_var": "DrugID",
+     "val_var": "Amount",
+     "callback": "sicdb_active_exposure",
+     "extra_vars": [
+      "OffsetDrugEnd"
+     ]
+    }
+   ]
+  }
  }
 }

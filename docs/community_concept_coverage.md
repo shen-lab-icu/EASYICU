@@ -1,7 +1,7 @@
 # Community database concept coverage
 
 Generated from `tools/build_community_concept_registry.py`. The matrix covers every standard
-concept (base dictionary plus SOFA-2 overlay): **382 concepts × 4 databases**.
+concept (base dictionary plus SOFA-2 overlay): **390 concepts × 4 databases**.
 
 `partial` is deliberately not advertised as extractable: it records useful ingredients while preventing an incomplete score or phenotype from being mistaken for a complete definition.
 
@@ -9,10 +9,10 @@ concept (base dictionary plus SOFA-2 overlay): **382 concepts × 4 databases**.
 
 | Database | Direct | Derived | Partial | Unavailable |
 |---|---:|---:|---:|---:|
-| nwicu | 137 | 19 | 37 | 189 |
-| zhejiang_eicu | 128 | 39 | 25 | 190 |
-| jinhua | 135 | 19 | 34 | 194 |
-| zigong | 125 | 27 | 41 | 189 |
+| nwicu | 137 | 19 | 37 | 197 |
+| zhejiang_eicu | 128 | 39 | 25 | 198 |
+| jinhua | 135 | 19 | 34 | 202 |
+| zigong | 125 | 27 | 41 | 197 |
 
 ## Complete matrix
 
@@ -126,6 +126,7 @@ concept (base dictionary plus SOFA-2 overlay): **382 concepts × 4 databases**.
 | `epi60` | medications | unavailable | unavailable | unavailable | unavailable |
 | `epi_dur` | medications | unavailable | unavailable | unavailable | unavailable |
 | `epi_rate` | medications | unavailable | unavailable | unavailable | unavailable |
+| `esketamine` | medications | unavailable | unavailable | unavailable | unavailable |
 | `esmolol` | medications | direct | direct | direct | direct |
 | `esr` | hematology | unavailable | direct | unavailable | direct |
 | `etco2` | ventilator | unavailable | unavailable | unavailable | unavailable |
@@ -164,6 +165,7 @@ concept (base dictionary plus SOFA-2 overlay): **382 concepts × 4 databases**.
 | `hgb_qc` | hematology | unavailable | unavailable | unavailable | unavailable |
 | `hgb_raw` | hematology | unavailable | unavailable | unavailable | unavailable |
 | `hr` | vitals | direct | direct | direct | direct |
+| `hydromorphone` | medications | unavailable | unavailable | unavailable | unavailable |
 | `icp` | neurological | unavailable | unavailable | unavailable | unavailable |
 | `icu_stay_is_readmission` | demographics | unavailable | unavailable | unavailable | unavailable |
 | `icu_unit_type` | demographics | direct | unavailable | unavailable | unavailable |
@@ -209,6 +211,7 @@ concept (base dictionary plus SOFA-2 overlay): **382 concepts × 4 databases**.
 | `mech_vent_opioid_sensitivity` | respiratory | unavailable | unavailable | unavailable | unavailable |
 | `mech_vent_rule` | respiratory | unavailable | unavailable | unavailable | unavailable |
 | `meropenem` | medications | direct | direct | direct | direct |
+| `methadone` | medications | unavailable | unavailable | unavailable | unavailable |
 | `methb` | blood gas | direct | unavailable | direct | direct |
 | `mews` | outcome | partial | partial | partial | partial |
 | `mg` | chemistry | direct | unavailable | direct | direct |
@@ -250,6 +253,7 @@ concept (base dictionary plus SOFA-2 overlay): **382 concepts × 4 databases**.
 | `osmolality` | chemistry | direct | unavailable | unavailable | unavailable |
 | `other_output_ml` | output | unavailable | unavailable | unavailable | unavailable |
 | `other_vaso` | cardiovascular | unavailable | unavailable | unavailable | unavailable |
+| `oxycodone` | medications | unavailable | unavailable | unavailable | unavailable |
 | `oxygenation_index` | respiratory | partial | partial | partial | partial |
 | `packed_rbc` | medications | unavailable | unavailable | direct | unavailable |
 | `pafi` | respiratory | partial | derived | derived | partial |
@@ -273,6 +277,7 @@ concept (base dictionary plus SOFA-2 overlay): **382 concepts × 4 databases**.
 | `phn_rate` | medications | unavailable | unavailable | unavailable | unavailable |
 | `phos` | chemistry | direct | direct | direct | direct |
 | `pip` | ventilator | unavailable | direct | unavailable | unavailable |
+| `piritramide` | medications | unavailable | unavailable | unavailable | unavailable |
 | `plateau_pres` | ventilator | partial | partial | unavailable | unavailable |
 | `plateau_pres_raw` | ventilator | unavailable | unavailable | unavailable | unavailable |
 | `platelets` | medications | direct | unavailable | direct | unavailable |
@@ -295,6 +300,7 @@ concept (base dictionary plus SOFA-2 overlay): **382 concepts × 4 databases**.
 | `rass` | neurological | unavailable | unavailable | unavailable | direct |
 | `rbc` | hematology | direct | direct | direct | direct |
 | `rdw` | hematology | direct | direct | direct | direct |
+| `remifentanil` | medications | unavailable | unavailable | unavailable | unavailable |
 | `renal_resistive_index` | renal | unavailable | unavailable | unavailable | unavailable |
 | `resp` | respiratory | direct | direct | direct | direct |
 | `resp_spont` | ventilator | unavailable | unavailable | unavailable | unavailable |
@@ -333,6 +339,7 @@ concept (base dictionary plus SOFA-2 overlay): **382 concepts × 4 databases**.
 | `sofa_renal` | outcome | partial | derived | partial | derived |
 | `sofa_resp` | outcome | partial | partial | partial | partial |
 | `spo2` | respiratory | direct | direct | direct | direct |
+| `sufentanil` | medications | unavailable | unavailable | unavailable | unavailable |
 | `supp_o2` | respiratory | partial | partial | partial | unavailable |
 | `susp_inf` | outcome | partial | partial | partial | partial |
 | `svo2` | cardiovascular | unavailable | unavailable | unavailable | unavailable |
@@ -353,6 +360,7 @@ concept (base dictionary plus SOFA-2 overlay): **382 concepts × 4 databases**.
 | `tnt_hs` | chemistry | unavailable | unavailable | unavailable | unavailable |
 | `total_input_ml` | output | unavailable | unavailable | unavailable | unavailable |
 | `total_protein` | chemistry | direct | direct | direct | direct |
+| `tramadol` | medications | unavailable | unavailable | unavailable | unavailable |
 | `transferrin` | chemistry | direct | unavailable | direct | unavailable |
 | `transpulm_pres_exp` | ventilator | unavailable | unavailable | unavailable | unavailable |
 | `transpulm_pres_insp` | ventilator | unavailable | unavailable | unavailable | unavailable |

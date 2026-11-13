@@ -110,6 +110,42 @@ def materialize_intervals(frame, *, start="Offset", stop="OffsetDrugEnd", data_s
     return freeze_sic_attrs(out)
 
 
+def active_hours(frame, *, concept_name, value, start, stop, data_source):
+    """ICU hours in which a drug is given (S732 B2+B3): TRUE rows only.
+
+    Amount <= 0 (or missing) is no administration. A row with OffsetDrugEnd
+    after Offset covers every ICU hour overlapping [start, stop); any other row
+    is a point administration at its start. Single-dose flags are not needed:
+    a timed infusion is exposure over its interval whatever its flag says.
+    Only identifier and hour are materialised.
+    """
+    columns = ["CaseID", start, stop, value]
+    missing = [c for c in columns if c not in frame]
+    if missing:
+        raise KeyError(f"SICdb active hours need columns {missing}")
+    amount = pd.to_numeric(frame[value], errors="coerce").to_numpy(dtype=float)
+    keep = np.isfinite(amount) & (amount > 0)
+    raw = icu_seconds(frame.loc[keep, ["CaseID", start, stop]], data_source, [start, stop])
+    starts = raw[start].to_numpy(dtype=float)
+    stops = raw[stop].to_numpy(dtype=float)
+    ids = raw["CaseID"].to_numpy()
+    timed = np.isfinite(starts) & np.isfinite(stops) & (stops > starts)
+    point = ~timed & np.isfinite(starts)
+    rows = np.flatnonzero(timed)
+    first = np.floor(starts[rows] / HOUR).astype(np.int64)
+    counts = np.ceil(stops[rows] / HOUR).astype(np.int64) - first
+    repeated = np.repeat(rows, counts)
+    step = np.arange(len(repeated)) - np.repeat(np.cumsum(counts) - counts, counts)
+    hours = np.repeat(first, counts) + step
+    out = pd.DataFrame({
+        "CaseID": np.concatenate([ids[repeated], ids[point]]),
+        start: np.concatenate([hours.astype(float), np.floor(starts[point] / HOUR)]),
+    }).drop_duplicates(ignore_index=True)
+    out[concept_name] = True
+    out.attrs["easyicu_time_columns"] = {start: "icu_relative_hours"}
+    return out
+
+
 def allocate_amounts(frame, *, concept_name, start, stop, single, data_source):
     """Allocate continuous amounts to ICU hours; preserve bolus event times."""
     raw = icu_seconds(frame, data_source, [start, stop])
@@ -232,6 +268,11 @@ def apply_source(frame, *, source, concept_name, data_source):
         return precondition(frame, value=value, concept_name=concept_name, data_source=data_source)
     if callback == "sicdb_cvp_raw":
         return frame
+    if callback == "sicdb_active_exposure":
+        return active_hours(
+            frame, concept_name=concept_name, value=value, start=source.index_var or "Offset",
+            stop=source.params.get("stop_var", "OffsetDrugEnd"), data_source=data_source,
+        )
     if callback in {"sicdb_exposure", "sicdb_interval_exposure"}:
         out = exposure(frame, value)
         if callback == "sicdb_exposure":
