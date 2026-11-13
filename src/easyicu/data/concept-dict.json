@@ -38131,6 +38131,36 @@
      "require_regex": {
       "unit": "(?i)^\\s*mmol\\s*/\\s*l\\s*$"
      }
+    },
+    {
+     "ids": [
+      10270
+     ],
+     "table": "numericitems",
+     "sub_var": "itemid",
+     "unit_var": "unit",
+     "require_regex": {
+      "unit": "(?i)^\\s*mmol/l\\s*$"
+     }
+    }
+   ],
+   "hirid": [
+    {
+     "ids": [
+      20003200
+     ],
+     "table": "observations",
+     "sub_var": "variableid",
+     "class_name": "hrd_itm"
+    }
+   ],
+   "sic": [
+    {
+     "ids": [
+      470
+     ],
+     "table": "laboratory",
+     "sub_var": "LaboratoryID"
     }
    ]
   }
@@ -38210,6 +38240,18 @@
       "unit": "(?i)^\\s*mmol\\s*/\\s*l\\s*$"
      },
      "callback": "convert_unit(binary_op(`*`, 11.312217194570135), 'mg/dL', '(?i)^\\s*mmol\\s*/\\s*l\\s*$')"
+    },
+    {
+     "ids": [
+      7109
+     ],
+     "table": "numericitems",
+     "sub_var": "itemid",
+     "unit_var": "unit",
+     "require_regex": {
+      "unit": "(?i)^\\s*mmol/l\\s*$"
+     },
+     "callback": "convert_unit(binary_op(`*`, 11.312217194570135), 'mg/dL')"
     }
    ],
    "sic": [
@@ -38219,6 +38261,17 @@
      ],
      "table": "laboratory",
      "sub_var": "LaboratoryID"
+    }
+   ],
+   "hirid": [
+    {
+     "ids": [
+      24000572
+     ],
+     "table": "observations",
+     "sub_var": "variableid",
+     "class_name": "hrd_itm",
+     "callback": "convert_unit(binary_op(`*`, 0.011312217194570135), 'mg/dL')"
     }
    ]
   }
@@ -38263,6 +38316,54 @@
       "valueuom": "(?i)^\\s*mosm\\s*/\\s*kg(?:\\s*h2o)?\\s*$"
      }
     }
+   ],
+   "aumc": [
+    {
+     "ids": [
+      11921
+     ],
+     "table": "numericitems",
+     "sub_var": "itemid",
+     "unit_var": "unit",
+     "require_regex": {
+      "unit": "(?i)^\\s*mosmol/kg\\s*$"
+     },
+     "callback": "convert_unit(binary_op(`*`, 1), 'mOsm/kg')"
+    },
+    {
+     "ids": [
+      11922
+     ],
+     "table": "numericitems",
+     "sub_var": "itemid",
+     "unit_var": "unit",
+     "require_regex": {
+      "unit": "(?i)^\\s*mosmol/kg\\s*$"
+     },
+     "callback": "convert_unit(binary_op(`*`, 1), 'mOsm/kg')"
+    }
+   ],
+   "eicu": [
+    {
+     "ids": [
+      "urinary osmolality"
+     ],
+     "table": "lab",
+     "sub_var": "labname",
+     "unit_var": "labmeasurenameinterface",
+     "require_regex": {
+      "labmeasurenameinterface": "(?i)^\\s*mOsm/kg\\s*$"
+     }
+    }
+   ],
+   "sic": [
+    {
+     "ids": [
+      475
+     ],
+     "table": "laboratory",
+     "sub_var": "LaboratoryID"
+    }
    ]
   }
  },
@@ -38305,6 +38406,73 @@
      "require_regex": {
       "valueuom": "(?i)^\\s*mg\\s*/\\s*dl\\s*$"
      }
+    }
+   ],
+   "aumc": [
+    {
+     "ids": [
+      10280
+     ],
+     "table": "numericitems",
+     "sub_var": "itemid",
+     "unit_var": "unit",
+     "require_regex": {
+      "unit": "(?i)^\\s*mmol/l\\s*$"
+     },
+     "callback": "convert_unit(binary_op(`*`, 2.80134), 'mg/dL')"
+    },
+    {
+     "ids": [
+      10281
+     ],
+     "table": "numericitems",
+     "sub_var": "itemid",
+     "unit_var": "unit",
+     "require_regex": {
+      "unit": "(?i)^\\s*mmol/l\\s*$"
+     },
+     "callback": "convert_unit(binary_op(`*`, 2.80134), 'mg/dL')"
+    },
+    {
+     "ids": [
+      7846
+     ],
+     "table": "numericitems",
+     "sub_var": "itemid",
+     "unit_var": "unit",
+     "require_regex": {
+      "unit": "(?i)^\\s*mmol/l\\s*$"
+     },
+     "callback": "convert_unit(binary_op(`*`, 2.80134), 'mg/dL')"
+    }
+   ],
+   "hirid": [
+    {
+     "ids": [
+      24000754
+     ],
+     "table": "observations",
+     "sub_var": "variableid",
+     "class_name": "hrd_itm",
+     "callback": "convert_unit(binary_op(`*`, 2.80134), 'mg/dL')"
+    }
+   ],
+   "sic": [
+    {
+     "ids": [
+      356
+     ],
+     "table": "laboratory",
+     "sub_var": "LaboratoryID",
+     "callback": "convert_unit(binary_op(`*`, 0.466459), 'mg/dL')"
+    },
+    {
+     "ids": [
+      396
+     ],
+     "table": "laboratory",
+     "sub_var": "LaboratoryID",
+     "callback": "convert_unit(binary_op(`*`, 0.1), 'mg/dL')"
     }
    ]
   }

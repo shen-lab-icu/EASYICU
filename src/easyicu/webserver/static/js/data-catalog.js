@@ -431,10 +431,10 @@
 
   // database coverage (how many of the 6 ICU databases harmonize this concept)
   const cov = {
-    urine_na: 4,
-    urine_crea: 5,
-    urine_osm: 2,
-    urine_urea: 2,
+    urine_na: 6,
+    urine_crea: 6,
+    urine_osm: 5,
+    urine_urea: 5,
     fena: 4,
     feurea: 2,
     sic_precondition_renal_dysfunction: 1,

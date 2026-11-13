@@ -893,7 +893,7 @@ CLINICAL_LANES = {
 
 # 跨库概念可用性（用于 harmonization badge）
 CONCEPT_DB_COVERAGE = {
-    'urine_na': 4, 'urine_crea': 5, 'urine_osm': 2, 'urine_urea': 2, 'fena': 4, 'feurea': 2,
+    'urine_na': 6, 'urine_crea': 6, 'urine_osm': 5, 'urine_urea': 5, 'fena': 4, 'feurea': 2,
     'sic_precondition_renal_dysfunction': 1,
     'hr': 6, 'map': 6, 'sbp': 6, 'dbp': 6, 'resp': 6, 'spo2': 6, 'temp': 6,
     'glu': 6, 'crea': 6, 'bili': 6, 'plt': 6, 'hgb': 6, 'wbc': 6, 'na': 6, 'k': 6,
