@@ -10678,6 +10678,18 @@
      "table": "numericitems",
      "sub_var": "itemid",
      "_comment": "2026-07-04 variant audit: added 11894 'Prothrombinetijd  (bloed)' (double-space duplicate of 11893, 127k rows, median 1.27)."
+    },
+    {
+     "ids": [
+      6789
+     ],
+     "table": "numericitems",
+     "sub_var": "itemid",
+     "unit_var": "unit",
+     "require_regex": {
+      "unit": "(?i)^\\s*sec\\s*$"
+     },
+     "callback": "convert_unit(binary_op(`*`, 1), 'ratio', '(?i)^\\s*sec\\s*$')"
     }
    ],
    "eicu": [
@@ -10721,6 +10733,15 @@
      "ids": 51237,
      "table": "labevents",
      "sub_var": "itemid"
+    }
+   ],
+   "sic": [
+    {
+     "ids": [
+      3128
+     ],
+     "table": "laboratory",
+     "sub_var": "LaboratoryID"
     }
    ]
   }

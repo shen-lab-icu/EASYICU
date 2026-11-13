@@ -252,7 +252,7 @@ def source_tables(database: str, stays: int):
             yield f"{converted}.parquet", table
 
 
-_AUMC_SOURCE_UNITS = ("mmol/l", "mol/l", "umol/l", "mg/l", "IE/l", "µg/l", "Geen", "mOsmol/kg", "ml/uur", "/min", "dynes.sec.cm-5", "mbar", "g/l")
+_AUMC_SOURCE_UNITS = ("mmol/l", "mol/l", "umol/l", "mg/l", "IE/l", "µg/l", "Geen", "mOsmol/kg", "ml/uur", "/min", "dynes.sec.cm-5", "mbar", "g/l", "sec")
 
 
 def _aumc_unit(name, source, definition):
