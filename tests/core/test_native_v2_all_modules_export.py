@@ -292,3 +292,22 @@ def test_opt_in_vis_inputs_publishes_on_native_hours(tmp_path, database):
     assert {"stay_id", "charttime"} <= set(frame.columns)
     assert pd.api.types.is_numeric_dtype(frame.charttime)
     assert frame["terlipressin"].notna().any()
+
+
+@pytest.mark.parametrize("database", ["hirid", "sic"])
+def test_opt_in_venous_gases_publish_on_native_hours(tmp_path, database):
+    from easyicu.api.extraction import extract_database
+    from easyicu.synthetic_sources import generate_source
+
+    source = tmp_path / "source"
+    generate_source(source, database, stays=12)
+    output = tmp_path / "out"
+    result = extract_database(
+        database, data_path=str(source), output_dir=str(output),
+        modules=["outcome", "gas_specimen"], native_export_v2=True, verbose=False,
+    )
+    assert not result["modules"]["gas_specimen"].get("errors")
+    frame = pd.read_parquet(output / "gas_specimen.parquet")
+    assert {"stay_id", "charttime"} <= set(frame.columns)
+    assert pd.api.types.is_numeric_dtype(frame.charttime)
+    assert frame["lact_venous" if database == "hirid" else "ph_venous"].notna().any()

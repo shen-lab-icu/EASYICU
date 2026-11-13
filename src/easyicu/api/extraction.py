@@ -29,6 +29,7 @@ from ..source_bounds import (
     strip_private_ledgers,
 )
 from ..concept.catalog import (
+    GAS_SPECIMEN_CONCEPTS,
     VIS_INPUT_CONCEPTS,
     DIURETIC_NEPHROTOXIN_CONCEPTS,
     SEDATION_ANALGESIA_CONCEPTS,
@@ -140,6 +141,7 @@ EXTRACT_MODULES["weight_strict"] = list(WEIGHT_STRICT_CONCEPTS)
 EXTRACT_MODULES["cardiac_markers"] = list(CARDIAC_MARKERS_CONCEPTS)
 EXTRACT_MODULES["inflam_detail"] = list(INFLAM_DETAIL_CONCEPTS)
 EXTRACT_MODULES["renal_detail"] = list(RENAL_DETAIL_CONCEPTS)
+EXTRACT_MODULES['gas_specimen'] = list(GAS_SPECIMEN_CONCEPTS)
 EXTRACT_MODULES['vis_inputs'] = list(VIS_INPUT_CONCEPTS)
 EXTRACT_MODULES['diuretic_nephrotoxin'] = list(DIURETIC_NEPHROTOXIN_CONCEPTS)
 EXTRACT_MODULES['sedation_analgesia'] = list(SEDATION_ANALGESIA_CONCEPTS)

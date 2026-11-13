@@ -253,6 +253,7 @@ def test_static_data_catalog_js_matches_python_catalog() -> None:
 def test_extract_database_modules_use_the_shared_catalog() -> None:
     from easyicu.api import EXTRACT_MODULE_ORDER, EXTRACT_MODULES
     from easyicu.concept.catalog import (
+        GAS_SPECIMEN_CONCEPTS,
         VIS_INPUT_CONCEPTS,
         DIURETIC_NEPHROTOXIN_CONCEPTS,
         SEDATION_ANALGESIA_CONCEPTS,
@@ -275,7 +276,8 @@ def test_extract_database_modules_use_the_shared_catalog() -> None:
        'vent_mechanics': list(VENT_MECHANICS_CONCEPTS),
        'sedation_analgesia': list(SEDATION_ANALGESIA_CONCEPTS),
        'diuretic_nephrotoxin': list(DIURETIC_NEPHROTOXIN_CONCEPTS),
-       'vis_inputs': list(VIS_INPUT_CONCEPTS)}
+       'vis_inputs': list(VIS_INPUT_CONCEPTS),
+       'gas_specimen': list(GAS_SPECIMEN_CONCEPTS)}
     # The SIC case module is explicitly selected, not part of the six-source
     # default extraction order.
     assert set(EXTRACT_MODULE_ORDER) == set(CONCEPT_GROUPS_INTERNAL)

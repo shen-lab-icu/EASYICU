@@ -41254,5 +41254,263 @@
     }
    ]
   }
+ },
+ "be_venous": {
+  "unit": "mEq/L",
+  "min": -25,
+  "max": 25,
+  "description": "Venous arterial base excess",
+  "category": "blood gas",
+  "sources": {
+   "miiv": [
+    {
+     "ids": [
+      50802
+     ],
+     "table": "labevents",
+     "sub_var": "itemid",
+     "unit_var": "valueuom",
+     "require_regex": {
+      "valueuom": "(?i)^\\s*mEq/L\\s*$"
+     },
+     "callback": "batch1_miiv_gas_site",
+     "extra_vars": [
+      "specimen_id",
+      "subject_id"
+     ],
+     "specimen_token": "VEN."
+    }
+   ]
+  }
+ },
+ "lact_venous": {
+  "unit": "mmol/L",
+  "min": 0,
+  "max": 50,
+  "description": "Venous lactate",
+  "category": "cardiovascular",
+  "sources": {
+   "hirid": [
+    {
+     "ids": [
+      24000485
+     ],
+     "table": "observations",
+     "sub_var": "variableid",
+     "class_name": "hrd_itm"
+    },
+    {
+     "ids": [
+      24000732
+     ],
+     "table": "observations",
+     "sub_var": "variableid",
+     "class_name": "hrd_itm"
+    }
+   ],
+   "miiv": [
+    {
+     "ids": [
+      50813
+     ],
+     "table": "labevents",
+     "sub_var": "itemid",
+     "unit_var": "valueuom",
+     "require_regex": {
+      "valueuom": "(?i)^\\s*mmol/L\\s*$"
+     },
+     "callback": "batch1_miiv_gas_site",
+     "extra_vars": [
+      "specimen_id",
+      "subject_id"
+     ],
+     "specimen_token": "VEN."
+    }
+   ]
+  }
+ },
+ "pco2_mixed_venous": {
+  "unit": "mmHg",
+  "min": 10,
+  "max": 150,
+  "description": "Mixed-venous CO2 partial pressure",
+  "category": "blood gas",
+  "sources": {
+   "miiv": [
+    {
+     "ids": [
+      50818
+     ],
+     "table": "labevents",
+     "sub_var": "itemid",
+     "unit_var": "valueuom",
+     "require_regex": {
+      "valueuom": "(?i)^\\s*mm\\ Hg\\s*$"
+     },
+     "callback": "batch1_miiv_gas_site",
+     "extra_vars": [
+      "specimen_id",
+      "subject_id"
+     ],
+     "specimen_token": "MIX."
+    }
+   ]
+  }
+ },
+ "pco2_venous": {
+  "unit": "mmHg",
+  "min": 10,
+  "max": 150,
+  "description": "Venous CO2 partial pressure",
+  "category": "blood gas",
+  "sources": {
+   "miiv": [
+    {
+     "ids": [
+      50818
+     ],
+     "table": "labevents",
+     "sub_var": "itemid",
+     "unit_var": "valueuom",
+     "require_regex": {
+      "valueuom": "(?i)^\\s*mm\\ Hg\\s*$"
+     },
+     "callback": "batch1_miiv_gas_site",
+     "extra_vars": [
+      "specimen_id",
+      "subject_id"
+     ],
+     "specimen_token": "VEN."
+    }
+   ]
+  }
+ },
+ "ph_mixed_venous": {
+  "min": 6.8,
+  "max": 8,
+  "description": "Mixed-venous pH of blood",
+  "category": "blood gas",
+  "sources": {
+   "miiv": [
+    {
+     "ids": [
+      50820
+     ],
+     "table": "labevents",
+     "sub_var": "itemid",
+     "unit_var": "valueuom",
+     "require_regex": {
+      "valueuom": "(?i)^\\s*units\\s*$"
+     },
+     "callback": "batch1_miiv_gas_site",
+     "extra_vars": [
+      "specimen_id",
+      "subject_id"
+     ],
+     "specimen_token": "MIX."
+    }
+   ]
+  }
+ },
+ "ph_venous": {
+  "min": 6.8,
+  "max": 8,
+  "description": "Venous pH of blood",
+  "category": "blood gas",
+  "sources": {
+   "miiv": [
+    {
+     "ids": [
+      50820
+     ],
+     "table": "labevents",
+     "sub_var": "itemid",
+     "unit_var": "valueuom",
+     "require_regex": {
+      "valueuom": "(?i)^\\s*units\\s*$"
+     },
+     "callback": "batch1_miiv_gas_site",
+     "extra_vars": [
+      "specimen_id",
+      "subject_id"
+     ],
+     "specimen_token": "VEN."
+    }
+   ],
+   "sic": [
+    {
+     "ids": [
+      697
+     ],
+     "table": "laboratory",
+     "sub_var": "LaboratoryID"
+    }
+   ]
+  }
+ },
+ "po2_mixed_venous": {
+  "unit": "mmHg",
+  "min": 20,
+  "max": 600,
+  "description": "Mixed-venous O2 partial pressure",
+  "category": "blood gas",
+  "sources": {
+   "miiv": [
+    {
+     "ids": [
+      50821
+     ],
+     "table": "labevents",
+     "sub_var": "itemid",
+     "unit_var": "valueuom",
+     "require_regex": {
+      "valueuom": "(?i)^\\s*mm\\ Hg\\s*$"
+     },
+     "callback": "batch1_miiv_gas_site",
+     "extra_vars": [
+      "specimen_id",
+      "subject_id"
+     ],
+     "specimen_token": "MIX."
+    }
+   ]
+  }
+ },
+ "po2_venous": {
+  "unit": "mmHg",
+  "min": 20,
+  "max": 600,
+  "description": "Venous O2 partial pressure",
+  "category": "blood gas",
+  "sources": {
+   "miiv": [
+    {
+     "ids": [
+      50821
+     ],
+     "table": "labevents",
+     "sub_var": "itemid",
+     "unit_var": "valueuom",
+     "require_regex": {
+      "valueuom": "(?i)^\\s*mm\\ Hg\\s*$"
+     },
+     "callback": "batch1_miiv_gas_site",
+     "extra_vars": [
+      "specimen_id",
+      "subject_id"
+     ],
+     "specimen_token": "VEN."
+    }
+   ],
+   "sic": [
+    {
+     "ids": [
+      694
+     ],
+     "table": "laboratory",
+     "sub_var": "LaboratoryID"
+    }
+   ]
+  }
  }
 }

@@ -1,5 +1,5 @@
 {
-  "concept_count": 400,
+  "concept_count": 408,
   "concepts": {
     "abdominal_circumference": {
       "category": "ventilator",
@@ -657,6 +657,28 @@
         }
       },
       "description": "arterial base excess"
+    },
+    "be_venous": {
+      "category": "blood gas",
+      "databases": {
+        "jinhua": {
+          "reason": "no validated native field/event in this release",
+          "status": "unavailable"
+        },
+        "nwicu": {
+          "reason": "no validated native field/event in this release",
+          "status": "unavailable"
+        },
+        "zhejiang_eicu": {
+          "reason": "no validated native field/event in this release",
+          "status": "unavailable"
+        },
+        "zigong": {
+          "reason": "no validated native field/event in this release",
+          "status": "unavailable"
+        }
+      },
+      "description": "Venous arterial base excess"
     },
     "beta2_microglobulin_urine": {
       "category": "renal",
@@ -4851,6 +4873,28 @@
       },
       "description": "lactate"
     },
+    "lact_venous": {
+      "category": "cardiovascular",
+      "databases": {
+        "jinhua": {
+          "reason": "no validated native field/event in this release",
+          "status": "unavailable"
+        },
+        "nwicu": {
+          "reason": "no validated native field/event in this release",
+          "status": "unavailable"
+        },
+        "zhejiang_eicu": {
+          "reason": "no validated native field/event in this release",
+          "status": "unavailable"
+        },
+        "zigong": {
+          "reason": "no validated native field/event in this release",
+          "status": "unavailable"
+        }
+      },
+      "description": "Venous lactate"
+    },
     "ldh": {
       "category": "chemistry",
       "databases": {
@@ -7061,6 +7105,50 @@
       },
       "description": "CO2 partial pressure"
     },
+    "pco2_mixed_venous": {
+      "category": "blood gas",
+      "databases": {
+        "jinhua": {
+          "reason": "no validated native field/event in this release",
+          "status": "unavailable"
+        },
+        "nwicu": {
+          "reason": "no validated native field/event in this release",
+          "status": "unavailable"
+        },
+        "zhejiang_eicu": {
+          "reason": "no validated native field/event in this release",
+          "status": "unavailable"
+        },
+        "zigong": {
+          "reason": "no validated native field/event in this release",
+          "status": "unavailable"
+        }
+      },
+      "description": "Mixed-venous CO2 partial pressure"
+    },
+    "pco2_venous": {
+      "category": "blood gas",
+      "databases": {
+        "jinhua": {
+          "reason": "no validated native field/event in this release",
+          "status": "unavailable"
+        },
+        "nwicu": {
+          "reason": "no validated native field/event in this release",
+          "status": "unavailable"
+        },
+        "zhejiang_eicu": {
+          "reason": "no validated native field/event in this release",
+          "status": "unavailable"
+        },
+        "zigong": {
+          "reason": "no validated native field/event in this release",
+          "status": "unavailable"
+        }
+      },
+      "description": "Venous CO2 partial pressure"
+    },
     "pct": {
       "category": "chemistry",
       "databases": {
@@ -7238,6 +7326,28 @@
       },
       "description": "pH of blood"
     },
+    "ph_mixed_venous": {
+      "category": "blood gas",
+      "databases": {
+        "jinhua": {
+          "reason": "no validated native field/event in this release",
+          "status": "unavailable"
+        },
+        "nwicu": {
+          "reason": "no validated native field/event in this release",
+          "status": "unavailable"
+        },
+        "zhejiang_eicu": {
+          "reason": "no validated native field/event in this release",
+          "status": "unavailable"
+        },
+        "zigong": {
+          "reason": "no validated native field/event in this release",
+          "status": "unavailable"
+        }
+      },
+      "description": "Mixed-venous pH of blood"
+    },
     "ph_qc": {
       "category": "blood gas",
       "databases": {
@@ -7305,6 +7415,28 @@
         }
       },
       "description": "Charted pH of blood before range filtering"
+    },
+    "ph_venous": {
+      "category": "blood gas",
+      "databases": {
+        "jinhua": {
+          "reason": "no validated native field/event in this release",
+          "status": "unavailable"
+        },
+        "nwicu": {
+          "reason": "no validated native field/event in this release",
+          "status": "unavailable"
+        },
+        "zhejiang_eicu": {
+          "reason": "no validated native field/event in this release",
+          "status": "unavailable"
+        },
+        "zigong": {
+          "reason": "no validated native field/event in this release",
+          "status": "unavailable"
+        }
+      },
+      "description": "Venous pH of blood"
     },
     "phenytoin": {
       "category": "medications",
@@ -7643,6 +7775,50 @@
         }
       },
       "description": "O2 partial pressure"
+    },
+    "po2_mixed_venous": {
+      "category": "blood gas",
+      "databases": {
+        "jinhua": {
+          "reason": "no validated native field/event in this release",
+          "status": "unavailable"
+        },
+        "nwicu": {
+          "reason": "no validated native field/event in this release",
+          "status": "unavailable"
+        },
+        "zhejiang_eicu": {
+          "reason": "no validated native field/event in this release",
+          "status": "unavailable"
+        },
+        "zigong": {
+          "reason": "no validated native field/event in this release",
+          "status": "unavailable"
+        }
+      },
+      "description": "Mixed-venous O2 partial pressure"
+    },
+    "po2_venous": {
+      "category": "blood gas",
+      "databases": {
+        "jinhua": {
+          "reason": "no validated native field/event in this release",
+          "status": "unavailable"
+        },
+        "nwicu": {
+          "reason": "no validated native field/event in this release",
+          "status": "unavailable"
+        },
+        "zhejiang_eicu": {
+          "reason": "no validated native field/event in this release",
+          "status": "unavailable"
+        },
+        "zigong": {
+          "reason": "no validated native field/event in this release",
+          "status": "unavailable"
+        }
+      },
+      "description": "Venous O2 partial pressure"
     },
     "potassium": {
       "category": "chemistry",
@@ -12210,25 +12386,25 @@
       "derived": 19,
       "direct": 135,
       "partial": 34,
-      "unavailable": 212
+      "unavailable": 220
     },
     "nwicu": {
       "derived": 19,
       "direct": 137,
       "partial": 37,
-      "unavailable": 207
+      "unavailable": 215
     },
     "zhejiang_eicu": {
       "derived": 39,
       "direct": 128,
       "partial": 25,
-      "unavailable": 208
+      "unavailable": 216
     },
     "zigong": {
       "derived": 27,
       "direct": 125,
       "partial": 41,
-      "unavailable": 207
+      "unavailable": 215
     }
   },
   "databases": [

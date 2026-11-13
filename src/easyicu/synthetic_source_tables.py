@@ -160,6 +160,8 @@ def _events(database, config, concepts, p):
                               Amount=.00036, AmountPerMinute=.000006, Cnt=1,
                               # 2296 = arterial: blood-gas sources keep arterial samples only.
                               LaboratoryType=2296)
+                if name in {"ph_venous", "po2_venous"}:
+                    record["LaboratoryType"] = None  # Explicitly venous item; do not invent an arterial specimen.
                 if table == "data_range":
                     record["Data"] = "synthetic ventilation"
                 if table == "medication" and item == 2148:

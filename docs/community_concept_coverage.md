@@ -1,7 +1,7 @@
 # Community database concept coverage
 
 Generated from `tools/build_community_concept_registry.py`. The matrix covers every standard
-concept (base dictionary plus SOFA-2 overlay): **400 concepts × 4 databases**.
+concept (base dictionary plus SOFA-2 overlay): **408 concepts × 4 databases**.
 
 `partial` is deliberately not advertised as extractable: it records useful ingredients while preventing an incomplete score or phenotype from being mistaken for a complete definition.
 
@@ -9,10 +9,10 @@ concept (base dictionary plus SOFA-2 overlay): **400 concepts × 4 databases**.
 
 | Database | Direct | Derived | Partial | Unavailable |
 |---|---:|---:|---:|---:|
-| nwicu | 137 | 19 | 37 | 207 |
-| zhejiang_eicu | 128 | 39 | 25 | 208 |
-| jinhua | 135 | 19 | 34 | 212 |
-| zigong | 125 | 27 | 41 | 207 |
+| nwicu | 137 | 19 | 37 | 215 |
+| zhejiang_eicu | 128 | 39 | 25 | 216 |
+| jinhua | 135 | 19 | 34 | 220 |
+| zigong | 125 | 27 | 41 | 215 |
 
 ## Complete matrix
 
@@ -43,6 +43,7 @@ concept (base dictionary plus SOFA-2 overlay): **400 concepts × 4 databases**.
 | `avpu` | neurological | unavailable | unavailable | unavailable | partial |
 | `basos` | hematology | direct | direct | direct | direct |
 | `be` | blood gas | unavailable | direct | direct | direct |
+| `be_venous` | blood gas | unavailable | unavailable | unavailable | unavailable |
 | `beta2_microglobulin_urine` | renal | unavailable | unavailable | unavailable | unavailable |
 | `bicar` | chemistry | direct | direct | direct | direct |
 | `bicarb` | chemistry | direct | direct | direct | direct |
@@ -189,6 +190,7 @@ concept (base dictionary plus SOFA-2 overlay): **400 concepts × 4 databases**.
 | `ketamine` | medications | direct | direct | unavailable | direct |
 | `labetalol` | medications | direct | direct | unavailable | unavailable |
 | `lact` | blood gas | direct | direct | direct | direct |
+| `lact_venous` | cardiovascular | unavailable | unavailable | unavailable | unavailable |
 | `ldh` | chemistry | unavailable | direct | direct | direct |
 | `ldl` | chemistry | direct | direct | direct | direct |
 | `levetiracetam` | medications | direct | unavailable | direct | direct |
@@ -269,6 +271,8 @@ concept (base dictionary plus SOFA-2 overlay): **400 concepts × 4 databases**.
 | `pawp` | cardiovascular | unavailable | unavailable | unavailable | unavailable |
 | `pc_above_peep_set` | ventilator | unavailable | unavailable | unavailable | unavailable |
 | `pco2` | blood gas | unavailable | direct | direct | direct |
+| `pco2_mixed_venous` | blood gas | unavailable | unavailable | unavailable | unavailable |
+| `pco2_venous` | blood gas | unavailable | unavailable | unavailable | unavailable |
 | `pct` | chemistry | unavailable | direct | direct | unavailable |
 | `peep` | ventilator | direct | direct | unavailable | unavailable |
 | `peep_intrinsic` | ventilator | unavailable | unavailable | unavailable | unavailable |
@@ -276,8 +280,10 @@ concept (base dictionary plus SOFA-2 overlay): **400 concepts × 4 databases**.
 | `peep_total` | ventilator | unavailable | unavailable | unavailable | unavailable |
 | `persistent_critical_illness` | outcome | derived | unavailable | derived | derived |
 | `ph` | blood gas | direct | direct | direct | direct |
+| `ph_mixed_venous` | blood gas | unavailable | unavailable | unavailable | unavailable |
 | `ph_qc` | blood gas | unavailable | unavailable | unavailable | unavailable |
 | `ph_raw` | blood gas | unavailable | unavailable | unavailable | unavailable |
+| `ph_venous` | blood gas | unavailable | unavailable | unavailable | unavailable |
 | `phenytoin` | medications | direct | direct | direct | unavailable |
 | `phn_rate` | medications | unavailable | unavailable | unavailable | unavailable |
 | `phos` | chemistry | direct | direct | direct | direct |
@@ -290,6 +296,8 @@ concept (base dictionary plus SOFA-2 overlay): **400 concepts × 4 databases**.
 | `plr` | hematology | derived | derived | derived | derived |
 | `plt` | hematology | direct | direct | direct | direct |
 | `po2` | blood gas | unavailable | direct | direct | direct |
+| `po2_mixed_venous` | blood gas | unavailable | unavailable | unavailable | unavailable |
+| `po2_venous` | blood gas | unavailable | unavailable | unavailable | unavailable |
 | `potassium` | chemistry | direct | unavailable | direct | direct |
 | `potassium_iv` | medications | direct | direct | direct | direct |
 | `potassium_sparing_diuretic` | medications | unavailable | unavailable | unavailable | unavailable |

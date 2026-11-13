@@ -1126,6 +1126,11 @@ def _apply_callback_body(
         frame = _drop_sic_single_doses(frame, source, concept_name)
         source = _without_single_dose_flag(source)
 
+    if expr == "batch1_miiv_gas_site":
+        from .batch1_sources import miiv_gas_site
+
+        return miiv_gas_site(frame, source, concept_name, data_source)
+
     arterial_only, inner_callback = parse_arterial_specimen_callback(expr)
     mixed_venous_only, mixed_inner = parse_mixed_venous_specimen_callback(expr)
     if arterial_only or mixed_venous_only:

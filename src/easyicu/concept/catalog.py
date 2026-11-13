@@ -850,7 +850,29 @@ VIS_INPUT_METADATA = {
     'terlipressin': ('Terlipressin administration exposure', '特利加压素给药暴露', 'boolean'),
 }
 
+GAS_SPECIMEN_CONCEPTS = (
+    'be_venous',
+    'lact_venous',
+    'pco2_mixed_venous',
+    'pco2_venous',
+    'ph_mixed_venous',
+    'ph_venous',
+    'po2_mixed_venous',
+    'po2_venous',
+)
+GAS_SPECIMEN_METADATA = {
+    'be_venous': ('Venous arterial base excess', '静脉血（采样部位未指定）碱剩余', 'mEq/L'),
+    'lact_venous': ('Venous lactate', '静脉血（采样部位未指定）乳酸', 'mmol/L'),
+    'pco2_mixed_venous': ('Mixed-venous CO2 partial pressure', '混合静脉血二氧化碳分压', 'mmHg'),
+    'pco2_venous': ('Venous CO2 partial pressure', '静脉血（采样部位未指定）二氧化碳分压', 'mmHg'),
+    'ph_mixed_venous': ('Mixed-venous pH of blood', '混合静脉血pH', ''),
+    'ph_venous': ('Venous pH of blood', '静脉血（采样部位未指定）pH', ''),
+    'po2_mixed_venous': ('Mixed-venous O2 partial pressure', '混合静脉血氧分压', 'mmHg'),
+    'po2_venous': ('Venous O2 partial pressure', '静脉血（采样部位未指定）氧分压', 'mmHg'),
+}
+
 HIDDEN_DICTIONARY_CONCEPTS = {
+    *GAS_SPECIMEN_CONCEPTS,
     *VIS_INPUT_CONCEPTS,
     'vancomycin_iv',
     *DIURETIC_NEPHROTOXIN_CONCEPTS,
