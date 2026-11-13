@@ -1,4 +1,4 @@
-"""Source-specific rules for the S732 opt-in batch."""
+"""MIMIC-IV angiotensin II infusion rate (ng/kg/min), expanded over its interval."""
 
 from __future__ import annotations
 
@@ -53,25 +53,3 @@ def angiotensin_rate(frame, source, concept_name, data_source):
     if value_col != concept_name:
         out = out.rename(columns={value_col: concept_name})
     return out
-
-
-def miiv_gas_site(frame, source, concept_name, data_source):
-    """Keep only the unanimous explicit site for the same subject and specimen."""
-    from .blood_gas_specimen import SpecimenRecordRule, _restrict_by_records
-
-    required = {"subject_id", "specimen_id", "charttime", concept_name}
-    missing = required - set(frame.columns)
-    if missing:
-        raise KeyError(f"venous specimen restriction requires columns {sorted(missing)}")
-    if frame.empty:
-        return frame.copy()
-    token = source.params.get("specimen_token")
-    if token not in {"VEN.", "MIX."}:
-        raise ValueError("venous specimen restriction requires an exact site token")
-    rule = SpecimenRecordRule(
-        table="labevents", item_column="itemid", item_id=52033,
-        keys=("subject_id", "specimen_id"), patient_column="subject_id",
-        value_column="value", arterial_tokens=frozenset({token}), keep_unrecorded=False,
-    )
-    result, _ = _restrict_by_records(frame, rule, data_source, frozenset({token}))
-    return result

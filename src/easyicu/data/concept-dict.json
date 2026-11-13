@@ -41095,7 +41095,7 @@
      "table": "inputevents",
      "sub_var": "itemid",
      "stop_var": "endtime",
-     "callback": "batch1_angiotensin_rate",
+     "callback": "miiv_angiotensin_rate",
      "extra_vars": [
       "ordercategorydescription",
       "rateuom",
@@ -41120,7 +41120,7 @@
      "table": "inputevents",
      "sub_var": "itemid",
      "stop_var": "endtime",
-     "callback": "batch1_angiotensin_rate",
+     "callback": "miiv_angiotensin_rate",
      "extra_vars": [
       "ordercategorydescription",
       "rateuom",
@@ -41273,7 +41273,7 @@
      "require_regex": {
       "valueuom": "(?i)^\\s*mEq/L\\s*$"
      },
-     "callback": "batch1_miiv_gas_site",
+     "callback": "miiv_specimen_site",
      "extra_vars": [
       "specimen_id",
       "subject_id"
@@ -41319,7 +41319,7 @@
      "require_regex": {
       "valueuom": "(?i)^\\s*mmol/L\\s*$"
      },
-     "callback": "batch1_miiv_gas_site",
+     "callback": "miiv_specimen_site",
      "extra_vars": [
       "specimen_id",
       "subject_id"
@@ -41347,7 +41347,7 @@
      "require_regex": {
       "valueuom": "(?i)^\\s*mm\\ Hg\\s*$"
      },
-     "callback": "batch1_miiv_gas_site",
+     "callback": "miiv_specimen_site",
      "extra_vars": [
       "specimen_id",
       "subject_id"
@@ -41375,7 +41375,7 @@
      "require_regex": {
       "valueuom": "(?i)^\\s*mm\\ Hg\\s*$"
      },
-     "callback": "batch1_miiv_gas_site",
+     "callback": "miiv_specimen_site",
      "extra_vars": [
       "specimen_id",
       "subject_id"
@@ -41402,7 +41402,7 @@
      "require_regex": {
       "valueuom": "(?i)^\\s*units\\s*$"
      },
-     "callback": "batch1_miiv_gas_site",
+     "callback": "miiv_specimen_site",
      "extra_vars": [
       "specimen_id",
       "subject_id"
@@ -41429,7 +41429,7 @@
      "require_regex": {
       "valueuom": "(?i)^\\s*units\\s*$"
      },
-     "callback": "batch1_miiv_gas_site",
+     "callback": "miiv_specimen_site",
      "extra_vars": [
       "specimen_id",
       "subject_id"
@@ -41466,7 +41466,7 @@
      "require_regex": {
       "valueuom": "(?i)^\\s*mm\\ Hg\\s*$"
      },
-     "callback": "batch1_miiv_gas_site",
+     "callback": "miiv_specimen_site",
      "extra_vars": [
       "specimen_id",
       "subject_id"
@@ -41494,7 +41494,7 @@
      "require_regex": {
       "valueuom": "(?i)^\\s*mm\\ Hg\\s*$"
      },
-     "callback": "batch1_miiv_gas_site",
+     "callback": "miiv_specimen_site",
      "extra_vars": [
       "specimen_id",
       "subject_id"

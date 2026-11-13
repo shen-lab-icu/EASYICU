@@ -387,7 +387,30 @@ def restrict_to_mixed_venous_specimens(
     return kept
 
 
+def restrict_to_specimen_site(frame, source, concept_name, data_source):
+    """MIMIC-IV: keep only gases whose specimen record unanimously names the
+    declared site token (``VEN.`` or ``MIX.``); unrecorded specimens drop."""
+
+    required = {"subject_id", "specimen_id", "charttime", concept_name}
+    missing = required - set(frame.columns)
+    if missing:
+        raise KeyError(f"venous specimen restriction requires columns {sorted(missing)}")
+    if frame.empty:
+        return frame.copy()
+    token = source.params.get("specimen_token")
+    if token not in {"VEN.", "MIX."}:
+        raise ValueError("venous specimen restriction requires an exact site token")
+    rule = SpecimenRecordRule(
+        table="labevents", item_column="itemid", item_id=52033,
+        keys=("subject_id", "specimen_id"), patient_column="subject_id",
+        value_column="value", arterial_tokens=frozenset({token}), keep_unrecorded=False,
+    )
+    result, _ = _restrict_by_records(frame, rule, data_source, frozenset({token}))
+    return result
+
+
 __all__ = [
+    "restrict_to_specimen_site",
     "ARTERIAL_SPECIMEN_CALLBACK",
     "MIXED_VENOUS_SPECIMEN_CALLBACK",
     "MIXED_VENOUS_TOKENS",

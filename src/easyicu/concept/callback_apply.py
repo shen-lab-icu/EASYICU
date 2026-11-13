@@ -1129,10 +1129,10 @@ def _apply_callback_body(
         frame = _drop_sic_single_doses(frame, source, concept_name)
         source = _without_single_dose_flag(source)
 
-    if expr == "batch1_miiv_gas_site":
-        from .batch1_sources import miiv_gas_site
+    if expr == "miiv_specimen_site":
+        from .blood_gas_specimen import restrict_to_specimen_site
 
-        return miiv_gas_site(frame, source, concept_name, data_source)
+        return restrict_to_specimen_site(frame, source, concept_name, data_source)
 
     arterial_only, inner_callback = parse_arterial_specimen_callback(expr)
     mixed_venous_only, mixed_inner = parse_mixed_venous_specimen_callback(expr)
@@ -3003,8 +3003,8 @@ def _apply_callback_body(
 
         return frame
     
-    if expr == "batch1_angiotensin_rate":
-        from .batch1_sources import angiotensin_rate
+    if expr == "miiv_angiotensin_rate":
+        from .miiv_angiotensin import angiotensin_rate
 
         return angiotensin_rate(frame, source, concept_name, data_source)
 
