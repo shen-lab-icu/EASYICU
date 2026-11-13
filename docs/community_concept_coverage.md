@@ -1,7 +1,7 @@
 # Community database concept coverage
 
 Generated from `tools/build_community_concept_registry.py`. The matrix covers every standard
-concept (base dictionary plus SOFA-2 overlay): **360 concepts × 4 databases**.
+concept (base dictionary plus SOFA-2 overlay): **371 concepts × 4 databases**.
 
 `partial` is deliberately not advertised as extractable: it records useful ingredients while preventing an incomplete score or phenotype from being mistaken for a complete definition.
 
@@ -9,10 +9,10 @@ concept (base dictionary plus SOFA-2 overlay): **360 concepts × 4 databases**.
 
 | Database | Direct | Derived | Partial | Unavailable |
 |---|---:|---:|---:|---:|
-| nwicu | 137 | 19 | 37 | 167 |
-| zhejiang_eicu | 128 | 39 | 25 | 168 |
-| jinhua | 135 | 19 | 34 | 172 |
-| zigong | 125 | 27 | 41 | 167 |
+| nwicu | 137 | 19 | 37 | 178 |
+| zhejiang_eicu | 128 | 39 | 25 | 179 |
+| jinhua | 135 | 19 | 34 | 183 |
+| zigong | 125 | 27 | 41 | 178 |
 
 ## Complete matrix
 
@@ -60,6 +60,7 @@ concept (base dictionary plus SOFA-2 overlay): **360 concepts × 4 databases**.
 | `cai_ph74` | blood gas | unavailable | unavailable | unavailable | unavailable |
 | `calcium_iv` | medications | direct | direct | direct | direct |
 | `cholesterol` | chemistry | direct | direct | direct | direct |
+| `ci` | cardiovascular | unavailable | unavailable | unavailable | unavailable |
 | `cisatracurium` | medications | direct | direct | direct | direct |
 | `ck` | chemistry | direct | direct | direct | direct |
 | `ckmb` | chemistry | direct | unavailable | unavailable | unavailable |
@@ -112,7 +113,11 @@ concept (base dictionary plus SOFA-2 overlay): **360 concepts × 4 databases**.
 | `driving_pres` | ventilator | partial | partial | unavailable | unavailable |
 | `driving_pres_controlled` | ventilator | partial | partial | unavailable | partial |
 | `ecmo` | respiratory | direct | unavailable | direct | unavailable |
+| `ecmo_blood_flow` | ventilator | unavailable | unavailable | unavailable | unavailable |
+| `ecmo_fio2` | ventilator | unavailable | unavailable | unavailable | unavailable |
 | `ecmo_indication` | respiratory | unavailable | unavailable | unavailable | unavailable |
+| `ecmo_pump_speed` | ventilator | unavailable | unavailable | unavailable | unavailable |
+| `ecmo_sweep_flow` | ventilator | unavailable | unavailable | unavailable | unavailable |
 | `egcs` | neurological | unavailable | unavailable | unavailable | direct |
 | `egfr` | renal | derived | derived | derived | derived |
 | `enoxaparin` | medications | direct | direct | direct | direct |
@@ -126,6 +131,7 @@ concept (base dictionary plus SOFA-2 overlay): **360 concepts × 4 databases**.
 | `etco2_qc` | ventilator | unavailable | unavailable | unavailable | unavailable |
 | `etco2_raw` | ventilator | unavailable | unavailable | unavailable | unavailable |
 | `ett_gcs` | respiratory | unavailable | unavailable | unavailable | unavailable |
+| `evlwi` | cardiovascular | unavailable | unavailable | unavailable | unavailable |
 | `fena` | renal | partial | partial | partial | partial |
 | `fentanyl` | medications | direct | direct | direct | direct |
 | `fentanyl_rate` | medications | unavailable | unavailable | unavailable | unavailable |
@@ -141,6 +147,8 @@ concept (base dictionary plus SOFA-2 overlay): **360 concepts × 4 databases**.
 | `ft4` | chemistry | direct | direct | direct | unavailable |
 | `furosemide` | medications | direct | direct | direct | direct |
 | `gcs` | neurological | unavailable | unavailable | unavailable | partial |
+| `gedvi` | cardiovascular | unavailable | unavailable | unavailable | unavailable |
+| `gef` | cardiovascular | unavailable | unavailable | unavailable | unavailable |
 | `ggt` | chemistry | direct | direct | direct | direct |
 | `glu` | chemistry | direct | direct | direct | direct |
 | `hba1c` | hematology | direct | direct | direct | unavailable |
@@ -269,6 +277,7 @@ concept (base dictionary plus SOFA-2 overlay): **360 concepts × 4 databases**.
 | `potassium` | chemistry | direct | unavailable | direct | direct |
 | `potassium_iv` | medications | direct | direct | direct | direct |
 | `potassium_sparing_diuretic` | medications | unavailable | unavailable | unavailable | unavailable |
+| `ppv` | cardiovascular | unavailable | unavailable | unavailable | unavailable |
 | `prealbumin` | chemistry | unavailable | direct | direct | direct |
 | `propofol` | medications | direct | direct | direct | direct |
 | `propofol_rate` | medications | unavailable | unavailable | unavailable | unavailable |
@@ -320,6 +329,8 @@ concept (base dictionary plus SOFA-2 overlay): **360 concepts × 4 databases**.
 | `supp_o2` | respiratory | partial | partial | partial | unavailable |
 | `susp_inf` | outcome | partial | partial | partial | partial |
 | `svo2` | cardiovascular | unavailable | unavailable | unavailable | unavailable |
+| `svr` | cardiovascular | unavailable | unavailable | unavailable | unavailable |
+| `svv` | cardiovascular | unavailable | unavailable | unavailable | unavailable |
 | `t4` | chemistry | direct | direct | direct | unavailable |
 | `tco2` | blood gas | direct | direct | direct | direct |
 | `temp` | vitals | direct | direct | direct | direct |

@@ -39498,5 +39498,387 @@
     }
    ]
   }
+ },
+ "ci": {
+  "unit": "L/min/m2",
+  "min": 0,
+  "max": 20,
+  "description": "Cardiac index",
+  "category": "cardiovascular",
+  "sources": {
+   "aumc": [
+    {
+     "ids": [
+      13150
+     ],
+     "table": "numericitems",
+     "sub_var": "itemid",
+     "unit_var": "unit",
+     "require_regex": {
+      "unit": "(?i)^\\s*l/min/m2\\s*$"
+     }
+    }
+   ],
+   "miiv": [
+    {
+     "ids": [
+      228177
+     ],
+     "table": "chartevents",
+     "sub_var": "itemid",
+     "unit_var": "valueuom",
+     "require_regex": {
+      "valueuom": "(?i)^\\s*L/min/m2\\s*$"
+     }
+    },
+    {
+     "ids": [
+      228368
+     ],
+     "table": "chartevents",
+     "sub_var": "itemid",
+     "unit_var": "valueuom",
+     "require_regex": {
+      "valueuom": "(?i)^\\s*L/min/m2\\s*$"
+     }
+    }
+   ]
+  }
+ },
+ "ecmo_blood_flow": {
+  "unit": "L/min",
+  "min": 0,
+  "max": 20,
+  "description": "ECMO blood flow",
+  "category": "ventilator",
+  "sources": {
+   "aumc": [
+    {
+     "ids": [
+      20648
+     ],
+     "table": "numericitems",
+     "sub_var": "itemid",
+     "unit_var": "unit",
+     "require_regex": {
+      "unit": "(?i)^\\s*l/min\\s*$"
+     }
+    }
+   ],
+   "miiv": [
+    {
+     "ids": [
+      229270
+     ],
+     "table": "chartevents",
+     "sub_var": "itemid",
+     "unit_var": "valueuom",
+     "require_regex": {
+      "valueuom": "(?i)^\\s*L/min\\s*$"
+     }
+    }
+   ]
+  }
+ },
+ "ecmo_fio2": {
+  "unit": "%",
+  "min": 0,
+  "max": 100,
+  "description": "ECMO oxygenator oxygen concentration",
+  "category": "ventilator",
+  "sources": {
+   "aumc": [
+    {
+     "ids": [
+      20656
+     ],
+     "table": "numericitems",
+     "sub_var": "itemid",
+     "unit_var": "unit",
+     "require_regex": {
+      "unit": "(?i)^\\s*Geen\\s*$"
+     },
+     "callback": "convert_unit(binary_op(`*`, 1), '%')"
+    }
+   ],
+   "miiv": [
+    {
+     "ids": [
+      229280
+     ],
+     "table": "chartevents",
+     "sub_var": "itemid",
+     "unit_var": "valueuom",
+     "require_regex": {
+      "valueuom": "(?i)^\\s*%\\s*$"
+     }
+    }
+   ],
+   "sic": [
+    {
+     "ids": [
+      2025
+     ],
+     "table": "data_float_h",
+     "sub_var": "DataID"
+    }
+   ]
+  }
+ },
+ "ecmo_pump_speed": {
+  "unit": "rpm",
+  "min": 0,
+  "max": 15000,
+  "description": "ECMO pump speed",
+  "category": "ventilator",
+  "sources": {
+   "aumc": [
+    {
+     "ids": [
+      20649
+     ],
+     "table": "numericitems",
+     "sub_var": "itemid",
+     "unit_var": "unit",
+     "require_regex": {
+      "unit": "(?i)^\\s*/min\\s*$"
+     },
+     "callback": "convert_unit(binary_op(`*`, 1), 'rpm')"
+    }
+   ],
+   "miiv": [
+    {
+     "ids": [
+      229277
+     ],
+     "table": "chartevents",
+     "sub_var": "itemid",
+     "unit_var": "valueuom",
+     "require_regex": {
+      "valueuom": "(?i)^\\s*RPM\\s*$"
+     }
+    }
+   ],
+   "sic": [
+    {
+     "ids": [
+      2023
+     ],
+     "table": "data_float_h",
+     "sub_var": "DataID",
+     "callback": "convert_unit(binary_op(`*`, 1), 'rpm')"
+    }
+   ]
+  }
+ },
+ "ecmo_sweep_flow": {
+  "unit": "L/min",
+  "min": 0,
+  "max": 30,
+  "description": "ECMO oxygenator sweep gas flow",
+  "category": "ventilator",
+  "sources": {
+   "aumc": [
+    {
+     "ids": [
+      20657
+     ],
+     "table": "numericitems",
+     "sub_var": "itemid",
+     "unit_var": "unit",
+     "require_regex": {
+      "unit": "(?i)^\\s*l/min\\s*$"
+     }
+    }
+   ],
+   "miiv": [
+    {
+     "ids": [
+      228192
+     ],
+     "table": "chartevents",
+     "sub_var": "itemid",
+     "unit_var": "valueuom",
+     "require_regex": {
+      "valueuom": "(?i)^\\s*L/min\\s*$"
+     }
+    }
+   ]
+  }
+ },
+ "evlwi": {
+  "unit": "mL/kg",
+  "min": 0,
+  "max": 100,
+  "description": "Extravascular lung water index",
+  "category": "cardiovascular",
+  "sources": {
+   "aumc": [
+    {
+     "ids": [
+      13153
+     ],
+     "table": "numericitems",
+     "sub_var": "itemid",
+     "unit_var": "unit",
+     "require_regex": {
+      "unit": "(?i)^\\s*ml/kg\\s*$"
+     }
+    }
+   ],
+   "miiv": [
+    {
+     "ids": [
+      228179
+     ],
+     "table": "chartevents",
+     "sub_var": "itemid",
+     "unit_var": "valueuom",
+     "require_regex": {
+      "valueuom": "(?i)^\\s*ml/kg\\s*$"
+     }
+    }
+   ]
+  }
+ },
+ "gedvi": {
+  "unit": "mL/m2",
+  "min": 0,
+  "max": 3000,
+  "description": "Global end-diastolic volume index",
+  "category": "cardiovascular",
+  "sources": {
+   "aumc": [
+    {
+     "ids": [
+      13152
+     ],
+     "table": "numericitems",
+     "sub_var": "itemid",
+     "unit_var": "unit",
+     "require_regex": {
+      "unit": "(?i)^\\s*ml/m2\\s*$"
+     }
+    }
+   ],
+   "miiv": [
+    {
+     "ids": [
+      228180
+     ],
+     "table": "chartevents",
+     "sub_var": "itemid",
+     "unit_var": "valueuom",
+     "require_regex": {
+      "valueuom": "(?i)^\\s*mL/m2\\s*$"
+     }
+    }
+   ]
+  }
+ },
+ "gef": {
+  "unit": "%",
+  "min": 0,
+  "max": 100,
+  "description": "Global ejection fraction",
+  "category": "cardiovascular",
+  "sources": {
+   "aumc": [
+    {
+     "ids": [
+      14064
+     ],
+     "table": "numericitems",
+     "sub_var": "itemid",
+     "unit_var": "unit",
+     "require_regex": {
+      "unit": "(?i)^\\s*Geen\\s*$"
+     },
+     "callback": "convert_unit(binary_op(`*`, 1), '%')"
+    }
+   ]
+  }
+ },
+ "ppv": {
+  "unit": "%",
+  "min": 0,
+  "max": 100,
+  "description": "Pulse pressure variation",
+  "category": "cardiovascular",
+  "sources": {
+   "aumc": [
+    {
+     "ids": [
+      13155
+     ],
+     "table": "numericitems",
+     "sub_var": "itemid",
+     "unit_var": "unit",
+     "require_regex": {
+      "unit": "(?i)^\\s*Geen\\s*$"
+     },
+     "callback": "convert_unit(binary_op(`*`, 1), '%')"
+    }
+   ]
+  }
+ },
+ "svr": {
+  "unit": "dyn.s/cm5",
+  "min": 0,
+  "max": 10000,
+  "description": "Systemic vascular resistance, unindexed",
+  "category": "cardiovascular",
+  "sources": {
+   "aumc": [
+    {
+     "ids": [
+      14074
+     ],
+     "table": "numericitems",
+     "sub_var": "itemid",
+     "unit_var": "unit",
+     "require_regex": {
+      "unit": "(?i)^\\s*dynes\\.sec\\.cm\\-5\\s*$"
+     },
+     "callback": "convert_unit(binary_op(`*`, 1), 'dyn.s/cm5')"
+    }
+   ]
+  }
+ },
+ "svv": {
+  "unit": "%",
+  "min": 0,
+  "max": 100,
+  "description": "Stroke volume variation",
+  "category": "cardiovascular",
+  "sources": {
+   "aumc": [
+    {
+     "ids": [
+      13154
+     ],
+     "table": "numericitems",
+     "sub_var": "itemid",
+     "unit_var": "unit",
+     "require_regex": {
+      "unit": "(?i)^\\s*Geen\\s*$"
+     },
+     "callback": "convert_unit(binary_op(`*`, 1), '%')"
+    }
+   ],
+   "miiv": [
+    {
+     "ids": [
+      228184
+     ],
+     "table": "chartevents",
+     "sub_var": "itemid",
+     "unit_var": "valueuom",
+     "require_regex": {
+      "valueuom": "(?i)^\\s*%\\s*$"
+     }
+    }
+   ]
+  }
  }
 }

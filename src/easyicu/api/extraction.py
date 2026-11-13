@@ -29,6 +29,7 @@ from ..source_bounds import (
     strip_private_ledgers,
 )
 from ..concept.catalog import (
+    HAEMO_ADVANCED_CONCEPTS,
     BOUNDS_AUDIT_CONCEPTS, CARDIAC_MARKERS_CONCEPTS, CONCEPT_GROUPS_INTERNAL,
     INFLAM_DETAIL_CONCEPTS, RENAL_DETAIL_CONCEPTS, RRT_DETAIL_CONCEPTS, WEIGHT_STRICT_CONCEPTS,
 )
@@ -135,6 +136,7 @@ EXTRACT_MODULES["weight_strict"] = list(WEIGHT_STRICT_CONCEPTS)
 EXTRACT_MODULES["cardiac_markers"] = list(CARDIAC_MARKERS_CONCEPTS)
 EXTRACT_MODULES["inflam_detail"] = list(INFLAM_DETAIL_CONCEPTS)
 EXTRACT_MODULES["renal_detail"] = list(RENAL_DETAIL_CONCEPTS)
+EXTRACT_MODULES['haemo_advanced'] = list(HAEMO_ADVANCED_CONCEPTS)
 EXTRACT_MODULES['rrt_detail'] = list(RRT_DETAIL_CONCEPTS)
 
 # Production cohort boundary used only to admit a calibrated one-shot fast

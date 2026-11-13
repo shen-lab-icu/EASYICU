@@ -746,7 +746,35 @@ RRT_DETAIL_METADATA = {
     'crrt_replacement_pre_flow_set': ('Prescribed prefilter CRRT replacement flow', '医嘱设置的CRRT前稀释置换液流量', 'mL/h'),
 }
 
+HAEMO_ADVANCED_CONCEPTS = (
+    'ci',
+    'ecmo_blood_flow',
+    'ecmo_fio2',
+    'ecmo_pump_speed',
+    'ecmo_sweep_flow',
+    'evlwi',
+    'gedvi',
+    'gef',
+    'ppv',
+    'svr',
+    'svv',
+)
+HAEMO_ADVANCED_METADATA = {
+    'ci': ('Cardiac index', '心脏指数', 'L/min/m2'),
+    'ecmo_blood_flow': ('ECMO blood flow', 'ECMO血流量', 'L/min'),
+    'ecmo_fio2': ('ECMO oxygenator oxygen concentration', 'ECMO氧合器氧浓度', '%'),
+    'ecmo_pump_speed': ('ECMO pump speed', 'ECMO泵转速', 'rpm'),
+    'ecmo_sweep_flow': ('ECMO oxygenator sweep gas flow', 'ECMO氧合器扫气流量', 'L/min'),
+    'evlwi': ('Extravascular lung water index', '血管外肺水指数', 'mL/kg'),
+    'gedvi': ('Global end-diastolic volume index', '全心舒张末期容积指数', 'mL/m2'),
+    'gef': ('Global ejection fraction', '全心射血分数', '%'),
+    'ppv': ('Pulse pressure variation', '脉压变异度', '%'),
+    'svr': ('Systemic vascular resistance, unindexed', '体循环血管阻力（非指数）', 'dyn.s/cm5'),
+    'svv': ('Stroke volume variation', '每搏量变异度', '%'),
+}
+
 HIDDEN_DICTIONARY_CONCEPTS = {
+    *HAEMO_ADVANCED_CONCEPTS,
     *RRT_DETAIL_CONCEPTS,
     *CARDIAC_MARKERS_CONCEPTS,
     *INFLAM_DETAIL_CONCEPTS,

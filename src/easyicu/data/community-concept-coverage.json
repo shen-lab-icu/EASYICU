@@ -1,5 +1,5 @@
 {
-  "concept_count": 360,
+  "concept_count": 371,
   "concepts": {
     "abdominal_circumference": {
       "category": "ventilator",
@@ -1130,6 +1130,28 @@
         }
       },
       "description": "total cholesterol (blood); AUMC mmol/L converted to mg/dL (×38.67)"
+    },
+    "ci": {
+      "category": "cardiovascular",
+      "databases": {
+        "jinhua": {
+          "reason": "no validated native field/event in this release",
+          "status": "unavailable"
+        },
+        "nwicu": {
+          "reason": "no validated native field/event in this release",
+          "status": "unavailable"
+        },
+        "zhejiang_eicu": {
+          "reason": "no validated native field/event in this release",
+          "status": "unavailable"
+        },
+        "zigong": {
+          "reason": "no validated native field/event in this release",
+          "status": "unavailable"
+        }
+      },
+      "description": "Cardiac index"
     },
     "cisatracurium": {
       "category": "medications",
@@ -2631,6 +2653,50 @@
       },
       "description": "Extracorporeal membrane oxygenation in use"
     },
+    "ecmo_blood_flow": {
+      "category": "ventilator",
+      "databases": {
+        "jinhua": {
+          "reason": "no validated native field/event in this release",
+          "status": "unavailable"
+        },
+        "nwicu": {
+          "reason": "no validated native field/event in this release",
+          "status": "unavailable"
+        },
+        "zhejiang_eicu": {
+          "reason": "no validated native field/event in this release",
+          "status": "unavailable"
+        },
+        "zigong": {
+          "reason": "no validated native field/event in this release",
+          "status": "unavailable"
+        }
+      },
+      "description": "ECMO blood flow"
+    },
+    "ecmo_fio2": {
+      "category": "ventilator",
+      "databases": {
+        "jinhua": {
+          "reason": "no validated native field/event in this release",
+          "status": "unavailable"
+        },
+        "nwicu": {
+          "reason": "no validated native field/event in this release",
+          "status": "unavailable"
+        },
+        "zhejiang_eicu": {
+          "reason": "no validated native field/event in this release",
+          "status": "unavailable"
+        },
+        "zigong": {
+          "reason": "no validated native field/event in this release",
+          "status": "unavailable"
+        }
+      },
+      "description": "ECMO oxygenator oxygen concentration"
+    },
     "ecmo_indication": {
       "category": "respiratory",
       "databases": {
@@ -2652,6 +2718,50 @@
         }
       },
       "description": "ECMO indication (respiratory/cardiovascular); MIMIC-IV 229268 charts VV/VA explicitly"
+    },
+    "ecmo_pump_speed": {
+      "category": "ventilator",
+      "databases": {
+        "jinhua": {
+          "reason": "no validated native field/event in this release",
+          "status": "unavailable"
+        },
+        "nwicu": {
+          "reason": "no validated native field/event in this release",
+          "status": "unavailable"
+        },
+        "zhejiang_eicu": {
+          "reason": "no validated native field/event in this release",
+          "status": "unavailable"
+        },
+        "zigong": {
+          "reason": "no validated native field/event in this release",
+          "status": "unavailable"
+        }
+      },
+      "description": "ECMO pump speed"
+    },
+    "ecmo_sweep_flow": {
+      "category": "ventilator",
+      "databases": {
+        "jinhua": {
+          "reason": "no validated native field/event in this release",
+          "status": "unavailable"
+        },
+        "nwicu": {
+          "reason": "no validated native field/event in this release",
+          "status": "unavailable"
+        },
+        "zhejiang_eicu": {
+          "reason": "no validated native field/event in this release",
+          "status": "unavailable"
+        },
+        "zigong": {
+          "reason": "no validated native field/event in this release",
+          "status": "unavailable"
+        }
+      },
+      "description": "ECMO oxygenator sweep gas flow"
     },
     "egcs": {
       "category": "neurological",
@@ -3029,6 +3139,28 @@
         }
       },
       "description": "invasive airway (endotracheal tube or tracheostomy)"
+    },
+    "evlwi": {
+      "category": "cardiovascular",
+      "databases": {
+        "jinhua": {
+          "reason": "no validated native field/event in this release",
+          "status": "unavailable"
+        },
+        "nwicu": {
+          "reason": "no validated native field/event in this release",
+          "status": "unavailable"
+        },
+        "zhejiang_eicu": {
+          "reason": "no validated native field/event in this release",
+          "status": "unavailable"
+        },
+        "zigong": {
+          "reason": "no validated native field/event in this release",
+          "status": "unavailable"
+        }
+      },
+      "description": "Extravascular lung water index"
     },
     "fena": {
       "category": "renal",
@@ -3575,6 +3707,50 @@
         }
       },
       "description": "Glasgow coma scale (non-sedated)"
+    },
+    "gedvi": {
+      "category": "cardiovascular",
+      "databases": {
+        "jinhua": {
+          "reason": "no validated native field/event in this release",
+          "status": "unavailable"
+        },
+        "nwicu": {
+          "reason": "no validated native field/event in this release",
+          "status": "unavailable"
+        },
+        "zhejiang_eicu": {
+          "reason": "no validated native field/event in this release",
+          "status": "unavailable"
+        },
+        "zigong": {
+          "reason": "no validated native field/event in this release",
+          "status": "unavailable"
+        }
+      },
+      "description": "Global end-diastolic volume index"
+    },
+    "gef": {
+      "category": "cardiovascular",
+      "databases": {
+        "jinhua": {
+          "reason": "no validated native field/event in this release",
+          "status": "unavailable"
+        },
+        "nwicu": {
+          "reason": "no validated native field/event in this release",
+          "status": "unavailable"
+        },
+        "zhejiang_eicu": {
+          "reason": "no validated native field/event in this release",
+          "status": "unavailable"
+        },
+        "zigong": {
+          "reason": "no validated native field/event in this release",
+          "status": "unavailable"
+        }
+      },
+      "description": "Global ejection fraction"
     },
     "ggt": {
       "category": "chemistry",
@@ -7189,6 +7365,28 @@
       },
       "description": "potassium-sparing diuretic administration (spironolactone, eplerenone, potassium canrenoate, amiloride, triamterene; fixed combinations included), any route"
     },
+    "ppv": {
+      "category": "cardiovascular",
+      "databases": {
+        "jinhua": {
+          "reason": "no validated native field/event in this release",
+          "status": "unavailable"
+        },
+        "nwicu": {
+          "reason": "no validated native field/event in this release",
+          "status": "unavailable"
+        },
+        "zhejiang_eicu": {
+          "reason": "no validated native field/event in this release",
+          "status": "unavailable"
+        },
+        "zigong": {
+          "reason": "no validated native field/event in this release",
+          "status": "unavailable"
+        }
+      },
+      "description": "Pulse pressure variation"
+    },
     "prealbumin": {
       "category": "chemistry",
       "databases": {
@@ -9458,6 +9656,50 @@
       },
       "description": "mixed venous oxygen saturation (SvO2)"
     },
+    "svr": {
+      "category": "cardiovascular",
+      "databases": {
+        "jinhua": {
+          "reason": "no validated native field/event in this release",
+          "status": "unavailable"
+        },
+        "nwicu": {
+          "reason": "no validated native field/event in this release",
+          "status": "unavailable"
+        },
+        "zhejiang_eicu": {
+          "reason": "no validated native field/event in this release",
+          "status": "unavailable"
+        },
+        "zigong": {
+          "reason": "no validated native field/event in this release",
+          "status": "unavailable"
+        }
+      },
+      "description": "Systemic vascular resistance, unindexed"
+    },
+    "svv": {
+      "category": "cardiovascular",
+      "databases": {
+        "jinhua": {
+          "reason": "no validated native field/event in this release",
+          "status": "unavailable"
+        },
+        "nwicu": {
+          "reason": "no validated native field/event in this release",
+          "status": "unavailable"
+        },
+        "zhejiang_eicu": {
+          "reason": "no validated native field/event in this release",
+          "status": "unavailable"
+        },
+        "zigong": {
+          "reason": "no validated native field/event in this release",
+          "status": "unavailable"
+        }
+      },
+      "description": "Stroke volume variation"
+    },
     "t4": {
       "category": "chemistry",
       "databases": {
@@ -11298,25 +11540,25 @@
       "derived": 19,
       "direct": 135,
       "partial": 34,
-      "unavailable": 172
+      "unavailable": 183
     },
     "nwicu": {
       "derived": 19,
       "direct": 137,
       "partial": 37,
-      "unavailable": 167
+      "unavailable": 178
     },
     "zhejiang_eicu": {
       "derived": 39,
       "direct": 128,
       "partial": 25,
-      "unavailable": 168
+      "unavailable": 179
     },
     "zigong": {
       "derived": 27,
       "direct": 125,
       "partial": 41,
-      "unavailable": 167
+      "unavailable": 178
     }
   },
   "databases": [
