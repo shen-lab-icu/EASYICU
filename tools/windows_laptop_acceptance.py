@@ -50,10 +50,15 @@ def failure_receipt(exc: Exception) -> dict[str, str]:
     code = getattr(exc, "reason_code", None)
     if not code and isinstance(detail, dict):
         code = detail.get("reason_code") or detail.get("error")
-    code = code or getattr(exc, "code", None)
+    code = code or getattr(exc, "code", None) or getattr(exc, "reason", None)
     if not isinstance(code, str) or not re.fullmatch(r"[a-z][a-z0-9_]{0,100}", code):
         code = "acceptance_phase_failed"
-    return {"reason_code": code, "exception_type": type(exc).__name__}
+    receipt = {"reason_code": code, "exception_type": type(exc).__name__}
+    # Storage refusals name the source table (a schema name, never data).
+    table = getattr(exc, "table", None)
+    if isinstance(table, str) and re.fullmatch(r"[A-Za-z][A-Za-z0-9_]{0,63}", table):
+        receipt["table"] = table
+    return receipt
 
 
 def demo_cache_key(sources: Iterable[Any]) -> str:
@@ -623,7 +628,8 @@ def write_reports(report: dict, output_dir: Path) -> None:
             if research.get("provider_kind") == "replay":
                 lines.append(f"\nProvider: replay; cassette: `{research['cassette_sha256']}`. Acceptance only; not reportable or publishable as an ordinary study.")
     for failure in report.get("failures", []):
-        lines.append(f"\nFailure: `{failure['reason_code']}` ({failure['exception_type']}).")
+        table = f", table `{failure['table']}`" if failure.get("table") else ""
+        lines.append(f"\nFailure: `{failure['reason_code']}` ({failure['exception_type']}{table}).")
     (output_dir / "summary.md").write_text("\n".join(lines) + "\n", encoding="utf-8")
 
 

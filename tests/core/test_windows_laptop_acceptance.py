@@ -707,3 +707,14 @@ finally:
         process.stdin.close()
         process.stdout.close()
 
+
+
+def test_storage_refusal_receipt_keeps_its_reason_and_table_only():
+    from easyicu.storage_layout import TableScanError
+
+    exc = TableScanError("table_scan_mixed_roots", "chartevents", "/private/data/patient 987: 2 directories")
+    assert acceptance.failure_receipt(exc) == {
+        "reason_code": "table_scan_mixed_roots", "exception_type": "TableScanError", "table": "chartevents",
+    }
+    unsafe = TableScanError("table_scan_mixed_roots", "/private/data 987", "detail")
+    assert "table" not in acceptance.failure_receipt(unsafe)

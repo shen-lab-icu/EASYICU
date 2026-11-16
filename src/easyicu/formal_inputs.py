@@ -96,7 +96,7 @@ def _relative(base: Path, relative: Any, manifest: Path) -> Path:
     if not isinstance(relative, str):
         raise InputSnapshotError("input_manifest_malformed", "a listed path is not a string",
                                  path=str(manifest))
-    parts = PurePosixPath(relative)
+    parts = PurePosixPath(relative.replace("\\", "/"))  # manifests written on Windows
     if parts.is_absolute() or not parts.parts or ".." in parts.parts:
         raise InputSnapshotError("input_manifest_malformed", "a listed path leaves its root",
                                  path=str(manifest), relative=relative)

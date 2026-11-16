@@ -3943,7 +3943,8 @@ class DataConverter:
         record: Dict[str, Any] = {
             "path": str(path),
             "relative_path": (
-                str(path.relative_to(self.data_path))
+                # Always "/" so the manifest reads the same on every OS.
+                path.relative_to(self.data_path).as_posix()
                 if exists and _is_relative_to(path, self.data_path)
                 else str(path)
             ),
