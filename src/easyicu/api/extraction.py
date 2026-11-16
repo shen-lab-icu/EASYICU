@@ -29,18 +29,8 @@ from ..source_bounds import (
     strip_private_ledgers,
 )
 from ..concept.catalog import (
-    GAS_SPECIMEN_CONCEPTS,
-    VIS_INPUT_CONCEPTS,
-    DIURETIC_NEPHROTOXIN_CONCEPTS,
-    FLUID_IO_CONCEPTS,
-    SEDATION_ANALGESIA_CONCEPTS,
-    VENT_MECHANICS_CONCEPTS,
-    HAEMO_ADVANCED_CONCEPTS,
-    BOUNDS_AUDIT_CONCEPTS, CARDIAC_MARKERS_CONCEPTS, CONCEPT_GROUPS_INTERNAL,
-    INFLAM_DETAIL_CONCEPTS, RENAL_DETAIL_CONCEPTS, RRT_DETAIL_CONCEPTS, WEIGHT_STRICT_CONCEPTS,
-    SUBHOUR_SIGNAL_CONCEPTS,
-    VENT_NATIVE_CONCEPTS,
-    HAEMO_NATIVE_CONCEPTS,
+    CONCEPT_GROUPS_INTERNAL,
+    OPT_IN_MODULE_CONCEPTS,
 )
 from ..concept.minute_resolution import (
     MINUTE_RESOLUTION_KWARG,
@@ -137,37 +127,14 @@ EXTRACT_MODULE_ORDER: List[str] = [
     if module not in _PREFERRED_EXTRACT_MODULE_ORDER
 ]
 
-# Internal opt-in only: landmark source fields may be read only when the
-# calling workflow explicitly includes this module in its authorized scope.
-# Keeping it out of EXTRACT_MODULE_ORDER preserves the default full export.
-EXTRACT_MODULES["sic_case_landmark"] = [
-    "care_unit_to_case_closure_days", "death_time_during_case_hours", "death_during_case",
-]
-# Audit values are available only when this module is explicitly requested.
-# Raw columns use the usual hourly median; QC is max over source observations.
-EXTRACT_MODULES["bounds_audit"] = list(BOUNDS_AUDIT_CONCEPTS)
-# S740: leakage-free stay weight fields, exported only when explicitly requested.
-EXTRACT_MODULES["weight_strict"] = list(WEIGHT_STRICT_CONCEPTS)
-# S853: map_invasive/cvp/peep_set/peep_total/hr/fio2_chart/norepi_equiv at a one-minute grid (SICdb from rawdata),
-# exported only when explicitly requested.
-EXTRACT_MODULES["subhour_signals"] = list(SUBHOUR_SIGNAL_CONCEPTS)
-# S2RECR: plateau/tidal volume/PEEP/compliance/pO2/FiO2 at a one-minute grid, explicitly requested only.
-EXTRACT_MODULES["vent_native"] = list(VENT_NATIVE_CONCEPTS)
-# S2HN: pressures (combined, arterial, cuff), HR, CVP, CO/CI, SVV/PPV and NEE at a one-minute grid, explicitly requested only.
-EXTRACT_MODULES["haemo_native"] = list(HAEMO_NATIVE_CONCEPTS)
-EXTRACT_MODULES["fluid_io"] = list(FLUID_IO_CONCEPTS)
+# Explicitly selected modules (owner: concept.catalog.OPT_IN_MODULE_CONCEPTS), registered
+# after EXTRACT_MODULE_ORDER is fixed so the default full export never includes them:
+# sic_case_landmark (authorized landmark scope), bounds_audit (raw/QC receipts),
+# weight_strict (S740), subhour_signals/vent_native/haemo_native (one-minute grid,
+# S853/S2RECR/S2HN) and the thesis batch-1 measures (S732).
+EXTRACT_MODULES.update({module: list(concepts) for module, concepts in OPT_IN_MODULE_CONCEPTS.items()})
 # Native event properties have their own typed schema, outside scalar concepts.
 EXTRACT_MODULES.update({module: [] for module in NATIVE_EVENT_MODULES})
-EXTRACT_MODULES["cardiac_markers"] = list(CARDIAC_MARKERS_CONCEPTS)
-EXTRACT_MODULES["inflam_detail"] = list(INFLAM_DETAIL_CONCEPTS)
-EXTRACT_MODULES["renal_detail"] = list(RENAL_DETAIL_CONCEPTS)
-EXTRACT_MODULES['gas_specimen'] = list(GAS_SPECIMEN_CONCEPTS)
-EXTRACT_MODULES['vis_inputs'] = list(VIS_INPUT_CONCEPTS)
-EXTRACT_MODULES['diuretic_nephrotoxin'] = list(DIURETIC_NEPHROTOXIN_CONCEPTS)
-EXTRACT_MODULES['sedation_analgesia'] = list(SEDATION_ANALGESIA_CONCEPTS)
-EXTRACT_MODULES['vent_mechanics'] = list(VENT_MECHANICS_CONCEPTS)
-EXTRACT_MODULES['haemo_advanced'] = list(HAEMO_ADVANCED_CONCEPTS)
-EXTRACT_MODULES['rrt_detail'] = list(RRT_DETAIL_CONCEPTS)
 
 # Production cohort boundary used only to admit a calibrated one-shot fast
 # path on sufficiently large-memory hosts.  Crossing it always uses streaming.

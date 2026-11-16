@@ -1324,3 +1324,38 @@ PHYSIOLOGIC_RANGES = {
     'alb': (0.5, 8.0),
     'bun': (1.0, 250.0),
 }
+
+
+# Explicitly selected export modules -> their scalar concepts (owner of the
+# opt-in roster; api.extraction registers these modules from here, after the
+# default EXTRACT_MODULE_ORDER is fixed, so none enters a default export).
+OPT_IN_MODULE_CONCEPTS = {
+    'sic_case_landmark': (
+        'care_unit_to_case_closure_days', 'death_time_during_case_hours', 'death_during_case',
+    ),
+    'bounds_audit': BOUNDS_AUDIT_CONCEPTS,
+    'weight_strict': WEIGHT_STRICT_CONCEPTS,
+    'subhour_signals': SUBHOUR_SIGNAL_CONCEPTS,
+    'vent_native': VENT_NATIVE_CONCEPTS,
+    'haemo_native': HAEMO_NATIVE_CONCEPTS,
+    'fluid_io': FLUID_IO_CONCEPTS,
+    'cardiac_markers': CARDIAC_MARKERS_CONCEPTS,
+    'inflam_detail': INFLAM_DETAIL_CONCEPTS,
+    'renal_detail': RENAL_DETAIL_CONCEPTS,
+    'gas_specimen': GAS_SPECIMEN_CONCEPTS,
+    'vis_inputs': VIS_INPUT_CONCEPTS,
+    'diuretic_nephrotoxin': DIURETIC_NEPHROTOXIN_CONCEPTS,
+    'sedation_analgesia': SEDATION_ANALGESIA_CONCEPTS,
+    'vent_mechanics': VENT_MECHANICS_CONCEPTS,
+    'haemo_advanced': HAEMO_ADVANCED_CONCEPTS,
+    'rrt_detail': RRT_DETAIL_CONCEPTS,
+}
+
+# Concepts that only an explicitly selected module exports. Without sealed
+# columns the Planner lists what a default export carries, so these stay off
+# that fallback menu; an export that carries them still lists them.
+OPT_IN_ONLY_CONCEPTS = frozenset(
+    {concept for concepts in OPT_IN_MODULE_CONCEPTS.values() for concept in concepts}
+    - {concept for concepts in CONCEPT_GROUPS_INTERNAL.values() for concept in concepts}
+)
+

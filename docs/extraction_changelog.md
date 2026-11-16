@@ -7,6 +7,19 @@ answers is in brackets.
 lead-r13 (0.1.0) is validated on SICdb 1.0.8, the default release, and
 remains compatible with SICdb 1.0.6 (the release is detected from the schema).
 
+## 2026-11-16 — thirteenth dictionary reseal [S732]
+
+**What changed.** Default values do not move. Under the user's consent ("同意重新封存，并继续 TB2")
+`tools/reseal_concept_dict.py` moved `concept-dict.LOCK.json` and the current research profiles to AUDIT13
+(SICdb overlay v15); AUDIT12 stays registered as history. The sealed dictionary (408 concepts, was 317) now
+includes the entries below that waited for this reseal: S907 urine sodium/creatinine for AUMCdb and SICdb with
+FENa/FEUrea, thesis batch 1 (S732, TB1), and the opt-in one-minute modules `subhour_signals` (S853),
+`vent_native` (S2RECR) and `haemo_native` (S2HN, with the arterial-line/cuff `sbp_*`/`dbp_*` channels), plus
+the `fluid_events` module and minute-grid AUMC/MIIV interval rates (S732FE). Opt-in modules have one owner,
+`concept.catalog.OPT_IN_MODULE_CONCEPTS`; without sealed columns the Planner's concept menu lists what a
+default export carries and leaves out concepts that only an opt-in module exports (an export that carries
+them still lists them).
+
 ## Unreleased — native fluid administrations and scoped interval rates [S732FE]
 
 Explicit minute loads now expand AUMC `aumc_rate_kg` and MetaVision

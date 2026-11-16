@@ -144,11 +144,15 @@ def _format_concept_id_allowlist(columns: Sequence[str] = ()) -> str:
         # than an empty menu, which would make the cohort unwritable. The
         # binder still refuses an unbound predicate downstream, so this is
         # permissive in the prompt only.
-        else "in the concept dictionary (this run's sealed columns were not "
-        "available to narrow them)"
+        else "a default export carries, from the concept dictionary (this "
+        "run's sealed columns were not available to narrow them)"
     )
     if not concept_ids:
-        concept_ids = sorted(known_concept_ids(include_audit=False))
+        # Without sealed columns, list what a default export carries: concepts
+        # that only an explicitly selected module exports cannot bind here.
+        from easyicu.concept.catalog import OPT_IN_ONLY_CONCEPTS
+
+        concept_ids = sorted(known_concept_ids(include_audit=False) - OPT_IN_ONLY_CONCEPTS)
     if not concept_ids:
         return (
             "ALLOWED concept_ids — no concept dictionary entries were loaded. "
