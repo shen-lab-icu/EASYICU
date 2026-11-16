@@ -1344,28 +1344,85 @@ class ICUDataSource:
                             
                             # 过滤 NaN keys (merge_asof 要求无空值)
                             stay_info = stay_info.dropna(subset=['outtime'])
-                            unique_data = unique_data.dropna(subset=[time_col])
-                            
+                            # A table indexed by a date but carrying a precise
+                            # time (microbiologyevents: chartdate/charttime)
+                            # rolls on the precise time; a row without it rolls
+                            # on its date, as ricu does, instead of being dropped.
+                            roll_col = '_stay_roll_time'
+                            precise_and_dated = bool(
+                                index_column
+                                and index_column != time_col
+                                and index_column in unique_data.columns
+                            )
+                            unique_data[roll_col] = unique_data[time_col]
+                            if precise_and_dated:
+                                unique_data[roll_col] = unique_data[roll_col].fillna(
+                                    _normalize_datetime_ns(unique_data[index_column])
+                                )
+                            unique_data = unique_data.dropna(subset=[roll_col])
+
                             if unique_data.empty or stay_info.empty:
                                 frame = single_stay_data
                             else:
                                 # 排序: merge_asof 要求左右都按 key 排序
-                                unique_data = unique_data.sort_values(time_col)
-                                
+                                unique_data = unique_data.sort_values(roll_col)
+
                                 merge_cols = ['hadm_id', target_id_col, 'outtime']
                                 if 'intime' in stay_info.columns:
                                     merge_cols.append('intime')
                                 stay_lookup = stay_info[merge_cols].drop_duplicates().sort_values('outtime')
-                                
+
                                 merged = pd.merge_asof(
                                     unique_data,
                                     stay_lookup,
-                                    left_on=time_col,
+                                    left_on=roll_col,
                                     right_on='outtime',
                                     by='hadm_id',
                                     direction='forward',
                                     allow_exact_matches=True,
                                 )
+
+                                # ricu rolls such a table on its date, so a row a
+                                # few hours after one stay's discharge stays with
+                                # that stay. The precise roll hands it to the next
+                                # stay, whose episode window may exclude it; keep
+                                # it with the earlier stay when that stay's
+                                # post-discharge allowance covers it and the next
+                                # stay's pre-admission window does not.
+                                if precise_and_dated and 'intime' in merged.columns:
+                                    from .utils.time_units import (
+                                        ICU_TIME_POST_DISCHARGE_HOURS,
+                                        ICU_TIME_PRE_ADMISSION_HOURS,
+                                    )
+                                    previous = pd.merge_asof(
+                                        merged[['hadm_id', roll_col]],
+                                        stay_lookup[['hadm_id', target_id_col, 'outtime']].rename(
+                                            columns={target_id_col: '_prev_stay', 'outtime': '_prev_out'}
+                                        ),
+                                        left_on=roll_col,
+                                        right_on='_prev_out',
+                                        by='hadm_id',
+                                        direction='backward',
+                                        allow_exact_matches=False,
+                                    )
+                                    previous.index = merged.index
+                                    keep_previous = (
+                                        merged[time_col].notna()
+                                        & merged[target_id_col].notna()
+                                        & previous['_prev_stay'].notna()
+                                        & (
+                                            merged[roll_col] - previous['_prev_out']
+                                            <= pd.Timedelta(hours=ICU_TIME_POST_DISCHARGE_HOURS)
+                                        )
+                                        & (
+                                            merged[roll_col]
+                                            < merged['intime'] - pd.Timedelta(hours=ICU_TIME_PRE_ADMISSION_HOURS)
+                                        )
+                                    )
+                                    if keep_previous.any():
+                                        merged.loc[keep_previous, target_id_col] = previous.loc[keep_previous, '_prev_stay']
+                                        merged.loc[keep_previous, 'outtime'] = previous.loc[keep_previous, '_prev_out']
+                                merged = merged.drop(columns=[roll_col])
                                 
                                 # rollends = TRUE: 未匹配行分配给每个 hadm_id 的最后一个 stay
                                 unmatched = merged[target_id_col].isna()
