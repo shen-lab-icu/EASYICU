@@ -77,6 +77,8 @@ from .providers.mocks import MockLLMClient
 from .providers.factory import authorized_complete
 from .providers.protocol import LLMClient, LLMMessage
 from .schema import HypothesisBlueprint, ResearchContext, VariableRole
+from ..utils.address_fallback import install as install_address_fallback
+from .literature_deadline import LITERATURE_STAGE_SECONDS, request_timeout, stage_deadline
 
 logger = logging.getLogger(__name__)
 
@@ -129,6 +131,12 @@ def _describe_transport_failure(exc: BaseException) -> str:
         return "the request timed out"
     return f"{type(exc).__name__}: {exc}"
 
+
+
+def _bind_stage_deadline(client: Any, deadline: float) -> None:
+    """Give a live client the stage deadline; stubs without the attribute are left alone."""
+    if hasattr(client, "deadline"):
+        client.deadline = deadline
 
 
 def _record_transport_failures(
@@ -795,11 +803,14 @@ class PubMedLiteratureClient:
         timeout: float = 15.0,
         base_url: str = _PUBMED_BASE,
     ) -> None:
+        install_address_fallback()
         self.email = email
         self.api_key = api_key
         self.tool = tool
         self.timeout = float(timeout)
         self.base_url = base_url.rstrip("/")
+        # Stage deadline (monotonic seconds) set by LiteratureAgent.run.
+        self.deadline: Optional[float] = None
         # Reasons this client returned nothing, for the search that is running
         # now. Read by LiteratureAgent so provenance can separate "the source
         # returned nothing" from "the source never answered".
@@ -829,8 +840,9 @@ class PubMedLiteratureClient:
     def _http_get(self, path: str, params: Dict[str, str]) -> Optional[bytes]:
         url = f"{self.base_url}/{path}?{urllib.parse.urlencode(params)}"
         try:
+            request_timeout(self.deadline, self.timeout)
             _pace_pubmed_request()
-            with urllib.request.urlopen(url, timeout=self.timeout) as resp:
+            with urllib.request.urlopen(url, timeout=request_timeout(self.deadline, self.timeout)) as resp:
                 return resp.read()
         except Exception as exc:
             self.record_transport_failure(path, exc)
@@ -3133,12 +3145,14 @@ class TavilyLiteratureClient:
         include_domains: Optional[Sequence[str]] = None,
         exclude_domains: Optional[Sequence[str]] = None,
     ) -> None:
+        install_address_fallback()
         self.api_key = api_key or os.environ.get("TAVILY_API_KEY")
         self.timeout = float(timeout)
         self.base_url = base_url.rstrip("/")
         self.search_depth = search_depth
         self.include_domains = list(include_domains or [])
         self.exclude_domains = list(exclude_domains or [])
+        self.deadline: Optional[float] = None
         self.transport_failures: List[str] = []
 
     def search(self, query: str, *, max_results: int = 5) -> List[CitationRecord]:
@@ -3193,7 +3207,7 @@ class TavilyLiteratureClient:
             method="POST",
         )
         try:
-            with urllib.request.urlopen(req, timeout=self.timeout) as resp:
+            with urllib.request.urlopen(req, timeout=request_timeout(self.deadline, self.timeout)) as resp:
                 return resp.read()
         except Exception as exc:
             self.record_transport_failure(path, exc)
@@ -3321,8 +3335,10 @@ class LiteratureAgent:
         enable_tavily: bool = False,
         tavily_client: Optional["TavilyLiteratureClient"] = None,
         tavily_retmax: int = 5,
+        stage_seconds: float = LITERATURE_STAGE_SECONDS,
     ) -> None:
         self.llm = llm
+        self.stage_seconds = float(stage_seconds)
         self.bound_seed = bound_seed
         self.enable_pubmed = bool(enable_pubmed)
         self.pubmed_client = pubmed_client
@@ -3340,6 +3356,7 @@ class LiteratureAgent:
 
     def run(self, context: ResearchContext) -> LiteratureBundle:
         baseline = _curated_for(context)
+        deadline = stage_deadline(self.stage_seconds)
         if self.enable_pubmed or self.enable_openalex or self.enable_tavily or self.bound_seed is not None:
             try:
                 # Resolve all query axes before any source or bound-seed screen.
@@ -3522,6 +3539,7 @@ class LiteratureAgent:
             live_bibliographic_retrieval_attempted = True
             sources_enabled.append("pubmed")
             client = self.pubmed_client or PubMedLiteratureClient()
+            _bind_stage_deadline(client, deadline)
             if callable(getattr(client, "reset_transport_failures", None)):
                 client.reset_transport_failures()
             fallback_query = build_pubmed_protocol_query_for_context(context)
@@ -3586,6 +3604,7 @@ class LiteratureAgent:
             live_bibliographic_retrieval_attempted = True
             sources_enabled.append("openalex")
             client = self.openalex_client or OpenAlexLiteratureClient(pace=_pace_pubmed_request)
+            _bind_stage_deadline(client, deadline)
             client.reset_transport_failures()
             try:
                 result = client.search_review(
@@ -3633,6 +3652,7 @@ class LiteratureAgent:
             live_bibliographic_retrieval_attempted = True
             sources_enabled.append("tavily")
             client = self.tavily_client or TavilyLiteratureClient()
+            _bind_stage_deadline(client, deadline)
             if callable(getattr(client, "reset_transport_failures", None)):
                 client.reset_transport_failures()
             search_queries["tavily"] = [build_tavily_query_for_context(context)]

@@ -21,6 +21,8 @@ from pydantic import BaseModel, ConfigDict, Field
 
 from .literature_excerpt import select_source_backed_excerpt
 from .planning.literature_contract import ImpactProxies, RecordReview, ReviewPolicy
+from ..utils.address_fallback import install as install_address_fallback
+from .literature_deadline import request_timeout
 
 
 PUBMED_SNAPSHOT_SHA256 = "3fb8330bbe3a874d9f52db3cec04f1712c4d37eebbd944c6b385b97cd05ddd52"
@@ -291,8 +293,10 @@ class OpenAlexLiteratureClient:
     name = "openalex"
 
     def __init__(self, *, timeout: float = 15.0, pace: Callable[[], None] = _pace_request):
+        install_address_fallback()
         self.timeout = timeout
         self.pace = pace
+        self.deadline: float | None = None  # Stage deadline set by LiteratureAgent.run.
         self.transport_failures: list[str] = []
         self._venues: dict[str, dict[str, Any]] = {}
 
@@ -302,9 +306,10 @@ class OpenAlexLiteratureClient:
 
     def _get_json(self, path: str, params: dict[str, str]) -> dict[str, Any] | None:
         try:
+            request_timeout(self.deadline, self.timeout)
             self.pace()
             url = "https://api.openalex.org/" + path + "?" + urllib.parse.urlencode(params)
-            with urllib.request.urlopen(url, timeout=self.timeout) as response:
+            with urllib.request.urlopen(url, timeout=request_timeout(self.deadline, self.timeout)) as response:
                 value = json.loads(response.read())
             if not isinstance(value, dict):
                 raise ValueError("expected a JSON object")
