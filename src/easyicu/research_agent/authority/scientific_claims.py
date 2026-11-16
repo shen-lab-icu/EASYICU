@@ -594,8 +594,10 @@ class ScientificClaim(ScientificClaimDraft):
                 else None
             )
             if counts is not None:
+                # Name the source statistic so numeric binding distinguishes
+                # this frequency from the same outcome's missingness fraction.
                 return (
-                    f"The observed frequency of {outcome} was "
+                    f"The observed frequency (absolute risk) of {outcome} was "
                     f"{_reader_percent(float(counts['percent']))}% "
                     f"({int(counts['events']):,} of {int(counts['n']):,} records) in "
                     f"{_reader_population(self.population)}; this was a "

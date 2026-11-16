@@ -5,7 +5,10 @@ import json
 
 import pytest
 
-from easyicu.research_agent.authority.evidence_store import EvidenceStore
+from easyicu.research_agent.authority.evidence_store import (
+    EvidenceEnforcementError,
+    EvidenceStore,
+)
 from easyicu.research_agent.authority.scientific_claims import (
     derive_scientific_claim_drafts,
     scientific_claim_compilation_requested,
@@ -133,7 +136,7 @@ def test_frequency_is_sealed_idempotent_and_usable_by_strict_writer(tmp_path):
     (claim,) = store.scientific_claims()
     assert len(store.scientific_claims()) == 1
     assert claim.render_reader_text() == (
-        "The observed frequency of death was 12.50% (18 of 144 records) in the "
+        "The observed frequency (absolute risk) of death was 12.50% (18 of 144 records) in the "
         "primary model's complete-case records; this was a descriptive, "
         "unadjusted, noncausal frequency."
     )
@@ -168,3 +171,112 @@ def test_generated_summary_cannot_register_a_host_scientific_claim(tmp_path):
         step_id="risk", evidence_id=record.evidence_id, summary=summary
     )
     assert store.scientific_claims() == []
+
+
+@pytest.mark.parametrize("primary", [False, True])
+@pytest.mark.parametrize("outcome", ["death", "icu_readmission", "renal_replacement"])
+def test_counts_only_frequency_survives_numeric_filter_with_outcome_missingness(
+    tmp_path, primary, outcome,
+):
+    from easyicu.research_agent.reporting.manuscript_post import (
+        bind_numeric_values,
+        drop_untraceable_numeric_sentences,
+    )
+    from easyicu.research_agent.reporting.write_phase import (
+        _result_claim_sufficiency_finding,
+    )
+
+    summary = _summary(primary=primary, outcome=outcome)
+    for field in ("n_total", "outcome_nonmissing_n", "outcome_missing_n"):
+        summary[field] *= 10
+    overall = summary["reportable_descriptive_results"]["overall_outcome"]
+    overall.update(n=1440, event_n=180)
+    if primary:
+        summary["population_binding"].update(
+            source_cohort_n=6000, population_n=1440, event_n=180,
+        )
+    store = EvidenceStore(tmp_path, enforcement_mode="strict")
+    source = store.register_json(
+        kind="statistic", description="Synthetic counts-only outcome summary",
+        payload=summary, filename="summary.json", evidence_id="frequency_summary",
+        produced_by_step="frequency", generation_mode="deterministic_standard",
+    )
+    store.register_step_summary_numerics(
+        step_id="frequency", evidence_id=source.evidence_id, summary=summary,
+    )
+    # Missingness of the same outcome is another proportion in the live
+    # registry; an outcome label alone cannot identify the risk statistic.
+    context = {"variable_groups": {
+        outcome: {"missingness": {"fraction_missing": 0.1}},
+        outcome + "_time_hours": {"missingness": {"fraction_missing": 0.2}},
+    }}
+    store.register_json(
+        kind="log", description="Synthetic research context", payload=context,
+        filename="context.json", evidence_id="research_context", producer="pipeline",
+        generation_mode="system",
+    )
+    store.register_step_summary_numerics(
+        step_id="research_context", evidence_id="research_context", summary=context,
+    )
+    records = [{
+        "step_id": "frequency", "status": "ok", "step_summary": summary,
+        "step_summary_evidence_id": source.evidence_id,
+        "evidence_ids": [source.evidence_id],
+    }]
+    (claim,) = store.authoritative_scientific_claims(records)
+    assert claim.point_estimate is None
+    scaffold = (
+        f"## Abstract\n\n**Results:** {claim.placeholder}\n\n"
+        f"## Introduction\n\n{claim.placeholder}\n\n"
+        f"## Results\n\n### Secondary analyses\n\n{claim.placeholder}\n\n"
+        f"## Discussion\n\n{claim.placeholder}\n\n"
+        f"## Conclusion\n\n{claim.placeholder}\n"
+    )
+    scaffold, dropped = store.enforce_evidence_bound_scaffold(
+        scaffold, per_step_records=records,
+    )
+    assert dropped == []
+    bound = store.bind_manuscript(scaffold, per_step_records=records)
+    kept, removed = drop_untraceable_numeric_sentences(
+        bound, evidence=store, per_step_records=records,
+    )
+
+    assert removed == []
+    assert kept == bound
+    assert bound.count(claim.render_reader_text()) == 3
+    assert bound.count(claim.render_reader_text(include_estimate=False)) == 2
+    _, bindings, untraced = bind_numeric_values(
+        kept, evidence=store, per_step_records=records,
+    )
+    assert untraced == []
+    assert {c.canonical for c in bindings.values()} == {12.5, 180, 1440}
+    assert all(c.evidence_id == source.evidence_id for c in bindings.values())
+    sufficiency_args = dict(
+        evidence=store, per_step_records=records, primary_result_facts=(), claim_labels={},
+    )
+    assert _result_claim_sufficiency_finding(kept, **sufficiency_args) is None
+    without_result = kept.replace("### Secondary analyses\n\n" + claim.render_reader_text(),
+                                  "### Secondary analyses\n\n")
+    assert _result_claim_sufficiency_finding(without_result, **sufficiency_args) is not None
+    with pytest.raises(EvidenceEnforcementError):
+        bind_numeric_values(
+            kept.replace("12.50%", "31.25%"), evidence=store, per_step_records=records,
+        )
+
+
+@pytest.mark.parametrize("operation", ["enforce_evidence_bound_scaffold", "bind_manuscript"])
+def test_unknown_counts_only_claim_token_still_fails_closed(tmp_path, operation):
+    summary = _summary()
+    store = EvidenceStore(tmp_path, enforcement_mode="strict")
+    source = store.register_json(
+        kind="statistic", description="Synthetic known frequency", payload=summary,
+        filename="summary.json", evidence_id="frequency_summary",
+        produced_by_step="frequency", generation_mode="deterministic_standard",
+    )
+    store.register_step_summary_numerics(
+        step_id="frequency", evidence_id=source.evidence_id, summary=summary,
+    )
+    scaffold = "## Results\n\n### Secondary analyses\n\n{claim:unknown.outcome_frequency}\n"
+
+    with pytest.raises(EvidenceEnforcementError):
+        getattr(store, operation)(scaffold)

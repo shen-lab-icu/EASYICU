@@ -221,7 +221,7 @@ def test_a_counts_only_frequency_reads_as_a_frequency() -> None:
     )
 
     assert claim.render_reader_text() == (
-        "The observed frequency of icu readmission was 12.50% (18 of 144 records) "
+        "The observed frequency (absolute risk) of icu readmission was 12.50% (18 of 144 records) "
         "in the primary model's complete-case records; this was a descriptive, "
         "unadjusted, noncausal frequency."
     )
