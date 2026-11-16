@@ -1504,7 +1504,7 @@ def _conversion_index(base: Path) -> dict[str, tuple[str, frozenset, int | None]
             name = str(entry.get("table"))
             outputs, rows = tables.setdefault(name, (set(), 0))
             outputs.update(
-                PurePosixPath(o["relative_path"]).as_posix()
+                _manifest_relative(o["relative_path"])
                 for o in entry.get("outputs") or ()
                 if str(o.get("relative_path", "")).lower().endswith((".parquet", ".pq"))
             )
@@ -1518,6 +1518,12 @@ def _conversion_index(base: Path) -> dict[str, tuple[str, frozenset, int | None]
                 index[relative] = (name, frozen, rows)
         _CONVERSION_INDEX[key] = index
     return index
+
+
+def _manifest_relative(relative: str) -> str:
+    """A conversion-manifest path in "/" form; manifests written on Windows
+    before the converter emitted POSIX paths carry backslashes."""
+    return PurePosixPath(str(relative).replace("\\", "/")).as_posix()
 
 
 def _relative(base: Path, path: Path) -> str | None:
@@ -2428,7 +2434,7 @@ def listed_csv_input(base, table: str, path) -> bool:
         relative = source.get("relative_path") if isinstance(source, dict) else None
         if str(entry.get("table")).lower() != table.lower() or not isinstance(relative, str):
             continue
-        parts = PurePosixPath(relative)
+        parts = PurePosixPath(_manifest_relative(relative))
         if parts.is_absolute() or ".." in parts.parts or not parts.parts:
             continue
         listed_path = Path(base).joinpath(*parts.parts)
