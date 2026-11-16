@@ -235,6 +235,23 @@ export function quickAnswerOfferReply(context, language) {
     : "";
 }
 
+// Only the host's own failed source transition can offer this retry. No
+// scientific tool may have been attempted; a later turn supersedes it.
+export function quickAnswerOfferRetryAvailable(entries) {
+  const conversation = (Array.isArray(entries) ? entries : [])
+    .filter(entry => entry?.type === "message" || entry?.type === "custom_message");
+  const failed = conversation.at(-1);
+  const offer = conversation.at(-2);
+  return failed?.type === "message" && failed.message?.role === "assistant"
+    && failed.message.stopReason === "error"
+    && !(failed.message.content || []).some(part => part.type === "toolCall")
+    && offer?.type === "custom_message" && offer.customType === "easyicu_host_transition"
+    && offer.details?.intent === "advance_after_data_source_confirmation"
+    && typeof offer.content === "string"
+    && offer.content.includes(DATA_SOURCE_CONFIRMED_MARKER)
+    && offer.content.includes(QUICK_ANSWER_OFFER_MARKER);
+}
+
 function messageStream(message) {
   const stream = createAssistantMessageEventStream();
   stream.push({ type: "start", partial: message });
@@ -257,24 +274,21 @@ function messageStream(message) {
  * Settle the model's decision on a quick-answer offer. Its own words are
  * never shown: the host's acknowledgement is the reply, followed by the first
  * easyicu_quick_answer call when the model made one (the host then qualifies
- * it). No call, a failed call or any other reply leaves the acknowledgement
- * alone, as the transition without an offer. The model's usage is kept; an
- * aborted call stays aborted.
+ * it). A successful decline leaves the acknowledgement alone. A failed or
+ * aborted decision keeps its terminal state and usage so it cannot silently
+ * advance the conversation into a full study.
  */
 export async function settleQuickAnswerOffer(model, open, reply, signal) {
   let message;
-  try {
-    const stream = await open();
-    for await (const event of stream) {
-      if (event?.type === "done") message = event.message;
-      else if (event?.type === "error") message = event.error;
-    }
-  } catch (error) {
-    if (signal?.aborted) throw error;
+  const opened = await open();
+  for await (const event of opened) {
+    if (event?.type === "done") message = event.message;
+    else if (event?.type === "error") message = event.error;
   }
-  if (message?.stopReason === "aborted") {
+  if (!message) throw new Error("Quick-answer decision ended without a terminal message");
+  if (message.stopReason === "error" || message.stopReason === "aborted") {
     const stream = createAssistantMessageEventStream();
-    stream.push({ type: "error", reason: "aborted", error: message });
+    stream.push({ type: "error", reason: message.stopReason, error: message });
     return stream;
   }
   const settled = { ...finalizedMessage(model, reply), usage: message?.usage ?? ZERO_USAGE };

@@ -285,6 +285,8 @@ CONTRACTS: dict[str, list[str]] = {
         "screens-guided-pi-activity.js",
         "screens-guided-pi-transcript.js",
     ],
+    "guided_pi_run_answer_loading.test.js": [],
+    "quick_answer_offer_recovery.test.js": [],
     # Loads the module registry and plan-confirmation owner itself; takes no arguments.
     "guided_plan_resource_authority.test.js": [],
     "guided_pi_outcome_confirmation.test.js": [],

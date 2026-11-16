@@ -147,6 +147,13 @@
         if (RUN_FILES && RUN_FILES.handleClick(event)) return;
         if (QUICK_ANSWERS && QUICK_ANSWERS.handleClick(event)) return;
         if (MULTI_DATABASE && MULTI_DATABASE.handleClick(event)) return;
+        const answerRetry = event.target.closest('[data-gpi-run-answer-retry]');
+        if (answerRetry) {
+          if (answerRetry.dataset.gpiRunAnswerRetry === state.latestRun?.run_id) {
+            void RUN_OUTCOME.retryAnswer(state.latestRun, state.workflow);
+          }
+          return;
+        }
         const append = event.target.closest('[data-gpi-result-append]');
         if (append) {
           if (!state.session || state.busy || state.childJobId || state.session.stale?.stale) return;

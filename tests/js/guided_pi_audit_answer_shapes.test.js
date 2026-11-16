@@ -45,7 +45,7 @@ async function answer(tables, options = {}) {
   await owner.load(run);
   return { html: owner.render(run), calls, owner, run };
 }
-const fallback = '分析已完成，暂未生成结果摘要。请查看结果表。';
+const fallback = '当前结果暂无法展示摘要，请查看结果表。';
 const summary = (tables, selectedPlan = plan) => modules.require('resultSummary').summarize({ tables }, selectedPlan, {});
 
 test('continuous medians display compact quartiles, units and counts with the exact source', async () => {
@@ -157,7 +157,7 @@ test('conflicting primary models and multiple primary contrasts never choose the
     assert.equal(summary(tables).estimates.length, 0);
     const { html, calls } = await answer(tables, { plan: { ...plan, analysis_type: 'association_study' },
       provenance: { claims: [{ source_field: 'primary_or', display_value: '12.345' }] } });
-    assert.match(html, /多个主要模型|暂未生成结果摘要/);
+    assert.match(html, /多个主要模型|当前结果暂无法展示摘要/);
     assert.doesNotMatch(html, /OR 1\.88|OR 8\.50|12\.345/);
     assert.ok(calls.some(r => r.evidence_id === main.evidence_id));
   }
@@ -205,13 +205,15 @@ test('unavailable, stale, or absent table provenance never creates evidence link
   }
 });
 
-test('missing results and failed reads show C01 in both languages without a scientific caveat', async () => {
-  for (const options of [{}, { fail: true }, { lang: 'en' }]) {
+test('missing summaries and failed reads have distinct states in both languages', async () => {
+  for (const options of [{}, { fail: true }, { lang: 'en' }, { lang: 'en', fail: true }]) {
     const { html, calls } = await answer([], options);
-    assert.ok(html.includes(options.lang === 'en'
-      ? 'Analysis complete. A result summary is unavailable; open the result table.' : fallback));
+    assert.ok(html.includes(options.fail ? (options.lang === 'en'
+      ? 'The results could not be loaded. Please retry.' : '结果加载失败，请重试。') : (options.lang === 'en'
+      ? 'A summary cannot be displayed from the registered results; open the result table.' : fallback)));
     assert.doesNotMatch(html, /未调整|without adjustment|可从下方打开/);
-    assert.ok(calls.some(r => r.artifact === 'result_tables.json' && !r.evidence_id));
+    if (options.fail) assert.match(html, /data-gpi-run-answer-retry/);
+    else assert.ok(calls.some(r => r.artifact === 'result_tables.json' && !r.evidence_id));
   }
 });
 
@@ -224,7 +226,7 @@ test('the completed card also uses C01 before its answer can be loaded', () => {
       iconHtml: () => '', resourceButton: () => '', canPreview: () => true });
     const html = outcome.render(latest, { stages: [{ id: 'analysis', status: 'complete' }] });
     assert.ok(html.includes(lang === 'zh' ? fallback
-      : 'Analysis complete. A result summary is unavailable; open the result table.'));
+      : 'A summary cannot be displayed from the registered results; open the result table.'));
     assert.doesNotMatch(html, /可从下方打开|Open the study overview/);
   }
 });
@@ -447,7 +449,7 @@ test('a complete primary long-form projection answers every group in one sentenc
   for (let i = 0; i < 8; i++) assert.ok(text.includes(`Ward ${i}`));
   assert.equal((text.match(/。/g) || []).length, 1);
   assert.match(text, /mmol\/L.*Ward 0 104［101–108］，n=6/);
-  assert.doesNotMatch(html, /暂未生成结果摘要|p 值|P =|显著|甲组/);
+  assert.doesNotMatch(html, /当前结果暂无法展示摘要|结果加载失败|p 值|P =|显著|甲组/);
   assert.equal(calls.filter(row => row.evidence_id).length, 1);
   assert.equal(calls.find(row => row.evidence_id).evidence_id, source.evidence_id);
 });
@@ -464,7 +466,7 @@ test('grouped medians only and means only can answer without inventing a spread'
     assert.match(html, /North.*South/);
     assert.match(html, /n=3/);
     assert.doesNotMatch(html, absent);
-    assert.doesNotMatch(html, /暂未生成结果摘要/);
+    assert.doesNotMatch(html, /当前结果暂无法展示摘要|结果加载失败/);
     const wide = { ...source, headers: ['variable', 'group', 'n', statistic, 'unit'],
       rows: [['chloride', 'North', '3', value, 'mmol/L'], ['chloride', 'South', '3', value, 'mmol/L']] };
     assert.match((await answer([wide])).html, expected);
@@ -487,7 +489,7 @@ test('categorical outcome proportions round percentages and retain observed nume
   });
   assert.ok(html.includes('恢复状态（已恢复），比例：North 28.6%（2/7）；South 0.0%（0/5）。'));
   assert.equal(summary([compact([], rows)]).categoricalGroups[0].percentage, '28.5714285714');
-  assert.doesNotMatch(html, /暂未生成结果摘要|风险比|OR |p 值|显著/);
+  assert.doesNotMatch(html, /当前结果暂无法展示摘要|结果加载失败|风险比|OR |p 值|显著/);
   assert.match(owner.limitation(run), /不能说明因果/);
   assert.ok(calls.some(row => row.evidence_id === source.evidence_id));
 });
@@ -495,7 +497,7 @@ test('categorical outcome proportions round percentages and retain observed nume
 test('an ungrouped distribution summary answers its registered overall statistics without a fabricated group', async () => {
   const { html } = await answer([compact([compactRow('', { row_role: 'overall', group_variable: '' })])]);
   assert.ok(html.includes('氯离子（mmol/L），中位数［四分位距］：104［101–108］，n=6。'));
-  assert.doesNotMatch(html, /「」|Overall|暂未生成结果摘要|undefined/);
+  assert.doesNotMatch(html, /「」|Overall|当前结果暂无法展示摘要|结果加载失败|undefined/);
   // Support/frequency rows alone contain no registered location statistic.
   const { html: empty } = await answer([{ ...source, headers: ['variable', 'value', 'count', 'proportion'],
     rows: [['chloride', '102.5', '2', '0.25']] }]);

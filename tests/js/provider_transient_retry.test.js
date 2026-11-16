@@ -650,8 +650,9 @@ test('a quick-answer offer keeps the first reading call behind the acknowledgeme
 
 test('a failed or aborted quick-answer decision keeps the transition safe', needsSdk, async () => {
   const failedCall = await harness([[opened(1), failed('HTTP 401: authentication failed')]], { quickOfferReply: ACK });
-  assert.equal(failedCall.result.stopReason, 'stop');
-  assert.deepEqual(JSON.parse(JSON.stringify(failedCall.result.content)), [{ type: 'text', text: ACK }]);
+  assert.equal(failedCall.result.stopReason, 'error');
+  assert.equal(failedCall.projected.error_code, 'pi_model_provider_error');
+  assert.deepEqual(failedCall.events.map(event => event.type), ['error']);
   const aborted = await harness([[opened(1), { type: 'error', reason: 'aborted', error: message([], 'aborted') }]], { quickOfferReply: ACK });
   assert.equal(aborted.result.stopReason, 'aborted');
   assert.deepEqual(aborted.events.map(event => event.type), ['error']);

@@ -11,6 +11,7 @@
 
   const REQUIRED = ['result_tables.json', 'agent_plan.json'];
   const OPTIONAL = ['run_context.json', 'figure_gallery.json', 'manuscript_provenance.json'];
+  const READ_BACKOFF_MS = [250, 750];
   const RASTER_IMAGE = /^data:image\/(?:png|jpeg|webp);base64,[A-Za-z0-9+/=]+$/;
   // Plan inputs that describe measurement bookkeeping or row identity, not a
   // baseline characteristic a follow-up question could adjust for.
@@ -532,12 +533,23 @@
       };
     }
 
-    async function load(latestRun) {
+    // API transport keeps HTTP status on errors; fetch rejects network reads
+    // with a TypeError. Integrity/authorization failures are never retried.
+    function transientRead(error) {
+      const status = Number(error && error.status);
+      if (status) return status >= 500 && status <= 599;
+      return error && (error.name === 'NetworkError' || error.name === 'TimeoutError'
+        || error.name === 'TypeError' && /fetch|network|load failed/i.test(error.message || ''));
+    }
+
+    async function load(latestRun, retry = false) {
       const key = keyFor(latestRun);
-      if (!key || current.key === key) return false;
+      if (!key || current.key === key && !(retry && current.failed)) return false;
       current = { key, projection: null, loading: true, failed: false };
+      const pending = current;
       const expectedProjectId = projectId();
       const refs = runRefs(latestRun);
+      const active = () => current === pending && projectId() === expectedProjectId;
       try {
         const client = typeof api === 'function' ? api() : null;
         if (!client || typeof client.loadPiCopilotResearchArtifact !== 'function') throw new Error('run_answer_api_unavailable');
@@ -545,19 +557,30 @@
           const ref = refs.get(name);
           if (!ref) return [name, null];
           try {
-            const response = await client.loadPiCopilotResearchArtifact(expectedProjectId, latestRun.run_id, name, ref.sha256);
-            return [name, response && response.ok !== false ? response : null];
+            for (let attempt = 0; ; attempt += 1) {
+              if (!active()) return [name, null];
+              try {
+                const response = await client.loadPiCopilotResearchArtifact(expectedProjectId, latestRun.run_id, name, ref.sha256);
+                if (response && response.ok === false) throw response;
+                return [name, response || null];
+              } catch (error) {
+                if (!transientRead(error) || attempt >= READ_BACKOFF_MS.length) throw error;
+                await new Promise(resolve => setTimeout(resolve, READ_BACKOFF_MS[attempt]));
+              }
+            }
           } catch (error) {
             if (REQUIRED.includes(name)) throw error;
             return [name, null];
           }
         }));
         if (current.key !== key || projectId() !== expectedProjectId) return false;
+        if (current !== pending) return false;
         const rows = Object.fromEntries(loaded);
         if (REQUIRED.some(name => !rows[name])) throw new Error('run_answer_artifact_missing');
         current = { key, projection: project(rows), loading: false, failed: false };
       } catch (_error) {
         if (current.key !== key || projectId() !== expectedProjectId) return false;
+        if (current !== pending) return false;
         current = { key, projection: null, loading: false, failed: true };
       }
       return true;
@@ -809,8 +832,8 @@
       const message = view && view.primaryModelAmbiguous ? tr(
         'Multiple primary models are recorded; inspect the result tables before selecting a primary estimate.',
         '记录中有多个主要模型，暂不能唯一确定主要估计；请查看结果表。',
-      ) : tr('Analysis complete. A result summary is unavailable; open the result table.',
-        '分析已完成，暂未生成结果摘要。请查看结果表。');
+      ) : tr('A summary cannot be displayed from the registered results; open the result table.',
+        '当前结果暂无法展示摘要，请查看结果表。');
       return `<div class="gpi-run-answer is-unavailable" data-gpi-run-answer="${esc(latestRun.run_id)}"><p>${esc(message)}</p>${sourceButtons(latestRun, view ? view.answerSources : [], true)}</div>`;
     }
 
@@ -819,6 +842,11 @@
       if (!key || current.key !== key) return '';
       if (current.loading) {
         return `<div class="gpi-run-answer is-loading" data-gpi-run-answer="${esc(latestRun.run_id)}" aria-busy="true"><p>${esc(tr('Reading this run’s registered results…', '正在读取本次运行登记的结果…'))}</p></div>`;
+      }
+      if (current.failed) {
+        return `<div class="gpi-run-answer is-failed" data-gpi-run-answer="${esc(latestRun.run_id)}" role="status"><p>${esc(tr(
+          'The results could not be loaded. Please retry.', '结果加载失败，请重试。',
+        ))}</p><button type="button" class="btn" data-gpi-run-answer-retry="${esc(latestRun.run_id)}">${esc(tr('Retry loading results', '重新加载结果'))}</button></div>`;
       }
       const view = current.projection;
       const sentences = view ? answerSentences(view) : [];
@@ -946,7 +974,8 @@
       return view.groups.length || view.continuousGroups.length || view.categoricalGroups.length || view.estimate ? caveat(view) : '';
     }
 
-    return Object.freeze({ load, render, followUps, fileNote, approachSteps, materials, limitation });
+    return Object.freeze({ load, retry: latestRun => load(latestRun, true), render,
+      followUps, fileNote, approachSteps, materials, limitation });
   }
 
   window.EasyICU.guidedPi.declare('runAnswer', { create });

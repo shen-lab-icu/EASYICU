@@ -48,6 +48,7 @@ import {
   hostPostToolFinalization,
   QUICK_ANSWER_OFFER_MARKER,
   quickAnswerOfferReply,
+  quickAnswerOfferRetryAvailable,
   settleQuickAnswerOffer,
 } from "./post-tool-finalization.mjs";
 import {
@@ -1314,6 +1315,8 @@ function sessionState(record, options = {}) {
     transcript: transcript.items,
     transcript_page: transcript,
     reply_continuation: replyContinuationState(record),
+    quick_answer_offer_retry_available: record.agentMode === "research" && !session.isStreaming
+      && quickAnswerOfferRetryAvailable(record.sessionManager.getBranch()),
     shell_usage: {
       tokens: stats.tokens,
       cost: null,

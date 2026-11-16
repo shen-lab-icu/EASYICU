@@ -5618,6 +5618,11 @@ class PiCopilotService(SkillAttachmentService, QuickAnswerService):
             # front end parses out of this same text.
             "transcript": project_transcript(state.get("transcript")),
             "reply_continuation": project_recovery_state(self, record, state),
+            "quick_answer_offer_retry_available": (
+                record.agent_mode == "research"
+                and record.last_turn_status in {"failed", "interrupted"}
+                and state.get("quick_answer_offer_retry_available") is True
+            ),
             "prior_failed_attempts": (
                 self.replay_store.prior_failed_attempts(session_id=record.session_id, project_id=str(record.project_id))
                 if include_replay and record.agent_mode == "workspace" else []

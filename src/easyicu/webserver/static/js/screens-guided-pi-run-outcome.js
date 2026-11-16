@@ -87,13 +87,18 @@
     /* The card is first drawn with a reading placeholder; once the run's own
        numbers are read, the card is redrawn in place with its answer, file
        notes and follow-ups. */
-    async function loadAnswer(latestRun, workflow) {
-      if (!ANSWER || !resultsAvailable(latestRun, workflow)) return;
-      if (!await ANSWER.load(latestRun)) return;
+    function repaintAnswer(latestRun, workflow) {
       const root = typeof host === 'function' ? host() : null;
       const card = root && Array.from(root.querySelectorAll('[data-gpi-run-outcome]'))
         .find(node => node.dataset.gpiRunOutcome === String(latestRun.run_id || ''));
       if (card) card.outerHTML = render(latestRun, workflow);
+    }
+
+    async function loadAnswer(latestRun, workflow, retry = false) {
+      if (!ANSWER || !resultsAvailable(latestRun, workflow)) return;
+      const pending = retry ? ANSWER.retry(latestRun) : ANSWER.load(latestRun);
+      if (retry) repaintAnswer(latestRun, workflow);
+      if (await pending) repaintAnswer(latestRun, workflow);
     }
 
     // The workflow owner calls this once per projected workflow; the run's
@@ -541,10 +546,10 @@
       const answer = ANSWER ? ANSWER.render(latestRun) : '';
       const lead = answer || `<p>${esc(tr(
         validated
-          ? 'Analysis complete. A result summary is unavailable; open the result table.'
+          ? 'A summary cannot be displayed from the registered results; open the result table.'
           : 'The generated results are available below. Review the check records before interpreting them.',
         validated
-          ? '分析已完成，暂未生成结果摘要。请查看结果表。'
+          ? '当前结果暂无法展示摘要，请查看结果表。'
           : '下方可以查看已生成的结果。解读前，请先核对各项检查记录。',
       ))}</p>`;
       const status = validated
@@ -609,6 +614,7 @@
 
     return Object.freeze({ render, renderShelf, renderReviewAction, collection, resultsAvailable,
       followUps, dismissFollowUp, selectReviewTab, loadScientificReview, openData,
+      retryAnswer: (latestRun, workflow) => loadAnswer(latestRun, workflow, true),
       proposeAppend: kind => APPEND?.propose(kind) });
   }
 

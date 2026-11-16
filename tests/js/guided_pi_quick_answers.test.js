@@ -87,7 +87,7 @@ function progression(quickAnswers) {
     setBusy: value => { busy = value; }, setError: () => {}, errorText: String, render: () => {},
     refreshSession: async () => {}, loadWorkflow: async () => {}, watchChildJob: () => {},
   });
-  return { actions, started };
+  return { actions, started, session };
 }
 
 const proposal = (question, status) => ({
@@ -101,6 +101,16 @@ test('a quick card from the source transition holds the automatic plan', async (
     message_job_id: 'job-transition', study_context_id: null, answer: null, proposal: proposal(question, 'approval_required') }]);
   assert.equal(await actions.continueSystemOwnedPlanProgression(), false);
   assert.equal(started.length, 0);
+});
+
+test('an interrupted quick-answer offer holds the automatic plan until its decision succeeds', async () => {
+  const { actions, started, session } = progression(() => []);
+  session.quick_answer_offer_retry_available = true;
+  assert.equal(await actions.continueSystemOwnedPlanProgression(), false);
+  assert.equal(started.length, 0);
+  session.quick_answer_offer_retry_available = false;
+  assert.equal(await actions.continueSystemOwnedPlanProgression(), true);
+  assert.equal(started.length, 1);
 });
 
 for (const status of ['stopped', 'full_study']) {

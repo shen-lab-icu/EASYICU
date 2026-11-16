@@ -153,6 +153,12 @@
     }
 
     function render(row) {
+      if (row && row.retryOffer) {
+        return `<article class="gpi-message assistant gpi-quick-answer"><div class="gpi-message-body"><p>${esc(tr(
+          'The quick-answer check was interrupted. Retry to check the same question with the confirmed data source.',
+          '快速回答判断已中断。请重试，使用已确认的数据源重新判断原问题。',
+        ))}</p><button type="button" class="btn" data-gpi-data-source-continue${disabled() ? ' disabled' : ''}>${esc(tr('Retry', '重试'))}</button></div></article>`;
+      }
       const attachment = row && row.attachment || {};
       const id = String(attachment.quick_answer_id || '');
       const proposal = attachment.proposal || {};
@@ -191,11 +197,16 @@
       const list = Array.isArray(session && session.quick_answers) ? session.quick_answers : [];
       const turns = Array.isArray(session && session.conversation_replay && session.conversation_replay.turns)
         ? session.conversation_replay.turns : [];
-      return list.filter(item => item && item.quick_answer_id).map(item => {
+      const cards = list.filter(item => item && item.quick_answer_id).map(item => {
         const turn = turns.find(row => row && row.job_id && row.job_id === item.message_job_id);
         const at = turn ? timeMs(turn.ended_at || turn.started_at) : 0;
         return { role: 'quick_answer', id: 'quick-answer-' + item.quick_answer_id, attachment: item, timelineAt: at ? at + 1 : 0 };
       });
+      if (session && session.quick_answer_offer_retry_available === true) {
+        cards.push({ role: 'quick_answer', id: 'quick-answer-retry-' + session.last_message_job_id,
+          retryOffer: true, timelineAt: 0 });
+      }
+      return cards;
     }
     function place(timeline, cards) {
       const list = Array.isArray(timeline) ? timeline.slice() : [];
@@ -232,6 +243,7 @@
   // study's own question until it becomes a full study. A stopped or
   // full-study proposal holds nothing (plan-actions.js).
   function holdsAutomaticPlan(session, workflow) {
+    if (session && session.quick_answer_offer_retry_available === true) return true;
     const list = Array.isArray(session && session.quick_answers) ? session.quick_answers : [];
     const lastJob = String(session && session.last_message_job_id || '');
     const configuration = workflow && workflow.study_setup_receipt && workflow.study_setup_receipt.configuration;
