@@ -9,6 +9,15 @@ from starlette.responses import StreamingResponse
 from .auth import CSRF_COOKIE, SESSION_COOKIE
 from .pages import unavailable
 
+# The instance's uvicorn closes an idle keep-alive connection after 5 s (its
+# default timeout_keep_alive). Expiring pooled connections sooner avoids
+# reusing one the instance is closing; a request that still meets a closed
+# connection before any response byte is retried once when it is idempotent.
+KEEPALIVE_EXPIRY_SECONDS = 2.0
+IDEMPOTENT_METHODS = frozenset({"GET", "HEAD"})
+STALE_CONNECTION_ERRORS = (httpx.RemoteProtocolError, httpx.ReadError,
+                           httpx.WriteError, httpx.ConnectError)
+
 HOP_HEADERS = {b"connection", b"keep-alive", b"proxy-authenticate", b"proxy-authorization",
                b"te", b"trailer", b"transfer-encoding", b"upgrade"}
 
@@ -53,6 +62,7 @@ class InstanceProxy:
             self.clients[socket] = httpx.AsyncClient(
                 transport=httpx.AsyncHTTPTransport(uds=socket), trust_env=False,
                 timeout=httpx.Timeout(10, read=None), follow_redirects=False,
+                limits=httpx.Limits(keepalive_expiry=KEEPALIVE_EXPIRY_SECONDS),
             )
         headers = [(key, value) for key, value in end_to_end(request.headers.raw)
                    if key.lower() not in {b"cookie", b"forwarded", b"x-real-ip"}
@@ -63,10 +73,20 @@ class InstanceProxy:
         raw_path = request.scope.get("raw_path", request.url.path.encode())
         query = request.scope.get("query_string", b"")
         url = httpx.URL("http://instance").copy_with(raw_path=raw_path + (b"?" + query if query else b""))
-        # A direct Request avoids client cookie-jar/header merging across requests.
-        outbound = httpx.Request(request.method, url, headers=headers, content=request.stream())
-        try:
-            upstream = await self.clients[socket].send(outbound, stream=True)
-        except httpx.HTTPError:
-            return unavailable()
-        return UpstreamResponse(upstream)
+        idempotent = request.method.upper() in IDEMPOTENT_METHODS
+        # A retried request must resend the same bytes, so an idempotent body is read once.
+        body = await request.body() if idempotent else None
+        for attempt in (1, 2):
+            # A direct Request avoids client cookie-jar/header merging across requests.
+            outbound = httpx.Request(request.method, url, headers=headers,
+                                     content=body if idempotent else request.stream())
+            try:
+                upstream = await self.clients[socket].send(outbound, stream=True)
+            except STALE_CONNECTION_ERRORS:
+                if idempotent and attempt == 1:
+                    continue
+                return unavailable()
+            except httpx.HTTPError:
+                return unavailable()
+            return UpstreamResponse(upstream)
+        return unavailable()
