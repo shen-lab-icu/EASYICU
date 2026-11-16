@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import logging
+
 import anyio
 import httpx
 from starlette.responses import StreamingResponse
@@ -14,6 +16,13 @@ from .pages import unavailable
 # reusing one the instance is closing; a request that still meets a closed
 # connection before any response byte is retried once when it is idempotent.
 KEEPALIVE_EXPIRY_SECONDS = 2.0
+# A GET/HEAD whose response has not started within this deadline is treated as
+# a stalled connection: cancelling the wait discards that connection, and the
+# request is sent once more on a fresh one. Streams and long polls already
+# start their response (SSE headers at once, /api/attention within ~20 s);
+# only the wait for the response start is bounded, never the body.
+RESPONSE_START_DEADLINE_SECONDS = 90.0
+PROXY_LOG = logging.getLogger("easyicu.hosted_gateway.proxy")
 IDEMPOTENT_METHODS = frozenset({"GET", "HEAD"})
 STALE_CONNECTION_ERRORS = (httpx.RemoteProtocolError, httpx.ReadError,
                            httpx.WriteError, httpx.ConnectError)
@@ -81,12 +90,28 @@ class InstanceProxy:
             outbound = httpx.Request(request.method, url, headers=headers,
                                      content=body if idempotent else request.stream())
             try:
-                upstream = await self.clients[socket].send(outbound, stream=True)
-            except STALE_CONNECTION_ERRORS:
+                if idempotent:
+                    with anyio.fail_after(RESPONSE_START_DEADLINE_SECONDS):
+                        upstream = await self.clients[socket].send(outbound, stream=True)
+                else:
+                    upstream = await self.clients[socket].send(outbound, stream=True)
+            except TimeoutError:
+                self._note(request, "response_start_deadline", attempt)
+                if attempt == 1:
+                    continue
+                return unavailable()
+            except STALE_CONNECTION_ERRORS as exc:
                 if idempotent and attempt == 1:
+                    self._note(request, f"stale_connection:{type(exc).__name__}", attempt)
                     continue
                 return unavailable()
             except httpx.HTTPError:
                 return unavailable()
             return UpstreamResponse(upstream)
         return unavailable()
+
+    @staticmethod
+    def _note(request, event: str, attempt: int) -> None:
+        # The same redacted fields as the access record: no query, body or cookie.
+        PROXY_LOG.warning("instance forward %s (attempt %d): %s %s",
+                          event, attempt, request.method, request.url.path)
