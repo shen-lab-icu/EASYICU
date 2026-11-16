@@ -618,7 +618,7 @@ def test_selected_proportion_never_receives_an_omnibus_test(prepared):
     assert proposal.card is None and proposal.expand.reading == request
 
 
-@pytest.mark.parametrize("label", ["Overall", "Missing", "Comparison"])
+@pytest.mark.parametrize("label", ["Overall", "Missing", "Comparison", "Other groups (pooled)"])
 def test_reserved_partition_labels_cannot_ambiguously_name_a_group(prepared, label):
     variables = [v.model_copy(update={"observed_domain": {"levels": [label, "Other"]}})
                  if v.name == "sex" else v for v in prepared.context.variables]
@@ -796,3 +796,78 @@ def test_population_receipts_do_not_copy_private_host_metadata_into_the_card(pre
     assert "private_host_path" not in proposal.model_dump_json()
     assert "subject_fixture" not in proposal.model_dump_json()
     assert proposal.card.plan.population["criteria"][0]["disposition"] == "applied_by_source"
+
+
+LACT_MEDIAN = {"concept": "lact", "statistic": "median", "summary": "max",
+               "window": {"start_hours": 0, "end_hours": 24}}
+
+
+def four_groups(prepared, sizes, *, lact=None):
+    frame = pd.read_parquet(prepared.path)
+    frame["sex"] = sum(([level] * n for level, n in sizes.items()), [])
+    if lact is not None:
+        frame["lact_max"] = lact
+    variables = [v.model_copy(update={"observed_domain": {"levels": list(sizes)}})
+                 if v.name == "sex" else v for v in prepared.context.variables]
+    return rebound(prepared, frame=frame, context=prepared.context.model_copy(update={"variables": variables}))
+
+
+def by_group(answer, statistic):
+    return {row.group: row.value for row in answer.rows if row.statistic == statistic}
+
+
+def test_small_groups_are_pooled_instead_of_withholding_the_answer(prepared, tmp_path):
+    source = four_groups(prepared, {"Male": 24, "Female": 24, "Unknown": 7, "Other": 5})
+    proposal = prepare_quick_answer(reading("Lactate by sex.", grouping=["sex"], measure=LACT_MEDIAN),
+                                    source=source, provider=None)
+    answer = run(proposal, source, tmp_path)
+    assert answer.status == "ok", answer.reason
+    assert set(by_group(answer, "median")) == {"Overall", "Male", "Female", "Other groups (pooled)"}
+    assert by_group(answer, "cohort_n") == {"Overall": 60, "Male": 24, "Female": 24, "Other groups (pooled)": 12}
+    assert not {row.group for row in answer.rows} & {"Unknown", "Other"}
+
+
+def test_a_pool_still_below_the_floor_absorbs_the_next_smallest_group(prepared, tmp_path):
+    source = four_groups(prepared, {"Male": 30, "Female": 20, "Unknown": 6, "Other": 4})
+    request = reading("Compare lactate by sex.", intent="compare", grouping=["sex"], measure=LACT_MEDIAN)
+    proposal = prepare_quick_answer(request, source=source, provider=None)
+    answer = run(proposal, source, tmp_path)
+    assert answer.status == "ok", answer.reason
+    assert by_group(answer, "cohort_n") == {"Overall": 60, "Male": 30, "Other groups (pooled)": 30}
+    assert not [row for row in answer.rows if row.statistic.startswith("p_value")]
+
+
+def test_a_group_with_few_values_shows_its_size_but_no_statistic(prepared, tmp_path):
+    lact = [2.0] * 30 + [3.0] * 5 + [None] * 25
+    source = four_groups(prepared, {"Male": 30, "Female": 30}, lact=lact)
+    proposal = prepare_quick_answer(reading("Lactate by sex.", grouping=["sex"], measure=LACT_MEDIAN),
+                                    source=source, provider=None)
+    answer = run(proposal, source, tmp_path)
+    assert answer.status == "ok", answer.reason
+    assert set(by_group(answer, "median")) == {"Overall", "Male"}
+    assert by_group(answer, "cohort_n") == {"Overall": 60, "Male": 30, "Female": 30}
+    female = {row.statistic for row in answer.rows if row.group == "Female"}
+    assert female == {"cohort_n"}
+    # Overall's split would reveal Female's 5 values by subtraction.
+    assert "nonmissing_n" not in {row.statistic for row in answer.rows if row.group == "Overall"}
+
+
+def test_a_few_missing_values_withhold_only_the_missing_split(prepared, tmp_path):
+    lact = [None] * 3 + [2.0] * 57
+    source = four_groups(prepared, {"Male": 30, "Female": 30}, lact=lact)
+    proposal = prepare_quick_answer(reading("Lactate by sex.", grouping=["sex"], measure=LACT_MEDIAN),
+                                    source=source, provider=None)
+    answer = run(proposal, source, tmp_path)
+    assert answer.status == "ok", answer.reason
+    assert set(by_group(answer, "median")) == {"Overall", "Male", "Female"}
+    assert set(by_group(answer, "missing_n")) == {"Female"}
+    assert set(by_group(answer, "nonmissing_n")) == {"Female"}
+
+
+def test_a_two_group_test_never_pools_and_still_stops_on_a_small_group(prepared, tmp_path):
+    source = four_groups(prepared, {"Male": 55, "Female": 5})
+    request = reading("Compare lactate by sex.", intent="compare", grouping=["sex"], measure=LACT_MEDIAN)
+    proposal = prepare_quick_answer(request, source=source, provider=None)
+    assert proposal.card.plan.test is not None
+    answer = run(proposal, source, tmp_path)
+    assert answer.reason == "quick_small_cells_suppressed" and not answer.rows

@@ -36,6 +36,9 @@ _COMPLEXITY = (
 _OUTCOMES = {"hospital_death", "icu_death", "death_within_72h_after_icu_discharge"}
 
 
+# Group label for groups pooled under the small-count rule (analysis owner).
+POOLED_GROUP = "Other groups (pooled)"
+
 def bind_concept_names(reading: QuickReading) -> QuickReading:
     """Name the reading's measure and groups by their EasyICU concept ids.
 
@@ -213,7 +216,7 @@ def _plan(reading, effective, source):
     group_levels = _levels(group)
     if group is not None and (len(group_levels) < 2 or group == variable):
         raise QuickStop("quick_grouping_ambiguous")
-    if {str(level) for level in group_levels} & {"Overall", "Missing", "Comparison"}:
+    if {str(level) for level in group_levels} & {"Overall", "Missing", "Comparison", POOLED_GROUP}:
         raise QuickStop("quick_grouping_ambiguous")
     test = None
     # More than two groups: per-group summaries without a between-group test.

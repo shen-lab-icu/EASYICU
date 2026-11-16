@@ -133,6 +133,22 @@ test('a grouped comparison reads each group and the test from their own rows', (
   assert.match(html, /Between groups: P = 0.041 \(Mann–Whitney \/ Kruskal–Wallis test\)/);
 });
 
+test('a pooled group is named and a withheld statistic says why, never a blank cell', () => {
+  const rows = [];
+  for (const [group, n, value] of [['Male', 30, 3.5], ['Other groups (pooled)', 12, 4.1], ['Female', 18, null]]) {
+    rows.push({ statistic: 'cohort_n', variable: '__cohort__', group, level: '', unit: '', value: n, evidence: evidence('x') });
+    if (value !== null) rows.push({ statistic: 'median', variable: 'lact_max', group, level: '', unit: 'mmol/L', value, evidence: evidence('y') });
+  }
+  const answer = { answer: { status: 'ok', reason: 'quick_answer_ready', source: SOURCE, rows, sentences: [], expand: {} } };
+  const zh = rendered(owners().cards, attachment(answer));
+  assert.match(zh, /<th scope="row">其他组（合并）<\/th><td>4.1 mmol\/L<\/td>/);
+  assert.match(zh, /<th scope="row">Female<\/th><td>有值例数过少，按隐私规则不显示<\/td><td>共 18 例<\/td>/);
+  assert.match(zh, /人数过少的组按隐私规则合并为“其他组”显示。/);
+  const en = rendered(owners('en').cards, attachment(answer));
+  assert.match(en, /<th scope="row">Other groups \(pooled\)<\/th>/);
+  assert.match(en, /Too few values to show under the privacy rule/);
+});
+
 test('a comparison over more than two groups says no test ran, before and after approval', () => {
   const { cards } = owners('zh');
   const compare = { ...READING, intent: 'compare', grouping: ['sex'] };

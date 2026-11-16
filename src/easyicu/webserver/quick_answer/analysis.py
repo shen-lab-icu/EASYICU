@@ -21,7 +21,7 @@ from easyicu.research_agent.research_context.stay_events import whole_stay_event
 from easyicu.research_agent.schema import TableOneSpec, TableOneVariableSpec
 
 from .contracts import QuickStop
-from .planning import population_receipt
+from .planning import POOLED_GROUP, population_receipt
 from .source import patient_groups
 
 
@@ -97,6 +97,63 @@ def _disclose_counts(table):
                 raise QuickStop("quick_small_cells_suppressed")
 
 
+def _small(count) -> bool:
+    return pd.notna(count) and project_outbound_counts(int(count), key="count") == SUPPRESSED_COUNT
+
+
+def _pool_small_groups(frame, column, levels):
+    """Pool groups below the outbound count floor (and a small missing group),
+    adding the next-smallest groups until the pool itself clears the floor, so
+    each reported group, the pool and the overall total stay disclosable and
+    no small group can be recovered by subtraction."""
+    if column is None:
+        return frame, levels
+    sizes = {level: int(frame[column].eq(level).sum()) for level in levels}
+    missing = int(frame[column].isna().sum())
+    pooled = [level for level in levels if _small(sizes[level])]
+    pool_missing = _small(missing)
+    if not pooled and not pool_missing:
+        return frame, levels
+    total = sum(sizes[level] for level in pooled) + (missing if pool_missing else 0)
+    remaining = sorted((level for level in levels if level not in pooled and sizes[level]), key=lambda level: sizes[level])
+    while _small(total) and remaining:
+        level = remaining.pop(0)
+        pooled.append(level)
+        total += sizes[level]
+    if _small(total):
+        raise QuickStop("quick_small_cells_suppressed")
+    frame = frame.copy()
+    into = frame[column].isin(pooled) | (frame[column].isna() if pool_missing else False)
+    frame[column] = frame[column].astype(object).where(~into, POOLED_GROUP)
+    kept = tuple(level for level in levels if level not in pooled)
+    if not kept:
+        return frame, ()
+    return frame, (*kept, POOLED_GROUP)
+
+
+def _withhold_small_counts(table):
+    """Per-group withholding for a continuous measure.
+
+    A group with a small number of values (below the outbound count floor)
+    shows its size only; a group with a small number of missing values shows
+    its statistic but not its
+    missing/non-missing split. Once any group withholds its split, the overall
+    split is withheld too, so no hidden count is recovered by subtraction.
+    """
+    hide = set()
+    split = {"nonmissing_n", "missing_n"}
+    for group, rows in table.groupby("group", sort=False):
+        counts = {row["statistic"]: row["value"] for row in rows.to_dict("records") if row["statistic"] in split}
+        if _small(counts.get("nonmissing_n")):
+            hide |= {(group, statistic) for statistic in rows["statistic"] if statistic != "cohort_n"}
+        elif _small(counts.get("missing_n")):
+            hide |= {(group, statistic) for statistic in split}
+    if any(group != "Overall" and statistic in split for group, statistic in hide):
+        hide |= {("Overall", statistic) for statistic in split}
+    keep = [(group, statistic) not in hide for group, statistic in zip(table["group"], table["statistic"])]
+    return table.loc[keep].reset_index(drop=True)
+
+
 def _cell(row, statistic, value, *, unit=""):
     if value is None or not math.isfinite(float(value)):
         raise QuickStop("quick_insufficient_observations")
@@ -118,9 +175,20 @@ def descriptive_cells(source, plan):
     frame, variables = _load(source, plan)
     columns = [plan.measure_column] if plan.measure_column else []
     metadata = {name: variable.model_dump(mode="json") for name, variable in variables.items()}
+    group_column, group_levels = plan.group_column, plan.group_levels
+    # Without a test, a continuous measure (or a plain count) pools small
+    # groups instead of withholding the whole answer.
+    poolable = not plan.measure_levels and not plan.test
+    if poolable:
+        # A test compares exactly its two declared groups; it never pools.
+        frame, group_levels = _pool_small_groups(frame, group_column, group_levels)
+        if not group_levels:
+            group_column = None
     summaries = [cohort_summary_table(partition, columns, metadata).assign(group=group)
-                 for group, _role, partition in descriptive_partitions(frame, plan.group_column, plan.group_levels)]
+                 for group, _role, partition in descriptive_partitions(frame, group_column, group_levels)]
     table = pd.concat(summaries, ignore_index=True)
+    if poolable and plan.measure_column:
+        table = _withhold_small_counts(table)
     _disclose_counts(table)
     measure = plan.effective_reading.measure
     cells = []

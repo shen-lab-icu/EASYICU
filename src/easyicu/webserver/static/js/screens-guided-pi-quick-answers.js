@@ -106,6 +106,7 @@
     function number(value) {
       return typeof value === 'number' ? value.toLocaleString(window.EU_LANG === 'zh' ? 'zh-CN' : 'en-US', { maximumFractionDigits: 3 }) : String(value);
     }
+    const POOLED = 'Other groups (pooled)'; // quick_answer/planning.py POOLED_GROUP
     // One line per group, each value read from its own answer row.
     function answerTable(answer) {
       const rows = Array.isArray(answer && answer.rows) ? answer.rows : [];
@@ -121,6 +122,8 @@
         cells[key] = row;
         if (row.statistic === 'numerator' || row.statistic === 'percentage' || row.statistic === 'denominator') cells[row.statistic] = row;
       });
+      // A group whose statistic is absent while others have one was withheld (too few values).
+      const withStatistic = rows.some(row => ['median', 'mean', 'q1', 'q3'].includes(row.statistic));
       const unitOf = row => row.unit && row.unit !== '%' ? ' ' + esc(row.unit) : row.unit === '%' ? '%' : '';
       const withUnit = row => row ? `${number(row.value)}${unitOf(row)}` : '';
       const lines = groups.map(group => {
@@ -138,13 +141,15 @@
         const observed = cells.nonmissing_n && cells.cohort_n
           ? tr(`${number(cells.nonmissing_n.value)} of ${number(cells.cohort_n.value)} with a value`, `${number(cells.cohort_n.value)} 例中 ${number(cells.nonmissing_n.value)} 例有值`)
           : cells.cohort_n ? tr(`${number(cells.cohort_n.value)} in the group`, `共 ${number(cells.cohort_n.value)} 例`) : '';
-        const label = group === 'Overall' ? tr('All', '全部') : esc(group);
+        if (!result && withStatistic) result = esc(tr('Too few values to show under the privacy rule', '有值例数过少，按隐私规则不显示'));
+        const label = group === 'Overall' ? tr('All', '全部') : group === POOLED ? esc(tr('Other groups (pooled)', '其他组（合并）')) : esc(group);
         return `<tr><th scope="row">${label}</th><td>${result}</td><td>${observed}</td></tr>`;
       });
+      const pooledNote = byGroup.has(POOLED) ? `<p class="gpi-quick-test">${esc(tr('Groups too small to show alone are pooled into “Other groups” under the privacy rule.', '人数过少的组按隐私规则合并为“其他组”显示。'))}</p>` : '';
       const test = comparison ? String(comparison.statistic).slice('p_value:'.length) : '';
       const testLine = comparison
         ? `<p class="gpi-quick-test">${esc(tr('Between groups', '组间比较'))}${tr(': ', '：')}P = ${number(comparison.value)}${pair(TESTS, test) ? tr(` (${esc(pair(TESTS, test))})`, `（${esc(pair(TESTS, test))}）`) : ''}</p>` : '';
-      return lines.length ? `<table class="gpi-quick-table"><tbody>${lines.join('')}</tbody></table>${testLine}` : '';
+      return lines.length ? `<table class="gpi-quick-table"><tbody>${lines.join('')}</tbody></table>${testLine}${pooledNote}` : '';
     }
 
     function render(row) {
