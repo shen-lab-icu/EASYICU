@@ -3461,9 +3461,12 @@ def _callback_sofa_resp(
                     pafi_df = pafi_df.rename(columns={col: 'pafi'})
                     break
     
-    # Ensure numeric pafi
+    # Ensure numeric pafi. A PaO2 or FiO2 without its partner carries P/F
+    # missing (missing_fio2 provenance); ricu's pafi() has no row there, so
+    # only a ventilation hour may score 0 without a ratio.
     pafi_df['pafi'] = pd.to_numeric(pafi_df['pafi'], errors='coerce')
-    
+    pafi_df = pafi_df[pafi_df['pafi'].notna()]
+
     # Expand vent_ind WinTbl to hourly points WITHIN windows only (vectorized)
     if isinstance(vent_tbl, WinTbl):
         vent_df = vent_tbl.data.copy()
