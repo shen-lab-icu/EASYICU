@@ -152,7 +152,12 @@ class QuickAnswerService:
         study = self._quick_study(record)
         row = self._quick_store().read(record.session_id, record.project_id, quick_answer_id)
         active = self.replay_store.snapshot(session_id=record.session_id, project_id=record.project_id, limit=400)
-        if (row["binding"] != record.binding.model_dump(mode="json")
+        # The card computes its own pinned reading on its pinned prepared
+        # source (checked below and again at execution), so a later revision
+        # of the same study -- such as the assistant saving the study in its
+        # automatic follow-up turn -- does not change its answer. It is stale
+        # only in another study or once its turn left the active conversation.
+        if (row["binding"].get("study_context_id") != record.binding.study_context_id
                 or row["message_job_id"] not in {turn["job_id"] for turn in active["turns"]}):
             raise error("quick_card_stale")
         identity = sources.registered_source_identity(study["data_source"]["path"])

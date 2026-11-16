@@ -208,6 +208,30 @@ def test_card_is_bound_to_current_study_message_and_registration(host, change):
         approve(host, attachment)
 
 
+def test_the_assistants_own_study_save_keeps_the_card_runnable(host):
+    # pilot1 dD3: the automatic follow-up turn saved the study ("研究问题和数据源
+    # 已就绪…"), the session rebound to the new revision, and every click then
+    # failed with quick_card_stale.
+    service, record, _ = host
+    attachment = submit(host)
+    study = study_contexts.upsert_context({"id": record.binding.study_context_id, "title": "Saved by the assistant"})
+    record.binding = service._binding_for_context(study)
+    service._save_record(record)
+    answer = approve(host, attachment)["answer"]
+    assert answer["status"] == "ok", answer["reason"]
+
+
+def test_a_card_from_another_study_stays_stale(host):
+    service, record, _ = host
+    attachment = submit(host)
+    store = service._quick_store()
+    row = store.read(record.session_id, record.project_id, attachment["quick_answer_id"])
+    row["binding"] = {**row["binding"], "study_context_id": "study-other"}
+    store.write(row)
+    with pytest.raises(PiCopilotError, match="quick_card_stale"):
+        approve(host, attachment)
+
+
 @pytest.mark.parametrize("host", ["hirid"], indirect=True)
 def test_source_substitution_requires_acceptance_on_the_same_click(host, monkeypatch):
     from easyicu.research_agent.providers.mocks import MockLLMClient
