@@ -7,6 +7,15 @@ answers is in brackets.
 lead-r13 (0.1.0) is validated on SICdb 1.0.8, the default release, and
 remains compatible with SICdb 1.0.6 (the release is detected from the schema).
 
+## 2026-11-16 — MIMIC-III demo reads CareVue ETT verbal item 723 [S732, ricu demo parity]
+
+**What changed.** MIMIC-III demo only; full MIMIC-III does not move. The demo's
+value-to-itemid mapping listed only MetaVision 223900, so CareVue verbal
+"1.0 ET/Trach" / "No Response-ETT" rows (itemid 723) never reached `ett_gcs`.
+The demo now reads the full MIMIC-III mapping. `gcs`, `sofa_cns` and `sofa`
+follow on the demo: the ricu demo parity traced all 1,057 differing GCS cells to
+this (EasyICU median 14, p05 3 versus ricu 15, 9 before the fix).
+
 ## 2026-11-16 — thirteenth dictionary reseal [S732]
 
 **What changed.** Default values do not move. Under the user's consent ("同意重新封存，并继续 TB2")

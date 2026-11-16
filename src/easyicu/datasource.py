@@ -496,15 +496,10 @@ VALUE_TO_ITEMID_MAPPING = {
             }
         }
     },
-    'mimic_demo': {
-        'chartevents': {
-            'value': {
-                'No Response-ETT': {223900},
-                '1.0 ET/Trach': {223900},
-            }
-        }
-    },
 }
+# The MIMIC-III demo is a subset of the same CareVue/MetaVision schema: it reads
+# the full mapping, including CareVue verbal item 723 (ett_gcs on the demo).
+VALUE_TO_ITEMID_MAPPING['mimic_demo'] = VALUE_TO_ITEMID_MAPPING['mimic']
 
 HIRID_OBSERVATIONS_VARIABLEIDS = (
     _dictionary_source_ids("hirid", "observations", "variableid")
