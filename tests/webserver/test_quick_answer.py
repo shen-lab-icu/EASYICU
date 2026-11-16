@@ -222,6 +222,49 @@ def test_a_clinical_name_binds_to_the_concept_the_question_names(prepared, tmp_p
     assert run(proposal, prepared, tmp_path).status == "ok"
 
 
+@pytest.mark.parametrize("name", ["icu_type", "unit_type", "unittype", "ICU type", "ICU 类型", "type of ICU"])
+def test_an_icu_type_name_binds_to_the_unit_type_concept(name):
+    from easyicu.webserver.study_intent import concept_named_by
+
+    assert concept_named_by(name) == "icu_unit_type"
+    assert concept_named_by("icu") is None and concept_named_by("ICU patients") is None
+
+
+def test_icu_stay_by_icu_type_is_answered_not_left_unassessed(tmp_path):
+    # pilot1 11-16 (dD3): the interpreter typed the grouping as "icu_type";
+    # unbound, it stopped as "not assessed for this database" although the
+    # eICU demo carries both the unit type and ICU length of stay.
+    frame = pd.DataFrame({
+        "stay_id": range(40), "subject_id": range(40),
+        "icu_unit_type": ["MICU"] * 20 + ["Med-Surg ICU"] * 20,
+        "los_icu": [1.0, 2.0, 3.0, 4.0] * 5 + [2.0, 3.0, 4.0, 5.0] * 5,
+    })
+    path = tmp_path / "unit_type.parquet"
+    frame.to_parquet(path, index=False)
+    identity = SourceIdentity(database="eicu_demo", registration_id="src_unit_type")
+    variables = [ConceptDescriptor(name=name, dtype="int64", role="id") for name in ("stay_id", "subject_id")] + [
+        ConceptDescriptor(name="icu_unit_type", dtype="object", role="demographic",
+                          observed_domain={"levels": ["MICU", "Med-Surg ICU"]}),
+        ConceptDescriptor(name="los_icu", dtype="float64", role="outcome", unit="days"),
+    ]
+    context = ResearchContext(
+        research_question="Prepared source",
+        cohort=CohortDescriptor(cohort_name="Synthetic stays", database="eicu_demo",
+                                n_stays=40, id_columns=["stay_id", "subject_id"]),
+        variables=variables,
+        user_preferences=UserPreferences(data_constraints=json.dumps({"source_identity": identity.to_dict()})),
+    )
+    source = bind_prepared_source(path, context=context, identity=identity,
+                                  unit_column="stay_id", patient_column="subject_id")
+    question = "在 eICU demo 中，不同 ICU 类型的患者，ICU 住院时长有什么差别？"
+    request = reading(question, intent="compare", grouping=["icu_type"],
+                      measure={"concept": "icu_los", "statistic": "median"})
+    proposal = prepare_quick_answer(request, source=source, provider=None, question=question)
+    assert proposal.status == "approval_required", proposal.reason
+    assert (proposal.card.plan.measure_column, proposal.card.plan.group_column) == ("los_icu", "icu_unit_type")
+    assert run(proposal, source, tmp_path).status == "ok"
+
+
 def test_a_name_that_reads_as_no_concept_stays_as_typed(prepared):
     request = reading("Summarize the first-day peak glucose.", measure={
         "concept": "glucose", "statistic": "median", "summary": "max",

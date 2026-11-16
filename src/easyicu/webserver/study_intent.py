@@ -193,6 +193,8 @@ _PHRASE_TO_CONCEPT: Tuple[Tuple[str, str], ...] = (
     (r"\bage\b|年龄", "age"),
     (r"\bsex\b|gender|性别", "sex"),
     (r"\badmission (?:type|category)\b|\btype of admission\b|入院类型|入院类别|入科类型", "adm"),
+    (r"\bicu\s*(?:unit\s*)?types?\b|\btypes? of (?:icus?|intensive care units?)\b|\bunit\s*types?\b|\bunittype\b|"
+     r"icu\s*(?:病房)?类型|监护(?:室|病房)类型", "icu_unit_type"),
     # 「ICU 住院死亡率」 is ICU death, read by the setting reader below.
     (r"in-?hospital mortality|hospital mortality|院内死亡|住院death|(?<!icu)(?<!icu )住院死亡", "death"),
     (_FIXED_HORIZON_MORTALITY, _FIXED_HORIZON_MORTALITY),
