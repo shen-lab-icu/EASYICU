@@ -10,6 +10,8 @@ from __future__ import annotations
 import numpy as np
 import pandas as pd
 
+from .minute_resolution import grid_bin_hours, grid_floor_index
+
 
 def admission_origins(frame, data_source):
     if "admittedat" in frame:
@@ -29,8 +31,12 @@ def admission_origins(frame, data_source):
 
 
 def expand_intervals(frame, *, start_col, stop_col, value_col, data_source=None,
-                     union=False, allocate=False):
-    """Occupancy, or overlap-weighted interval totals, in ICU hours [h,h+1)."""
+                     union=False, allocate=False, grid: pd.Timedelta | None = None):
+    """Occupancy or totals in admission-anchored half-open cells.
+
+    ``grid=None`` retains ICU hours [h,h+1). Rate callbacks may explicitly
+    supply the scoped sub-hour grid; window/volume callers stay hourly.
+    """
     columns = ["admissionid", start_col, value_col]
     units = [c for c in ("doseunit", "unit", "doserateunit") if c in frame]
     columns += [c for c in units if c not in columns]
@@ -64,14 +70,17 @@ def expand_intervals(frame, *, start_col, stop_col, value_col, data_source=None,
         chunk = out.iloc[lo:lo + 20_000]
         start = chunk["__start"].to_numpy(dtype=float)
         stop = chunk["__stop"].to_numpy(dtype=float)
-        first = np.floor(start).astype(np.int64)
-        counts = (np.ceil(stop).astype(np.int64) - first).clip(min=0)
+        step = grid.total_seconds() / 3600 if grid is not None else 1.0
+        first = (grid_floor_index(start, step) if grid is not None else np.floor(start)).astype(np.int64)
+        last = -grid_floor_index(-stop, step) if grid is not None else np.ceil(stop)
+        counts = (last.astype(np.int64) - first).clip(min=0)
         rows = np.repeat(np.arange(len(chunk)), counts)
         offsets = np.arange(len(rows)) - np.repeat(np.cumsum(counts) - counts, counts)
-        hours = first[rows] + offsets
+        bins = first[rows] + offsets
+        hours = grid_bin_hours(bins, grid) if grid is not None else bins
         piece = chunk.iloc[rows][["admissionid", value_col, *units]].reset_index(drop=True)
         if allocate:
-            overlap = np.minimum(stop[rows], hours + 1) - np.maximum(start[rows], hours)
+            overlap = np.minimum(stop[rows], hours + step) - np.maximum(start[rows], hours)
             piece[value_col] = piece[value_col].to_numpy(dtype=float) * overlap / (stop[rows] - start[rows])
         piece[start_col] = hours * 60.0 + piece.admissionid.map(origins).to_numpy(dtype=float)
         pieces.append(piece)

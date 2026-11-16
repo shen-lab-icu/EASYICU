@@ -371,6 +371,13 @@ def build_export_file_metadata_binding(
 ):
     """Bind a producer-owned physical output to typed metadata exactly once."""
 
+    from .native_events import NATIVE_EVENT_MODULES, event_metadata_binding
+
+    if module in NATIVE_EVENT_MODULES:
+        spec = NATIVE_EVENT_MODULES[module]
+        spec.canonical(frame)
+        return event_metadata_binding(spec, relative_path=relative_path, database=database)
+
     import pandas as pd
     from easyicu.databases.time_origin import native_export_time_origin
 

@@ -950,12 +950,15 @@ def mimic_rate_mv(
     admission_times: Optional[pd.DataFrame] = None,
     **kwargs
 ) -> pd.DataFrame:
-    """Expand MetaVision rates over positive intersections with ICU-hour cells."""
+    """Expand MetaVision rates on ICU hours or the explicit scoped rate grid."""
     if data.empty:
         return data
     if id_cols is None:
         id_cols = _mimic_duration_id_cols(data, None)
-    return expand_mv_rate(data, val_col, unit_col, stop_var, id_cols, admission_times)
+    from ..concept.minute_resolution import active_minute_rate_grid
+
+    return expand_mv_rate(data, val_col, unit_col, stop_var, id_cols, admission_times,
+                          grid=active_minute_rate_grid())
 
 
 def calc_dur(
@@ -4033,12 +4036,14 @@ def aumc_rate_kg(
     
     if stop_col and stop_col in df.columns and index_col and index_col in df.columns:
         from ..concept.aumc_intervals import expand_intervals
+        from ..concept.minute_resolution import active_minute_rate_grid
 
         result = result.copy()
         result[stop_col] = df.loc[result.index, stop_col]
         result = expand_intervals(
             result, start_col=index_col, stop_col=stop_col,
             value_col=concept_name, data_source=data_source,
+            grid=active_minute_rate_grid(),
         )
     return result
 
@@ -5798,8 +5803,9 @@ def normalize_mv_rate(frame, concept_name, val_col, unit_col):
     return out.loc[valid].copy()
 
 
-def expand_mv_rate(data, val_col, unit_col, stop_var, id_cols, admission_times):
-    """Repeat a rate only in ICU-hour cells with positive [start, end) overlap."""
+def expand_mv_rate(data, val_col, unit_col, stop_var, id_cols, admission_times,
+                   *, grid: Optional[pd.Timedelta] = None):
+    """Repeat rates in half-open cells; ``grid=None`` preserves ICU-hour bins."""
     time_col = next((c for c in ("starttime", "charttime", "time") if c in data), None)
     if data.empty or time_col is None or not stop_var or stop_var not in data:
         return data
@@ -5822,14 +5828,23 @@ def expand_mv_rate(data, val_col, unit_col, stop_var, id_cols, admission_times):
         end = (ends - origins).dt.total_seconds() / 3600.
     valid = start.notna() & end.notna() & np.isfinite(start) & np.isfinite(end) & end.gt(start)
     rows = data.loc[valid, keep].reset_index(drop=True)
-    lo = np.floor(start.loc[valid]).to_numpy(dtype=np.int64)
-    hi = np.ceil(end.loc[valid]).to_numpy(dtype=np.int64)
+    from ..concept.minute_resolution import grid_bin_hours, grid_floor_index
+
+    if grid is None:
+        lo = np.floor(start.loc[valid]).to_numpy(dtype=np.int64)
+        hi = np.ceil(end.loc[valid]).to_numpy(dtype=np.int64)
+    else:
+        step = grid.total_seconds() / 3600
+        lo = grid_floor_index(start.loc[valid], step).astype(np.int64)
+        hi = -grid_floor_index(-end.loc[valid], step).astype(np.int64)
     counts = hi - lo
     repeated = np.repeat(np.arange(len(rows)), counts)
     if not len(repeated):
         return rows.iloc[:0]
     block = np.repeat(np.cumsum(counts) - counts, counts)
     hours = np.repeat(lo, counts) + np.arange(len(repeated)) - block
+    if grid is not None:
+        hours = grid_bin_hours(hours, grid)
     result = rows.iloc[repeated].reset_index(drop=True)
     if numeric:
         result[time_col] = hours.astype(float)

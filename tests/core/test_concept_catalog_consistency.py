@@ -281,6 +281,7 @@ def test_extract_database_modules_use_the_shared_catalog() -> None:
        'sedation_analgesia': list(SEDATION_ANALGESIA_CONCEPTS),
        'diuretic_nephrotoxin': list(DIURETIC_NEPHROTOXIN_CONCEPTS),
        'fluid_io': list(FLUID_IO_CONCEPTS),
+       'fluid_events': [],  # Native event properties are outside scalar concepts.
        'vis_inputs': list(VIS_INPUT_CONCEPTS),
        'gas_specimen': list(GAS_SPECIMEN_CONCEPTS),
        "subhour_signals": list(SUBHOUR_SIGNAL_CONCEPTS), "vent_native": list(VENT_NATIVE_CONCEPTS),
@@ -298,6 +299,7 @@ def test_extract_database_modules_use_the_shared_catalog() -> None:
     assert "subhour_signals" not in EXTRACT_MODULE_ORDER
     assert "vent_native" not in EXTRACT_MODULE_ORDER
     assert "haemo_native" not in EXTRACT_MODULE_ORDER
+    assert "fluid_events" not in EXTRACT_MODULE_ORDER
 
 
 def test_web_catalog_aligns_with_merged_extraction_dictionary() -> None:

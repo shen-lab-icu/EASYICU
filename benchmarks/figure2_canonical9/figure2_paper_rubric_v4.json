@@ -84,6 +84,7 @@
     "src/easyicu/api/concepts.py",
     "src/easyicu/api/convenience.py",
     "src/easyicu/api/derivation_context.py",
+    "src/easyicu/api/event_extraction.py",
     "src/easyicu/api/extraction.py",
     "src/easyicu/api/medications.py",
     "src/easyicu/api/special_concepts.py",
@@ -120,6 +121,7 @@
     "src/easyicu/concept/errors.py",
     "src/easyicu/concept/export_metadata.py",
     "src/easyicu/concept/expr_parser.py",
+    "src/easyicu/concept/fluid_administrations.py",
     "src/easyicu/concept/fractional_excretion.py",
     "src/easyicu/concept/free_days.py",
     "src/easyicu/concept/hirid_admission.py",
@@ -135,6 +137,7 @@
     "src/easyicu/concept/mimic_prescription_time.py",
     "src/easyicu/concept/mimic_support.py",
     "src/easyicu/concept/minute_resolution.py",
+    "src/easyicu/concept/native_events.py",
     "src/easyicu/concept/nephrotoxin_coexposure.py",
     "src/easyicu/concept/parser.py",
     "src/easyicu/concept/provenance.py",
@@ -1564,7 +1567,7 @@
     "src/easyicu/webserver/zotero_probe.py"
   ],
   "scorer_tree_root": "benchmarks/figure2_canonical9/successor_v4",
-  "scorer_tree_sha256": "9d777ecd2f175d247c2e091122c2844f4394705a7784599b592665171451faf3",
+  "scorer_tree_sha256": "ca99ad7d75fb0e6413af2c7ddc09f6b8fa912233d7c35ce4d24221bbb00faf99",
   "suite_projection_sha256": "11c39afac69c9a0b560c6aa92be19f05725f04c66b9d2c499cfdb353c40295ab",
   "suite_ref": "easyicu_evaluation_protocol_suite/v2",
   "tasks": [

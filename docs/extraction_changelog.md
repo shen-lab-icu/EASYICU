@@ -7,6 +7,46 @@ answers is in brackets.
 lead-r13 (0.1.0) is validated on SICdb 1.0.8, the default release, and
 remains compatible with SICdb 1.0.6 (the release is detected from the schema).
 
+## Unreleased — native fluid administrations and scoped interval rates [S732FE]
+
+Explicit minute loads now expand AUMC `aumc_rate_kg` and MetaVision
+`mimic_rate_mv` intervals on the scoped rate grid. Non-hour starts, changes
+and half-open stops retain their minute positions in `haemo_native`.
+Without the minute opt-in the same callbacks retain their hourly output.
+
+`extract_database(..., modules=["outcome", "fluid_events"], native_export_v2=True)`
+adds a native event table for AUMC, MIMIC-IV and SICdb. This module is outside
+the default order and scalar concept catalog. Its typed columns are `stay_id`,
+`event_index` (a stable per-stay record ordinal), `start`, `end` (ICU-relative
+hours floored to minutes after origin subtraction), `volume_ml`, `fluid_class`,
+`mode`, and `mode_evidence`. The primary key is `(stay_id, event_index)`;
+identical administrations at the same minute remain separate rows through
+batching and native-v2 publication. The manifest binds the event row grain,
+both time coordinates, property metadata and a source/mode receipt.
+
+The typed fluid-source accessor reuses the exact `fluid_io` source objects,
+including their item membership and declared exclusions. No second item list
+or new dictionary concepts are added. AUMC also excludes coded Flush/not-IV
+rows. Amounts use AUMC `fluidin` mL, unit-gated MIMIC-IV `amount`, and SICdb
+`Amount` in the selected references' verified mL units. Positive finite amounts
+and usable source clocks are required. Enteral feeding is never selected;
+parenteral feeding is included only through its existing `fluid_io` sources.
+
+Mode uses a closed coded vocabulary. MIMIC-IV `Continuous IV`/`Continuous Med`
+are continuous; `Bolus`/`Drug Push` are bolus. AUMC `iscontinuous=1` establishes
+continuous mode; zero does not establish a bolus and remains unknown. SICdb
+`IsSingleDose=0/1` establishes continuous/bolus mode; its artificial single-dose
+end is replaced by the start. Timed MIMIC-IV boluses retain their recorded end.
+Missing or unrecognized mode evidence stays unknown, without duration-based
+inference or copying an unrecognized source label into the output.
+
+HiRID publishes a typed empty event table with a `NOT_AVAILABLE` receipt:
+fluid counters cannot establish native administration records. SICdb FFP
+events remain unavailable because `fluid_io` has no validated FFP source.
+All default module membership, dictionary counts and default exports are
+unchanged. Validation uses synthetic sources; real-data checks are aggregate
+source scans only, with the MIMIC-IV allowed-stay join.
+
 ## Unreleased — thesis batch 1 opt-in measures and reviewed source extensions [S732]
 
 Implementation completion: `6a1f24af5`.

@@ -48,6 +48,7 @@ from ..concept.minute_resolution import (
     resolution_summary,
 )
 from ..concept.merge_time_index import merge_fill_scope
+from ..concept.native_events import NATIVE_EVENT_MODULES
 from ..config import DATABASE_ID_CONFIG
 from ..resources import load_dictionary
 from ..utils.death_time_semantics import (
@@ -155,6 +156,8 @@ EXTRACT_MODULES["vent_native"] = list(VENT_NATIVE_CONCEPTS)
 # S2HN: pressures (combined, arterial, cuff), HR, CVP, CO/CI, SVV/PPV and NEE at a one-minute grid, explicitly requested only.
 EXTRACT_MODULES["haemo_native"] = list(HAEMO_NATIVE_CONCEPTS)
 EXTRACT_MODULES["fluid_io"] = list(FLUID_IO_CONCEPTS)
+# Native event properties have their own typed schema, outside scalar concepts.
+EXTRACT_MODULES.update({module: [] for module in NATIVE_EVENT_MODULES})
 EXTRACT_MODULES["cardiac_markers"] = list(CARDIAC_MARKERS_CONCEPTS)
 EXTRACT_MODULES["inflam_detail"] = list(INFLAM_DETAIL_CONCEPTS)
 EXTRACT_MODULES["renal_detail"] = list(RENAL_DETAIL_CONCEPTS)
@@ -3977,6 +3980,13 @@ def _run_module_extraction(
     import traceback
     import pandas as pd
     from easyicu import load_concepts as _lc
+
+    if module_name in NATIVE_EVENT_MODULES:
+        from .event_extraction import run_event_extraction
+
+        run_event_extraction(module=module_name, database=database, data_path=data_path,
+                             patient_ids=patient_ids_filter, batch_size=batch_size, output_dir=output_dir)
+        return
 
     t0 = time.time()
     module_memory_sampler = _RSSPeakSampler().start()
@@ -8082,7 +8092,12 @@ def _publish_native_export_v2(
             pd.read_parquet(outcome_source)
         )
     time_window_authority = _native_export_time_window_authority(
-        modules=published_modules,
+        # A structurally unavailable event table contains no longitudinal
+        # observations and needs no stay bounds merely to seal its absence.
+        modules=[module for module in published_modules if not (
+            module in NATIVE_EVENT_MODULES
+            and ((result.get("modules", {}).get(module) or {}).get("event_receipt") or {}).get("status") == "NOT_AVAILABLE"
+        )],
         stay_time_upper_bounds=stay_time_upper_bounds,
         required=bool(require_stay_time_bounds),
     )
@@ -8193,7 +8208,14 @@ def _publish_native_export_v2(
                     f"{temporary_parquet}"
                 )
             arrow_result = None
-            if not physical_output_missing:
+            if module in NATIVE_EVENT_MODULES:
+                from .event_extraction import publish_event_table
+
+                arrow_result = publish_event_table(
+                    source_parquet=source_parquet, temporary_parquet=temporary_parquet,
+                    module=module, stay_time_upper_bounds=stay_time_upper_bounds,
+                )
+            elif not physical_output_missing:
                 arrow_result = _try_publish_native_export_arrow_fast_path(
                     source_parquet=source_parquet,
                     temporary_parquet=temporary_parquet,
@@ -8466,6 +8488,8 @@ def _publish_native_export_v2(
                     concepts=requested_concept_plan[module],
                 ),
             }
+        if module in NATIVE_EVENT_MODULES:
+            files[-1]["event_receipt"] = (result["modules"].get(module) or {}).get("event_receipt", {})
         # Prevent the previous fallback frame from overlapping the next
         # ``read_parquet`` RHS. Return unused Arrow pages as well so a 19-file
         # package does not appear cumulatively resident to the OS.
@@ -8570,6 +8594,9 @@ def _publish_native_export_v2(
                     "primary_key": ["stay_id", "charttime"],
                     "null_key_equality": "nulls_equal",
                 },
+                **{module: {"row_grain": NATIVE_EVENT_MODULES[module].row_grain,
+                            "primary_key": list(NATIVE_EVENT_MODULES[module].primary_key)}
+                   for module in modules if module in NATIVE_EVENT_MODULES},
             },
         },
         "module_timings_seconds": module_timings,
@@ -9227,6 +9254,8 @@ def extract_database(
         # batch-level retries join the run's retry history (D3-LEDGER).
         mod_result["stream_resume_events"] = list(manifest.get("stream_resume_events") or [])
         mod_result["storage_unavailable"] = list(manifest.get("storage_unavailable") or [])
+        if "event_receipt" in manifest:
+            mod_result["event_receipt"] = dict(manifest["event_receipt"])
         if manifest.get("stream_failure") is not None:
             mod_result["stream_failure"] = dict(manifest["stream_failure"])
         result["stream_retry_history"].extend(
@@ -9279,6 +9308,8 @@ def extract_database(
                 {mod_name: mod_result["source_bounds"]}, database=str(database),
                 dictionary=publication_dictionary(str(database)),
             )
+        if "event_receipt" in manifest:
+            output_manifest["event_receipt"] = dict(manifest["event_receipt"])
         # 每个模块一个宽表 parquet：manifest["saved"] 只有一条（键=模块名），
         # info 里带 concepts（列名清单）+ concept_meta（逐概念 rows/bounds provenance）。
         for _saved_key, info in manifest.get("saved", {}).items():
@@ -9473,7 +9504,7 @@ def extract_database(
             group.get("_adaptive_stream_batches", _adaptive_stream_batches)
         )
         stream_retry_attempt = int(group.get("_stream_retry_attempt", 0))
-        group_mods = [m for m in group["modules"] if EXTRACT_MODULES.get(m)]
+        group_mods = [m for m in group["modules"] if EXTRACT_MODULES.get(m) or m in NATIVE_EVENT_MODULES]
         group_special = list(group["special"])
         if not group_mods and not group_special:
             continue
