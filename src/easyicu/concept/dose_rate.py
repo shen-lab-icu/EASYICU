@@ -98,8 +98,15 @@ def point_rates(frame, *, ids, index, value, hours, channel=None, native_scale=1
     return _finish(out, ids, index, value, native_scale)
 
 
+def _point_flags(frame):
+    # An object column of True/False/None would make ``~`` a bitwise integer
+    # negation under pandas 3; the flag is always read as a strict boolean.
+    return frame[POINT].fillna(False).astype(bool)
+
+
 def _point_spans(frame, ids, value):
-    points = frame.loc[frame[POINT].fillna(False)].copy()
+    point = _point_flags(frame)
+    points = frame.loc[point].copy()
     if not points.empty:
         keys = [*ids, CHANNEL]
         # At an exact tie, stop wins; otherwise use the greatest setting.
@@ -109,11 +116,11 @@ def _point_spans(frame, ids, value):
         nxt = points.groupby(keys, dropna=False)[START].shift(-1)
         gap = nxt - points[START]
         points[END] = nxt.where(gap.gt(0) & gap.le(5.), points[START] + 1.)
-    return pd.concat([frame.loc[~frame[POINT].fillna(False)], points], ignore_index=True)
+    return pd.concat([frame.loc[~point], points], ignore_index=True)
 
 
 def _supersede_intervals(frame, ids, value):
-    identified = ~frame[POINT].fillna(False) & frame[CHANNEL].fillna('').ne('')
+    identified = ~_point_flags(frame) & frame[CHANNEL].fillna('').ne('')
     intervals = frame.loc[identified].copy()
     if not intervals.empty:
         keys = [*ids, CHANNEL]
@@ -211,7 +218,11 @@ def datetime_hours(frame, index, ids, admission_times):
     origins = pd.Timestamp('1970-01-01', tz='UTC')
     if admission_times is not None:
         lookup = admission_times.drop_duplicates(ids[0]).set_index(ids[0])['intime']
-        origins = pd.to_datetime(frame[ids[0]].map(lookup), errors='coerce', utc=True)
+        lookup = pd.to_datetime(lookup, errors='coerce', utc=True)
+        # Reindex rather than Series.map: pandas 3 maps through a float cast that
+        # a datetime lookup cannot take.
+        origins = lookup.reindex(frame[ids[0]].to_numpy())
+        origins.index = frame.index
     return (pd.to_datetime(frame[index], errors='coerce', utc=True) - origins).dt.total_seconds() / 3600.
 
 
