@@ -277,7 +277,12 @@ def _message_directly_names_label(message: str, proposed: Any) -> bool:
 
 
 def _literal_outcome_choice(message: str) -> str:
-    """Return one explicit, unambiguous outcome value in the user's own words."""
+    """Return one designated display label, preserving compound outcomes.
+
+    StudyContext keeps the user's label; Planner defines executable endpoints.
+    Conjunctions within that label are not alternative choices or permission
+    to select just one component. Multiple designations still need a choice.
+    """
     choices: list[str] = []
     for clause in re.split(r"[。；;\n]", str(message or "")):
         if not clause.strip() or re.search(r"[?？]|(?:不要|不选择|不采用|不用|先别|暂不|拒绝|不同意|不确认|是否|能否|如果|假如|\bor\b|\b(?:do\s+not|don't|never|not|should|whether|if)\b|或者|还是|或是)", clause, re.I):
@@ -288,17 +293,17 @@ def _literal_outcome_choice(message: str) -> str:
         matches = list(re.finditer(pattern, clause, flags=re.I))
         for match in matches:
             value = match.group(1).strip()
-            if value and not re.search(r"(?:或者|还是|或是|以及|和|与|、|\bor\b|待定|未定|不确定)", value, re.I):
+            if value and not re.search(r"(?:或者|还是|或是|\bor\b|待定|未定|不确定)", value, re.I):
                 choices.append(value)
         english = re.search(r"\bprimary\s+(?:outcome|endpoint)\s*(?:is|will\s+be|:)\s*([^,;?]+)", clause, re.I)
         if english:
             value = english.group(1).strip().rstrip(".")
-            if value and not re.search(r"\b(?:or|and|unknown|undecided|tbd)\b", value, re.I):
+            if value and not re.search(r"\b(?:or|unknown|undecided|tbd)\b", value, re.I):
                 choices.append(value)
         english_use = re.search(r"\b(?:choose|select|use)\s+(.+?)\s+as\s+(?:the\s+)?primary\s+(?:outcome|endpoint)\b", clause, re.I)
         if english_use:
             value = english_use.group(1).strip()
-            if value and not re.search(r"\b(?:or|and|unknown|undecided|tbd)\b", value, re.I):
+            if value and not re.search(r"\b(?:or|unknown|undecided|tbd)\b", value, re.I):
                 choices.append(value)
     return choices[0] if len(choices) == 1 else ""
 
