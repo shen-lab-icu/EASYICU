@@ -159,6 +159,13 @@ def _refuse_a_shared_unix_socket() -> None:
 
 
 @app.on_event("startup")
+def _install_stack_dump_signal() -> None:
+    from easyicu.webserver import stack_dump
+
+    stack_dump.install()
+
+
+@app.on_event("startup")
 def _acquire_web_deployment_lease() -> None:
     acquire_single_process_lease()
     try:
