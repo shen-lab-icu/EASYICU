@@ -1090,7 +1090,7 @@
     "boolean"
   ],
   "vancomycin_iv": [
-    "vancomycin systemic (intravenous) administration; input of vancomycin_piperacillin_tazobactam",
+    "vancomycin systemic (intravenous) administration; an input of the vancomycin and piperacillin-tazobactam co-exposure",
     "静脉万古霉素给药",
     "boolean"
   ]

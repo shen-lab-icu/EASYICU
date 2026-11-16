@@ -15,7 +15,7 @@ from ..planning.analysis_types import (
 from ..planning import scientific_action_catalog as _scientific_actions
 from .article_contract_switch import describe_article_contract_family_switch
 from ..planning.cohort_contract import (
-    cohort_concept_id_scope,
+    cohort_concept_id_scope, default_export_concept_ids,
     sealed_cohort_concept_ids,
 )
 from ..planning.prompt_projection import (
@@ -148,11 +148,7 @@ def _format_concept_id_allowlist(columns: Sequence[str] = ()) -> str:
         "run's sealed columns were not available to narrow them)"
     )
     if not concept_ids:
-        # Without sealed columns, list what a default export carries: concepts
-        # that only an explicitly selected module exports cannot bind here.
-        from easyicu.concept.catalog import OPT_IN_ONLY_CONCEPTS
-
-        concept_ids = sorted(known_concept_ids(include_audit=False) - OPT_IN_ONLY_CONCEPTS)
+        concept_ids = sorted(default_export_concept_ids(known_concept_ids(include_audit=False)))
     if not concept_ids:
         return (
             "ALLOWED concept_ids — no concept dictionary entries were loaded. "

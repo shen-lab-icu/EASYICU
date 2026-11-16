@@ -12228,7 +12228,7 @@
           "status": "unavailable"
         }
       },
-      "description": "vancomycin systemic (intravenous) administration; input of vancomycin_piperacillin_tazobactam"
+      "description": "vancomycin systemic (intravenous) administration; an input of the vancomycin and piperacillin-tazobactam co-exposure"
     },
     "vancomycin_piperacillin_tazobactam": {
       "category": "medications",

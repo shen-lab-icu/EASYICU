@@ -5,7 +5,7 @@ from dataclasses import replace
 import pandas as pd
 import pytest
 
-from easyicu.api import EXTRACT_MODULES
+from easyicu.api import EXTRACT_MODULE_ORDER, EXTRACT_MODULES
 from easyicu.concept.callbacks import apply_vent_mode_frame, _load_vent_mode_map
 from easyicu.io.ts_utils import change_interval
 from easyicu.resources import load_dictionary
@@ -136,6 +136,7 @@ def test_recent_semantic_fixes_only_feed_ventilator_module(concept):
 
     consumers = {
         module for module, names in EXTRACT_MODULES.items()
-        if concept in dependency_closure(names)
+        # Opt-in minute modules (vent_native) republish ventilator inputs on request.
+        if module in EXTRACT_MODULE_ORDER and concept in dependency_closure(names)
     }
     assert consumers == {"ventilator"}

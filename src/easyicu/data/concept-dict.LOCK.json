@@ -2,7 +2,7 @@
   "finalized": true,
   "finalized_note": "2026-09-21 v6 数据基础已完成重建与质控：六库受影响模块均从原始数据刷新，全部 114 个 native-v2 模块由同一 clean runtime 97f508c6 重新发布。MIMIC-III/IV 住院死亡状态逐 stay 与原始 admissions 完全一致，death_time 的缺失性逐行一致，非缺失值仅有 float32 写出误差（最大分别 0.000115/0.000228 小时）。其余字典、临床合同、数据源与运行时修复均由候选包 provenance 和封存门禁绑定。",
   "locked_for_extraction_run": "full6_native_v6_clean_rebuild_97f508c6_20260921",
-  "concept_dict_sha256": "37c0afbfc9a8561b89c0e14d812c659c0e50b4ef6977879876158289b31f812e",
+  "concept_dict_sha256": "d96618449f127e142784c87f53251109cb6c2efb7cf0f5a2346d66988661ba38",
   "sofa2_dict_sha256": "a3f64f28dbf704a6d4822376a6778620eff455f1e703ee9081e51c85a750b118",
   "total_concepts": 408,
   "new_this_round": [],
@@ -174,7 +174,7 @@
       "change": "User-approved 20261112-audit12 reseal: v0.1.0 re-release: bind the installed dictionaries so research launches pass the strict dictionary gate (S732) Consent: 同意重新封存并重新发布"
     },
     {
-      "git_commit": "cbfd26e00425d1f85c6b63f07106fdfc0147b9cd",
+      "git_commit": "659ef8fd0f45fbaab308a858b86680800c327aa3",
       "change": "User-approved 20261116-audit13 reseal: thirteenth reseal: S907 + TB1 + nativevent + haemo_native + fluid_events Consent: 同意重新封存，并继续 TB2"
     }
   ]

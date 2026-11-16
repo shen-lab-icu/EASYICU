@@ -207,6 +207,21 @@ def test_rb_05_every_drug_and_blood_product_needs_a_positive_dose(concept, spec,
             assert "statusdescription" in spec["extra_vars"]
             assert spec["status_var"] == "statusdescription"
             assert "Rewritten" in spec["excluded_statuses"]
+    elif spec.get("callback") == "sicdb_active_exposure":
+        # S732 active-hour exposures keep identifier and ICU hour only: one point
+        # dose per ICU hour 0..4, so the TRUE hours are the positive doses.
+        from easyicu.concept import ConceptResolver
+
+        origin = 7_200.0
+        cases = pd.DataFrame({"CaseID": [5], "ICUOffset": [origin], "TimeOfStay": [origin + 72 * 3_600]})
+        ds = SimpleNamespace(config=SimpleNamespace(name="sic"), load_table=lambda *a, **kw: cases)
+        offsets = [origin + hour * 3_600 for hour in range(5)]
+        frame = pd.DataFrame({"CaseID": 5, "Offset": offsets, "OffsetDrugEnd": offsets,
+                              spec["val_var"]: [0., None, -1., 2., 0.]})
+        out = _apply(spec, concept, frame, projected, data_source=ds)
+        aligned = ConceptResolver.__new__(ConceptResolver)._align_time_to_admission(out, ds, ["CaseID"], "Offset")
+        assert set(aligned.loc[aligned[concept].eq(True), "Offset"].floordiv(1).astype(int)) == {3}
+        return
     else:
         column = DEFAULTS[spec["table"]]
         frame = pd.DataFrame({"row": range(5), column: [0., None, -1., 2., 0.], "IsSingleDose": 1})

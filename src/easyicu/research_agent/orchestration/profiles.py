@@ -964,15 +964,15 @@ E1_REVIEWED_DEMO_2026_11_12_AUDIT12 = replace(
 
 E1_PROGRESSIVE_PLANNER_CANARY_2026_11_16_AUDIT13 = replace(
     E1_PROGRESSIVE_PLANNER_CANARY_2026_11_12_AUDIT12,
-    version="20261116-audit13", locked_at="2026-11-16T15:16:04Z",
+    version="20261116-audit13", locked_at="2026-11-16T16:28:20Z",
     # thirteenth reseal: S907 + TB1 + nativevent + haemo_native + fluid_events
-    expected_concept_dict_sha="37c0afbfc9a8561b89c0e14d812c659c0e50b4ef6977879876158289b31f812e",
+    expected_concept_dict_sha="d96618449f127e142784c87f53251109cb6c2efb7cf0f5a2346d66988661ba38",
     expected_sofa2_dict_sha="a3f64f28dbf704a6d4822376a6778620eff455f1e703ee9081e51c85a750b118",
 )
 
 E1_REVIEWED_DEMO_2026_11_16_AUDIT13 = replace(
     E1_REVIEWED_DEMO_2026_11_12_AUDIT12,
-    version="20261116-audit13", locked_at="2026-11-16T15:16:04Z",
+    version="20261116-audit13", locked_at="2026-11-16T16:28:20Z",
     expected_concept_dict_sha=E1_PROGRESSIVE_PLANNER_CANARY_2026_11_16_AUDIT13.expected_concept_dict_sha,
     expected_sofa2_dict_sha=E1_PROGRESSIVE_PLANNER_CANARY_2026_11_16_AUDIT13.expected_sofa2_dict_sha,
 )
@@ -1409,14 +1409,14 @@ E1_REVIEWED_DEMO_LIVE_PUBMED_2026_11_12_AUDIT12 = replace(
 
 E1_PROGRESSIVE_PLANNER_CANARY_LIVE_PUBMED_2026_11_16_AUDIT13 = replace(
     E1_PROGRESSIVE_PLANNER_CANARY_LIVE_PUBMED_2026_11_12_AUDIT12,
-    version="20261116-audit13", locked_at="2026-11-16T15:16:04Z",
+    version="20261116-audit13", locked_at="2026-11-16T16:28:20Z",
     expected_concept_dict_sha=E1_PROGRESSIVE_PLANNER_CANARY_2026_11_16_AUDIT13.expected_concept_dict_sha,
     expected_sofa2_dict_sha=E1_PROGRESSIVE_PLANNER_CANARY_2026_11_16_AUDIT13.expected_sofa2_dict_sha,
 )
 
 E1_REVIEWED_DEMO_LIVE_PUBMED_2026_11_16_AUDIT13 = replace(
     E1_REVIEWED_DEMO_LIVE_PUBMED_2026_11_12_AUDIT12,
-    version="20261116-audit13", locked_at="2026-11-16T15:16:04Z",
+    version="20261116-audit13", locked_at="2026-11-16T16:28:20Z",
     expected_concept_dict_sha=E1_PROGRESSIVE_PLANNER_CANARY_2026_11_16_AUDIT13.expected_concept_dict_sha,
     expected_sofa2_dict_sha=E1_PROGRESSIVE_PLANNER_CANARY_2026_11_16_AUDIT13.expected_sofa2_dict_sha,
 )
@@ -2198,26 +2198,26 @@ WEB_DESKTOP_FIRST_RESULT_LIVE_PUBMED_SIC_OVERLAY = replace(WEB_DESKTOP_FIRST_RES
 # moves the current names; 2026_11_12_AUDIT12 stays history.
 DESKTOP_FIRST_RESULT_2026_11_12_AUDIT12 = DESKTOP_FIRST_RESULT
 DESKTOP_FIRST_RESULT = replace(DESKTOP_FIRST_RESULT_2026_11_12_AUDIT12,
-    version="20261116-audit13", locked_at="2026-11-16T15:16:04Z",
+    version="20261116-audit13", locked_at="2026-11-16T16:28:20Z",
     expected_concept_dict_sha=E1_PROGRESSIVE_PLANNER_CANARY_2026_11_16_AUDIT13.expected_concept_dict_sha,
     expected_sofa2_dict_sha=E1_PROGRESSIVE_PLANNER_CANARY_2026_11_16_AUDIT13.expected_sofa2_dict_sha,
 )
 DESKTOP_FIRST_RESULT_LIVE_PUBMED_2026_11_12_AUDIT12 = DESKTOP_FIRST_RESULT_LIVE_PUBMED
 DESKTOP_FIRST_RESULT_LIVE_PUBMED = replace(DESKTOP_FIRST_RESULT_LIVE_PUBMED_2026_11_12_AUDIT12,
-    version="20261116-audit13", locked_at="2026-11-16T15:16:04Z",
+    version="20261116-audit13", locked_at="2026-11-16T16:28:20Z",
     expected_concept_dict_sha=E1_PROGRESSIVE_PLANNER_CANARY_2026_11_16_AUDIT13.expected_concept_dict_sha,
     expected_sofa2_dict_sha=E1_PROGRESSIVE_PLANNER_CANARY_2026_11_16_AUDIT13.expected_sofa2_dict_sha,
 )
 PUBLIC_DEMO_ACCEPTANCE_2026_11_12_AUDIT12 = PUBLIC_DEMO_ACCEPTANCE
 PUBLIC_DEMO_ACCEPTANCE = replace(PUBLIC_DEMO_ACCEPTANCE_2026_11_12_AUDIT12,
-    version="20261116-audit13", locked_at="2026-11-16T15:16:04Z",
+    version="20261116-audit13", locked_at="2026-11-16T16:28:20Z",
     expected_concept_dict_sha=E1_PROGRESSIVE_PLANNER_CANARY_2026_11_16_AUDIT13.expected_concept_dict_sha,
     expected_sofa2_dict_sha=E1_PROGRESSIVE_PLANNER_CANARY_2026_11_16_AUDIT13.expected_sofa2_dict_sha,
 )
 _SIC_OVERLAY_PROFILE_COORDINATES_2026_11_16_AUDIT13 = {
     **_SIC_OVERLAY_PROFILE_COORDINATES_2026_11_12_AUDIT12,
     "version": "20261116-sic-overlay-v15",
-    "locked_at": "2026-11-16T15:16:04Z",
+    "locked_at": "2026-11-16T16:28:20Z",
     "expected_concept_dict_sha": E1_PROGRESSIVE_PLANNER_CANARY_2026_11_16_AUDIT13.expected_concept_dict_sha,
     "expected_sofa2_dict_sha": E1_PROGRESSIVE_PLANNER_CANARY_2026_11_16_AUDIT13.expected_sofa2_dict_sha,
 }

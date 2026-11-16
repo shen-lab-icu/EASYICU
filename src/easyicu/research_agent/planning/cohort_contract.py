@@ -17,7 +17,7 @@ from contextlib import contextmanager
 from functools import lru_cache
 from dataclasses import asdict, dataclass, replace
 from pathlib import Path
-from typing import Annotated, Any, Dict, Iterator, Literal, Optional, Sequence
+from typing import Annotated, Any, Dict, Iterable, Iterator, Literal, Optional, Sequence
 
 from pydantic import Field, PlainSerializer
 from easyicu.concept.catalog import BOUNDS_AUDIT_CONCEPTS
@@ -778,6 +778,19 @@ def known_concept_ids(*, include_audit: bool = True) -> set[str]:
                 if include_audit or (key not in BOUNDS_AUDIT_CONCEPTS and key not in PLANNER_HIDDEN_CONCEPTS)
             )
     return concept_ids
+
+
+def default_export_concept_ids(concept_ids: Iterable[str]) -> set[str]:
+    """The given concept ids a default export can carry.
+
+    Without sealed columns the Planner menu falls back to the dictionary; a
+    concept that only an explicitly selected module exports
+    (``concept.catalog.OPT_IN_ONLY_CONCEPTS``) cannot bind there. An export
+    that carries such a concept lists it through its sealed columns.
+    """
+    from easyicu.concept.catalog import OPT_IN_ONLY_CONCEPTS
+
+    return set(concept_ids) - OPT_IN_ONLY_CONCEPTS
 
 
 def _coerce_offset(value: Any) -> float:

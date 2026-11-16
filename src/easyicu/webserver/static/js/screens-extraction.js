@@ -105,7 +105,7 @@
     ['Vasopressors', '血管活性药物', 18, false, false],
     ['Other medications', '其他药物', 54, false, false],
     ['Renal & urine output', '肾脏与尿量', 73, false, false],
-    ['Urine chemistry & renal history', '尿液生化与肾病史', 5, false, false],
+    ['Urine chemistry & renal history', '尿液生化与肾病史', 7, false, false],
     ['Neurological', '神经系统', 14, false, false],
     ['Circulatory', '循环系统', 10, false, false],
     ['Other scores', '其他评分', 9, false, false],

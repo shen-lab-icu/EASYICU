@@ -883,7 +883,7 @@ DIURETIC_NEPHROTOXIN_METADATA = {
     'piperacillin_tazobactam': ('piperacillin-tazobactam intravenous administration', '哌拉西林他唑巴坦给药', 'boolean'),
     'vancomycin_piperacillin_tazobactam': ('vancomycin and piperacillin-tazobactam co-exposure: TRUE at an administration hour of either agent when the other agent was given in the same or the preceding 23 hours', '万古霉素与哌拉西林他唑巴坦联合暴露', 'boolean'),
     'nsaid': ('systemic non-steroidal anti-inflammatory drug administration (non-aspirin COX inhibitors)', '全身用非甾体抗炎药', 'boolean'),
-    'vancomycin_iv': ('vancomycin systemic (intravenous) administration; input of vancomycin_piperacillin_tazobactam', '静脉万古霉素给药', 'boolean'),
+    'vancomycin_iv': ('vancomycin systemic (intravenous) administration; an input of the vancomycin and piperacillin-tazobactam co-exposure', '静脉万古霉素给药', 'boolean'),
 }
 
 VIS_INPUT_CONCEPTS = (

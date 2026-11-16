@@ -106,7 +106,10 @@ def test_without_sealed_columns_the_dictionary_is_still_offered() -> None:
     rendered = _format_concept_id_allowlist([])
 
     # Round-5 bounds receipts require explicit selection (R5C-HIRID-014).
-    assert len(_listed_ids(rendered)) == len(known_concept_ids(include_audit=False))
+    from easyicu.concept.catalog import OPT_IN_ONLY_CONCEPTS
+
+    # Concepts only an opt-in module exports cannot bind without sealed columns.
+    assert len(_listed_ids(rendered)) == len(set(known_concept_ids(include_audit=False)) - OPT_IN_ONLY_CONCEPTS)
     assert "sealed columns were not" in rendered
 
 
