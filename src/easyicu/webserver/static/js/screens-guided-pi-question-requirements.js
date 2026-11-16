@@ -116,8 +116,8 @@
       const covered = Math.max(0, Math.floor(Number(notes.covered_count) || 0));
       if (lines.length && covered) {
         lines.push(tr(
-          `${covered} more ${covered === 1 ? 'is' : 'are'} answered by plan steps (verified by EasyICU)`,
-          `另有 ${covered} 项已由计划步骤回答（EasyICU 已核实）`,
+          `${covered} more ${covered === 1 ? 'is' : 'are'} covered by the plan or host delivery (verified by EasyICU)`,
+          `另有 ${covered} 项已由计划或宿主交付覆盖（EasyICU 已核实）`,
         ));
       }
     }

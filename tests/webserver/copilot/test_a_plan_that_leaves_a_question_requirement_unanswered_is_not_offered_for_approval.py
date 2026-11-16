@@ -31,6 +31,7 @@ from easyicu.research_agent.canonical_json import canonical_sha256
 from easyicu.research_agent.orchestration.progressive_planning import (
     question_requirement_outcome,
 )
+from easyicu.research_agent.orchestration.workflow import human_review_requests_for_plan
 from easyicu.research_agent.planning.approval_stops import PLAN_APPROVAL_STOPS
 from easyicu.research_agent.planning.question_requirements import (
     QUESTION_REQUIREMENT_STOP_CODES,
@@ -39,9 +40,12 @@ from easyicu.research_agent.planning.question_requirements import (
     QUESTION_REQUIREMENTS_REVIEW_SCHEMA_VERSION,
     QUESTION_REQUIREMENTS_SCHEMA_VERSION,
     analysis_plan_sha256,
+    judge_question_requirements,
+    question_requirement_findings,
+    QuestionRequirement,
     question_requirements_on_plan_under_review,
 )
-from easyicu.research_agent.schema import AnalysisPlan
+from easyicu.research_agent.schema import AnalysisPlan, AnalysisStep
 from easyicu.webserver import agent_pipeline_runs, agent_runs, run_file_guide
 from easyicu.webserver import study_contexts as study_context_owner
 from easyicu.webserver.pi_copilot.projections import project_run_row
@@ -128,6 +132,47 @@ def test_the_registry_holds_the_owners_stops() -> None:
     assert set(_STOPS) <= set(PLAN_APPROVAL_STOPS)
     # A fresh candidate plan can be generated from each stop.
     assert set(_STOPS) <= agent_routes._CANDIDATE_PLAN_WORKFLOW_CODES
+
+
+@pytest.mark.parametrize("quote, allowed", [
+    ("web article preview and downloadable PDF", True),
+    ("fit an unsupported joint model and provide a PDF", False),
+])
+def test_host_delivery_is_approvable_but_a_scientific_gap_still_blocks(quote, allowed) -> None:
+    plan = AnalysisPlan(research_question=quote, steps=[AnalysisStep(
+        step_id="primary", intent="Describe the synthetic cohort", method="descriptive",
+        inputs=[], expected_outputs=["table:summary"],
+    )])
+    requirement = QuestionRequirement(
+        id="r1", kind="analysis", quote=quote, coverage="capability_gap",
+        gap={"requirement": "design_element_unsupported", "element": "analysis",
+             "detail": "The Planner declares this requirement unavailable."},
+    )
+    judged = judge_question_requirements(
+        [requirement], plan=plan, family_template=True,
+        relatives=lambda concept: frozenset({concept}),
+        check_gap=lambda gap: ("unverifiable", "No scientific capability evidence."),
+    )
+    requests = human_review_requests_for_plan(
+        findings=question_requirement_findings(judged), plan=plan, require_plan_review=True,
+    )
+    study = complete_study()
+    digest = study_context_owner.scientific_configuration_sha256(dict(study))
+    reasons = [r.payload["reason"] for r in requests]
+    run, review = _run_and_review(reasons, digest=digest)
+    review["plan_approval_allowed"] = all(r.payload.get("approval_allowed") is not False for r in requests)
+    review["requests"] = [{
+        "review_id": r.review_id, "kind": r.kind, "summary": r.summary,
+        "authority_sha256": r.authority_sha256, "reason_code": r.payload["reason"],
+        "approval_allowed": r.payload.get("approval_allowed", True),
+    } for r in requests]
+    snapshot = build_research_workflow_snapshot(
+        study=study, active_export_present=True, active_job=None,
+        latest_run=run, plan_review_authority=review,
+    )
+    offers = host_decision_offers(snapshot, study=study, latest_run=run, plan_review_authority=review)
+    assert (offers.plan_review is not None) is allowed
+    assert snapshot.next_action_code == ("operator_plan_approval_required" if allowed else _GAP)
 
 
 @pytest.mark.parametrize("reason", _STOPS)

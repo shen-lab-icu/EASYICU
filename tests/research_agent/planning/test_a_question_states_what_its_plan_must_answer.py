@@ -480,6 +480,104 @@ def test_a_gap_the_host_cannot_check_stops_the_plan_as_unverified(
     assert ".. r2" not in stop.message
 
 
+@pytest.mark.parametrize("quote", [
+    "web article preview and downloadable PDF",
+    "网页文章预览、可下载的 PDF",
+    "result tables, figures and reference list",
+    "结果表、图表、正文、引用",
+])
+@pytest.mark.parametrize("kind", ["analysis", "delivery"])
+def test_host_delivery_overrides_a_planner_gap_and_records_why(tmp_path, quote, kind) -> None:
+    context = _context(named=False).model_copy(update={"research_question": _QUESTION + " " + quote})
+    claim = {**_UNCHECKABLE, "kind": kind, "quote": quote}
+    result = _planned(context, [claim])
+    findings = question_requirement_outcome(
+        context=context, plan=result.output, facts=result.facts, run_dir=tmp_path,
+    )
+    record = json.loads((tmp_path / QUESTION_REQUIREMENTS_FILENAME).read_text())
+    assert record["stated"][0] == claim  # Keep the original claim for audit.
+    (row,) = record["judged"]
+    assert row["disposition"] == "covered"
+    assert row["claimed_coverage"] == "capability_gap"
+    assert row["host_judged"] is row["verified_by_host"] is True
+    assert row["reason_code"] == "question_requirement_covered_by_host_delivery"
+    assert row["delivery"]["source"] == "host_verified"
+    assert row["delivery"]["contract"] == "easyicu.run_delivery/1"
+    assert row["delivery"]["deliverable_kinds"]
+    assert row["gap"] == claim["gap"]  # An overridden claim is never erased.
+    assert _question_stops(findings) == []
+    assert record["coverage"]["complete"] is True
+    assert all(r["delivery_kind"] == r["concept_identity"] and not r["owner_step_ids"]
+               for r in record["coverage"]["records"])
+    reviewed = judge_recorded_requirements(record, plan=result.output)
+    assert reviewed.record["judged"] == record["judged"]
+    assert _question_stops(reviewed.findings()) == []
+
+
+@pytest.mark.parametrize("quote", [
+    "fit an unavailable joint model and provide a PDF",
+    "download patient-level data as PDF",
+    "downloadable DOCX",
+    "upload the article to an external web server",
+    "未支持的纵向模型、图表和参考文献",
+])
+@pytest.mark.parametrize("kind", ["analysis", "delivery"])
+def test_delivery_words_cannot_hide_a_method_or_unavailable_delivery_gap(quote, kind) -> None:
+    context = _context()
+    plan = _planned(context, [_BENCHMARK]).output
+    item = QuestionRequirement.model_validate({**_UNCHECKABLE, "kind": kind, "quote": quote})
+    (judged,) = judge_question_requirements(
+        [item], plan=plan, family_template=True,
+        relatives=concept_relatives(context), check_gap=_host_check(context),
+    )
+    assert judged.disposition == "capability_gap"
+    assert judged.verified_by_host is False
+    assert _question_stops(question_requirement_findings([judged])) == [
+        "question_requirement_capability_gap",
+    ]
+
+
+def test_typed_delivery_uses_the_host_contract_independently_of_wording(monkeypatch) -> None:
+    quote = "give me a typeset copy of the article"
+    context = _context(named=False).model_copy(update={"research_question": _QUESTION + " " + quote})
+    claim = {**_UNCHECKABLE, "kind": "delivery", "quote": quote,
+             "deliverable_kinds": ["manuscript_pdf"]}
+    def no_scientific_gap_check(*args, **kwargs):
+        raise AssertionError("the host delivery contract owns this gap claim")
+    monkeypatch.setattr(
+        "easyicu.research_agent.agents.family_spec_planner.check_capability_gap", no_scientific_gap_check,
+    )
+    result = _planned(context, [claim])
+    assert result.facts.question_requirements[0].deliverable_kinds == ["manuscript_pdf"]
+    schema = question_requirements_owner.question_requirements_schema([])
+    assert "deliverable_kinds" in schema["items"]["required"]
+    assert "manuscript_pdf" in schema["items"]["properties"]["deliverable_kinds"]["items"]["enum"]
+    (judged,) = judge_question_requirements(
+        result.facts.question_requirements, plan=result.output, family_template=True,
+        relatives=concept_relatives(context), check_gap=_host_check(context),
+    )
+    assert judged.disposition == "covered"
+    with pytest.raises(ValidationError, match="only a delivery requirement"):
+        QuestionRequirement.model_validate({**claim, "kind": "analysis", "quote": "fit an unsupported joint model"})
+    with pytest.raises(ValidationError, match="not scientific concepts"):
+        QuestionRequirement.model_validate({**claim, "concepts": ["age"]})
+
+
+def test_delivery_coverage_cannot_replace_a_scientific_step_owner() -> None:
+    with pytest.raises(ValidationError, match="owner step or host delivery"):
+        PlanRequirementCoverageRecord(
+            requirement_id="outcome:death", kind="outcome", concept_identity="death",
+            source_ref="research_context.json.target_outcome", status="covered",
+            reason_code="typed_plan_owner_present",
+        )
+    with pytest.raises(ValidationError, match="host delivery covers only its typed output"):
+        PlanRequirementCoverageRecord(
+            requirement_id="outcome:death", kind="outcome", concept_identity="death",
+            source_ref="research_context.json.target_outcome", status="covered",
+            delivery_kind="manuscript_pdf", reason_code="question_requirement_covered_by_host_delivery",
+        )
+
+
 @pytest.mark.parametrize(
     ("family_template", "disposition"),
     [(False, "not_covered"), (True, "capability_gap")],

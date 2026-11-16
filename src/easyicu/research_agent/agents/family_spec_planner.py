@@ -79,6 +79,7 @@ from ..planning.question_requirements import (
     question_effect_measures,
     question_requirements_schema,
     question_requirements_shape,
+    requirement_delivery_coverage,
 )
 from ..planning.literature_design_authority import (
     LITERATURE_DESIGN_DIMENSIONS,
@@ -906,16 +907,21 @@ def check_question_requirement_gaps(
     context: ResearchContext,
     planning_contract_context: str = "",
 ) -> None:
-    """A gap the spec declares stops the plan, so the host checks it first.
+    """Check scientific gap claims; the delivery contract owns output claims.
 
     One the study's typed context contradicts goes back to the Planner with
     what the context shows (``planning.capability_gap``), under the outline
     route's code; a verified or unverifiable gap stands and is judged once the
-    plan exists.
+    plan exists. Host-covered output claims are retained for the requirement
+    owner's recorded override, independently of scientific capability checks.
     """
 
     for index, item in enumerate(spec.question_requirements):
         if item.gap is None:
+            continue
+        if requirement_delivery_coverage(item) is not None:
+            # The requirement owner records the host override after compiling;
+            # the statistical capability checker does not own delivered files.
             continue
         check = check_capability_gap(
             item.gap,

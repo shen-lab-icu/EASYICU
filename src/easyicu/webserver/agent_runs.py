@@ -25,6 +25,10 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Dict, List, Mapping, Optional
 
+from easyicu.research_agent.contracts.product_files import (
+    RUN_DELIVERY_ARTIFACT_NAMES,
+    RUN_DOCUMENT_SPECS,
+)
 from easyicu.webserver import state_paths
 from easyicu.webserver import agent_outputs
 from easyicu.webserver import dataio
@@ -74,13 +78,9 @@ _RUN_ARTIFACT_NAMES = [
     "question_requirements.json",
     "question_requirements_review.json",
     "scientific_readiness.json",
-    "manuscript_draft.json",
-    "manuscript_provenance.json",
-    "manuscript_pdf_receipt.json",
+    *RUN_DELIVERY_ARTIFACT_NAMES,
     "benchmark_scorecard.json",
     "workflow_graph.json",
-    "figure_gallery.json",
-    "result_tables.json",
     "system_validation_report.json",
     "system_validation_report_receipt.json",
     "source_run_manifest.json",
@@ -92,32 +92,7 @@ _RUN_ARTIFACT_NAMES = [
 # Generated manuscript documents are a separate, fixed browser boundary from
 # JSON review payloads.  They may be downloaded/previewed but are never parsed
 # as JSON or accepted from a browser-supplied path.
-_RUN_DOCUMENT_SPECS = {
-    "manuscript_revision.pdf": {
-        "media_type": "application/pdf",
-        "max_bytes": 16 * 1024 * 1024,
-    },
-    "manuscript_scaffold.pdf": {
-        "media_type": "application/pdf",
-        "max_bytes": 16 * 1024 * 1024,
-    },
-    "manuscript_scaffold.tex": {
-        "media_type": "text/x-tex; charset=utf-8",
-        "max_bytes": 2 * 1024 * 1024,
-    },
-    "manuscript_scaffold.bib": {
-        "media_type": "application/x-bibtex; charset=utf-8",
-        "max_bytes": 2 * 1024 * 1024,
-    },
-    "system_validation_report.html": {
-        "media_type": "text/html; charset=utf-8",
-        "max_bytes": 8 * 1024 * 1024,
-    },
-    "system_validation_report.pdf": {
-        "media_type": "application/pdf",
-        "max_bytes": 16 * 1024 * 1024,
-    },
-}
+_RUN_DOCUMENT_SPECS = RUN_DOCUMENT_SPECS
 
 _SIGNOFF_CONFIRMATIONS = {
     "evidence_reviewed",

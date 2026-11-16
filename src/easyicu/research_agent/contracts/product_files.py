@@ -1,8 +1,16 @@
-"""Physical file-format contract for declared scientific products."""
+"""Scientific product formats and the host run delivery/export contract.
+
+The fixed download boundary and planning resolve the same typed outputs here;
+delivery promises no scientific result, patient export or publication readiness.
+"""
 
 from __future__ import annotations
 
+import re
+from dataclasses import dataclass
 from pathlib import Path
+from types import MappingProxyType
+from typing import Literal, Mapping, Sequence
 
 
 FIGURE_SUFFIXES = frozenset({".png", ".svg", ".pdf", ".tif", ".tiff"})
@@ -108,7 +116,114 @@ def contained_regular_output_file(out_dir: Path, value: object) -> Path:
     return candidate
 
 
+RUN_DELIVERY_SCHEMA_VERSION = "easyicu.run_delivery/1"
+HOST_DELIVERY_REASON = "question_requirement_covered_by_host_delivery"
+DeliverableKind = Literal[
+    "article_preview", "manuscript_pdf", "result_tables", "figures", "references",
+]
+
+# The fixed browser document boundary, previously owned by agent_runs. Keeping
+# it here lets planning read the same capabilities without importing webserver.
+RUN_DOCUMENT_SPECS = MappingProxyType({
+    "manuscript_revision.pdf": {"media_type": "application/pdf", "max_bytes": 16 * 1024 * 1024},
+    "manuscript_scaffold.pdf": {"media_type": "application/pdf", "max_bytes": 16 * 1024 * 1024},
+    "manuscript_scaffold.tex": {"media_type": "text/x-tex; charset=utf-8", "max_bytes": 2 * 1024 * 1024},
+    "manuscript_scaffold.bib": {"media_type": "application/x-bibtex; charset=utf-8", "max_bytes": 2 * 1024 * 1024},
+    "system_validation_report.html": {"media_type": "text/html; charset=utf-8", "max_bytes": 8 * 1024 * 1024},
+    "system_validation_report.pdf": {"media_type": "application/pdf", "max_bytes": 16 * 1024 * 1024},
+})
+
+
+@dataclass(frozen=True)
+class RunDeliverable:
+    artifact_names: tuple[str, ...]
+    # Compatibility reader for stored requirements predating typed kinds.
+    # Only a whole delivery-only request is accepted, never a substring of a
+    # scientific requirement. The Planner's prose about feasibility is ignored.
+    request_names: str
+
+
+RUN_DELIVERABLES: Mapping[DeliverableKind, RunDeliverable] = MappingProxyType({
+    "article_preview": RunDeliverable(
+        ("manuscript_draft.json", "manuscript_provenance.json"),
+        r"(?:web|html|browser|online|网页|在线|浏览器)\s*"
+        r"(?:(?:article|manuscript|report|文章|论文|报告)\s*)?(?:preview|预览)"
+        r"|(?:article|manuscript|report)\s+text|正文",
+    ),
+    "manuscript_pdf": RunDeliverable(
+        ("manuscript_scaffold.pdf", "manuscript_revision.pdf", "manuscript_pdf_receipt.json"),
+        r"pdf",
+    ),
+    "result_tables": RunDeliverable(
+        ("result_tables.json",), r"(?:result\s+)?tables?|结果表(?:格)?|表格",
+    ),
+    "figures": RunDeliverable(
+        ("figure_gallery.json",), r"figures?|图表|图件|图形|图片",
+    ),
+    "references": RunDeliverable(
+        ("manuscript_scaffold.bib",),
+        r"reference\s+list|references|bibliography|citations?"
+        r"|参考文献(?:清单|列表)?|引用(?:清单|列表)?|文献列表",
+    ),
+})
+RUN_DELIVERY_ARTIFACT_NAMES = tuple(dict.fromkeys(
+    name for spec in RUN_DELIVERABLES.values() for name in spec.artifact_names
+    if name not in RUN_DOCUMENT_SPECS
+))
+
+# Neutral delivery grammar only. Unknown words (methods, data requests,
+# destinations, formats, etc.) leave a residue and keep ordinary gap handling.
+_DELIVERY_GRAMMAR = re.compile(
+    r"\b(?:please|provide|include|deliver|a|an|the|and|or|with|downloadable|"
+    r"download|manuscript|article|report|files?|readable)\b"
+    r"|(?:请|提供|包含|交付|以及|并|和|及|与|或|可下载|下载|文件|信息充分|清晰|且|可读|的)",
+    re.IGNORECASE,
+)
+_SEPARATORS = re.compile(r"[\s,，、;；。.：:()（）/\-]+")
+
+
+def requested_deliverable_kinds(quote: str) -> tuple[DeliverableKind, ...]:
+    """Translate a complete delivery request to typed kinds, including old records.
+
+    Scientific/mixed clauses and unknown deliveries deliberately resolve to
+    nothing, so mentioning a PDF cannot hide an unavailable method or variable.
+    """
+    remainder = quote
+    kinds: list[DeliverableKind] = []
+    for kind, spec in RUN_DELIVERABLES.items():
+        pattern = re.compile(r"(?<![a-z])(?:" + spec.request_names + r")(?![a-z])", re.IGNORECASE)
+        remainder, count = pattern.subn(" ", remainder)
+        if count:
+            kinds.append(kind)
+    remainder = _DELIVERY_GRAMMAR.sub(" ", remainder)
+    return tuple(kinds) if kinds and not _SEPARATORS.sub("", remainder) else ()
+
+
+def host_delivery_coverage(kinds: Sequence[DeliverableKind]) -> dict[str, object] | None:
+    """Resolve typed kinds against the export contract, never feasibility prose."""
+    if not kinds or any(kind not in RUN_DELIVERABLES for kind in kinds):
+        return None
+    read = tuple(dict.fromkeys(kinds))
+    return {
+        "source": "host_verified",
+        "contract": RUN_DELIVERY_SCHEMA_VERSION,
+        "deliverable_kinds": list(read),
+        "artifact_names": list(dict.fromkeys(
+            name for kind in read for name in RUN_DELIVERABLES[kind].artifact_names
+        )),
+        "reason": "The host delivery contract covers these outputs independently of analysis steps.",
+    }
+
+
 __all__ = [
+    "DeliverableKind",
+    "HOST_DELIVERY_REASON",
+    "RUN_DELIVERABLES",
+    "RUN_DELIVERY_ARTIFACT_NAMES",
+    "RUN_DELIVERY_SCHEMA_VERSION",
+    "RUN_DOCUMENT_SPECS",
+    "host_delivery_coverage",
+    "requested_deliverable_kinds",
     "FIGURE_SUFFIXES",
     "KNOWN_FILE_SUFFIXES",
     "contained_regular_output_file",

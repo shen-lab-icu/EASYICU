@@ -23,6 +23,7 @@ from pydantic import BaseModel, ConfigDict, Field, model_validator
 from ..methods.descriptive_inputs import REQUESTED_CONCEPT_NO_DATA, context_columns_without_data
 from .adjustment_authority import concept_relatives
 from ..contracts.analysis_design import PlanShapeRemediation as PlanShapeRemediation
+from ..contracts.product_files import DeliverableKind, HOST_DELIVERY_REASON
 
 if TYPE_CHECKING:
     from ..schema import AnalysisPlan, ResearchContext
@@ -44,14 +45,22 @@ class PlanRequirementCoverageRecord(BaseModel):
     source_ref: str = Field(min_length=3, max_length=512)
     status: RequirementCoverageStatus
     owner_step_ids: tuple[str, ...] = ()
+    delivery_kind: Optional[DeliverableKind] = Field(default=None, exclude_if=lambda value: value is None)
     reason_code: str = Field(min_length=3, max_length=160)
 
     @model_validator(mode="after")
     def _owner_status_is_consistent(self) -> "PlanRequirementCoverageRecord":
         if len(self.owner_step_ids) != len(set(self.owner_step_ids)):
             raise ValueError("requirement coverage owner step ids must be unique")
-        if self.status == "covered" and not self.owner_step_ids:
-            raise ValueError("covered requirement must name at least one owner step")
+        if self.delivery_kind is not None and (
+            self.kind != "question" or self.question_kind not in {"analysis", "delivery"}
+            or self.status != "covered" or self.owner_step_ids
+            or self.reason_code != HOST_DELIVERY_REASON
+            or self.concept_identity != self.delivery_kind
+        ):
+            raise ValueError("host delivery covers only its typed output, independently of steps")
+        if self.status == "covered" and not (self.owner_step_ids or self.delivery_kind):
+            raise ValueError("covered requirement must name an owner step or host delivery kind")
         if self.status != "covered" and self.owner_step_ids:
             raise ValueError("uncovered requirement cannot name an owner step")
         if (self.kind == "question") != (self.question_kind is not None):
@@ -92,7 +101,7 @@ def with_requirement_data_availability(
         record.model_copy(update={
             "status": "unsupported", "owner_step_ids": (),
             "reason_code": REQUESTED_CONCEPT_NO_DATA,
-        }) if context_columns_without_data(context, (record.concept_identity,)) else record
+        }) if not record.delivery_kind and context_columns_without_data(context, (record.concept_identity,)) else record
         for record in coverage.records
     )
     return coverage.model_copy(update={

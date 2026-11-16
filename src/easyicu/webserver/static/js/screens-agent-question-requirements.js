@@ -62,6 +62,7 @@
       subgroup: tr('Named subgroup', '指定亚组'),
       estimand: tr('Named estimand or measure', '指定估计量或指标'),
       analysis: tr('Other named analysis', '其他指定分析'),
+      delivery: tr('Requested output', '交付要求'),
       definition: tr('Definition', '定义'),
     };
     return labels[kind] || clip(kind, 40);
@@ -95,6 +96,9 @@
     const reading = names(row.reading_step_ids);
     const gap = row.gap && typeof row.gap === 'object' ? row.gap : null;
     if (row.disposition === 'covered') {
+      if (row.delivery && row.delivery.source === 'host_verified') {
+        return tr('Covered by EasyICU’s article and download delivery', '由 EasyICU 的文章与下载交付覆盖');
+      }
       const owners = names(row.owner_step_ids);
       return owners ? tr(`Answered by step ${owners}`, `由步骤 ${owners} 回答`) : '';
     }

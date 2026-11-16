@@ -256,6 +256,26 @@ def test_each_requirement_reads_with_its_disposition_reason_and_source(
     ]
 
 
+def test_host_delivery_is_shown_with_its_verified_reason() -> None:
+    requirement = QuestionRequirement(
+        id="r1", kind="delivery", quote="downloadable manuscript PDF",
+        coverage="capability_gap", deliverable_kinds=["manuscript_pdf"],
+        gap=ProgressiveCapabilityGap(
+            requirement="design_element_unsupported", element="analysis",
+            detail="The statistical plan cannot generate this document.",
+        ),
+    )
+    judged = judge_question_requirements(
+        [requirement], plan=PLAN, family_template=True,
+        relatives=lambda concept: frozenset({concept}),
+        check_gap=lambda gap: ("unverifiable", "No scientific capability evidence."),
+    )
+    html = _render(QUESTION_REQUIREMENTS_REVIEW_FILENAME, _record(judged))
+    assert "由 EasyICU 的文章与下载交付覆盖" in html
+    assert "EasyICU 已核实" in html
+    assert "不能批准" not in html
+
+
 def test_english_readers_keep_the_hosts_own_gap_detail(tmp_path: Path) -> None:
     judged = _judged()
     served = _opened(_record(judged), QUESTION_REQUIREMENTS_REVIEW_FILENAME, tmp_path)

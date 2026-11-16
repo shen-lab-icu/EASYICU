@@ -533,7 +533,7 @@ def test_the_card_names_each_requirement_and_its_source() -> None:
         "这份计划做不到：「the r7 analysis」",
         "计划中写明：the r3 analysis。尚需核对。",
         "计划中写明：the r2 analysis。尚需核对。（计划说它只用于定义：the comparison score）",
-        "另有 2 项已由计划步骤回答（EasyICU 已核实）",
+        "另有 2 项已由计划或宿主交付覆盖（EasyICU 已核实）",
     ]
     assert html.count("data-resource=") == 1
     assert f'data-resource="{REVIEW}"' in html

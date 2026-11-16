@@ -13,6 +13,10 @@ from easyicu.research_agent.reporting.system_validation_report import (
     render_system_validation_html,
 )
 from easyicu.webserver import agent_pipeline_runs, agent_runs
+from easyicu.research_agent.contracts.product_files import (
+    RUN_DELIVERABLES, RUN_DOCUMENT_SPECS, DeliverableKind,
+)
+from typing import get_args
 
 
 def _pdf_bytes(text: str) -> bytes:
@@ -74,6 +78,18 @@ def test_manuscript_document_boundary_is_fixed_and_media_typed(tmp_path) -> None
     assert validation["ok"] is True
     assert validation["media_type"] == "text/html; charset=utf-8"
     assert json_reader["error"] == "artifact_json_not_allowed"
+
+
+def test_requirement_delivery_contract_is_the_actual_download_boundary(tmp_path) -> None:
+    assert agent_runs._RUN_DOCUMENT_SPECS is RUN_DOCUMENT_SPECS
+    assert set(RUN_DELIVERABLES) == set(get_args(DeliverableKind))
+    for spec in RUN_DELIVERABLES.values():
+        for name in spec.artifact_names:
+            assert name in agent_runs._RUN_ARTIFACT_NAMES or name in RUN_DOCUMENT_SPECS
+    # Only the run's aggregate outputs and registered documents are covered.
+    for name in ("patient_rows.csv", "manuscript.docx", "unregistered.pdf"):
+        (tmp_path / name).write_bytes(b"synthetic withheld content")
+        assert agent_runs.read_run_artifact_bytes(str(tmp_path), name)["error"] == "artifact_not_allowed"
 
 
 def test_system_validation_governance_cannot_be_upgraded_to_publication() -> None:

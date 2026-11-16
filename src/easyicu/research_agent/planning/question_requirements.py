@@ -13,6 +13,9 @@ dropped silently.
 
 What the host can verify, it verifies:
 
+* typed delivery requirements are covered by the same product-file contract
+  the browser downloads read, independently of statistical plan steps. Old
+  untyped records use a conservative reader for complete delivery clauses;
 * the quote is written in the question (``population_spec.quote_written_in``);
 * every concept is one the run offers;
 * a benchmark is answered only by a step whose action compares models on the
@@ -101,6 +104,10 @@ from pydantic import (
 from ..canonical_json import canonical_sha256
 from ..contracts.association_execution import primary_binary_effect_measure
 from ..contracts.model_tokens import BinaryEffectMeasure
+from ..contracts.product_files import (
+    DeliverableKind, HOST_DELIVERY_REASON, RUN_DELIVERABLES,
+    host_delivery_coverage, requested_deliverable_kinds,
+)
 from ..schema import AnalysisPlan, ResearchContext, ValidationFinding
 from .population_spec import quote_written_in
 from .progressive_contract import (
@@ -128,7 +135,7 @@ MAX_NAMED_QUESTION_CONCEPTS = 8
 #: The columns one named concept may denote, the dictionary's relatives included.
 MAX_DENOTED_COLUMNS = 8
 
-RequirementKind = Literal["benchmark", "subgroup", "estimand", "analysis", "cohort_accounting", "definition"]
+RequirementKind = Literal["benchmark", "subgroup", "estimand", "analysis", "cohort_accounting", "definition", "delivery"]
 CoverageClaim = Literal["plan", "capability_gap", "definition_only"]
 Disposition = Literal[
     "covered", "not_covered", "capability_gap", "attested", "definition_only"
@@ -170,7 +177,7 @@ QUESTION_REQUIREMENT_STOP_CODES: tuple[str, ...] = (
 
 #: The rule the Planner is given, case-neutral.
 QUESTION_REQUIREMENTS_GUIDE = (
-    "Question requirements: state every analysis the research question explicitly asks "
+    "Question requirements: state every analysis or delivery the research question explicitly asks "
     "for beyond the sealed design as one question_requirements entry, quoting the "
     "question's own words: a comparison of the model or estimate with an existing score, "
     "model or estimate (benchmark), a named subgroup (subgroup), a named estimand or "
@@ -186,6 +193,12 @@ QUESTION_REQUIREMENTS_GUIDE = (
     "the question names (question_named_concepts) must appear in some entry, unless it "
     "is the sealed exposure or outcome. Return [] when the question asks for nothing "
     "beyond the sealed design."
+    " Delivery-only requests use kind delivery and deliverable_kinds from the host "
+    "delivery contract: " + ", ".join(RUN_DELIVERABLES) + ". "
+    "Quote only the requested outputs, keeping scientific requirements "
+    "separate. The host covers these outputs independently of analysis steps; never "
+    "declare them infeasible because the statistical plan does not generate files. "
+    "For other requirements use deliverable_kinds=[]."
 )
 
 
@@ -368,7 +381,7 @@ class QuestionRequirementsError(ValueError):
 
 
 class QuestionRequirement(BaseModel):
-    """One analysis the question asks for, in its words."""
+    """One explicit analysis or delivery requirement, in the question's words."""
 
     model_config = ConfigDict(extra="forbid", frozen=True)
 
@@ -385,6 +398,9 @@ class QuestionRequirement(BaseModel):
     #: the measure the plan's primary reports.  Omitted when absent.
     effect_measure: Optional[BinaryEffectMeasure] = Field(
         default=None, exclude_if=lambda value: value is None
+    )
+    deliverable_kinds: list[DeliverableKind] = Field(
+        default_factory=list, max_length=5, exclude_if=lambda value: not value
     )
 
     @field_validator("quote")
@@ -423,6 +439,12 @@ class QuestionRequirement(BaseModel):
             raise ValueError("a definition says in its note which element it defines")
         if self.effect_measure is not None and self.kind != "estimand":
             raise ValueError("only an estimand requirement names an effect measure")
+        if self.deliverable_kinds and (
+            self.kind != "delivery" or len(set(self.deliverable_kinds)) != len(self.deliverable_kinds)
+        ):
+            raise ValueError("only a delivery requirement names distinct deliverable kinds")
+        if self.kind == "delivery" and (concepts or (self.gap and self.gap.concept)):
+            raise ValueError("a delivery requirement names outputs, not scientific concepts")
         if (
             self.kind in {"benchmark", "subgroup", "cohort_accounting"}
             and self.coverage == "plan"
@@ -638,6 +660,7 @@ class JudgedRequirement:
     #: The analysis steps that read its concepts: what an attested claim rests
     #: on, never an owner.
     reading_step_ids: tuple[str, ...] = ()
+    delivery: Optional[Mapping[str, Any]] = None
 
     @property
     def verified_by_host(self) -> bool:
@@ -668,6 +691,7 @@ class JudgedRequirement:
             # Only a requirement that names a measure carries it, so the rows
             # of every other requirement keep their recorded bytes.
             **({"effect_measure": item.effect_measure} if item.effect_measure else {}),
+            **({"delivery": dict(self.delivery)} if self.delivery is not None else {}),
         }
 
 
@@ -728,6 +752,13 @@ def _judge(
     check_gap: GapCheck,
     sealed_owner_concepts: Mapping[str, Collection[str]],
 ) -> JudgedRequirement:
+    delivery = requirement_delivery_coverage(item)
+    if delivery is not None:
+        return JudgedRequirement(
+            item, "covered", HOST_DELIVERY_REASON, host_judged=True,
+            gap=item.gap, verification="unverified" if item.gap else None,
+            fact=str(delivery["reason"]), delivery=delivery,
+        )
     denoted = [relatives(concept) for concept in item.concepts]
     analysing = [
         step for step in plan.steps if step.planned_analysis_role in ANALYSIS_ROLES
@@ -849,6 +880,18 @@ def _judge(
         QUESTION_REQUIREMENT_APPROVAL_STOPS["not_covered"],
         reading_step_ids=reading,
     )
+
+
+def requirement_delivery_coverage(item: QuestionRequirement) -> dict[str, object] | None:
+    """Host-owned outputs bypass scientific gap checks, on every planning boundary."""
+    if item.gap is not None and item.gap.concept is not None:
+        return None
+    # Stored untyped requirements need a conservative compatibility reader.
+    # New requirements resolve the typed kind, independently of wording.
+    kinds = item.deliverable_kinds or (
+        requested_deliverable_kinds(item.quote) if item.kind in {"analysis", "delivery"} else ()
+    )
+    return host_delivery_coverage(kinds)
 
 
 def _judge_effect_measure(
@@ -1123,7 +1166,8 @@ def _coverage(
         if entry.disposition not in status:
             continue
         item = entry.requirement
-        for concept in item.concepts or [item.id]:
+        delivery_kinds = entry.delivery["deliverable_kinds"] if entry.delivery else ()
+        for concept in delivery_kinds or item.concepts or [item.id]:
             records.append(
                 PlanRequirementCoverageRecord(
                     requirement_id=f"question:{item.id}:{concept}",
@@ -1136,6 +1180,7 @@ def _coverage(
                     if entry.disposition == "covered"
                     else (),
                     reason_code=entry.reason_code,
+                    **({"delivery_kind": concept} if delivery_kinds else {}),
                 )
             )
     for measure in measures:
@@ -1421,8 +1466,10 @@ def judge_recorded_requirements(
 
     The same rules judge it, reading nothing of the study but what the record
     carries, so the judgment cannot drift with later changes to the study.  A
-    declared gap keeps the verdict it was given: it is a check of the study,
-    not of the plan.  A record that cannot be read is refused with
+    scientific gap keeps the verdict it was given: it is a check of the study,
+    not of the plan. Host delivery is resolved against the current export
+    contract, including for older records that declared it infeasible.
+    A record that cannot be read is refused with
     :data:`UNREADABLE_REASON`.
     """
 
@@ -1650,6 +1697,7 @@ def question_requirements_schema(
             "additionalProperties": False,
             "required": [
                 "id", "kind", "quote", "concepts", "coverage", "gap", "note",
+                "deliverable_kinds",
                 *(["effect_measure"] if effect_measures else []),
             ],
             "properties": {
@@ -1661,17 +1709,13 @@ def question_requirements_schema(
                 },
                 "kind": {
                     "type": "string",
-                    "enum": [
-                        "benchmark",
-                        "subgroup",
-                        "estimand",
-                        "analysis",
-                        "cohort_accounting",
-                        "definition",
-                    ],
+                    "enum": list(get_args(RequirementKind)),
                 },
                 "quote": {"type": "string"},
                 "concepts": {"type": "array", "items": concept},
+                "deliverable_kinds": {
+                    "type": "array", "items": {"type": "string", "enum": list(get_args(DeliverableKind))},
+                },
                 "coverage": {
                     "type": "string",
                     "enum": ["plan", "capability_gap", "definition_only"],
@@ -1709,9 +1753,11 @@ def question_requirements_shape(
     )
     return (
         '- "question_requirements": array of 0-6 objects, each exactly {"id": "r1".."r6", '
-        '"kind": "benchmark"|"subgroup"|"estimand"|"analysis"|"cohort_accounting"|"definition", "quote": "<the '
+        '"kind": "benchmark"|"subgroup"|"estimand"|"analysis"|"cohort_accounting"|"definition"|"delivery", "quote": "<the '
         'question\'s own words, 2-240 characters>", "concepts": [0-4 distinct names from '
         + json.dumps(list(concepts), ensure_ascii=False)
+        + '], "deliverable_kinds": [0-5 distinct kinds from '
+        + json.dumps(list(get_args(DeliverableKind)))
         + '], "coverage": "plan"|"capability_gap"|"definition_only", "gap": null or '
         '{"requirement": <one of '
         + ", ".join(get_args(CapabilityGapRequirement))
@@ -1784,6 +1830,7 @@ __all__ = [
     "question_requirements_record",
     "question_requirements_schema",
     "question_requirements_shape",
+    "requirement_delivery_coverage",
     "unaccounted_named_concepts",
     "write_question_requirements",
 ]
