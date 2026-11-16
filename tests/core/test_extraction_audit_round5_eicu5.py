@@ -436,8 +436,8 @@ def test_r5_eicu_026_dose_rates_break_long_gaps_and_stops_have_no_row(tmp_path, 
     infusion = pd.DataFrame({"infusionoffset": [0, 600, 660], "drugname": [drug] * 3, "drugrate": [1.0, 2.0, 0.0]})
     ds = _eicu_source(tmp_path, "eicu", infusiondrug=infusion)
     out = _hourly(ds, name)
-    # S732TW: the 10-hour gap has no supported active span.
-    assert out == {10.0: 2.0}
+    # The setting before the 10-hour gap keeps only its one-hour episode tail.
+    assert out == {0.0: 1.0, 10.0: 2.0}
 
 
 def test_r5_eicu_036_conflicting_unit_labelled_weights_are_not_arbitrarily_prioritized():

@@ -100,8 +100,8 @@ def test_eicu_rate_kg_missing_weight_leaves_non_perkg_rate_missing():
     assert by_id.loc[3] == pytest.approx(2.0)
 
 
-def test_eicu_rate_kg_unknown_singleton_keeps_schema_without_fabricated_time():
-    """An unbounded positive point has unknown active duration (S732TW)."""
+def test_eicu_rate_kg_singleton_keeps_schema_and_one_hour_overhang():
+    """A terminal positive point retains the declared one-hour rate overhang."""
 
     callback = eicu_rate_kg_callback(ml_to_mcg=2000.0)
     frame = pd.DataFrame(
@@ -127,7 +127,8 @@ def test_eicu_rate_kg_unknown_singleton_keeps_schema_without_fabricated_time():
         "infusionoffset",
         "dobu_rate",
     }
-    assert result.empty
+    assert result.infusionoffset.tolist() == [60.]
+    assert result.dobu_rate.tolist() == pytest.approx([2.5])
 
 
 def test_aumc_rate_kg_missing_weight_drops_only_non_perkg_rows():

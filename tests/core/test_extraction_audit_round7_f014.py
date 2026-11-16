@@ -2,8 +2,8 @@
 
 The published hourly rate must not depend on the dtype or the row order the
 table reader delivers. S732TW integrates each setting over active time; an
-amount-only row does not truncate it, and an unknown terminal setting adds
-no fabricated active time.
+amount-only row does not truncate it, and a terminal positive setting retains
+the declared one-hour overhang.
 """
 import itertools
 
@@ -45,7 +45,8 @@ def test_latest_chart_of_an_hour_carries_forward_whatever_the_row_order():
         out = _run(list(order))
         assert out[1.0] == pytest.approx(3.0)
         assert out[2.0] == pytest.approx(3.0)
-        assert out[3.0] == pytest.approx(3.0)  # active until the unknown terminal point
+        assert out[3.0] == pytest.approx((3 * 10 + 2 * 50) / 60)
+        assert out[4.0] == pytest.approx(2.0)  # tail ends at relative minute 250
 
 
 def test_amount_only_row_at_the_rate_time_does_not_truncate_the_infusion():
@@ -53,13 +54,13 @@ def test_amount_only_row_at_the_rate_time_does_not_truncate_the_infusion():
     rows = [(1, 1, 10, 7, np.nan), (2, 1, 10, 7, 1.0), (3, 1, 190, 7, 2.0)]
     results = [_run(list(order)) for order in itertools.permutations(rows)]
     assert all(r == results[0] for r in results)
-    assert results[0] == {0.0: 1.0, 1.0: 1.0, 2.0: 1.0, 3.0: 1.0}
+    assert results[0] == pytest.approx({0.0: 1.0, 1.0: 1.0, 2.0: 1.0, 3.0: 11 / 6, 4.0: 2.0})
 
 
-def test_stop_and_unknown_singleton_contribute_no_active_span():
+def test_stop_adds_no_time_and_later_singleton_keeps_one_hour_overhang():
     rows = [(1, 1, 10, 7, 0.0), (2, 1, 10 + 9 * 60, 7, 1.5)]
     out = _run(rows)
-    assert out == {}
+    assert out == {9.0: 1.5, 10.0: 1.5}
 
 
 def test_two_runs_over_the_same_rows_are_bitwise_identical():

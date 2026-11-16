@@ -93,13 +93,40 @@ def test_concurrent_infusions_sum_before_mean_and_max(path):
 
 
 @pytest.mark.parametrize('path', ['cv', 'eicu'])
-def test_five_hour_boundary_and_unknown_terminal_setting(path):
+def test_five_hour_boundary_keeps_terminal_overhang(path):
     exact = point_rate(path, [0, 300], [.1, .2])
-    assert exact.charttime.tolist() == [0., 1., 2., 3., 4.]
-    assert exact.norepi_rate.tolist() == pytest.approx([.1] * 5)
-    assert point_rate(path, [0, 301], [.1, .2]).empty
-    assert point_rate(path, [15], [.2]).empty
+    assert exact.charttime.tolist() == [0., 1., 2., 3., 4., 5.]
+    assert exact.norepi_rate.tolist() == pytest.approx([.1] * 5 + [.2])
     assert point_rate(path, [15, 30], [0., 0.]).empty
+
+
+@pytest.mark.parametrize('path', ['cv', 'eicu'])
+@pytest.mark.parametrize('minutes,rates,hours,expected', [
+    ([0], [.2], [0.], [.2]),
+    ([15], [.2], [0., 1.], [.2, .2]),
+    # 45 minutes at .1, then 15 at .3; the final .3 also covers 60..105.
+    ([0, 45], [.1, .3], [0., 1.], [.15, .3]),
+    # A >5 h gap breaks the episode; both endpoints retain a one-hour tail.
+    ([0, 301], [.1, .2], [0., 5., 6.], [.1, .2, .2]),
+], ids=['singleton', 'singleton_mid_hour', 'last_mid_hour', 'episode_gap'])
+def test_point_episode_ends_have_one_hour_overhang(path, minutes, rates, hours, expected):
+    out = point_rate(path, minutes, rates)
+    assert out.charttime.tolist() == hours
+    assert out.norepi_rate.tolist() == pytest.approx(expected)
+
+
+@pytest.mark.parametrize('path', ['cv', 'eicu'])
+@pytest.mark.parametrize('closing', [0., -1.])
+def test_nonpositive_terminal_setting_closes_without_overhang(path, closing):
+    out = point_rate(path, [45, 75], [.2, closing])
+    assert out.charttime.tolist() == [0., 1.]
+    assert out.norepi_rate.tolist() == pytest.approx([.2, .2])
+
+
+def test_invalid_eicu_terminal_setting_closes_without_overhang():
+    out = point_rate('eicu', [45, 75], [.2, float('nan')])
+    assert out.charttime.tolist() == [0., 1.]
+    assert out.norepi_rate.tolist() == pytest.approx([.2, .2])
 
 
 def test_sources_are_combined_before_point_intervals_and_concurrency():
@@ -305,6 +332,33 @@ def test_summary_precedes_episode_clipping_without_losing_stop_boundary(tmp_path
         patient_ids={ident: [1]}, concept_workers=1, verbose=False)['norepi_rate']
     assert result.data[result.index_column].tolist() == expected
     assert result.data.norepi_rate.tolist() == pytest.approx([.1] * len(expected))
+
+
+@pytest.mark.parametrize('database,last_hour', [('mimic', 96.5), ('eicu', 72.5)])
+def test_terminal_overhang_obeys_existing_episode_end(tmp_path, database, last_hour):
+    from easyicu.concept import ConceptResolver
+    from easyicu.resources import load_dictionary
+    from tests.support.mimic_synthetic_source import mimic_synthetic_source
+    from tests.core.test_eicu_extraction_audit2 import _eicu_source
+
+    if database == 'mimic':
+        frame = pd.DataFrame({'icustay_id': [1], 'itemid': [30120], 'rate': [.2],
+                              'charttime': [pd.Timestamp('2150-01-01') + pd.Timedelta(hours=last_hour)],
+                              'rateuom': ['mcgkgmin'], 'linkorderid': [10]})
+        source = mimic_synthetic_source(tmp_path, database, inputevents_cv=frame)
+        ident = 'icustay_id'
+    else:
+        frame = pd.DataFrame({'infusionoffset': [last_hour * 60], 'drugrate': [.2],
+                              'drugname': ['Norepinephrine (mcg/kg/min)'], 'patientweight': [70.]})
+        source = _eicu_source(tmp_path, database, infusiondrug=frame)
+        ident = 'patientunitstayid'
+    out = ConceptResolver(load_dictionary()).load_concepts(
+        ['norepi_rate', 'norepi_rate_max'], source, merge=False, r_compatible=False,
+        interval=pd.Timedelta(hours=1), patient_ids={ident: [1]}, concept_workers=1, verbose=False)
+    for name in ('norepi_rate', 'norepi_rate_max'):
+        result = out[name]
+        assert result.data[result.index_column].tolist() == [last_hour // 1]
+        assert result.data[name].tolist() == pytest.approx([.2])
 
 
 def test_carevue_restart_closes_a_setting_without_creating_a_new_one():

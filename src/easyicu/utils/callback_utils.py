@@ -3174,9 +3174,9 @@ def units_to_unit(x: pd.Timedelta) -> str:
 def _eicu_expand_rate_hours(frame, id_col, time_col, concept_name):
     """Summarise hourly active settings; retain the legacy minute dependency path.
 
-    Hourly dose rates use supported next observations within five hours,
-    without a fabricated terminal tail. Legacy *60 dependencies retain their
-    original six-hour cap and one-hour overhang.
+    Hourly dose rates use next observations within five hours and a one-hour
+    terminal overhang. Legacy *60 dependencies retain their original six-hour
+    cap and one-hour overhang.
     """
     from ..concept.window_expansion import expand_wintbl_vectorized
 

@@ -178,7 +178,9 @@ def test_r7_f012_carevue_support_keeps_legacy_coverage_when_dose_time_is_unknown
         rate = loaded[name]
         positive = set(rate.data.loc[rate.data[name].gt(0), rate.index_column])
         assert _hours(loaded["other_vaso"], "other_vaso") == expected
-        assert positive == {0., 1., 10., 11.}  # S732TW supported active spans only
+        # The last setting before each >5 h gap and the singleton at hour 20
+        # retain one hour of active rate; support-duration inference is separate.
+        assert positive == {0., 1., 2., 10., 11., 20.}
         assert _hours(loaded["vaso_ind"], "vaso_ind") == expected
 
 

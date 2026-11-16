@@ -127,11 +127,16 @@ Different infusion/link/order ids remain separate and add concurrently; an
 eICU event-row id (`infusiondrugid`) is not an infusion identity. Without an
 infusion id a drug has one setting sequence, including source-label changes.
 At an exact-time conflict a stop wins, otherwise the largest setting wins,
-so table order cannot select a different rate. There is no extrapolation
-after the final observed setting: its duration is unknown, and the new
-active-time denominator cannot justify the old fabricated one-hour tail.
-This forced rate-coverage change does **not** turn singleton duration NULL
-into zero, or alter duration episode inference or `*60` qualification.
+so table order cannot select a different rate. The final positive setting of
+each sequence remains active for **one hour from its exact charttime**, as in
+ricu 0.6.3 `create_intervals(overhang = 1 h)` and EasyICU's previous rate path.
+A positive setting followed by a gap greater than five hours is the last
+setting of its episode and receives the same one-hour overhang; the gap does
+not erase it or carry it through the gap. The existing episode/stay end rules
+still truncate the result. Zero, explicit stop and invalid settings add no
+active time. This declared rate overhang does **not** supply observed episode
+duration: singleton duration stays NULL, duration episode inference and `*60`
+qualification stay unchanged.
 
 MetaVision, AUMC and SICdb retain their explicit interval endpoints. A newer
 setting of the same recorded order supersedes its predecessor at its start;

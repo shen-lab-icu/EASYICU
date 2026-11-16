@@ -82,11 +82,11 @@ def interval_rates(frame, *, ids, index, value, starts, ends, native_scale=1., c
 
 
 def point_rates(frame, *, ids, index, value, hours, channel=None, native_scale=1.):
-    """Carry a setting only to a supported next observation within five hours.
+    """Carry settings to the next point within five hours, with a one-hour tail.
 
-    Stops and invalid settings close the preceding setting. A terminal positive
-    observation has unknown duration and cannot invent active minutes. Points
-    are kept until source concat so unit/label changes share one drug sequence.
+    Terminal positive settings, including those before an episode-breaking gap,
+    retain the ricu one-hour overhang. Stops and invalid settings only close.
+    Keep points until source concat so unit/label changes share one sequence.
     """
     out = frame.copy()
     out[START] = np.asarray(hours, dtype=float)
@@ -108,7 +108,7 @@ def _point_spans(frame, ids, value):
         points = points.drop_duplicates([*keys, START], keep='last')
         nxt = points.groupby(keys, dropna=False)[START].shift(-1)
         gap = nxt - points[START]
-        points[END] = nxt.where(gap.gt(0) & gap.le(5.))
+        points[END] = nxt.where(gap.gt(0) & gap.le(5.), points[START] + 1.)
     return pd.concat([frame.loc[~frame[POINT].fillna(False)], points], ignore_index=True)
 
 

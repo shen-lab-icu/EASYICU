@@ -43,9 +43,13 @@ sources: sum concurrent infusions, integrate their active dose, and divide by
 the union of active time in the hour. This replaces CareVue's charted median,
 eICU's maximum-active pooling, and unweighted interval pooling elsewhere.
 HiRID retains preceding-interval amount attribution, converting to an exact
-interval rate before integration. A terminal point with unknown duration no
-longer fabricates a one-hour tail; five-hour point episodes and all duration
-and `*60` definitions remain unchanged.
+interval rate before integration. Terminal positive CareVue/eICU settings
+retain one hour of active rate from their exact charttime, matching ricu
+0.6.3's overhang. A gap greater than five hours ends an episode with the same
+one-hour tail. Existing episode/stay end rules truncate it; zero, stop and
+invalid settings add no time. Singleton duration remains NULL, and all duration
+and `*60` definitions remain unchanged. The S732TW follow-up restores this
+overhang after its initial implementation incorrectly removed terminal cells.
 
 SICdb propofol replaces the opaque 3057 hourly summary with verified continuous
 medication 1499/1549 rate intervals, excluding single-dose rows. This necessary
