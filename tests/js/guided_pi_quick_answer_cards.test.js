@@ -133,6 +133,28 @@ test('a grouped comparison reads each group and the test from their own rows', (
   assert.match(html, /Between groups: P = 0.041 \(Mann–Whitney \/ Kruskal–Wallis test\)/);
 });
 
+test('a comparison over more than two groups says no test ran, before and after approval', () => {
+  const { cards } = owners('zh');
+  const compare = { ...READING, intent: 'compare', grouping: ['sex'] };
+  const base = attachment();
+  base.proposal.card.plan = { reading: compare, effective_reading: compare, qualification: [], test: null };
+  assert.match(rendered(cards, base), /未做组间检验：快速回答只对两组做检验。/);
+  const rows = [];
+  for (const [group, value] of [['Male', 3.5], ['Female', 4.5], ['Unknown', 2.5]]) {
+    rows.push({ statistic: 'median', variable: 'lact_max', group, level: '', unit: 'mmol/L', value, evidence: evidence('y') });
+  }
+  const answered = attachment({ answer: { status: 'ok', reason: 'quick_answer_ready', source: SOURCE, rows, sentences: [], expand: {} } });
+  answered.proposal.card.plan = base.proposal.card.plan;
+  const html = rendered(cards, answered);
+  assert.match(html, /<th scope="row">Unknown<\/th>/);
+  assert.match(html, /未做组间检验/);
+  assert.doesNotMatch(html, /组间比较：P =/);
+  const tested = attachment({ answer: { status: 'ok', reason: 'quick_answer_ready', source: SOURCE, sentences: [], expand: {},
+    rows: [...rows.slice(0, 2), { statistic: 'p_value:mann_whitney_or_kruskal', variable: 'lact_max', group: 'Comparison', level: '', unit: '', value: 0.04, evidence: evidence('z') }] } });
+  tested.proposal.card.plan = { ...base.proposal.card.plan, test: 'mann_whitney_or_kruskal' };
+  assert.doesNotMatch(rendered(cards, tested), /未做组间检验/);
+});
+
 test('a question that is not quick says why and offers the full study, never a calculation', () => {
   const { cards } = owners();
   const html = rendered(cards, attachment({ proposal: { status: 'full_study', reason: 'quick_requires_adjusted_study',

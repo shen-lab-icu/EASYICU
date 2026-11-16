@@ -216,7 +216,12 @@ def _plan(reading, effective, source):
     if {str(level) for level in group_levels} & {"Overall", "Missing", "Comparison"}:
         raise QuickStop("quick_grouping_ambiguous")
     test = None
-    if effective.intent == "compare":
+    # More than two groups: per-group summaries without a between-group test.
+    # An omnibus test would silently compare levels the question may not mean
+    # (e.g. an "Unknown" sex); the card says no test ran and the full study
+    # offers one.
+    multi_group = effective.intent == "compare" and len(group_levels) > 2
+    if effective.intent == "compare" and not multi_group:
         if len(group_levels) != 2:
             raise QuickStop("quick_two_groups_required")
         # The shared categorical test compares the complete distribution. It
@@ -233,7 +238,9 @@ def _plan(reading, effective, source):
         population=population_receipt(population), measure_column=variable.name if variable else None,
         measure_levels=levels, group_column=group.name if group else None, group_levels=group_levels, test=test,
         qualification=("typed_reading_unambiguous", "single_prepared_population", "single_measure",
-                       "host_descriptive_kernel", "standard_two_group_test" if test else "point_summaries_only"),
+                       "host_descriptive_kernel",
+                       "standard_two_group_test" if test else
+                       "multi_group_summaries_without_test" if multi_group else "point_summaries_only"),
     )
 
 

@@ -575,12 +575,35 @@ def test_a_measure_requires_the_exact_prepared_window(prepared):
     assert prepare_quick_answer(request, source=prepared, provider=None).reason == "quick_window_unresolved"
 
 
-def test_group_count_is_not_inferred_from_the_question(prepared):
+def test_more_than_two_groups_get_per_group_summaries_without_a_test(prepared):
+    # The group count is not inferred from the question: a third level is
+    # summarised as its own group, and no omnibus test silently includes it.
     variables = [v.model_copy(update={"observed_domain": {"levels": ["Male", "Female", "Unknown"]}})
                  if v.name == "sex" else v for v in prepared.context.variables]
     prepared = rebound(prepared, context=prepared.context.model_copy(update={"variables": variables}))
     request = reading(intent="compare", grouping=["sex"], measure={"concept": "age", "statistic": "mean"})
-    assert prepare_quick_answer(request, source=prepared, provider=None).reason == "quick_two_groups_required"
+    proposal = prepare_quick_answer(request, source=prepared, provider=None)
+    assert proposal.status == "approval_required"
+    assert proposal.card.plan.test is None
+    assert proposal.card.plan.group_levels == ("Male", "Female", "Unknown")
+    assert proposal.card.plan.qualification[-1] == "multi_group_summaries_without_test"
+
+
+def test_a_three_group_comparison_reports_each_group_and_no_p_value(prepared, tmp_path):
+    frame = pd.read_parquet(prepared.path)
+    frame["sex"] = ["Male"] * 20 + ["Female"] * 20 + ["Unknown"] * 20
+    variables = [v.model_copy(update={"observed_domain": {"levels": ["Male", "Female", "Unknown"]}})
+                 if v.name == "sex" else v for v in prepared.context.variables]
+    source = rebound(prepared, frame=frame, context=prepared.context.model_copy(update={"variables": variables}))
+    request = reading("Compare lactate by sex.", intent="compare", grouping=["sex"],
+                      measure={"concept": "lact", "statistic": "median", "summary": "max",
+                               "window": {"start_hours": 0, "end_hours": 24}})
+    proposal = prepare_quick_answer(request, source=source, provider=None)
+    answer = run(proposal, source, tmp_path)
+    assert answer.status == "ok"
+    medians = {row.group: row.value for row in answer.rows if row.statistic == "median"}
+    assert set(medians) >= {"Male", "Female", "Unknown"}
+    assert not [row for row in answer.rows if row.statistic.startswith("p_value")]
 
 
 def test_selected_proportion_never_receives_an_omnibus_test(prepared):

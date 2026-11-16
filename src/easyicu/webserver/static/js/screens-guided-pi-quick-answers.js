@@ -160,15 +160,20 @@
       const head = `<header class="gpi-quick-head"><strong>${esc(tr('Quick answer', '快速回答'))}</strong><span>${esc(databaseName(source))}</span></header>`;
       const question = reading.question ? `<p class="gpi-quick-question">${esc(reading.question)}</p>` : '';
       const scope = `<p class="gpi-quick-scope">${esc(tr('A descriptive summary: no adjustment and no causal reading; missing values are counted, not filled.', '描述性汇总：不调整其他因素，不作因果解释；缺失值只计数，不填补。'))}</p>`;
+      // A compare over more than two groups is summarised per group, untested.
+      const untested = reading.intent === 'compare' && (answer
+        ? !(answer.rows || []).some(row => String(row.statistic).startsWith('p_value:'))
+        : !!(card && card.plan && !card.plan.test));
+      const untestedNote = untested ? `<p class="gpi-quick-test">${esc(tr('No between-group test: a quick answer tests exactly two groups. Make it a full study to compare all groups.', '未做组间检验：快速回答只对两组做检验。如需比较所有组，请改为完整研究。'))}</p>` : '';
       let body = '';
       if (answer && answer.status === 'ok') {
-        body = `<p class="gpi-quick-measure">${esc(measureText(reading))}</p>${answerTable(answer)}${scope}<div class="gpi-quick-actions">${expandButton(false)}</div>`;
+        body = `<p class="gpi-quick-measure">${esc(measureText(reading))}</p>${answerTable(answer)}${untestedNote}${scope}<div class="gpi-quick-actions">${expandButton(false)}</div>`;
       } else if (answer) {
         body = `<p class="gpi-quick-reason">${esc(reasonText(answer.reason))}</p><div class="gpi-quick-actions">${expandButton(true)}</div>`;
       } else if (proposal.status === 'approval_required' && card) {
         const substitution = card.capability && card.capability.status === 'substitution';
         body = `<dl class="gpi-quick-plan"><dt>${esc(tr('Population', '人群'))}</dt><dd>${esc(populationText(reading))}</dd><dt>${esc(tr('Calculation', '计算'))}</dt><dd>${esc(measureText(reading))}</dd>${Array.isArray(reading.grouping) && reading.grouping.length
-          ? `<dt>${esc(tr('Groups', '分组'))}</dt><dd>${esc(reading.grouping.map(conceptName).join(tr(', ', '、')))}</dd>` : ''}</dl>${substitutionsHtml(card.capability)}${scope}<div class="gpi-quick-actions">${expandButton(false)}<button class="btn primary sm" type="button" data-gpi-quick-approve="${esc(id)}" data-gpi-quick-card="${esc(card.sha256)}" data-gpi-quick-accept="${substitution ? 'true' : 'false'}"${off}>${esc(substitution ? tr('Accept the changes and calculate', '同意口径调整并计算') : tr('Calculate', '计算'))}</button></div>`;
+          ? `<dt>${esc(tr('Groups', '分组'))}</dt><dd>${esc(reading.grouping.map(conceptName).join(tr(', ', '、')))}</dd>` : ''}</dl>${substitutionsHtml(card.capability)}${untestedNote}${scope}<div class="gpi-quick-actions">${expandButton(false)}<button class="btn primary sm" type="button" data-gpi-quick-approve="${esc(id)}" data-gpi-quick-card="${esc(card.sha256)}" data-gpi-quick-accept="${substitution ? 'true' : 'false'}"${off}>${esc(substitution ? tr('Accept the changes and calculate', '同意口径调整并计算') : tr('Calculate', '计算'))}</button></div>`;
       } else {
         body = `<p class="gpi-quick-reason">${esc(reasonText(proposal.reason))}</p><div class="gpi-quick-actions">${expandButton(true)}</div>`;
       }
