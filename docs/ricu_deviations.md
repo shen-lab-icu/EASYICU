@@ -7,6 +7,7 @@ written as "<10". "Sample" means the 3,000-stay server sample of that database
 used for the lead-r13 gates; "demo" means the public PhysioNet demo.
 
 Per-commit details are in [extraction_changelog.md](extraction_changelog.md).
+Deviations from MIT-LCP mimic-code are in [mimiccode_deviations.md](mimiccode_deviations.md).
 
 ## Declared deviations
 

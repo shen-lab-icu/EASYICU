@@ -1,0 +1,27 @@
+# Deviations from MIT-LCP mimic-code
+
+EasyICU's reference implementation is ricu 0.6.3; its deviations from ricu are
+in [ricu_deviations.md](ricu_deviations.md). This table lists where EasyICU's
+MIMIC-IV concepts differ from MIT-LCP mimic-code
+`303d26c623dcc9c49cc0f204468d4acc2f063797` (`mimic-iv/concepts_duckdb`), as
+measured in the 2026-11-16 MIMIC-IV demo parity study (paper branch commit
+`37170c2cb`, `docs/validation/mimiccode_miiv_demo_parity_20261116.md`;
+140 stays, so the effects below are demo-sized). Identifiers D1–D13 are that
+report's. Counts of 1–9 are written "<10".
+
+Where EasyICU and mimic-code use the same source rows and the same rule,
+EasyICU reproduces mimic-code exactly: urine output, the six vasopressor rates,
+KDIGO CRRT stage, and the first-day heart-rate and SpO2 summaries.
+
+| Concept | mimic-code 303d26c | EasyICU | Why | Effect (demo) |
+|---|---|---|---|---|
+| Hourly grid (D1; every hourly SOFA item) | Clock hours `(endtime − 1 h, endtime]`, anchored at the first heart-rate charttime and running to the last one | Cells `[intime + k h, intime + (k+1) h)`; SOFA rows stop at the last component row | The admission-anchored grid is the ricu convention every database shares | Hourly recalls 0.62–0.78, absorbed by the 24 h windows; total SOFA precision 0.983, recall 0.998 |
+| SOFA respiration (D2) and ventilation (D10) | Arterial PaO2 with the blood-gas FiO2 or the last charted FiO2 within 4 h; ventilation episodes from charted devices/modes, closed at 14 h gaps | P/F with the hourly median FiO2; ventilation from `procedureevents` 225792/225794 intervals; an hour without P/F scores no respiratory points (reseal 14, B1) | ricu sources and FiO2 rule (ricu table, row `pafi`) | 352 of 403 shared hourly P/F cells agree; P/F present in 693 vs 481 ICU hours |
+| SOFA renal (D3) | `uo_24hr` only at urine charttimes with 22–30 documented hours | `urine24` every hour, at least 18 covered hours, scaled to 24 h | ricu table, row `urine24` | 24 % of total-SOFA disagreements |
+| SOFA cardiovascular (D4) | Any rate active at the window end | Dose from the `<drug>_rate_max` companions, qualified by the `*60` concepts (infusion running ≥ 60 min) | SOFA's "for at least 1 hour" criterion; ricu `vaso60` | 15 % of total-SOFA disagreements, mostly MAP 0↔1 flips from the grid phase |
+| KDIGO creatinine stage (D5) | Plain double comparison; a creatinine with no prior value is stage 0; every creatinine of the subject in `[intime − 7 d, outtime]`, including other admissions and an earlier stay | Cut-offs with relative tolerance; no prior value → missing; each lab belongs to one stay. Since reseal 14, NULL-admission labs 24–168 h before the next ICU admission reach that stay (`LAB_PRE_ICU_LOOKBACK_HOURS`), so the declared 168 h baseline sees ED/outpatient creatinine | Exact boundaries (0.6 ≥ 1.5 × 0.4) are met; one stay per lab | 97.0 % within tolerance, recall 0.963 at `c18a628fd`; 6 of 36 disagreements involved the pre-ICU rows fixed in reseal 14 |
+| KDIGO urine-output stage (D6) | Window volume over summed inter-record gaps, 6–12 documented hours, time-varying `weight_durations` | Port of mimic-code `d20b49a`: volume apportioned over collection intervals (12 h gap cap), one admission weight per stay | The pinned `d20b49a` definition (aki-profile-registry) | 93.2 %, weighted κ 0.93 |
+| KDIGO 6 h smoothing (D7) | Partitioned by `subject_id`, ordered by time since each row's own `intime`, so a patient's stays mix | Per stay | A stay's stage uses only that stay's measurements | 753 of 8,729 mimic-code rows (48 stays) change under per-stay smoothing |
+| Norepinephrine equivalent, dopamine factor (D8) | Dopamine ÷ 100 (citing Goradia et al. 2021) | Dopamine ÷ 150; epinephrine 1:1, phenylephrine ÷ 10, vasopressin × 2.5 (U/min); summed over per-drug hourly active-time means (reseal 14) | Same factors as ricu 0.6.3 (which cites no source) and the ATHOS-3 trial's dose definitions: the FDA clinical review of NDA 209360 (2017), Table 8, p. 45, lists dopamine 15 µg/kg/min as equal to norepinephrine 0.1 µg/kg/min; Kotani et al., *Crit Care* 2023;27:29 (doi:10.1186/s13054-023-04322-y), Table 1, attributes ÷ 150 to Khanna et al., *N Engl J Med* 2017;377:419–430 (doi:10.1056/NEJMoa1704154). The scoping review Goradia et al., *J Crit Care* 2021;61:233–240 (doi:10.1016/j.jcrc.2020.11.002) found empirical dopamine ratios of 75.2–144.4 and suggests ÷ 100, as does Kotani 2023 | 93.7 % agreement; 97.4 % with ÷ 100. Only dopamine-containing hours differ; analyses where the equivalent is central should report a ÷ 100 sensitivity analysis |
+| Suspicion of infection (D12) | Tied to a stay only if the antibiotic starts inside it; dated at a culture up to 72 h earlier | Cultures clipped to the episode window (from 24 h before admission) | ricu episode window | EasyICU's first suspicion is later for early pre-ICU cultures |
+| Sepsis-3 (D13) | Absolute SOFA ≥ 2 around the first qualifying suspicion, ICU-onset, SOFA rows from hour 0 | Default: SOFA rise ≥ 2 over the running minimum (ricu). The declared variant `si_mode="and", baseline_sofa="zero", si_window="any", onset_scope="icu"` follows mimic-code | Sepsis-3 defines organ dysfunction as an acute change; the variant is for comparison | Demo: 7 mimic-code-only and 14 EasyICU-only stays at `c18a628fd`; the variant gives 74 positive stays vs 69 by default |
