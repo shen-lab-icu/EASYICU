@@ -7,6 +7,35 @@ answers is in brackets.
 lead-r13 (0.1.0) is validated on SICdb 1.0.8, the default release, and
 remains compatible with SICdb 1.0.6 (the release is detected from the schema).
 
+## Unreleased (reseal 14) — MIMIC-IV pre-ICU creatinine reaches the KDIGO baseline [S732, mimic-code parity B1]
+
+**What changed.** MIMIC-IV only. Laboratory rows without an admission ID that
+lie outside every ICU window but at most 168 h before the subject's next ICU
+admission (`LAB_PRE_ICU_LOOKBACK_HOURS`, the largest declared concept
+lookback) are attributed to that stay, with basis `subject_id_pre_icu_lookback`
+and the audit count `pre_icu_lookback_null_hadm_rows`. A row inside another
+admission's interval still never moves. The concept episode clip keeps these
+rows only for a declared lookback: `kdigo_creatinine_input` (168 h) now sees ED
+and outpatient creatinine; generic `crea` and every 24 h concept do not move.
+On the 26,220 ventilated thesis stays (21f703c48 basis) 16.1 % gain pre-ICU
+creatinine rows, the baseline changes in 7.2 %, the maximum KDIGO stage in
+0.23 % (all upward) and `kdigo48` in 0.08 % (all 0→1). MIMIC-III still drops
+such rows (declared in [aki-source-contract.md](aki-source-contract.md)).
+
+## Unreleased (reseal 14) — `sofa_resp` scores no hour without a P/F ratio or ventilation [S732, B1]
+
+**What changed.** An hour whose P/F ratio is missing or non-numeric no longer
+publishes a respiratory score of 0. MIMIC-IV/eICU demos: −664 / −9,678 zero
+rows, no score value changes; SOFA total loses edge cells only (maxima
+unchanged).
+
+## Unreleased (reseal 14) — MIMIC microbiology keeps chartdate-only and just-after-discharge specimens [S732, R1]
+
+**What changed.** Multi-stay admissions roll specimens on `charttime`, falling
+back to `chartdate`; a specimen just after one stay's discharge stays with that
+stay when its +24 h allowance covers it and the next stay's −24 h window does
+not. MIMIC-III demo `samp` +5 / −0 rows.
+
 ## 2026-11-16 — MIMIC-III demo reads CareVue ETT verbal item 723 [S732, ricu demo parity]
 
 **What changed.** MIMIC-III demo only; full MIMIC-III does not move. The demo's

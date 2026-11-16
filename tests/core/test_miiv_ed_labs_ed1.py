@@ -85,7 +85,7 @@ def test_ed_lab_reaches_every_loader_without_cross_subject_or_window_leak(tmp_pa
     labs = _labs([
         (1, None, "2140-01-01 12:00", 50813, 1.25),
         (1, 11, "2140-01-02 01:00", 50813, 2.),
-        (1, None, "2139-12-31 23:59:59", 50813, 90.),
+        (1, None, "2139-12-25 23:59:59", 50813, 90.),  # Just beyond the 168 h pre-ICU lookback.
         (1, None, "2140-01-05 00:00:01", 50813, 91.),
         (99, None, "2140-01-01 12:00", 50813, 92.),
     ])
@@ -261,6 +261,7 @@ def test_admission_intervals_restrict_null_labs_before_target_selection(tmp_path
         "null_hadm_rows_in_other_admission_reassigned": 1,
         "null_hadm_rows_in_other_admission_dropped": 2,
         "window_before_hours": 24, "window_after_hours": 24,
+        "pre_icu_lookback_null_hadm_rows": 0, "pre_icu_lookback_hours": 168,
     }
 
 

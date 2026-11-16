@@ -66,7 +66,7 @@ def _labs():
             (1, None, "2140-01-02 02:00", 50912, 4.0),
             (2, None, "2140-01-03 02:00", 50912, 8.0),
             (3, None, "2140-01-03 02:00", 50912, 9.0),
-            (1, None, "2139-12-30 12:00", 50912, 7.0),
+            (1, None, "2139-12-20 12:00", 50912, 7.0),  # Beyond the 168 h pre-ICU lookback.
             (1, None, "2140-01-02 02:00", 51222, 10.0)]
     frame = pd.DataFrame(rows, columns=["subject_id", "hadm_id", "charttime", "itemid", "valuenum"])
     frame["charttime"] = pd.to_datetime(frame.charttime)

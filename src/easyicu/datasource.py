@@ -5348,6 +5348,11 @@ __all__ = [
 
 # MIMIC source quality and MIIV lab attribution share these rules across all loaders.
 LAB_WINDOW_HOURS = 24
+# A NULL-admission row with no ICU window within 24 h may still precede the
+# subject's next ICU admission by up to the largest declared concept lookback
+# (kdigo_creatinine_input, 168 h). It is attributed to that stay; concepts with
+# the standard 24 h pre-ICU history drop it at their episode bound.
+LAB_PRE_ICU_LOOKBACK_HOURS = 168
 LAB_AUDIT_ATTR = "easyicu_miiv_lab_attribution"
 LAB_OPTIONAL_COLUMNS = ("valueuom", "value", "specimen_id", "labevent_id")
 
@@ -5448,6 +5453,10 @@ def _lab_ctes(events_sql: str, stays_sql: str, time_col="charttime", value_col="
     admission when none of their ICU windows contains the row.
     Choose the first candidate outtime >= charttime, or the last candidate
     when all outtimes precede it. Overlapping windows are counted, not rejected.
+    A NULL-admission row outside every such window that precedes a later ICU
+    admission of the subject by at most LAB_PRE_ICU_LOOKBACK_HOURS goes to the
+    earliest such stay (same admission-interval restriction). The concept
+    layer's episode clip keeps it only for a declared pre-admission lookback.
     Only cross-channel duplicates are removed; equal independent events in
     one channel keep their multiplicity.
     """
@@ -5492,8 +5501,22 @@ def _lab_ctes(events_sql: str, stays_sql: str, time_col="charttime", value_col="
                       WHERE a.__lab_row = n.__lab_row AND a.hadm_id = n.attributed_hadm_id)
         QUALIFY ROW_NUMBER() OVER (PARTITION BY n.__lab_row ORDER BY n.__rank) = 1
     ),
+    null_lookback AS (
+        SELECT e.*, s.stay_id, s.hadm_id AS attributed_hadm_id, s.intime, s.outtime,
+            'subject_id_pre_icu_lookback' AS lab_attribution_basis
+        FROM raw_events e JOIN all_stays s ON e.subject_id = s.subject_id
+        WHERE e.hadm_id IS NULL
+          AND e.{time_col} >= s.intime - INTERVAL '{LAB_PRE_ICU_LOOKBACK_HOURS} hours'
+          AND e.{time_col} < s.intime - INTERVAL '{LAB_WINDOW_HOURS} hours'
+          AND NOT EXISTS (SELECT 1 FROM null_candidates c WHERE c.__lab_row = e.__lab_row)
+          AND (NOT EXISTS (SELECT 1 FROM null_admissions a WHERE a.__lab_row = e.__lab_row)
+               OR EXISTS (SELECT 1 FROM null_admissions a
+                          WHERE a.__lab_row = e.__lab_row AND a.hadm_id = s.hadm_id))
+        QUALIFY ROW_NUMBER() OVER (PARTITION BY e.__lab_row ORDER BY s.intime, s.stay_id) = 1
+    ),
+    null_attributed AS (SELECT * FROM null_assigned UNION ALL BY NAME SELECT * FROM null_lookback),
     null_kept AS (
-        SELECT n.* FROM null_assigned n WHERE NOT EXISTS (
+        SELECT n.* FROM null_attributed n WHERE NOT EXISTS (
             SELECT 1 FROM hadm_assigned h WHERE n.subject_id = h.subject_id AND n.stay_id = h.stay_id
               AND n.{time_col} = h.{time_col} AND n.itemid = h.itemid
               AND n.{value_col} IS NOT DISTINCT FROM h.{value_col}
@@ -5508,8 +5531,10 @@ def _lab_ctes(events_sql: str, stays_sql: str, time_col="charttime", value_col="
         SELECT
             (SELECT COUNT(DISTINCT __lab_row) FROM null_candidates WHERE __candidates > 1) AS __audit_ambiguous_null_hadm_rows,
             (SELECT COUNT(*) FROM raw_events WHERE hadm_id IS NULL) -
-                (SELECT COUNT(DISTINCT __lab_row) FROM null_candidates) AS __audit_unmatched_null_hadm_rows,
-            (SELECT COUNT(*) FROM null_assigned) - (SELECT COUNT(*) FROM null_kept) AS __audit_deduplicated_null_hadm_rows,
+                (SELECT COUNT(DISTINCT __lab_row) FROM null_candidates) -
+                (SELECT COUNT(*) FROM null_lookback) AS __audit_unmatched_null_hadm_rows,
+            (SELECT COUNT(*) FROM null_lookback) AS __audit_pre_icu_lookback_null_hadm_rows,
+            (SELECT COUNT(*) FROM null_attributed) - (SELECT COUNT(*) FROM null_kept) AS __audit_deduplicated_null_hadm_rows,
             (SELECT COUNT(*) FROM null_kept) AS __audit_attributed_null_hadm_rows,
             (SELECT COUNT(*) FROM hadm_assigned) AS __audit_hadm_rows,
             (SELECT COUNT(*) FROM null_candidates c JOIN null_assigned n USING (__lab_row)
@@ -5535,6 +5560,7 @@ def finish_miiv_lab_frame(frame: pd.DataFrame) -> pd.DataFrame:
         return frame
     audit = {c.removeprefix("__audit_"): int(frame[c].iloc[0]) for c in audit_cols}
     audit["window_before_hours"] = audit["window_after_hours"] = LAB_WINDOW_HOURS
+    audit["pre_icu_lookback_hours"] = LAB_PRE_ICU_LOOKBACK_HOURS
     frame = frame.loc[frame.stay_id.notna()].drop(columns=audit_cols).reset_index(drop=True)
     frame.attrs[LAB_AUDIT_ATTR] = audit
     logger.info("MIIV lab attribution: %s", audit)

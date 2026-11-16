@@ -121,6 +121,15 @@ components, creatinine and RRT policies are unchanged.
 lookback. Generic creatinine and the published chemistry module retain their
 standard 24-hour pre-ICU boundary.
 
+MIMIC-IV laboratory rows without an admission ID reach the stay whose ICU
+admission they precede by at most 168 hours (`LAB_PRE_ICU_LOOKBACK_HOURS`,
+reseal 14), so this lookback sees ED and outpatient creatinine; before reseal
+14 such rows were attributed only within 24 hours of the stay, and the
+lookback saw admission-linked creatinine alone. **Declared gap (MIMIC-III):**
+MIMIC-III laboratory rows without an admission ID are still dropped before
+stay attribution, so its 168-hour baseline uses admission-linked creatinine
+only. Its size has not been measured.
+
 ## Evidence quality and downstream events
 
 Creatinine, urine, RRT, baseline, and observation-window receipts are published
