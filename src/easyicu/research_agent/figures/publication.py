@@ -1223,6 +1223,7 @@ def finish_publication_layout(fig: Any) -> list[Any]:
         legend.set_in_layout(False)
 
     # Constrained layout can change the available width after the first wrap.
+    y_labels: dict[int, str] = {}
     for _ in range(3):
         fig.canvas.draw()
         renderer = fig.canvas.get_renderer()
@@ -1236,6 +1237,17 @@ def finish_publication_layout(fig: Any) -> list[Any]:
                         title.get_text(), renderer=renderer,
                         font=title.get_fontproperties(), width=max(width, gap),
                     ))
+            # A y label longer than its axis is tall enough to reach the
+            # title line and the panel letter; fit it to the axis height
+            # (each pass rewraps the original text for the current height).
+            y_label = axis.yaxis.label
+            if y_label.get_visible() and y_label.get_text():
+                original = y_labels.setdefault(id(y_label), y_label.get_text())
+                height = axis.get_window_extent(renderer).height - 2 * gap
+                y_label.set_text(wrap_figure_label(
+                    original, renderer=renderer,
+                    font=y_label.get_fontproperties(), width=max(height, gap),
+                ))
             # One letter style: the panel letter shares the baseline of the
             # title's first line, just outside the panel's left edge.
             shown = [title for title in titles if title.get_visible() and title.get_text()]
@@ -1260,12 +1272,13 @@ def finish_publication_layout(fig: Any) -> list[Any]:
                     letter.set_position(axis.transAxes.inverted().transform(
                         (left - letter_width - gap, baseline)
                     ))
-                    # A top y tick label can reach up to the title line; the
-                    # letter then steps left of it rather than sit on it.
+                    # A top y tick label (or the y label) can reach up to the
+                    # title line; the letter then steps left of it rather
+                    # than sit on it.
                     box = letter.get_window_extent(renderer)
                     blocking = [
                         label.get_window_extent(renderer)
-                        for label in axis.get_yticklabels()
+                        for label in [*axis.get_yticklabels(), axis.yaxis.label]
                         if label.get_visible() and label.get_text()
                     ]
                     blocking = [other for other in blocking if box.overlaps(other)]
