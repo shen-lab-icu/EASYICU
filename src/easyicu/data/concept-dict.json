@@ -628,14 +628,14 @@
   }
  },
   "adh_rate": {
-   "unit": [
-    "units/min",
-    "U/min"
-   ],
-   "min": 0,
-   "max": 0.15,
-   "_comment": "2026-09-18 v6: added clinically reviewed bounds 0-0.15 (unmerged review tag archive/concept-clinical-bounds-ee33539). Vasopressin infusion is typically 0.01-0.06 units/min, refractory shock up to ~0.1; v5 sealed vasopressors show absurd tails (eICU max 190, MIMIC max 50, MIMIC-IV max 40) from unit errors. 0.15 excludes junk while keeping real shock doses.",
-   "description": "vasopressin rate",
+  "unit": [
+   "units/min",
+   "U/min"
+  ],
+  "min": 0,
+  "max": 0.15,
+  "_comment": "2026-09-18 v6: added clinically reviewed bounds 0-0.15 (unmerged review tag archive/concept-clinical-bounds-ee33539). Vasopressin infusion is typically 0.01-0.06 units/min, refractory shock up to ~0.1; v5 sealed vasopressors show absurd tails (eICU max 190, MIMIC max 50, MIMIC-IV max 40) from unit errors. 0.15 excludes junk while keeping real shock doses.",
+  "description": "vasopressin rate",
   "omopid": 1507835,
   "category": "medications",
   "sources": {
@@ -761,7 +761,8 @@
      "_comment": "1550=Vasopressin (d_references unit IE). Continuous rows (IsSingleDose=0) carry Amount = AmountPerMinute x minutes, so AmountPerMinute is IE/min = units/min; one-minute single doses are excluded."
     }
    ]
-  }
+  },
+  "_hourly_rule": "time_weighted_mean_active_rate"
  },
  "adm": {
   "target": "id_tbl",
@@ -6528,7 +6529,8 @@
      "_comment": "2026-11-03 extraction audit: continuous rows only (IsSingleDose=0); a single dose is a one-minute push whose AmountPerMinute is the whole bolus."
     }
    ]
-  }
+  },
+  "_hourly_rule": "time_weighted_mean_active_rate"
  },
  "dopa60": {
   "concepts": [
@@ -6848,7 +6850,8 @@
      "_comment": "2026-11-03 extraction audit: continuous rows only (IsSingleDose=0); a single dose is a one-minute push whose AmountPerMinute is the whole bolus."
     }
    ]
-  }
+  },
+  "_hourly_rule": "time_weighted_mean_active_rate"
  },
  "driving_pres": {
   "min": 0,
@@ -7821,7 +7824,8 @@
      "_comment": "2026-11-03 extraction audit: continuous rows only (IsSingleDose=0); a single dose is a one-minute push whose AmountPerMinute is the whole bolus."
     }
    ]
-  }
+  },
+  "_hourly_rule": "time_weighted_mean_active_rate"
  },
  "esmolol": {
   "class_name": "lgl_cncpt",
@@ -8733,7 +8737,8 @@
      }
     }
    ]
-  }
+  },
+  "_hourly_rule": "time_weighted_mean_active_rate"
  },
  "ffp": {
   "class_name": "lgl_cncpt",
@@ -14955,7 +14960,8 @@
      "_comment": "R5-SIC-012: positive continuous 1495 total Amount in grams / elapsed time gives mg/hour after x1000, on ICU-relative right-open overlap hours. Single doses never enter rates; medication route is unknown."
     }
    ]
-  }
+  },
+  "_hourly_rule": "time_weighted_mean_active_rate"
  },
  "milrinone": {
   "class_name": "lgl_cncpt",
@@ -16904,7 +16910,8 @@
      "_comment": "2026-11-03 extraction audit: continuous rows only (IsSingleDose=0); a single dose is a one-minute push whose AmountPerMinute is the whole bolus."
     }
    ]
-  }
+  },
+  "_hourly_rule": "time_weighted_mean_active_rate"
  },
  "o2sat": {
   "unit": [
@@ -18500,11 +18507,11 @@
   }
  },
   "phn_rate": {
-   "unit": "mcg/kg/min",
-   "min": 0,
-   "max": 15,
-   "_comment": "2026-09-18 v6: added clinically reviewed bounds 0-15 (unmerged review tag archive/concept-clinical-bounds-ee33539 set phn_rate 0-15). v5 sealed vasopressors show absurd tails (eICU max 475, MIMIC max 250, MIMIC-IV max 440) from unit/weight errors. 15 keeps high-dose phenylephrine while excluding junk.",
-   "description": "phenylephrine rate",
+  "unit": "mcg/kg/min",
+  "min": 0,
+  "max": 15,
+  "_comment": "2026-09-18 v6: added clinically reviewed bounds 0-15 (unmerged review tag archive/concept-clinical-bounds-ee33539 set phn_rate 0-15). v5 sealed vasopressors show absurd tails (eICU max 475, MIMIC max 250, MIMIC-IV max 440) from unit/weight errors. 15 keeps high-dose phenylephrine while excluding junk.",
+  "description": "phenylephrine rate",
   "omopid": 1135766,
   "category": "medications",
   "sources": {
@@ -18637,31 +18644,32 @@
      "_comment": "1593=Phenylephrin (d_references unit g). Continuous rows (IsSingleDose=0) carry AmountPerMinute in g/min like norepinephrine; one-minute single-dose pushes (most 1593 rows) are excluded."
     }
    ],
-  "aumc": [
-   {
-    "ids": 19929,
-    "table": "drugitems",
-    "sub_var": "itemid",
-    "rel_weight": "doserateperkg",
-    "rate_uom": "doserateunit",
-    "stop_var": "stop",
-    "callback": "aumc_rate_kg",
-    "_comment": "2026-11-03 extraction audit 2: drugitems 19929 'Fenylefrine' syringe-pump infusion, same rate callback as norepi_rate 7229; bolus rows without a dose rate are dropped by aumc_rate_kg. | 2026-11-04 audit round 3 (full-dictionary M): a rate is read from running infusions only: 'Flush' rows (a line flush at 30-120 ml/h; fentanyl 24,867 rows) and iscontinuous = 0 doses are not infusion rates.",
-    "extra_vars": [
-     "action",
-     "iscontinuous",
-     "ordercategory"
-    ],
-    "require_regex": {
-     "iscontinuous": "^(1|1\\.0|True|true)$"
-    },
-    "exclude_regex": {
-     "action": "(?i)^\\s*flush\\s*$",
-     "ordercategory": "(?i)^\\s*niet iv"
+   "aumc": [
+    {
+     "ids": 19929,
+     "table": "drugitems",
+     "sub_var": "itemid",
+     "rel_weight": "doserateperkg",
+     "rate_uom": "doserateunit",
+     "stop_var": "stop",
+     "callback": "aumc_rate_kg",
+     "_comment": "2026-11-03 extraction audit 2: drugitems 19929 'Fenylefrine' syringe-pump infusion, same rate callback as norepi_rate 7229; bolus rows without a dose rate are dropped by aumc_rate_kg. | 2026-11-04 audit round 3 (full-dictionary M): a rate is read from running infusions only: 'Flush' rows (a line flush at 30-120 ml/h; fentanyl 24,867 rows) and iscontinuous = 0 doses are not infusion rates.",
+     "extra_vars": [
+      "action",
+      "iscontinuous",
+      "ordercategory"
+     ],
+     "require_regex": {
+      "iscontinuous": "^(1|1\\.0|True|true)$"
+     },
+     "exclude_regex": {
+      "action": "(?i)^\\s*flush\\s*$",
+      "ordercategory": "(?i)^\\s*niet iv"
+     }
     }
-   }
-  ]
-  }
+   ]
+  },
+  "_hourly_rule": "time_weighted_mean_active_rate"
  },
  "phos": {
   "unit": "mg/dL",
@@ -20096,14 +20104,23 @@
    ],
    "sic": [
     {
-     "ids": 3057,
-     "table": "data_float_h",
-     "sub_var": "DataID",
-     "callback": "transform_fun(binary_op(`*`, 16666.6667))",
-     "_comment": "2026-11-03 extraction audit 2: SICdb d_references DrugDosagePerHour 3057 'PropofolPerHourWeight' (g/h/kg), SICdb's own hourly weight-normalised propofol dose; x 1e6 / 60 = mcg/kg/min."
+     "ids": [
+      1499,
+      1549
+     ],
+     "table": "medication",
+     "sub_var": "DrugID",
+     "val_var": "AmountPerMinute",
+     "stop_var": "OffsetDrugEnd",
+     "callback": "sic_rate_kg",
+     "extra_vars": [
+      "IsSingleDose"
+     ],
+     "_comment": "S732TW 2026-11-16: continuous propofol 1%/2% only (IsSingleDose=0); d_references units g and Amount = AmountPerMinute x elapsed minutes verified for continuous rows. Use the existing SIC kg-rate/weight owner and exact Offset..OffsetDrugEnd spans. Single-dose AmountPerMinute contains bolus totals and is excluded. Replaces DataID 3057 hourly g/h/kg summary, whose active-time denominator cannot be recovered."
     }
    ]
-  }
+  },
+  "_hourly_rule": "time_weighted_mean_active_rate"
  },
  "ps": {
   "unit": [
@@ -22077,7 +22094,11 @@
    "dopa60",
    "norepi60",
    "dobu60",
-   "epi60"
+   "epi60",
+   "dopa_rate_max",
+   "norepi_rate_max",
+   "dobu_rate_max",
+   "epi_rate_max"
   ],
   "family": "sofa",
   "depends_on": [
@@ -22086,13 +22107,21 @@
    "norepi60",
    "dobu60",
    "epi60",
-   "vaso_ind"
+   "vaso_ind",
+   "dopa_rate_max",
+   "norepi_rate_max",
+   "dobu_rate_max",
+   "epi_rate_max"
   ],
   "description": "SOFA cardiovascular component",
   "omopid": 1617534,
   "category": "outcome",
   "aggregate": [
    "min",
+   "max",
+   "max",
+   "max",
+   "max",
    "max",
    "max",
    "max",
@@ -41633,7 +41662,8 @@
      }
     }
    ]
-  }
+  },
+  "_hourly_rule": "time_weighted_mean_active_rate"
  },
  "levosimendan": {
   "unit": "boolean",
@@ -44020,7 +44050,8 @@
      }
     }
    ]
-  }
+  },
+  "_hourly_rule": "time_weighted_mean_active_rate"
  },
  "ffp_input_ml": {
   "unit": "mL",
@@ -44191,7 +44222,8 @@
      "callback": "eicu_rate_kg(ml_to_mcg = NA)"
     }
    ]
-  }
+  },
+  "_hourly_rule": "time_weighted_mean_active_rate"
  },
  "packed_rbc_input_ml": {
   "unit": "mL",
@@ -45046,7 +45078,8 @@
      }
     }
    ]
-  }
+  },
+  "_hourly_rule": "time_weighted_mean_active_rate"
  },
  "rrt_modality": {
   "unit": "category",
@@ -45093,5 +45126,1179 @@
     }
    ]
   }
+ },
+ "adh_rate_max": {
+  "unit": [
+   "units/min",
+   "U/min"
+  ],
+  "min": 0,
+  "max": 0.15,
+  "_comment": "S732TW 2026-11-16: opt-in/internal worst active dose; sum concurrent infusions before the hourly maximum. Source units, weights and exclusions mirror adh_rate.",
+  "description": "Maximum concurrent active adh dose rate in the ICU hour",
+  "omopid": 1507835,
+  "category": "medications",
+  "sources": {
+   "eicu": [
+    {
+     "regex": "^vasopressin.*\\(.+/.+\\)$",
+     "table": "infusiondrug",
+     "sub_var": "drugname",
+     "callback": "eicu_rate_units(NA, NA)",
+     "class_name": "rgx_itm",
+     "_comment": "2026-11-03 extraction audit 2: rates come only from rows charted in units (units/min, units/hr). ricu's eicu_rate_units(2.65, 0.53) turned ml/hr into 1.40 units/mL, above every vasopressin concentration recorded in eICU v2.0 infusionDrug (drugamount/volumeoffluid on units-charted rows: 0.16-1.0 units/mL, median 0.4), and 'Vasopressin (ml/hr)' (65,562 rows/2,218 stays) carries no per-row concentration while 43 hospitals use different bags, so ml/hr rows stay missing (exposure remains in other_vaso). Mass-charted rows ('mg/min' 0.04, 'mcg/min' 20-40) are mislabelled units and are not converted by a potency factor."
+    }
+   ],
+   "eicu_demo": [
+    {
+     "regex": "^vasopressin.*\\(.+/.+\\)$",
+     "table": "infusiondrug",
+     "sub_var": "drugname",
+     "callback": "eicu_rate_units(NA, NA)",
+     "class_name": "rgx_itm",
+     "_comment": "2026-11-03 extraction audit 2: rates come only from rows charted in units (units/min, units/hr). ricu's eicu_rate_units(2.65, 0.53) turned ml/hr into 1.40 units/mL, above every vasopressin concentration recorded in eICU v2.0 infusionDrug (drugamount/volumeoffluid on units-charted rows: 0.16-1.0 units/mL, median 0.4), and 'Vasopressin (ml/hr)' (65,562 rows/2,218 stays) carries no per-row concentration while 43 hospitals use different bags, so ml/hr rows stay missing (exposure remains in other_vaso). Mass-charted rows ('mg/min' 0.04, 'mcg/min' 20-40) are mislabelled units and are not converted by a potency factor."
+    }
+   ],
+   "hirid": [
+    {
+     "ids": [
+      112,
+      113
+     ],
+     "table": "pharma",
+     "sub_var": "pharmaid",
+     "grp_var": "infusionid",
+     "callback": "hirid_rate",
+     "extra_vars": [
+      "route"
+     ],
+     "require_regex": {
+      "route": "(?i)^\\s*(?:[ci]v(?:-(?:inf|inj))?|i\\.?v\\.?|intravenous)\\s*$"
+     }
+    }
+   ],
+   "miiv": [
+    {
+     "ids": 222315,
+     "table": "inputevents",
+     "sub_var": "itemid",
+     "stop_var": "endtime",
+     "callback": "combine_callbacks(\n               convert_unit(binary_op(`/`, 60), 'units/min', 'units/hour'),\n               mimic_rate_mv\n             )",
+     "extra_vars": [
+      "statusdescription"
+     ],
+     "status_var": "statusdescription",
+     "excluded_statuses": [
+      "Rewritten"
+     ]
+    }
+   ],
+   "mimic": [
+    {
+     "ids": 30051,
+     "table": "inputevents_cv",
+     "sub_var": "itemid",
+     "grp_var": "linkorderid",
+     "callback": "combine_callbacks(\n               convert_unit(binary_op(`/`, 60), 'units/min', 'Uhr'),\n               transform_fun(divide_above(0.2, 60)),\n               mimic_rate_cv\n             )",
+     "_comment": "2026-11-04 audit round 3 (F-24): 41,557 of 99,798 CareVue 30051 rows labelled Umin have values of 0.6 or more (median 2.4), the U/hr scale; a vasopressin rate above 0.2 U/min is not a dose, so after the Uhr conversion a value above 0.2 is read as U/hr and divided by 60.",
+     "extra_vars": [
+      "stopped"
+     ]
+    },
+    {
+     "ids": 222315,
+     "table": "inputevents_mv",
+     "sub_var": "itemid",
+     "stop_var": "endtime",
+     "callback": "combine_callbacks(\n               convert_unit(binary_op(`/`, 60), 'units/min', 'units/hour'),\n               mimic_rate_mv\n             )",
+     "extra_vars": [
+      "statusdescription"
+     ],
+     "status_var": "statusdescription",
+     "excluded_statuses": [
+      "Rewritten"
+     ]
+    }
+   ],
+   "mimic_demo": [
+    {
+     "ids": 30051,
+     "table": "inputevents_cv",
+     "sub_var": "itemid",
+     "grp_var": "linkorderid",
+     "callback": "combine_callbacks(\n               convert_unit(binary_op(`/`, 60), 'units/min', 'Uhr'),\n               transform_fun(divide_above(0.2, 60)),\n               mimic_rate_cv\n             )",
+     "_comment": "2026-11-04 audit round 3 (F-24): 41,557 of 99,798 CareVue 30051 rows labelled Umin have values of 0.6 or more (median 2.4), the U/hr scale; a vasopressin rate above 0.2 U/min is not a dose, so after the Uhr conversion a value above 0.2 is read as U/hr and divided by 60.",
+     "extra_vars": [
+      "stopped"
+     ]
+    },
+    {
+     "ids": 222315,
+     "table": "inputevents_mv",
+     "sub_var": "itemid",
+     "stop_var": "endtime",
+     "callback": "combine_callbacks(\n               convert_unit(binary_op(`/`, 60), 'units/min', 'units/hour'),\n               mimic_rate_mv\n             )",
+     "extra_vars": [
+      "statusdescription"
+     ],
+     "status_var": "statusdescription",
+     "excluded_statuses": [
+      "Rewritten"
+     ]
+    }
+   ],
+   "sic": [
+    {
+     "ids": 1550,
+     "table": "medication",
+     "sub_var": "DrugID",
+     "val_var": "AmountPerMinute",
+     "stop_var": "OffsetDrugEnd",
+     "extra_vars": [
+      "IsSingleDose"
+     ],
+     "callback": "sic_rate_units",
+     "_comment": "1550=Vasopressin (d_references unit IE). Continuous rows (IsSingleDose=0) carry Amount = AmountPerMinute x minutes, so AmountPerMinute is IE/min = units/min; one-minute single doses are excluded."
+    }
+   ]
+  },
+  "_hourly_rule": "maximum_active_rate",
+  "aggregate": "max"
+ },
+ "angiotensin_ii_rate_max": {
+  "unit": "ng/kg/min",
+  "min": 0,
+  "max": 1000,
+  "description": "Maximum concurrent active angiotensin_ii dose rate in the ICU hour",
+  "category": "cardiovascular",
+  "sources": {
+   "miiv": [
+    {
+     "ids": [
+      229709
+     ],
+     "table": "inputevents",
+     "sub_var": "itemid",
+     "stop_var": "endtime",
+     "callback": "miiv_angiotensin_rate",
+     "extra_vars": [
+      "ordercategorydescription",
+      "rateuom",
+      "statusdescription"
+     ],
+     "status_var": "statusdescription",
+     "excluded_statuses": [
+      "Rewritten",
+      "Cancelled",
+      "Canceled",
+      "Bolus"
+     ],
+     "require_regex": {
+      "rateuom": "(?i)^\\s*mcg/kg/min\\s*$",
+      "ordercategorydescription": "^Continuous Med$"
+     }
+    },
+    {
+     "ids": [
+      229764
+     ],
+     "table": "inputevents",
+     "sub_var": "itemid",
+     "stop_var": "endtime",
+     "callback": "miiv_angiotensin_rate",
+     "extra_vars": [
+      "ordercategorydescription",
+      "rateuom",
+      "statusdescription"
+     ],
+     "status_var": "statusdescription",
+     "excluded_statuses": [
+      "Rewritten",
+      "Cancelled",
+      "Canceled",
+      "Bolus"
+     ],
+     "require_regex": {
+      "rateuom": "(?i)^\\s*ng/kg/min\\s*$",
+      "ordercategorydescription": "^Continuous Med$"
+     }
+    }
+   ]
+  },
+  "_hourly_rule": "maximum_active_rate",
+  "_comment": "S732TW 2026-11-16: opt-in/internal worst active dose; sum concurrent infusions before the hourly maximum. Source units, weights and exclusions mirror angiotensin_ii_rate.",
+  "aggregate": "max"
+ },
+ "dobu_rate_max": {
+  "unit": [
+   "mcg/kg/min",
+   "mcgkgmin"
+  ],
+  "min": 0,
+  "max": 50,
+  "description": "Maximum concurrent active dobu dose rate in the ICU hour",
+  "omopid": 1337720,
+  "category": "medications",
+  "sources": {
+   "aumc": [
+    {
+     "ids": 7178,
+     "table": "drugitems",
+     "sub_var": "itemid",
+     "rel_weight": "doserateperkg",
+     "rate_uom": "doserateunit",
+     "stop_var": "stop",
+     "callback": "aumc_rate_kg",
+     "extra_vars": [
+      "action",
+      "iscontinuous",
+      "ordercategory"
+     ],
+     "require_regex": {
+      "iscontinuous": "^(1|1\\.0|True|true)$"
+     },
+     "exclude_regex": {
+      "action": "(?i)^\\s*flush\\s*$",
+      "ordercategory": "(?i)^\\s*niet iv"
+     },
+     "_comment": "2026-11-04 audit round 3 (full-dictionary M): a rate is read from running infusions only: 'Flush' rows (a line flush at 30-120 ml/h; fentanyl 24,867 rows) and iscontinuous = 0 doses are not infusion rates."
+    }
+   ],
+   "eicu": [
+    {
+     "regex": "^dobu.*\\(.+\\)$",
+     "table": "infusiondrug",
+     "sub_var": "drugname",
+     "weight_var": "patientweight",
+     "callback": "eicu_rate_kg(ml_to_mcg = 2000)",
+     "class_name": "rgx_itm"
+    }
+   ],
+   "eicu_demo": [
+    {
+     "regex": "^dobu.*\\(.+\\)$",
+     "table": "infusiondrug",
+     "sub_var": "drugname",
+     "weight_var": "patientweight",
+     "callback": "eicu_rate_kg(ml_to_mcg = 2000)",
+     "class_name": "rgx_itm"
+    }
+   ],
+   "hirid": [
+    {
+     "ids": 426,
+     "table": "pharma",
+     "sub_var": "pharmaid",
+     "grp_var": "infusionid",
+     "callback": "hirid_rate_kg",
+     "extra_vars": [
+      "route"
+     ],
+     "require_regex": {
+      "route": "(?i)^\\s*(?:[ci]v(?:-(?:inf|inj))?|i\\.?v\\.?|intravenous)\\s*$"
+     }
+    }
+   ],
+   "miiv": [
+    {
+     "ids": 221653,
+     "table": "inputevents",
+     "sub_var": "itemid",
+     "stop_var": "endtime",
+     "callback": "mimic_rate_mv",
+     "extra_vars": [
+      "statusdescription"
+     ],
+     "status_var": "statusdescription",
+     "excluded_statuses": [
+      "Rewritten"
+     ]
+    }
+   ],
+   "mimic": [
+    {
+     "ids": [
+      30042,
+      30306
+     ],
+     "table": "inputevents_cv",
+     "sub_var": "itemid",
+     "grp_var": "linkorderid",
+     "callback": "mimic_rate_cv"
+    },
+    {
+     "ids": 221653,
+     "table": "inputevents_mv",
+     "sub_var": "itemid",
+     "stop_var": "endtime",
+     "callback": "mimic_rate_mv",
+     "extra_vars": [
+      "statusdescription"
+     ],
+     "status_var": "statusdescription",
+     "excluded_statuses": [
+      "Rewritten"
+     ]
+    }
+   ],
+   "mimic_demo": [
+    {
+     "ids": [
+      30042,
+      30306
+     ],
+     "table": "inputevents_cv",
+     "sub_var": "itemid",
+     "grp_var": "linkorderid",
+     "callback": "mimic_rate_cv"
+    },
+    {
+     "ids": 221653,
+     "table": "inputevents_mv",
+     "sub_var": "itemid",
+     "stop_var": "endtime",
+     "callback": "mimic_rate_mv",
+     "extra_vars": [
+      "statusdescription"
+     ],
+     "status_var": "statusdescription",
+     "excluded_statuses": [
+      "Rewritten"
+     ]
+    }
+   ],
+   "sic": [
+    {
+     "ids": 1559,
+     "table": "medication",
+     "sub_var": "DrugID",
+     "val_var": "AmountPerMinute",
+     "stop_var": "OffsetDrugEnd",
+     "callback": "sic_rate_kg",
+     "extra_vars": [
+      "IsSingleDose"
+     ],
+     "_comment": "2026-11-03 extraction audit: continuous rows only (IsSingleDose=0); a single dose is a one-minute push whose AmountPerMinute is the whole bolus."
+    }
+   ]
+  },
+  "_hourly_rule": "maximum_active_rate",
+  "_comment": "S732TW 2026-11-16: opt-in/internal worst active dose; sum concurrent infusions before the hourly maximum. Source units, weights and exclusions mirror dobu_rate.",
+  "aggregate": "max"
+ },
+ "dopa_rate_max": {
+  "unit": [
+   "mcg/kg/min",
+   "mcgkgmin"
+  ],
+  "min": 0,
+  "max": 50,
+  "description": "Maximum concurrent active dopa dose rate in the ICU hour",
+  "omopid": 1337860,
+  "category": "medications",
+  "sources": {
+   "aumc": [
+    {
+     "ids": 7179,
+     "table": "drugitems",
+     "sub_var": "itemid",
+     "rel_weight": "doserateperkg",
+     "rate_uom": "doserateunit",
+     "stop_var": "stop",
+     "callback": "aumc_rate_kg",
+     "extra_vars": [
+      "action",
+      "iscontinuous",
+      "ordercategory"
+     ],
+     "require_regex": {
+      "iscontinuous": "^(1|1\\.0|True|true)$"
+     },
+     "exclude_regex": {
+      "action": "(?i)^\\s*flush\\s*$",
+      "ordercategory": "(?i)^\\s*niet iv"
+     },
+     "_comment": "2026-11-04 audit round 3 (full-dictionary M): a rate is read from running infusions only: 'Flush' rows (a line flush at 30-120 ml/h; fentanyl 24,867 rows) and iscontinuous = 0 doses are not infusion rates."
+    }
+   ],
+   "eicu": [
+    {
+     "regex": "^dopa.*\\(.+\\)$",
+     "table": "infusiondrug",
+     "sub_var": "drugname",
+     "weight_var": "patientweight",
+     "callback": "eicu_rate_kg(ml_to_mcg = 1600)",
+     "class_name": "rgx_itm"
+    }
+   ],
+   "eicu_demo": [
+    {
+     "regex": "^dopa.*\\(.+\\)$",
+     "table": "infusiondrug",
+     "sub_var": "drugname",
+     "weight_var": "patientweight",
+     "callback": "eicu_rate_kg(ml_to_mcg = 1600)",
+     "class_name": "rgx_itm"
+    }
+   ],
+   "miiv": [
+    {
+     "ids": 221662,
+     "table": "inputevents",
+     "sub_var": "itemid",
+     "stop_var": "endtime",
+     "callback": "mimic_rate_mv",
+     "extra_vars": [
+      "statusdescription"
+     ],
+     "status_var": "statusdescription",
+     "excluded_statuses": [
+      "Rewritten"
+     ]
+    }
+   ],
+   "mimic": [
+    {
+     "ids": [
+      30043,
+      30307
+     ],
+     "table": "inputevents_cv",
+     "sub_var": "itemid",
+     "grp_var": "linkorderid",
+     "callback": "mimic_rate_cv",
+     "_comment": "2026-11-03 extraction audit: removed 30125 Milrinone (it has its own concept)."
+    },
+    {
+     "ids": 221662,
+     "table": "inputevents_mv",
+     "sub_var": "itemid",
+     "stop_var": "endtime",
+     "callback": "mimic_rate_mv",
+     "extra_vars": [
+      "statusdescription"
+     ],
+     "status_var": "statusdescription",
+     "excluded_statuses": [
+      "Rewritten"
+     ]
+    }
+   ],
+   "mimic_demo": [
+    {
+     "ids": [
+      30043,
+      30307
+     ],
+     "table": "inputevents_cv",
+     "sub_var": "itemid",
+     "grp_var": "linkorderid",
+     "callback": "mimic_rate_cv",
+     "_comment": "2026-11-03 extraction audit: removed 30125 Milrinone (it has its own concept)."
+    },
+    {
+     "ids": 221662,
+     "table": "inputevents_mv",
+     "sub_var": "itemid",
+     "stop_var": "endtime",
+     "callback": "mimic_rate_mv",
+     "extra_vars": [
+      "statusdescription"
+     ],
+     "status_var": "statusdescription",
+     "excluded_statuses": [
+      "Rewritten"
+     ]
+    }
+   ],
+   "sic": [
+    {
+     "ids": 1618,
+     "table": "medication",
+     "sub_var": "DrugID",
+     "val_var": "AmountPerMinute",
+     "stop_var": "OffsetDrugEnd",
+     "callback": "sic_rate_kg",
+     "extra_vars": [
+      "IsSingleDose"
+     ],
+     "_comment": "2026-11-03 extraction audit: continuous rows only (IsSingleDose=0); a single dose is a one-minute push whose AmountPerMinute is the whole bolus."
+    }
+   ]
+  },
+  "_hourly_rule": "maximum_active_rate",
+  "_comment": "S732TW 2026-11-16: opt-in/internal worst active dose; sum concurrent infusions before the hourly maximum. Source units, weights and exclusions mirror dopa_rate.",
+  "aggregate": "max"
+ },
+ "enoximone_rate_max": {
+  "unit": "mcg/kg/min",
+  "min": 0,
+  "max": 50,
+  "description": "Maximum concurrent active enoximone dose rate in the ICU hour",
+  "category": "cardiovascular",
+  "sources": {
+   "aumc": [
+    {
+     "ids": [
+      7196
+     ],
+     "table": "drugitems",
+     "sub_var": "itemid",
+     "rel_weight": "doserateperkg",
+     "rate_uom": "doserateunit",
+     "stop_var": "stop",
+     "callback": "aumc_rate_kg",
+     "extra_vars": [
+      "action",
+      "doserateperkg",
+      "doserateunit",
+      "doseunit",
+      "iscontinuous",
+      "ordercategory"
+     ],
+     "require_regex": {
+      "iscontinuous": "^(1|1\\.0|True|true)$",
+      "doseunit": "(?i)^(?:mg|µg|ug|mcg|g|ng)$",
+      "doserateunit": "(?i)^(?:min|uur|hour|hr|h|sec|s|dag)$"
+     },
+     "exclude_regex": {
+      "action": "(?i)^\\s*flush\\s*$",
+      "ordercategory": "(?i)^\\s*niet iv"
+     }
+    }
+   ]
+  },
+  "_hourly_rule": "maximum_active_rate",
+  "_comment": "S732TW 2026-11-16: opt-in/internal worst active dose; sum concurrent infusions before the hourly maximum. Source units, weights and exclusions mirror enoximone_rate.",
+  "aggregate": "max"
+ },
+ "epi_rate_max": {
+  "_comment": "S732TW 2026-11-16: opt-in/internal worst active dose; sum concurrent infusions before the hourly maximum. Source units, weights and exclusions mirror epi_rate.",
+  "unit": [
+   "mcg/kg/min",
+   "mcgkgmin"
+  ],
+  "min": 0,
+  "max": 5,
+  "description": "Maximum concurrent active epi dose rate in the ICU hour",
+  "omopid": 1343916,
+  "category": "medications",
+  "sources": {
+   "aumc": [
+    {
+     "ids": 6818,
+     "table": "drugitems",
+     "sub_var": "itemid",
+     "rel_weight": "doserateperkg",
+     "rate_uom": "doserateunit",
+     "stop_var": "stop",
+     "callback": "aumc_rate_kg",
+     "extra_vars": [
+      "action",
+      "iscontinuous",
+      "ordercategory"
+     ],
+     "require_regex": {
+      "iscontinuous": "^(1|1\\.0|True|true)$"
+     },
+     "exclude_regex": {
+      "action": "(?i)^\\s*flush\\s*$",
+      "ordercategory": "(?i)^\\s*niet iv"
+     },
+     "_comment": "2026-11-04 audit round 3 (full-dictionary M): a rate is read from running infusions only: 'Flush' rows (a line flush at 30-120 ml/h; fentanyl 24,867 rows) and iscontinuous = 0 doses are not infusion rates."
+    }
+   ],
+   "miiv": [
+    {
+     "ids": [
+      221289
+     ],
+     "table": "inputevents",
+     "sub_var": "itemid",
+     "stop_var": "endtime",
+     "rate_uom": "rateuom",
+     "callback": "mimic_rate_mv",
+     "_comment": "2026-11-04 audit round 4 (R4-109): 229617 'Epinephrine.' is a bolus push with no rate in any row.",
+     "extra_vars": [
+      "statusdescription"
+     ],
+     "status_var": "statusdescription",
+     "excluded_statuses": [
+      "Rewritten"
+     ]
+    }
+   ],
+   "eicu": [
+    {
+     "regex": "(?i)^epi(?:\\s|nephrine|nepherine).*\\(.+\\)$",
+     "table": "infusiondrug",
+     "sub_var": "drugname",
+     "weight_var": "patientweight",
+     "callback": "eicu_rate_kg(ml_to_mcg = NA)",
+     "class_name": "rgx_itm",
+     "_comment": "2026-11-03 audit round 2 (V2): ml/hr rows give no dose (ml_to_mcg = NA): eICU concentrations differ by hospital (measured norepinephrine 16-32, epinephrine 16, phenylephrine 100 mcg/mL against the fixed 32/40/200), so only mcg/min and mcg/kg/min rows are doses; ml/hr-only infusions remain exposure through *_dur."
+    }
+   ],
+   "eicu_demo": [
+    {
+     "regex": "(?i)^epi(?:\\s|nephrine|nepherine).*\\(.+\\)$",
+     "table": "infusiondrug",
+     "sub_var": "drugname",
+     "weight_var": "patientweight",
+     "callback": "eicu_rate_kg(ml_to_mcg = NA)",
+     "class_name": "rgx_itm",
+     "_comment": "2026-11-03 audit round 2 (V2): ml/hr rows give no dose (ml_to_mcg = NA): eICU concentrations differ by hospital (measured norepinephrine 16-32, epinephrine 16, phenylephrine 100 mcg/mL against the fixed 32/40/200), so only mcg/min and mcg/kg/min rows are doses; ml/hr-only infusions remain exposure through *_dur."
+    }
+   ],
+   "hirid": [
+    {
+     "ids": [
+      1000649,
+      1000650
+     ],
+     "table": "pharma",
+     "sub_var": "pharmaid",
+     "grp_var": "infusionid",
+     "callback": "hirid_rate_kg",
+     "_comment": "2026-11-03 extraction audit 2 (S8): perfusor items only; 1000655/1000750 boluses and 71 (1 mg/ml ampoule, inhaled and resuscitation doses) are not infusions.",
+     "extra_vars": [
+      "route"
+     ],
+     "require_regex": {
+      "route": "(?i)^\\s*(?:[ci]v(?:-(?:inf|inj))?|i\\.?v\\.?|intravenous)\\s*$"
+     }
+    }
+   ],
+   "mimic": [
+    {
+     "ids": [
+      30119,
+      30309
+     ],
+     "table": "inputevents_cv",
+     "sub_var": "itemid",
+     "grp_var": "linkorderid",
+     "callback": "mimic_rate_cv"
+    },
+    {
+     "ids": [
+      30044
+     ],
+     "table": "inputevents_cv",
+     "sub_var": "itemid",
+     "grp_var": "linkorderid",
+     "callback": "combine_callbacks(mimic_kg_rate, mimic_rate_cv)",
+     "_comment": "2026-11-03 audit round 2 (V9): 30044 is charted in mcg/min (rateuom mcgmin); divide by weight as for 30127, so the rate is mcg/kg/min like the other sources."
+    },
+    {
+     "ids": 221289,
+     "table": "inputevents_mv",
+     "sub_var": "itemid",
+     "stop_var": "endtime",
+     "callback": "mimic_rate_mv",
+     "extra_vars": [
+      "statusdescription"
+     ],
+     "status_var": "statusdescription",
+     "excluded_statuses": [
+      "Rewritten"
+     ]
+    }
+   ],
+   "mimic_demo": [
+    {
+     "ids": [
+      30119,
+      30309
+     ],
+     "table": "inputevents_cv",
+     "sub_var": "itemid",
+     "grp_var": "linkorderid",
+     "callback": "mimic_rate_cv"
+    },
+    {
+     "ids": [
+      30044
+     ],
+     "table": "inputevents_cv",
+     "sub_var": "itemid",
+     "grp_var": "linkorderid",
+     "callback": "combine_callbacks(mimic_kg_rate, mimic_rate_cv)",
+     "_comment": "2026-11-03 audit round 2 (V9): 30044 is charted in mcg/min (rateuom mcgmin); divide by weight as for 30127, so the rate is mcg/kg/min like the other sources."
+    },
+    {
+     "ids": 221289,
+     "table": "inputevents_mv",
+     "sub_var": "itemid",
+     "stop_var": "endtime",
+     "callback": "mimic_rate_mv",
+     "extra_vars": [
+      "statusdescription"
+     ],
+     "status_var": "statusdescription",
+     "excluded_statuses": [
+      "Rewritten"
+     ]
+    }
+   ],
+   "sic": [
+    {
+     "ids": 1502,
+     "table": "medication",
+     "sub_var": "DrugID",
+     "val_var": "AmountPerMinute",
+     "stop_var": "OffsetDrugEnd",
+     "callback": "sic_rate_kg",
+     "extra_vars": [
+      "IsSingleDose"
+     ],
+     "_comment": "2026-11-03 extraction audit: continuous rows only (IsSingleDose=0); a single dose is a one-minute push whose AmountPerMinute is the whole bolus."
+    }
+   ]
+  },
+  "_hourly_rule": "maximum_active_rate",
+  "aggregate": "max"
+ },
+ "milrinone_rate_max": {
+  "unit": [
+   "mcg/kg/min",
+   "mcgkgmin"
+  ],
+  "min": 0,
+  "max": 3,
+  "description": "Maximum concurrent active milrinone dose rate in the ICU hour",
+  "category": "medications",
+  "sources": {
+   "miiv": [
+    {
+     "ids": 221986,
+     "table": "inputevents",
+     "sub_var": "itemid",
+     "stop_var": "endtime",
+     "callback": "mimic_rate_mv",
+     "extra_vars": [
+      "ordercategorydescription",
+      "rateuom",
+      "statusdescription"
+     ],
+     "status_var": "statusdescription",
+     "excluded_statuses": [
+      "Rewritten",
+      "Cancelled",
+      "Canceled",
+      "Bolus"
+     ],
+     "require_regex": {
+      "rateuom": "(?i)^\\s*mcg/kg/min\\s*$",
+      "ordercategorydescription": "^Continuous Med$"
+     }
+    }
+   ],
+   "hirid": [
+    {
+     "ids": 1000441,
+     "table": "pharma",
+     "sub_var": "pharmaid",
+     "grp_var": "infusionid",
+     "callback": "hirid_rate_kg",
+     "extra_vars": [
+      "route"
+     ],
+     "require_regex": {
+      "route": "(?i)^\\s*[ci]v-inf\\s*$"
+     }
+    }
+   ],
+   "eicu": [
+    {
+     "ids": [
+      "Milrinone (mcg/kg/hr)"
+     ],
+     "table": "infusiondrug",
+     "sub_var": "drugname",
+     "weight_var": "patientweight",
+     "extra_vars": [
+      "drugname"
+     ],
+     "callback": "eicu_rate_kg(ml_to_mcg = NA)"
+    },
+    {
+     "ids": [
+      "Milrinone (mcg/kg/min)"
+     ],
+     "table": "infusiondrug",
+     "sub_var": "drugname",
+     "weight_var": "patientweight",
+     "extra_vars": [
+      "drugname"
+     ],
+     "callback": "eicu_rate_kg(ml_to_mcg = NA)"
+    },
+    {
+     "ids": [
+      "primacore (mcg/kg/min)"
+     ],
+     "table": "infusiondrug",
+     "sub_var": "drugname",
+     "weight_var": "patientweight",
+     "extra_vars": [
+      "drugname"
+     ],
+     "callback": "eicu_rate_kg(ml_to_mcg = NA)"
+    }
+   ]
+  },
+  "_hourly_rule": "maximum_active_rate",
+  "_comment": "S732TW 2026-11-16: opt-in/internal worst active dose; sum concurrent infusions before the hourly maximum. Source units, weights and exclusions mirror milrinone_rate.",
+  "aggregate": "max"
+ },
+ "norepi_rate_max": {
+  "_comment": "S732TW 2026-11-16: opt-in/internal worst active dose; sum concurrent infusions before the hourly maximum. Source units, weights and exclusions mirror norepi_rate.",
+  "unit": [
+   "mcg/kg/min",
+   "mcgkgmin"
+  ],
+  "min": 0,
+  "max": 5,
+  "description": "Maximum concurrent active norepi dose rate in the ICU hour",
+  "omopid": 1321341,
+  "category": "medications",
+  "sources": {
+   "aumc": [
+    {
+     "ids": 7229,
+     "table": "drugitems",
+     "sub_var": "itemid",
+     "rel_weight": "doserateperkg",
+     "rate_uom": "doserateunit",
+     "stop_var": "stop",
+     "callback": "aumc_rate_kg",
+     "extra_vars": [
+      "action",
+      "iscontinuous",
+      "ordercategory"
+     ],
+     "require_regex": {
+      "iscontinuous": "^(1|1\\.0|True|true)$"
+     },
+     "exclude_regex": {
+      "action": "(?i)^\\s*flush\\s*$",
+      "ordercategory": "(?i)^\\s*niet iv"
+     },
+     "_comment": "2026-11-04 audit round 3 (full-dictionary M): a rate is read from running infusions only: 'Flush' rows (a line flush at 30-120 ml/h; fentanyl 24,867 rows) and iscontinuous = 0 doses are not infusion rates."
+    }
+   ],
+   "miiv": [
+    {
+     "ids": 221906,
+     "table": "inputevents",
+     "sub_var": "itemid",
+     "stop_var": "endtime",
+     "rate_uom": "rateuom",
+     "callback": "mimic_rate_mv",
+     "extra_vars": [
+      "statusdescription"
+     ],
+     "status_var": "statusdescription",
+     "excluded_statuses": [
+      "Rewritten"
+     ]
+    }
+   ],
+   "eicu": [
+    {
+     "regex": "(?i)^(?:norepi|levophed).*\\(.+\\)$",
+     "table": "infusiondrug",
+     "sub_var": "drugname",
+     "weight_var": "patientweight",
+     "callback": "eicu_rate_kg(ml_to_mcg = NA)",
+     "class_name": "rgx_itm",
+     "_comment": "2026-11-03 audit round 2 (V2): ml/hr rows give no dose (ml_to_mcg = NA): eICU concentrations differ by hospital (measured norepinephrine 16-32, epinephrine 16, phenylephrine 100 mcg/mL against the fixed 32/40/200), so only mcg/min and mcg/kg/min rows are doses; ml/hr-only infusions remain exposure through *_dur."
+    }
+   ],
+   "eicu_demo": [
+    {
+     "regex": "(?i)^(?:norepi|levophed).*\\(.+\\)$",
+     "table": "infusiondrug",
+     "sub_var": "drugname",
+     "weight_var": "patientweight",
+     "callback": "eicu_rate_kg(ml_to_mcg = NA)",
+     "class_name": "rgx_itm",
+     "_comment": "2026-11-03 audit round 2 (V2): ml/hr rows give no dose (ml_to_mcg = NA): eICU concentrations differ by hospital (measured norepinephrine 16-32, epinephrine 16, phenylephrine 100 mcg/mL against the fixed 32/40/200), so only mcg/min and mcg/kg/min rows are doses; ml/hr-only infusions remain exposure through *_dur."
+    }
+   ],
+   "hirid": [
+    {
+     "ids": [
+      1000462,
+      1000656,
+      1000657
+     ],
+     "table": "pharma",
+     "sub_var": "pharmaid",
+     "grp_var": "infusionid",
+     "callback": "hirid_rate_kg",
+     "_comment": "2026-11-03 audit round 2 (V4): 1000658 'Norepinephrine 10 ug/ml Bolus' removed: a bolus is not an infusion rate or an infusion-hour (7,180 bolus-only hours were read as running noradrenaline).",
+     "extra_vars": [
+      "route"
+     ],
+     "require_regex": {
+      "route": "(?i)^\\s*(?:[ci]v(?:-(?:inf|inj))?|i\\.?v\\.?|intravenous)\\s*$"
+     }
+    }
+   ],
+   "mimic": [
+    {
+     "ids": [
+      30120
+     ],
+     "table": "inputevents_cv",
+     "sub_var": "itemid",
+     "grp_var": "linkorderid",
+     "callback": "mimic_rate_cv"
+    },
+    {
+     "ids": [
+      30047
+     ],
+     "table": "inputevents_cv",
+     "sub_var": "itemid",
+     "grp_var": "linkorderid",
+     "callback": "combine_callbacks(mimic_kg_rate, mimic_rate_cv)",
+     "_comment": "2026-11-03 audit round 2 (V9): 30047 is charted in mcg/min (rateuom mcgmin); divide by weight as for 30127, so the rate is mcg/kg/min like the other sources."
+    },
+    {
+     "ids": 221906,
+     "table": "inputevents_mv",
+     "sub_var": "itemid",
+     "stop_var": "endtime",
+     "callback": "mimic_rate_mv",
+     "extra_vars": [
+      "statusdescription"
+     ],
+     "status_var": "statusdescription",
+     "excluded_statuses": [
+      "Rewritten"
+     ]
+    }
+   ],
+   "mimic_demo": [
+    {
+     "ids": [
+      30120
+     ],
+     "table": "inputevents_cv",
+     "sub_var": "itemid",
+     "grp_var": "linkorderid",
+     "callback": "mimic_rate_cv"
+    },
+    {
+     "ids": [
+      30047
+     ],
+     "table": "inputevents_cv",
+     "sub_var": "itemid",
+     "grp_var": "linkorderid",
+     "callback": "combine_callbacks(mimic_kg_rate, mimic_rate_cv)",
+     "_comment": "2026-11-03 audit round 2 (V9): 30047 is charted in mcg/min (rateuom mcgmin); divide by weight as for 30127, so the rate is mcg/kg/min like the other sources."
+    },
+    {
+     "ids": 221906,
+     "table": "inputevents_mv",
+     "sub_var": "itemid",
+     "stop_var": "endtime",
+     "callback": "mimic_rate_mv",
+     "extra_vars": [
+      "statusdescription"
+     ],
+     "status_var": "statusdescription",
+     "excluded_statuses": [
+      "Rewritten"
+     ]
+    }
+   ],
+   "sic": [
+    {
+     "ids": 1562,
+     "table": "medication",
+     "sub_var": "DrugID",
+     "val_var": "AmountPerMinute",
+     "stop_var": "OffsetDrugEnd",
+     "callback": "sic_rate_kg",
+     "extra_vars": [
+      "IsSingleDose"
+     ],
+     "_comment": "2026-11-03 extraction audit: continuous rows only (IsSingleDose=0); a single dose is a one-minute push whose AmountPerMinute is the whole bolus."
+    }
+   ]
+  },
+  "_hourly_rule": "maximum_active_rate",
+  "aggregate": "max"
+ },
+ "phn_rate_max": {
+  "unit": "mcg/kg/min",
+  "min": 0,
+  "max": 15,
+  "_comment": "S732TW 2026-11-16: opt-in/internal worst active dose; sum concurrent infusions before the hourly maximum. Source units, weights and exclusions mirror phn_rate.",
+  "description": "Maximum concurrent active phn dose rate in the ICU hour",
+  "omopid": 1135766,
+  "category": "medications",
+  "sources": {
+   "eicu": [
+    {
+     "regex": "(?i)^(phenylephrine|neo[- ]?synephrine|neosynephrine|neosynsprine).*\\(.+\\)$",
+     "table": "infusiondrug",
+     "sub_var": "drugname",
+     "weight_var": "patientweight",
+     "callback": "eicu_rate_kg(ml_to_mcg = NA)",
+     "class_name": "rgx_itm",
+     "_comment": "2026-11-03 audit round 2 (V2): ml/hr rows give no dose (ml_to_mcg = NA): eICU concentrations differ by hospital (measured norepinephrine 16-32, epinephrine 16, phenylephrine 100 mcg/mL against the fixed 32/40/200), so only mcg/min and mcg/kg/min rows are doses; ml/hr-only infusions remain exposure through *_dur."
+    }
+   ],
+   "eicu_demo": [
+    {
+     "regex": "(?i)^(phenylephrine|neo[- ]?synephrine|neosynephrine|neosynsprine).*\\(.+\\)$",
+     "table": "infusiondrug",
+     "sub_var": "drugname",
+     "weight_var": "patientweight",
+     "callback": "eicu_rate_kg(ml_to_mcg = NA)",
+     "class_name": "rgx_itm",
+     "_comment": "2026-11-03 audit round 2 (V2): ml/hr rows give no dose (ml_to_mcg = NA): eICU concentrations differ by hospital (measured norepinephrine 16-32, epinephrine 16, phenylephrine 100 mcg/mL against the fixed 32/40/200), so only mcg/min and mcg/kg/min rows are doses; ml/hr-only infusions remain exposure through *_dur."
+    }
+   ],
+   "miiv": [
+    {
+     "ids": [
+      221749,
+      229630,
+      229632
+     ],
+     "table": "inputevents",
+     "sub_var": "itemid",
+     "stop_var": "endtime",
+     "callback": "mimic_rate_mv",
+     "_comment": "2026-11-03 extraction audit: added 229630/229632 'Phenylephrine (50/250)', '(200/250)' (rate in mcg/kg/min like 221749).",
+     "extra_vars": [
+      "statusdescription"
+     ],
+     "status_var": "statusdescription",
+     "excluded_statuses": [
+      "Rewritten"
+     ]
+    }
+   ],
+   "mimic": [
+    {
+     "ids": 30127,
+     "table": "inputevents_cv",
+     "sub_var": "itemid",
+     "grp_var": "linkorderid",
+     "callback": "combine_callbacks(\n               mimic_kg_rate, mimic_rate_cv)\n             ",
+     "extra_vars": [
+      "stopped"
+     ]
+    },
+    {
+     "ids": 30128,
+     "table": "inputevents_cv",
+     "sub_var": "itemid",
+     "grp_var": "linkorderid",
+     "callback": "mimic_rate_cv",
+     "extra_vars": [
+      "stopped"
+     ]
+    },
+    {
+     "ids": 221749,
+     "table": "inputevents_mv",
+     "sub_var": "itemid",
+     "stop_var": "endtime",
+     "callback": "mimic_rate_mv",
+     "extra_vars": [
+      "statusdescription"
+     ],
+     "status_var": "statusdescription",
+     "excluded_statuses": [
+      "Rewritten"
+     ]
+    }
+   ],
+   "mimic_demo": [
+    {
+     "ids": 30127,
+     "table": "inputevents_cv",
+     "sub_var": "itemid",
+     "grp_var": "linkorderid",
+     "callback": "combine_callbacks(\n               mimic_kg_rate, mimic_rate_cv)\n             ",
+     "extra_vars": [
+      "stopped"
+     ]
+    },
+    {
+     "ids": 30128,
+     "table": "inputevents_cv",
+     "sub_var": "itemid",
+     "grp_var": "linkorderid",
+     "callback": "mimic_rate_cv",
+     "extra_vars": [
+      "stopped"
+     ]
+    },
+    {
+     "ids": 221749,
+     "table": "inputevents_mv",
+     "sub_var": "itemid",
+     "stop_var": "endtime",
+     "callback": "mimic_rate_mv",
+     "extra_vars": [
+      "statusdescription"
+     ],
+     "status_var": "statusdescription",
+     "excluded_statuses": [
+      "Rewritten"
+     ]
+    }
+   ],
+   "sic": [
+    {
+     "ids": 1593,
+     "table": "medication",
+     "sub_var": "DrugID",
+     "val_var": "AmountPerMinute",
+     "stop_var": "OffsetDrugEnd",
+     "extra_vars": [
+      "IsSingleDose"
+     ],
+     "callback": "sic_rate_kg",
+     "_comment": "1593=Phenylephrin (d_references unit g). Continuous rows (IsSingleDose=0) carry AmountPerMinute in g/min like norepinephrine; one-minute single-dose pushes (most 1593 rows) are excluded."
+    }
+   ],
+   "aumc": [
+    {
+     "ids": 19929,
+     "table": "drugitems",
+     "sub_var": "itemid",
+     "rel_weight": "doserateperkg",
+     "rate_uom": "doserateunit",
+     "stop_var": "stop",
+     "callback": "aumc_rate_kg",
+     "_comment": "2026-11-03 extraction audit 2: drugitems 19929 'Fenylefrine' syringe-pump infusion, same rate callback as norepi_rate 7229; bolus rows without a dose rate are dropped by aumc_rate_kg. | 2026-11-04 audit round 3 (full-dictionary M): a rate is read from running infusions only: 'Flush' rows (a line flush at 30-120 ml/h; fentanyl 24,867 rows) and iscontinuous = 0 doses are not infusion rates.",
+     "extra_vars": [
+      "action",
+      "iscontinuous",
+      "ordercategory"
+     ],
+     "require_regex": {
+      "iscontinuous": "^(1|1\\.0|True|true)$"
+     },
+     "exclude_regex": {
+      "action": "(?i)^\\s*flush\\s*$",
+      "ordercategory": "(?i)^\\s*niet iv"
+     }
+    }
+   ]
+  },
+  "_hourly_rule": "maximum_active_rate",
+  "aggregate": "max"
  }
 }

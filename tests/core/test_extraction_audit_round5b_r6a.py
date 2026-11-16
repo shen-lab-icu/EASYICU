@@ -207,7 +207,8 @@ def test_r6a_02_hirid_duplicate_times_are_permutation_invariant_and_conserve_dos
         pd.testing.assert_frame_equal(run(permuted), baseline)
     raw = {(1, 0.): 20., (1, 1.): 22., (1, 10.): 3., (2, 0.): 4., (2, 1.): 4.}
     scale = 1000. if name == "fentanyl_rate" else .001 if name == "midazolam_rate" else 1 / 60
-    expected = {key: dose / (60 * (80 if key[0] == 1 else 40)) if target == "kg" else dose * scale
+    active_hours = {(1, 0.): .5, (1, 1.): 1., (1, 10.): 1., (2, 0.): .1, (2, 1.): .1}
+    expected = {key: (dose / (60 * (80 if key[0] == 1 else 40)) if target == "kg" else dose * scale) / active_hours[key]
                 for key, dose in raw.items()}
     assert baseline.set_index(["patientid", "givenat"])[name].to_dict() == pytest.approx(expected)
 
@@ -288,7 +289,7 @@ def test_r6a_02_hirid_public_rates_preserve_duplicate_doses_in_every_path(tmp_pa
                          "givenat": origin + pd.Timedelta(hours=time), "givendose": dose,
                          "doseunit": unit, "recordstatus": 0, "route": "cv-inf"})
         scale = {"adh_rate": 1 / 60, "fentanyl_rate": 1., "midazolam_rate": .001}.get(name, 1 / (60 * 80))
-        expected[name] = {0.: 1.2 * scale, 1.: 1.8 * scale}
+        expected[name] = {0.: 1.2 * scale / .25, 1.: 1.8 * scale}
     frame = pd.DataFrame(rows)
     _assert_native_columns("hirid", "pharma", frame)
     path = tmp_path / ("pharma/part.parquet" if layout == "flat" else "pharma_bucket/bucket_id=0/part.parquet")

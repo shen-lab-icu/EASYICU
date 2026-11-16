@@ -93,6 +93,9 @@ EXPECTED = {'angiotensin_ii_rate': {'unit': 'ng/kg/min',
                                        'callback': 'sicdb_exposure'}]}}}
 
 
+EXPECTED["angiotensin_ii_rate"]["_hourly_rule"] = "time_weighted_mean_active_rate"
+
+
 @pytest.mark.parametrize("name", list(EXPECTED))
 def test_dictionary_contract(name):
     assert DICTIONARY[name] == EXPECTED[name]

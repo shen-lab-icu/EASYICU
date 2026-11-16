@@ -624,8 +624,8 @@ def test_r6_f012_boolean_union_does_not_lose_positive_adjunct_under_zero_rates(t
         indicator = out["vaso_ind"]
         assert set(indicator.data[indicator.index_column]) == {2., 3.}
         if "phn_rate" in out:
-            # The boolean union's max must not change the public numeric rate.
-            assert out["phn_rate"].data.phn_rate.tolist() == [0., 0.]
+            # S732TW: zero-rate records do not dilute a concurrent active dose.
+            assert out["phn_rate"].data.phn_rate.tolist() == pytest.approx([.1, .1])
 
 
 @pytest.mark.parametrize("concept", ["mech_vent", "rrt"])

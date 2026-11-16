@@ -97,7 +97,11 @@
    "other_vaso",
    "mech_circ_support",
    "ecmo",
-   "ecmo_indication"
+   "ecmo_indication",
+   "dopa_rate_max",
+   "norepi_rate_max",
+   "dobu_rate_max",
+   "epi_rate_max"
   ],
   "description": "SOFA-2 cardiovascular component (combined norepi+epi; any dopamine/dobutamine/other adjunct escalates low/medium tiers; dopamine dose tiers apply only when dopamine is the sole vasoactive drug)",
   "clinical_status": "source_bound_golden",
@@ -116,7 +120,11 @@
    null,
    null,
    null,
-   null
+   null,
+   "max",
+   "max",
+   "max",
+   "max"
   ],
   "callback": "sofa2_cardio",
   "class_name": "rec_cncpt"

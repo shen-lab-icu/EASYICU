@@ -101,10 +101,10 @@ def test_mimic_iii_mv_rate_keeps_every_stay_on_its_icu_clock() -> None:
     # 01:30 -> 0.75 h, 03:10 -> 2.42 h, 03:40 -> 2.92 h.
     assert stay["starttime"].tolist() == list(
         pd.to_datetime(
-            ["2101-01-01 00:45", "2101-01-01 01:45", "2101-01-01 02:45", "2101-01-01 02:45"]
+            ["2101-01-01 00:45", "2101-01-01 01:45", "2101-01-01 02:45"]
         )
     )
-    assert stay["norepi_rate"].tolist() == pytest.approx([0.05, 0.05, 0.05, 0.08])
+    assert stay["norepi_rate"].tolist() == pytest.approx([0.05, 0.05, (.05 * 25 + .08 * 30) / 55])
     other = result.loc[result["icustay_id"].eq(2000)].sort_values("starttime", kind="stable")
     assert other["starttime"].tolist() == list(
         pd.to_datetime(["2101-02-01 00:00", "2101-02-01 01:00"])
@@ -166,7 +166,7 @@ def test_mimic_rate_mv_infers_only_the_stay_identifier() -> None:
     )
 
     assert sorted(result["icustay_id"].unique()) == [1000, 2000]
-    assert len(result) == 6
+    assert len(result) == 5
     assert "row_id" not in result.columns
 
 

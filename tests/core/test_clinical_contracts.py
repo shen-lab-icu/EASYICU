@@ -365,6 +365,12 @@ def test_shipped_sofa2_component_resolver_graphs_execute_runtime_vectors(
     fixture = json.loads(
         (ROOT / "tests/clinical_specs" / fixture_name).read_text(encoding="utf-8")
     )
+    if concept_name == 'sofa2_cardio':
+        # The reference vectors supply peak doses. Production separates those
+        # doses from the unchanged *60 administration-duration gate.
+        for drug in ('dopa', 'norepi', 'dobu', 'epi'):
+            fixture['inputs'][f'{drug}_rate_max'] = fixture['inputs'].get(
+                f'{drug}60', [0.] * len(fixture['expected']))
     dictionary = copy.deepcopy(load_dictionary(include_sofa2=True))
     for input_name in fixture["inputs"]:
         dictionary[input_name].sources["fixture"] = [

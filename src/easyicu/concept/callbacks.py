@@ -2968,7 +2968,7 @@ def _callback_norepi_equiv(
     # norepi 0.2 + epi 0.2 + adh 0.04 -> scaled 0.2+0.2+0.1=0.5 sum vs 0.2
     # median). R ricu median applies to repeated measures of ONE concept, not
     # to potency summation across DIFFERENT drugs. SOFA cardio is unaffected:
-    # it consumes norepi60/dopa60/dobu60/epi60 + map, never norepi_equiv.
+    # it consumes max dose companions, *60 qualification and MAP, never NEE.
     if key_cols:
         aggregated = exact_groupby_sum(combined, key_cols, "norepi_equiv", sort=True)
         aggregated = aggregated.sort_values(key_cols).reset_index(drop=True)
@@ -2999,7 +2999,9 @@ def _callback_sofa_component(
         # vaso_ind is listed in depends_on only for dependency ordering.
         # The scoring function uses only the concepts field: map, dopa60, norepi60, dobu60, epi60.
         # We explicitly remove vaso_ind from tables if present.
-        tables = dict(tables)
+        from .dose_rate_sofa import cardio_max_tables
+
+        tables = cardio_max_tables(tables, ctx)
         tables.pop("vaso_ind", None)
         # CRITICAL: For single concept (sofa_single type), ricu_code's collect_dots returns the data directly
         # For multiple concepts, use outer join (replicates R ricu merge_dat = TRUE)

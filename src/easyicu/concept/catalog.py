@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from .dose_rate import RATE_MAX_CONCEPTS
+
 from ..concept_output_sources import (
     COMPOSITE_CONCEPT_OUTPUT_SOURCES as COMPOSITE_CONCEPT_OUTPUT_SOURCES,
 )
@@ -942,6 +944,7 @@ FLUID_IO_METADATA = {
 }
 
 HIDDEN_DICTIONARY_CONCEPTS = {
+    *RATE_MAX_CONCEPTS,  # Internal SOFA doses; available explicitly, outside default modules.
     *BP_CHANNEL_CONCEPTS,
     *FLUID_IO_CONCEPTS,
     *GAS_SPECIMEN_CONCEPTS,

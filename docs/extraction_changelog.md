@@ -36,6 +36,31 @@ back to `chartdate`; a specimen just after one stay's discharge stays with that
 stay when its +24 h allowance covers it and the next stay's −24 h window does
 not. MIMIC-III demo `samp` +5 / −0 rows.
 
+## Unreleased (reseal 14) — declared active-time hourly dose rates [S732TW]
+
+Thirteen infusion dose-rate concepts now share one hourly estimator across
+sources: sum concurrent infusions, integrate their active dose, and divide by
+the union of active time in the hour. This replaces CareVue's charted median,
+eICU's maximum-active pooling, and unweighted interval pooling elsewhere.
+HiRID retains preceding-interval amount attribution, converting to an exact
+interval rate before integration. A terminal point with unknown duration no
+longer fabricates a one-hour tail; five-hour point episodes and all duration
+and `*60` definitions remain unchanged.
+
+SICdb propofol replaces the opaque 3057 hourly summary with verified continuous
+medication 1499/1549 rate intervals, excluding single-dose rows. This necessary
+source/weight change uses the existing SIC case-weight kg-rate owner.
+
+Nine hidden maximum companions preserve the worst active doses separately.
+SOFA-1/2 cardiovascular use the four standard maxima with their existing
+`*60` duration gates. Hourly `norepi_equiv` inherits the component means;
+its factors, including dopamine, are untouched. Insulin remains a mixed
+administered-dose concept. See the complete inventory and boundary rules in
+[the duration/rate contract](vasopressor_duration_contract.md#hourly-dose-rate-summary-s732tw)
+and DEV-RICUC-07 through DEV-RICUC-10 in [ricu deviations](ricu_deviations.md).
+No default export module is added. The changed dictionary is intentionally
+not resealed; reseal 14 belongs to the engineering session.
+
 ## 2026-11-16 — MIMIC-III demo reads CareVue ETT verbal item 723 [S732, ricu demo parity]
 
 **What changed.** MIMIC-III demo only; full MIMIC-III does not move. The demo's

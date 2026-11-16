@@ -51,7 +51,8 @@ def test_r5c_hirid_002_non_weight_rates_split_previous_valid_interval(name, unit
     scale = {"adh_rate": 1 / 60, "fentanyl_rate": 1000, "midazolam_rate": .001}[name]
     # Zero start markers bound the first interval, and an exact end at 2 h
     # gives no dose to hour 2. Gaps over 6 h stay at their record boundary.
-    got = dict(zip(out.givenat, out[name] / scale))
+    active_hours = out.givenat.map({0.: .25, 1.: 1., 10.: 1.})
+    got = dict(zip(out.givenat, out[name] * active_hours / scale))
     assert got == pytest.approx({0: 6.0, 1: 12.0, 10: 3.0})
     assert sum(got.values()) == pytest.approx(21.0)
 
@@ -71,7 +72,8 @@ def test_r5c_hirid_002_public_batch_rates_conserve_dose(tmp_path, layout):
     out = _load(root, names)
     for name in names:
         scale = {"adh_rate": 1 / 60, "fentanyl_rate": 1000, "midazolam_rate": .001}[name]
-        got = dict(zip(out[name].givenat, out[name][name] / scale))
+        active_hours = out[name].givenat.map({0.: .25, 1.: 1., 10.: 1.})
+        got = dict(zip(out[name].givenat, out[name][name] * active_hours / scale))
         assert got == pytest.approx({0.: .006, 1.: .012, 10.: .003})
         pd.testing.assert_frame_equal(out[name], _load(root, [name])[name], check_like=True)
 
@@ -299,7 +301,8 @@ def test_r5c_hirid_019_status_bits_are_removed_before_dose_and_episode_aggregati
     })
     rate = hirid_rate_kg(frame, concept_name="norepi_rate", val_col="givendose", unit_col="doseunit",
                          index_col="givenat", grp_var="infusionid")
-    assert dict(zip(rate.givenat, rate.norepi_rate * 60 * 50)) == pytest.approx({0.: 9., 1.: 3.})
+    active_hours = rate.givenat.map({0.: .75, 1.: .25})
+    assert dict(zip(rate.givenat, rate.norepi_rate * active_hours * 60 * 50)) == pytest.approx({0.: 9., 1.: 3.})
     dur = hirid_duration(frame, concept_name="norepi_dur", val_col="givendose",
                          index_col="givenat", grp_var="infusionid")
     assert dur.givenat.tolist() == [.25]

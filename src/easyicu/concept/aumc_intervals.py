@@ -50,6 +50,12 @@ def expand_intervals(frame, *, start_col, stop_col, value_col, data_source=None,
     # Subtract before division to preserve exact boundaries on large clocks.
     out["__start"] = (pd.to_numeric(out[start_col], errors="coerce") - origin) / 60.0
     out["__stop"] = (pd.to_numeric(out[stop_col], errors="coerce") - origin) / 60.0
+    from .dose_rate import enabled, interval_rates
+
+    if not union and not allocate and grid is None and enabled(value_col):
+        channel = next((c for c in ('orderid', 'linkorderid', 'infusionid') if c in out), None)
+        return interval_rates(out, ids=['admissionid'], index=start_col, value=value_col,
+                              starts=out['__start'], ends=out['__stop'], native_scale=60., channel=channel)
     valid = np.isfinite(out["__start"]) & np.isfinite(out["__stop"])
     valid &= out["__stop"].gt(out["__start"]) & out[value_col].notna()
     out = out.loc[valid].copy()

@@ -79,7 +79,7 @@ def icu_seconds(frame, data_source, columns):
 
 
 def materialize_intervals(frame, *, start="Offset", stop="OffsetDrugEnd", data_source=None, relative=False,
-                          grid=None):
+                          grid=None, rate_value=None):
     """Return hourly observations and per-interval overlap seconds, without aggregation.
 
     ``grid`` (the minute opt-in only, S853c) uses bins of that length instead of
@@ -88,6 +88,17 @@ def materialize_intervals(frame, *, start="Offset", stop="OffsetDrugEnd", data_s
     """
     width = HOUR if grid is None else pd.to_timedelta(grid).total_seconds()
     raw = frame.copy() if relative else icu_seconds(frame, data_source, [start, stop])
+    from .dose_rate import enabled, interval_rates
+
+    if rate_value and grid is None and enabled(rate_value):
+        raw[start] = pd.to_numeric(raw[start], errors='coerce') / HOUR
+        channel = next((c for c in ('InfusionID', 'OrderID', 'orderid') if c in raw), None)
+        out = interval_rates(raw, ids=['CaseID'], index=start, value=rate_value,
+                             starts=raw[start], ends=pd.to_numeric(raw[stop], errors='coerce') / HOUR,
+                             channel=channel)
+        out = out.drop(columns=[stop, 'dur_var'], errors='ignore')
+        out.attrs['easyicu_time_columns'] = {start: 'icu_relative_hours'}
+        return out
     starts = pd.to_numeric(raw[start], errors="coerce").to_numpy(dtype=float)
     stops = pd.to_numeric(raw[stop], errors="coerce").to_numpy(dtype=float)
     valid = np.isfinite(starts) & np.isfinite(stops) & (stops > starts)
@@ -223,7 +234,7 @@ def amount_rate(frame, *, concept_name, source, data_source, factor):
     valid = continuous & amount.gt(0) & duration.gt(0) & np.isfinite(amount) & np.isfinite(duration)
     out = frame.loc[valid].copy()
     out[concept_name] = amount.loc[valid] * factor / duration.loc[valid] * HOUR
-    return materialize_intervals(out, start=start, stop=stop, data_source=data_source)
+    return materialize_intervals(out, start=start, stop=stop, data_source=data_source, rate_value=concept_name)
 
 
 def _glucose_factors(frame, data_source):

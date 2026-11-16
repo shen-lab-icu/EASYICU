@@ -187,7 +187,7 @@ def test_r6_f028_real_selector_resolves_same_time_native_modes_before_hour_pooli
     assert sequence.charttime.tolist() == [0.]
 
 
-def test_r6_f029_duration_helper_is_not_rate_owner_and_cv_mv_use_different_pooling():
+def test_r6_f029_duration_inference_is_separate_from_active_rate_integration():
     origin = pd.Timestamp("2180-01-01 00:17")
     bounds = pd.DataFrame({"icustay_id": [1], "intime": [origin],
                            "outtime": [origin + pd.Timedelta(hours=12)]})
@@ -199,21 +199,17 @@ def test_r6_f029_duration_helper_is_not_rate_owner_and_cv_mv_use_different_pooli
     cv = mimic_rate_cv(frame, val_col="rate", grp_var="linkorderid",
                        id_cols=["icustay_id"], admission_times=bounds)
     cv["charttime"] = (cv.charttime - origin) / pd.Timedelta(hours=1)
-    # ricu's CV owner floors to the ICU origin and takes the median across
-    # simultaneous infusion groups. This cannot be replayed as an additive MV rate.
-    assert cv.set_index("charttime").rate.to_dict() == {0.: .4, 1.: .4, 2.: 0.}
+    # S732TW adds the two concurrent pump rates before the active-time mean.
+    assert cv.set_index("charttime").rate.to_dict() == pytest.approx({0.: .8, 1.: .8, 2.: .8})
     mv = pd.DataFrame({"icustay_id": [1, 1], "orderid": [1, 2], "starttime": [.25, .75],
                        "endtime": [1., 2.], "rate": [.2, .6]})
     expanded = mimic_rate_mv(mv, val_col="rate", stop_var="endtime",
-                             id_cols=["icustay_id", "orderid"])
-    assert expanded.starttime.tolist() == [0., 0., 1.]
-    assert expanded.rate.tolist() == [.2, .6, .6]
-    # Actual dose conserves the precise intervals, not rate * published cells.
-    raw = mv.set_index("orderid")
-    starts = expanded.orderid.map(raw.starttime)
-    ends = expanded.orderid.map(raw.endtime)
-    overlap = np.minimum(ends, expanded.starttime + 1) - np.maximum(starts, expanded.starttime)
-    assert (expanded.rate * overlap * 60).sum() == pytest.approx(54.)
+                             id_cols=["icustay_id"])
+    assert expanded.starttime.tolist() == [0., 1.]
+    assert expanded.rate.tolist() == pytest.approx([.4, .6])
+    # Recover mass by integrating the union of active time.
+    active_hours = expanded.starttime.map({0.: .75, 1.: 1.})
+    assert (expanded.rate * active_hours * 60).sum() == pytest.approx(54.)
     assert ((mv.endtime - mv.starttime) * mv.rate * 60).sum() == pytest.approx(54.)
     rates = {name: _table(name, [0.], [value]) for name, value in {
         "norepi_rate": .2, "epi_rate": .1, "dopa_rate": 15., "phn_rate": 1.,
@@ -695,12 +691,12 @@ def test_r6_f029_public_rate_selectors_and_equivalent_share_source_clock(tmp_pat
     loaded = _load(source, [*channels, "norepi_equiv"])
     for name, (_, _, rate) in channels.items():
         table = loaded[name]
-        expected = {0.: rate, 1.: rate, **({2.: 0.} if system == "cv" else {})}
+        expected = {0.: 2 * rate, 1.: 2 * rate, 2.: 2 * rate} if system == "cv" else {0.: rate, 1.: rate}
         assert table.data.set_index(table.index_column)[name].to_dict() == pytest.approx(expected)
         pd.testing.assert_frame_equal(_load(source, [name])[name].data, table.data)
     equiv = loaded["norepi_equiv"]
     assert equiv.data.set_index(equiv.index_column).norepi_equiv.to_dict() == pytest.approx(
-        {0.: .5, 1.: .5, **({2.: 0.} if system == "cv" else {})})
+        {0.: 1., 1.: 1., 2.: 1.} if system == "cv" else {0.: .5, 1.: .5})
 
 
 def test_r6_f030_public_parent_request_uses_twenty_four_cell_worst(tmp_path):

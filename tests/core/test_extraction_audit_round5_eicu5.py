@@ -432,12 +432,12 @@ def test_r5_eicu_034_later_same_hour_invasive_anchor_restarts_support(tmp_path):
     ("phn_rate", "Phenylephrine (mcg/kg/min)"), ("propofol_rate", "Propofol (mcg/kg/min)"),
     ("fentanyl_rate", "Fentanyl (mcg/hr)"), ("midazolam_rate", "Midazolam (mg/hr)"),
 ])
-def test_r5_eicu_026_every_dictionary_rate_retains_six_hour_gap_and_zero_stop(tmp_path, name, drug):
+def test_r5_eicu_026_dose_rates_break_long_gaps_and_stops_have_no_row(tmp_path, name, drug):
     infusion = pd.DataFrame({"infusionoffset": [0, 600, 660], "drugname": [drug] * 3, "drugrate": [1.0, 2.0, 0.0]})
     ds = _eicu_source(tmp_path, "eicu", infusiondrug=infusion)
     out = _hourly(ds, name)
-    assert set(out) == {0.0, 1.0, 2.0, 3.0, 4.0, 5.0, 10.0, 11.0}
-    assert out[11.0] == 0
+    # S732TW: the 10-hour gap has no supported active span.
+    assert out == {10.0: 2.0}
 
 
 def test_r5_eicu_036_conflicting_unit_labelled_weights_are_not_arbitrarily_prioritized():
@@ -531,7 +531,7 @@ def test_r5_eicu_026_zero_volume_rate_stops_without_concentration(tmp_path, name
     out = _hourly(ds, name)
     assert out[0] == 1
     assert not any(out.get(h, 0) > 0 for h in range(1, 10))
-    assert out[1] == 0
+    assert 1 not in out
 
 
 def test_r5_eicu_014_suspected_infection_is_not_explicit_negation():

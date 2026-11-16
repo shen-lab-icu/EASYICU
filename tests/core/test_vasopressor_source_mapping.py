@@ -74,6 +74,7 @@ def test_eicu_kg_rate_drops_unrecognised_units_instead_of_dividing_by_weight():
                           "drugrate": [5.0, 5.0, 8.0], "patientweight": [80.0, 80.0, 80.0],
                           "drugname": ["Norepinephrine (mcg/kg/day)", "Norepinephrine 4mg/250ml",
                                        "Levophed (mcg/min)"]})
+    frame = pd.concat([frame, frame.assign(infusionoffset=60, drugrate=0.)], ignore_index=True)
     result = eicu_rate_kg_callback(ml_to_mcg=32)(frame, val_var="drugrate", sub_var="drugname",
                                                  weight_var="patientweight", concept_name="norepi_rate")
     assert result.set_index("patientunitstayid")["norepi_rate"].to_dict() == {3: pytest.approx(0.1)}
@@ -82,6 +83,7 @@ def test_eicu_kg_rate_drops_unrecognised_units_instead_of_dividing_by_weight():
 def test_eicu_units_rate_leaves_unknown_dose_unit_missing():
     frame = pd.DataFrame({"patientunitstayid": [1, 2], "infusionoffset": [0, 0], "drugrate": [2.4, 0.04],
                           "drugname": ["Vasopressin (Unknown)", "Vasopressin (units/min)"]})
+    frame = pd.concat([frame, frame.assign(infusionoffset=60, drugrate=0.)], ignore_index=True)
     result = eicu_rate_units_callback(2.65, 0.53)(frame, val_var="drugrate", sub_var="drugname",
                                                   concept_name="adh_rate")
     by_id = result.groupby("patientunitstayid")["drugrate"].max()
@@ -97,6 +99,7 @@ def test_eicu_kg_rate_falls_back_to_the_admission_weight_when_the_row_has_none()
 
     frame = pd.DataFrame({"patientunitstayid": [1], "infusionoffset": [0], "drugrate": [8.0],
                           "patientweight": [np.nan], "drugname": ["Norepinephrine (mcg/min)"]})
+    frame = pd.concat([frame, frame.assign(infusionoffset=60, drugrate=0.)], ignore_index=True)
     result = eicu_rate_kg_callback(ml_to_mcg=32)(frame, val_var="drugrate", sub_var="drugname",
                                                  weight_var="patientweight", concept_name="norepi_rate",
                                                  data_source=SimpleNamespace(load_table=load_table))

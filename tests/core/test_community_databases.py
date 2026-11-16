@@ -65,7 +65,8 @@ def test_community_coverage_audits_every_standard_concept() -> None:
     # UC1-K5/K6 adds five concepts, unavailable without community mappings.
     # Round 12 adds norepi_order_dur (eICU orders only).
     # S740 adds weight_admit_strict and its _source/_time_h fields (opt-in weight_strict).
-    assert coverage["concept_count"] == 427 == len(list(dictionary.keys()))
+    # S732TW adds nine hidden worst-dose companions.
+    assert coverage["concept_count"] == 436 == len(list(dictionary.keys()))
     assert set(coverage["concepts"]) == set(dictionary.keys())
     assert set(coverage["databases"]) == COMMUNITY_DATABASES
     valid = {"direct", "derived", "partial", "unavailable"}

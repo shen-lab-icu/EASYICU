@@ -188,9 +188,9 @@ def test_r5c_iv_011_rate_hours_require_positive_interval_overlap(datetime_axis):
     hours = out.starttime
     if datetime_axis:
         hours = (hours - origins.intime.item()).dt.total_seconds() / 3600
-    assert hours.tolist() == [0., 1., 2., 2.]
-    # The two changes in hour 2 remain distinct components for the normal rate aggregator.
-    assert out.rate.tolist() == [.1, .2, .2, .3]
+    assert hours.tolist() == [0., 1., 2.]
+    # S732TW integrates both settings over 48 active minutes in hour 2.
+    assert out.rate.tolist() == pytest.approx([.1, .2, (.2 * .2 + .3 * .6) / .8])
 
 
 @pytest.mark.parametrize("datetime_axis", [False, True])

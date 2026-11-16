@@ -149,8 +149,8 @@
     "reference_implementation": "easyicu.scores.sofa2.sofa2_cardio",
     "production_executor": "easyicu.concept.ConceptResolver.load_concepts",
     "production_callback": "easyicu.concept.callbacks._callback_sofa_component",
-    "runtime_inputs": {"map": "concept:map", "norepi60": "concept:norepi60", "epi60": "concept:epi60", "dopa60": "concept:dopa60", "dobu60": "concept:dobu60", "other_vaso": "concept:other_vaso", "mech_circ_support": "concept:mech_circ_support", "ecmo": "concept:ecmo", "ecmo_indication": "concept:ecmo_indication"},
-    "ascertainment_limitations": ["norepinephrine, epinephrine, dopamine, and dobutamine use duration-aware 60-minute concepts; other_vaso mappings do not yet prove continuous intravenous infusion for >=1h in every database, and treatment-ceiling/unavailable-vasopressor state is not mapped"],
+    "runtime_inputs": {"map": "concept:map", "norepi60": "concept:norepi60", "epi60": "concept:epi60", "dopa60": "concept:dopa60", "dobu60": "concept:dobu60", "other_vaso": "concept:other_vaso", "mech_circ_support": "concept:mech_circ_support", "ecmo": "concept:ecmo", "ecmo_indication": "concept:ecmo_indication", "dopa_rate_max": "concept:dopa_rate_max", "norepi_rate_max": "concept:norepi_rate_max", "dobu_rate_max": "concept:dobu_rate_max", "epi_rate_max": "concept:epi_rate_max"},
+    "ascertainment_limitations": ["norepinephrine, epinephrine, dopamine, and dobutamine use maximum active dose companions gated by duration-aware 60-minute concepts; other_vaso mappings do not yet prove continuous intravenous infusion for >=1h in every database, and treatment-ceiling/unavailable-vasopressor state is not mapped"],
     "database_conformance": {"mimic": "mapping_only", "miiv": "mapping_only", "eicu": "mapping_only", "aumc": "mapping_only", "hirid": "mapping_only", "sic": "mapping_only"}
   },
   "sofa2_cns_2025": {

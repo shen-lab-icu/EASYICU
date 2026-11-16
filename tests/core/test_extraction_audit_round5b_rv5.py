@@ -100,6 +100,7 @@ def _requires_ml(spec):
 @pytest.mark.parametrize("name,index", _INPUTS)
 @pytest.mark.parametrize("storage", ["flat", "bucket", "batch"])
 def test_RV_01_miiv_nonboolean_inputs_exclude_rewritten_before_callbacks(tmp_path, name, index, storage):
+    dose_name = name.removesuffix('_max')
     definition = _dictionary()[name]
     spec = definition["sources"]["miiv"][index]
     # This declaration also disables SQL paths that discard raw status fields.
@@ -108,12 +109,12 @@ def test_RV_01_miiv_nonboolean_inputs_exclude_rewritten_before_callbacks(tmp_pat
     assert "statusdescription" in spec.get("extra_vars", [])
     item = spec["ids"][0] if isinstance(spec["ids"], list) else spec["ids"]
     times = pd.Timestamp("2140-01-02") + pd.to_timedelta([.25, 1.25, 2.25], unit="h")
-    unit = "units/min" if name == "adh_rate" else "mcg/hour" if name == "fentanyl_rate" else "mcg/kg/min"
+    unit = "units/min" if dose_name == "adh_rate" else "mcg/hour" if dose_name == "fentanyl_rate" else "mcg/kg/min"
     if "ng/kg/min" in (spec.get("require_regex") or {}).get("rateuom", ""):
         unit = "ng/kg/min"  # angiotensin II charted in ng/kg/min
     rows = pd.DataFrame({
         "stay_id": 101, "hadm_id": 11, "itemid": item, "starttime": times,
-        "endtime": times + pd.Timedelta(minutes=30), "rate": [10., 20., 30.] if unit == "ng/kg/min" else [.01, .02, .1] if name in {"adh_rate", "angiotensin_ii_rate"} else [1., 2., 3.],
+        "endtime": times + pd.Timedelta(minutes=30), "rate": [10., 20., 30.] if unit == "ng/kg/min" else [.01, .02, .1] if dose_name in {"adh_rate", "angiotensin_ii_rate"} else [1., 2., 3.],
         "rateuom": unit, "patientweight": 50., "amount": [1., 2., 3.],
         # MIMIC-IV inputevents carries the order category; continuous-only rate
         # callbacks (angiotensin II) read it.

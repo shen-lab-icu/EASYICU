@@ -370,6 +370,7 @@ def test_r5c_iii_021_nullable_missing_weight_is_rejected_and_counted():
                           "weight": pd.Series([60., pd.NA, 70.], dtype="Float64"),
                           "rateuom": pd.Series(["mcgkghr", "mcgkghr", pd.NA], dtype="string"),
                           "stopped": None, "linkorderid": [1, 2, 3]})
+    frame = pd.concat([frame, frame.iloc[[0]].assign(charttime=1., fentanyl_rate=0., stopped='Stopped')], ignore_index=True)
     out = _apply(spec, frame, "fentanyl_rate")
     assert out.loc[out.fentanyl_rate.gt(0), "icustay_id"].tolist() == [1]
     assert out.attrs["mimic_mass_rate_audit"] == {"missing_weight_rows": 1, "unknown_unit_rows": 1}

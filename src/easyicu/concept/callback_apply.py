@@ -974,6 +974,7 @@ def _apply_callback(
     interval: Optional[Union[str, pd.Timedelta]] = None,
     *,
     _source_rows_validated: bool = False,
+    _capture_dose_spans: bool = False,
 ) -> pd.DataFrame:
     """Apply ``source``'s callback with its source and effective declaration in context.
 
@@ -1026,7 +1027,9 @@ def _apply_callback(
     ):
         raw = frame[parsed_column].copy()
         raw_frame = frame[[c for c in (context.id_column,) if c and c in frame.columns]].copy()
-    with source_parse_context(context):
+    from .dose_rate import source_rate_scope
+
+    with source_parse_context(context), source_rate_scope(concept_name, interval, capture=_capture_dose_spans):
         result = _apply_callback_body(
             frame, source, concept_name, unit_column, resolver, patient_ids, data_source,
             interval, _source_rows_validated=_source_rows_validated,
@@ -4200,7 +4203,7 @@ def _apply_callback_body(
         frame = frame.loc[parse_source_numeric(frame[val_var], frame=frame).gt(0)].copy()
         frame = materialize_intervals(
             frame, start=index_var, stop=stop_var, data_source=data_source,
-            grid=active_minute_rate_grid(),
+            grid=active_minute_rate_grid(), rate_value=concept_name,
         )
 
         return frame

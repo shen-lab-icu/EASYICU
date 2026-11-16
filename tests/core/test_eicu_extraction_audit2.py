@@ -214,6 +214,8 @@ def test_vasopressin_rates_come_from_units_charted_rows_only(dictionary, databas
         "drugname": ["Vasopressin (ml/hr)", "Vasopressin (units/hr)", "Vasopressin (units/min)",
                      "Vasopressin (mg/min)", "Vasopressin (mcg/min)"],
     })
+    # S732TW: unit-conversion fixtures need a known active span.
+    frame = pd.concat([frame, frame.assign(infusionoffset=60, drugrate=0.)], ignore_index=True)
     result = eicu_rate_units_callback(None, None)(frame, val_var="drugrate", sub_var="drugname",
                                                   concept_name="adh_rate")
     by_stay = result.groupby("patientunitstayid")["drugrate"].max()
@@ -229,6 +231,7 @@ def test_rate_units_parser_reads_na_as_no_conversion(dictionary, tmp_path):
         "patientunitstayid": [1, 2], "infusionoffset": [0, 0], "adh_rate": [6.0, 0.03],
         "drugname": ["Vasopressin (ml/hr)", "Vasopressin (units/min)"],
     })
+    frame = pd.concat([frame, frame.assign(infusionoffset=60, adh_rate=0.)], ignore_index=True)
     result = _apply_callback(frame, source, "adh_rate")
     by_stay = result.groupby("patientunitstayid")["adh_rate"].max()
     assert np.isnan(by_stay.get(1, np.nan)) and by_stay.get(2) == pytest.approx(0.03)

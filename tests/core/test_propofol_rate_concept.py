@@ -3,15 +3,15 @@
 propofol_rate is a ts_tbl rate concept modeled after ``dobu_rate`` / ``norepi_rate``,
 emitting continuous propofol infusion rate in mcg/kg/min.
 
-Ground-truth IDs verified against each database's local reference dictionary on
-2026-05-13 (see lookup scripts in /tmp):
+Source IDs verified against local reference dictionaries on 2026-05-13;
+SICdb continuous interval units rechecked for S732TW on 2026-11-16:
 
   - AUMC drugitems itemid 7480 (Propofol (Diprivan))
   - MIMIC-IV inputevents itemid 222168
   - MIMIC-III inputevents_cv itemid 30131, inputevents_mv itemid 222168
   - SIC medication DrugID 1499 (Propofol 1%) + 1549 (Propofol 2%)
   - eICU infusiondrug regex (?i)^propofol.*\\(.+\\)$ (ml_to_mcg=10000, standard 10 mg/mL)
-  - HiRID: intentionally absent — pharma reference has no propofol entry
+  - HiRID pharma 208 / 1001050 (Disoprivan 2% infusions)
 
 MIIV rate-column study (pre-implementation): 402,985 of 498,811 matching rows
 carry ``rateuom = mcg/kg/min`` natively, so mimic_rate_mv yields the target unit
@@ -44,12 +44,8 @@ def test_propofol_rate_is_mcg_kg_min(propofol_rate_entry):
 
 
 def test_propofol_rate_covers_all_six_main_databases(propofol_rate_entry):
-    """2026-11-03 extraction audit 2: HiRID's pharma reference does list
-    propofol (208/1001050 'Disoprivan 2%' infusions), and SICdb ships its own
-    hourly weight-normalised dose (data_float_h 3057 PropofolPerHourWeight),
-    which avoids the per-DrugID ``AmountPerMinute`` ambiguity that removed the
-    earlier SIC medication source (DrugID 1499 stores bolus totals in that
-    column); see ``audit_reports/sic_amount_per_minute_unit_audit_20260513.md``."""
+    """All six sources now have explicit infusion-rate paths, including SICdb
+    continuous medication rows. Boluses remain excluded (S732TW)."""
     sources = set(propofol_rate_entry["sources"].keys())
     assert sources & MAIN_DBS == {"miiv", "mimic", "eicu", "aumc", "hirid", "sic"}
 
@@ -109,12 +105,14 @@ def test_eicu_regex_and_ml_to_mcg(propofol_rate_entry):
     assert src["weight_var"] == "patientweight"
 
 
-def test_sic_reads_the_native_hourly_dose_not_amount_per_minute(propofol_rate_entry):
-    """Guard rail: SICdb medication AmountPerMinute (DrugID 1499/1549) has
-    mixed unit semantics; only the native hourly dose 3057 (g/h/kg) is read."""
-    (sic,) = propofol_rate_entry["sources"]["sic"]
-    assert sic["table"] == "data_float_h" and sic["ids"] == 3057
-    assert sic["callback"] == "transform_fun(binary_op(`*`, 16666.6667))"
+def test_sic_uses_only_verified_continuous_propofol_intervals(propofol_rate_entry):
+    """Mixed APM semantics are separated by the explicit single-dose flag."""
+    (sic,) = propofol_rate_entry['sources']['sic']
+    assert sic['table'] == 'medication' and sic['ids'] == [1499, 1549]
+    assert sic['callback'] == 'sic_rate_kg'
+    assert sic['val_var'] == 'AmountPerMinute'
+    assert sic['stop_var'] == 'OffsetDrugEnd'
+    assert 'IsSingleDose' in sic['extra_vars']
 
 
 def test_hirid_reads_infusions_not_boluses(propofol_rate_entry):

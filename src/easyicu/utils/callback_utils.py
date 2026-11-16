@@ -950,7 +950,7 @@ def mimic_rate_mv(
     admission_times: Optional[pd.DataFrame] = None,
     **kwargs
 ) -> pd.DataFrame:
-    """Expand MetaVision rates on ICU hours or the explicit scoped rate grid."""
+    """Summarise active MetaVision rates, or retain the legacy scoped minute grid."""
     if data.empty:
         return data
     if id_cols is None:
@@ -2170,7 +2170,16 @@ def mimic_rate_cv(
         stopped = data['stopped'].astype('string').str.strip().str.casefold()
         terminal = stopped.isin(['stopped', 'discontinued', 'discontinue']) | stopped.str.startswith('d/c', na=False)
         data.loc[terminal, val_col] = 0.
-    # Build keep_vars
+    from ..concept.dose_rate import datetime_hours, enabled, point_rates
+
+    if enabled(val_col, generic=True) and time_col is not None:
+        if 'stopped' in data:
+            data.loc[data['stopped'].astype('string').str.strip().str.casefold().eq('restart').fillna(False), val_col] = 0.
+        ids = id_cols or _mimic_duration_id_cols(data, None)
+        # Amount-only CareVue rows do not change a pump setting.
+        data = data.loc[data[val_col].notna()]
+        return point_rates(data, ids=ids, index=time_col, value=val_col,
+                           hours=datetime_hours(data, time_col, ids, admission_times), channel=grp_var)
     keep_vars = [val_col]
     if unit_col and unit_col in data.columns:
         keep_vars.append(unit_col)
@@ -3163,14 +3172,21 @@ def units_to_unit(x: pd.Timedelta) -> str:
     return unit_map.get(resolution, 'hour')
 
 def _eicu_expand_rate_hours(frame, id_col, time_col, concept_name):
-    """Quantize after building exact step intervals, capped at six hours.
+    """Summarise hourly active settings; retain the legacy minute dependency path.
 
-    The final observation retains the established one-hour overhang. Explicit
-    zero or missing rates terminate earlier settings before hourly pooling,
-    so a stop halfway through an hour cannot erase its positive first half.
+    Hourly dose rates use supported next observations within five hours,
+    without a fabricated terminal tail. Legacy *60 dependencies retain their
+    original six-hour cap and one-hour overhang.
     """
     from ..concept.window_expansion import expand_wintbl_vectorized
 
+    from ..concept.dose_rate import enabled, point_rates
+
+    if enabled(concept_name):
+        channel = next((c for c in ('infusionid', 'linkorderid', 'orderid') if c in frame), None)
+        return point_rates(frame, ids=[id_col], index=time_col, value=concept_name,
+                           hours=pd.to_numeric(frame[time_col], errors='coerce') / 60.,
+                           channel=channel, native_scale=60.)
     work = frame[[id_col, time_col, concept_name]].copy()
     work[time_col] = pd.to_numeric(work[time_col], errors="coerce") / 60.
     work = work.dropna(subset=[time_col]).sort_values([id_col, time_col], kind="stable")
@@ -3478,7 +3494,14 @@ def eicu_rate_units_callback(
         # never as a guessed units/min rate.
         work.loc[~work["unit_var"].str.lower().eq("units/min"), val_var] = np.nan
 
-        # Expand into hourly windows so that easyicu matches ricu's exposure logic.
+        from ..concept.dose_rate import enabled
+
+        if enabled(concept_name) and 'infusionoffset' in work:
+            work[concept_name] = work[val_var]
+            expanded = _eicu_expand_rate_hours(work, 'patientunitstayid', 'infusionoffset', concept_name)
+            if val_var != concept_name:
+                expanded[val_var] = expanded[concept_name]
+            return expanded
         expanded = expand_intervals(work, keep_vars=[val_var, "unit_var"])
         return expanded
 
@@ -4032,6 +4055,10 @@ def aumc_rate_kg(
     if rate_unit_col and rate_unit_col in df.columns:
         result_cols.append(rate_unit_col)
 
+    from ..concept.dose_rate import enabled
+
+    if enabled(concept_name):
+        result_cols += [c for c in ('orderid', 'linkorderid', 'infusionid') if c in df and c not in result_cols]
     result = df[result_cols].dropna(subset=[concept_name])
     
     if stop_col and stop_col in df.columns and index_col and index_col in df.columns:
@@ -4157,6 +4184,10 @@ def aumc_rate_mass(
     if unit_col and unit_col in df.columns:
         result_cols.append(unit_col)
 
+    from ..concept.dose_rate import enabled
+
+    if enabled(concept_name):
+        result_cols += [c for c in ('orderid', 'linkorderid', 'infusionid') if c in df and c not in result_cols]
     result = df[result_cols].dropna(subset=[concept_name])
 
     if stop_col and stop_col in df.columns and index_col and index_col in df.columns:
@@ -4883,6 +4914,12 @@ def hirid_rate_kg(
                 index_col = cand
                 break
     
+    from ..concept.dose_rate import enabled, hirid_amount_spans
+
+    if enabled(concept_name) and rate_grid is None and index_col in df:
+        return hirid_amount_spans(df, id_col=id_col, index=index_col, value=actual_val_col,
+                                  output=concept_name, unit_col=unit_col, per_kg=True,
+                                  minimum=value_min, maximum=value_max)
     if index_col and index_col in df.columns:
         # Floor time based on interval_minutes to match R ricu's change_interval behavior
         time_series = df[index_col]
@@ -5068,6 +5105,11 @@ def hirid_rate(
                 index_col = cand
                 break
     
+    from ..concept.dose_rate import enabled, hirid_amount_spans
+
+    if enabled(concept_name) and rate_grid is None and index_col in df:
+        return hirid_amount_spans(df, id_col=id_col, index=index_col, value=actual_val_col,
+                                  output=concept_name, unit_col=unit_col)
     if index_col and index_col in df.columns:
         # Floor time to hours
         time_series = df[index_col]
@@ -5232,6 +5274,15 @@ def hirid_rate_mass(
                 index_col = cand
                 break
 
+    from ..concept.dose_rate import enabled, hirid_amount_spans
+
+    if enabled(concept_name) and index_col in df:
+        if target_time == 'hour':
+            df[actual_val_col] *= 60.
+        if unit_col:
+            df[unit_col] = target_unit.rsplit('/', 1)[0]
+        return hirid_amount_spans(df, id_col=id_col, index=index_col, value=actual_val_col,
+                                  output=concept_name, unit_col=unit_col, output_unit=target_unit)
     if index_col and index_col in df.columns:
         time_series = df[index_col]
         if pd.api.types.is_numeric_dtype(time_series):
@@ -5826,6 +5877,13 @@ def expand_mv_rate(data, val_col, unit_col, stop_var, id_cols, admission_times,
             origins = pd.to_datetime(data[identifier].map(lookup), errors="coerce", utc=True)
         start = (starts - origins).dt.total_seconds() / 3600.
         end = (ends - origins).dt.total_seconds() / 3600.
+    from ..concept.dose_rate import enabled, interval_rates
+
+    if enabled(val_col, generic=True) and grid is None:
+        channel = next((c for c in ('orderid', 'linkorderid') if c in data), None)
+        return interval_rates(data[list(dict.fromkeys([*keep, *[c for c in ('orderid', 'linkorderid') if c in data]]))],
+                              ids=id_cols, index=time_col, value=val_col,
+                              starts=start, ends=end, channel=channel)
     valid = start.notna() & end.notna() & np.isfinite(start) & np.isfinite(end) & end.gt(start)
     rows = data.loc[valid, keep].reset_index(drop=True)
     from ..concept.minute_resolution import grid_bin_hours, grid_floor_index

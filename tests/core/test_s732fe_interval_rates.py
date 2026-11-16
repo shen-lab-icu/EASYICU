@@ -1,4 +1,4 @@
-"""Scoped rate grids retain native changes without changing hourly callbacks."""
+"""Scoped native rates and S732TW active-time hourly summaries share exact spans."""
 
 import numpy as np
 import pandas as pd
@@ -19,8 +19,8 @@ def _rate_sources():
 
 @pytest.mark.parametrize("name,database,source", _rate_sources(),
                          ids=lambda value: value if isinstance(value, str) else value.callback)
-def test_every_declared_interval_rate_source_keeps_its_hourly_default(name, database, source):
-    """Every dictionary consumer retains the pre-change half-open hourly bins."""
+def test_every_declared_interval_rate_source_uses_its_declared_hourly_summary(name, database, source):
+    """Two settings lasting 24 and 29 active minutes have one weighted mean."""
     from dataclasses import replace
     from types import SimpleNamespace
     from easyicu.concept.callback_apply import _apply_callback
@@ -37,7 +37,7 @@ def test_every_declared_interval_rate_source_keeps_its_hourly_default(name, data
         source = replace(source, value_var=name)
         index = "start"
         unit = "doseunit"
-        expected_time = [origin, origin, origin + 60]
+        expected_time = [origin, origin + 60]
     else:
         origin = pd.Timestamp("2150-01-01 00:00:17")
         ident = "stay_id" if database == "miiv" else "icustay_id"
@@ -50,11 +50,12 @@ def test_every_declared_interval_rate_source_keeps_its_hourly_default(name, data
                             "statusdescription": "FinishedRunning"})
         origins = pd.DataFrame({ident: [1], "intime": [origin]})
         index = "starttime"
-        expected_time = [origin, origin, origin + pd.Timedelta(hours=1)]
+        expected_time = [origin, origin + pd.Timedelta(hours=1)]
     data = SimpleNamespace(load_table=lambda *a, **k: origins)
     result = _apply_callback(raw, source, name, unit_column=unit, data_source=data)
     assert result[index].tolist() == expected_time
-    assert result[name].tolist() == [1., 2., 2.]
+    first = 2. if name.endswith('_max') else (24. + 2. * 29.) / 53.
+    assert result[name].tolist() == pytest.approx([first, 2.])
 
 
 @pytest.mark.parametrize("database", ["aumc", "miiv"])
@@ -108,7 +109,7 @@ def test_haemo_native_export_changes_at_record_minutes(tmp_path, database):
                 assert rates[31] == pytest.approx(.3)
             else:
                 assert minutes == [0., 60.]
-                assert frame.loc[present, "norepi_equiv"].tolist() == pytest.approx([.2, .3])
+                assert frame.loc[present, "norepi_equiv"].tolist() == pytest.approx([(.1 * 24 + .3 * 29) / 53, .3])
     finally:
         clear_global_loader()
 
@@ -121,28 +122,28 @@ def test_interval_owner_uses_scoped_grid_and_restores_hourly_default(database):
         origin = 1234567.25
         frame = pd.DataFrame({"admissionid": 1, "admittedat": origin,
                               "start": origin + starts * 60, "stop": origin + stops * 60,
-                              "rate": [1., 2., 3.]})
+                              "norepi_rate": [1., 2., 3.]})
 
         def run():
             from easyicu.concept.minute_resolution import active_minute_rate_grid
-            out = expand_intervals(frame, start_col="start", stop_col="stop", value_col="rate",
+            out = expand_intervals(frame, start_col="start", stop_col="stop", value_col="norepi_rate",
                                    grid=active_minute_rate_grid())
-            return (out.start - origin) / 60, out.rate
+            return (out.start - origin) / 60, out.norepi_rate
     else:
         origin = pd.Timestamp("2150-01-01 00:00:17")
         frame = pd.DataFrame({"stay_id": 1, "starttime": origin + pd.to_timedelta(starts, unit="h"),
                               "endtime": origin + pd.to_timedelta(stops, unit="h"),
-                              "rate": [1., 2., 3.]})
+                              "norepi_rate": [1., 2., 3.]})
 
         def run():
-            out = mimic_rate_mv(frame, "rate", stop_var="endtime",
+            out = mimic_rate_mv(frame, "norepi_rate", stop_var="endtime",
                                 admission_times=pd.DataFrame({"stay_id": [1], "intime": [origin]}))
-            return (out.starttime - origin).dt.total_seconds() / 3600, out.rate
+            return (out.starttime - origin).dt.total_seconds() / 3600, out.norepi_rate
 
     with minute_rate_grid({"_minute_resolution": True}, pd.Timedelta(minutes=1)):
         time, rate = run()
     assert time.to_numpy() == pytest.approx(grid_bin_hours(np.arange(7, 65), pd.Timedelta(minutes=1)))
     assert rate.tolist() == [1.] * 24 + [2.] * 31 + [3.] * 3
     time, rate = run()
-    assert time.tolist() == [0., 0., 1., 1.]
-    assert rate.tolist() == [1., 2., 2., 3.]
+    assert time.tolist() == [0., 1.]
+    assert rate.tolist() == pytest.approx([(24 + 2 * 29) / 53, (2 * 2 + 3 * 3) / 5])

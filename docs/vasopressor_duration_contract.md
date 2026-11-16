@@ -88,3 +88,81 @@ chain of supported observations, not a claim of uninterrupted pump operation.
 Because duration feeds the `*60` concepts and vasopressor indicators, any change
 to this contract requires a clean six-database, 19-module re-extraction. Old
 exports cannot be patched or promoted as current.
+
+## Hourly dose-rate summary (S732TW)
+
+The product rule for hourly **dose rates** is the time-weighted mean of the
+active rate: integral(rate dt) / active time in that ICU hour. Concurrent
+infusions of the same drug are summed at each instant before either the mean
+or the maximum is taken. The denominator is the union of active intervals,
+not 60 minutes and not the sum of individual infusion durations. Intervals
+are half-open; no active time gives no row, and a stop never creates a zero
+rate observation. Exact overlap integration avoids rounding partial minutes.
+
+Coverage is `norepi_rate`, `epi_rate`, `dopa_rate`, `dobu_rate`, `adh_rate`,
+`phn_rate`, `angiotensin_ii_rate`, `milrinone_rate`, `enoximone_rate`,
+`propofol_rate`, `midazolam_rate`, `fentanyl_rate` and `remifentanil_rate`.
+These are every dictionary dose-rate concept using `mimic_rate_cv`,
+`mimic_rate_mv`, `eicu_rate_kg`/`eicu_rate_units`/`eicu_rate_mass`,
+`aumc_rate_kg`/`aumc_rate_mass`, `hirid_rate_kg`/`hirid_rate`/`hirid_rate_mass`,
+`sic_rate_kg`/`sic_rate_units` or `sicdb_amount_rate`; angiotensin's dedicated
+callback delegates to MetaVision's interval owner. Weight selection, unit
+conversion, bounds on source doses, route/continuous filters and excluded
+statuses remain with their source owners.
+
+`ins` is excluded as a **mixed administered-dose concept**. Its MetaVision
+`distribute_amount` sources include boluses and timed total units, HiRID
+explicitly declares one-hour-bin totals, CareVue supplies amounts, and its
+AUMC/eICU/SICdb continuous sources coexist with those quantities under the
+same name. Converting it to an active-time rate would change its quantity
+and require separate infusion/bolus concepts. Its existing dose allocation,
+including the `sicdb_amount_rate` source, is retained. Dextrose and fluid
+volume/amount callbacks do not enter the dose-rate summary.
+
+CareVue and eICU settings hold to the next observation of the same infusion
+where its gap is at most five hours. Larger gaps break the episode; zero,
+explicit CareVue stop/discontinuation/restart and invalid eICU settings close
+rather than renew a setting. Amount-only CareVue rows do not change a setting.
+Different infusion/link/order ids remain separate and add concurrently; an
+eICU event-row id (`infusiondrugid`) is not an infusion identity. Without an
+infusion id a drug has one setting sequence, including source-label changes.
+At an exact-time conflict a stop wins, otherwise the largest setting wins,
+so table order cannot select a different rate. There is no extrapolation
+after the final observed setting: its duration is unknown, and the new
+active-time denominator cannot justify the old fabricated one-hour tail.
+This forced rate-coverage change does **not** turn singleton duration NULL
+into zero, or alter duration episode inference or `*60` qualification.
+
+MetaVision, AUMC and SICdb retain their explicit interval endpoints. A newer
+setting of the same recorded order supersedes its predecessor at its start;
+independent orders add. MetaVision retains its optional `orderid` for this
+purpose, falling back to `linkorderid` when no order id is supplied. CareVue
+continues to identify its point sequence by `linkorderid`. HiRID givendose is an amount over the **preceding**
+same-infusion interval (DEV-RICUC-04), not a forward setting: retain that
+source interpretation and its six-hour valid-amount-interval limit, but
+recover its constant rate as dose / exact interval minutes before applying
+the shared active-time mean. Untimed HiRID amounts retain the existing
+one-hour-bin attribution. SICdb propofol moves from the precomputed
+hourly `data_float_h` 3057 dose-per-weight summary to continuous medication
+1499/1549 (`AmountPerMinute`, verified g/min) over explicit start/stop spans.
+Its `IsSingleDose=1` rows contain bolus totals in that column and are excluded.
+This source/weight change is forced by the new active-time denominator: the
+3057 hourly summary cannot recover it. The existing SIC kg-rate owner supplies
+its case weight and g/min -> mcg/kg/min conversion; other weight sources and
+unit conversions remain unchanged. Apart from this explicit SICdb propofol
+source replacement, minute opt-in paths retain their existing source
+representation; ordinary hourly loads use the same exact
+start/stop spans directly, without materialising a parallel minute table.
+
+The nine vasopressor/inotrope concepts additionally declare opt-in/internal
+`<concept>_max` companions. They share all source declarations with their mean
+counterparts and take the maximum of the concurrent summed active dose.
+They are hidden from default export modules. SOFA-1 and SOFA-2 cardiovascular
+load the four dopamine/dobutamine/epinephrine/norepinephrine maxima and use
+`*60` only as the unchanged administration-duration gate. Existing `vaso60`
+and `*60` outputs remain unchanged. `norepi_equiv` sums its **hourly mean**
+components with the existing factors (including dopamine); no potency factor
+changes in S732TW.
+
+Clean re-extraction is required for affected rate and derived score exports;
+the dictionary remains unsealed pending the engineering session's reseal 14.

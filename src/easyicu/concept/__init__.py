@@ -5111,7 +5111,7 @@ class ConceptResolver:
                     resolver=self,
                     patient_ids=patient_ids,
                     data_source=data_source,
-                    interval=interval,
+                    interval=interval, _capture_dose_spans=True,
                 )
                 callback_applied = True  # 标记回调已应用
                 # 如果callback创建了concept_name，更新value_column
@@ -5210,7 +5210,7 @@ class ConceptResolver:
                     resolver=self,
                     patient_ids=patient_ids,
                     data_source=data_source,
-                    interval=interval,
+                    interval=interval, _capture_dose_spans=True,
                 )
             from .aumc_intervals import expand_source_windows
 
@@ -5534,6 +5534,7 @@ class ConceptResolver:
             ]
             ordered_cols.extend(extra_time)
             ordered_cols.append(concept_name)
+            ordered_cols.extend(c for c in ('_dose_start', '_dose_end', '_dose_point', '_dose_channel') if c in frame)
             ordered_cols.extend(c for c in ('_urine_source_lag_h', '_urine_first_lag_h', '_urine_availability_lag_h', 'vent_mode_interface') if c in frame)
             if source_unit_column and source_unit_column not in ordered_cols:
                 ordered_cols.append(source_unit_column)
@@ -6077,6 +6078,9 @@ class ConceptResolver:
                             )
                             combined[key] = numeric_vals
         combined = combined.reset_index(drop=True)
+        from .dose_rate import resolver_summary
+
+        combined = resolver_summary(combined, id_columns, index_column, concept_name, definition, database=db_name)
         agg_value = self._coerce_final_aggregator(aggregator)
         if agg_value in (None, "auto"):
             fallback_agg = definition.aggregate

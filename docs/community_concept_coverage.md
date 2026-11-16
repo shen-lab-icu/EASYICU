@@ -1,7 +1,7 @@
 # Community database concept coverage
 
 Generated from `tools/build_community_concept_registry.py`. The matrix covers every standard
-concept (base dictionary plus SOFA-2 overlay): **427 concepts × 4 databases**.
+concept (base dictionary plus SOFA-2 overlay): **436 concepts × 4 databases**.
 
 `partial` is deliberately not advertised as extractable: it records useful ingredients while preventing an incomplete score or phenotype from being mistaken for a complete definition.
 
@@ -9,10 +9,10 @@ concept (base dictionary plus SOFA-2 overlay): **427 concepts × 4 databases**.
 
 | Database | Direct | Derived | Partial | Unavailable |
 |---|---:|---:|---:|---:|
-| nwicu | 137 | 19 | 37 | 234 |
-| zhejiang_eicu | 128 | 39 | 25 | 235 |
-| jinhua | 135 | 19 | 34 | 239 |
-| zigong | 125 | 27 | 41 | 234 |
+| nwicu | 137 | 19 | 37 | 243 |
+| zhejiang_eicu | 128 | 39 | 25 | 244 |
+| jinhua | 135 | 19 | 34 | 248 |
+| zigong | 125 | 27 | 41 | 243 |
 
 ## Complete matrix
 
@@ -23,6 +23,7 @@ concept (base dictionary plus SOFA-2 overlay): **427 concepts × 4 databases**.
 | `acetazolamide` | medications | unavailable | unavailable | unavailable | unavailable |
 | `acute_rrt_input` | renal | derived | derived | derived | unavailable |
 | `adh_rate` | medications | unavailable | unavailable | unavailable | unavailable |
+| `adh_rate_max` | medications | unavailable | unavailable | unavailable | unavailable |
 | `adm` | demographics | unavailable | unavailable | unavailable | unavailable |
 | `adv_resp` | respiratory | unavailable | direct | unavailable | direct |
 | `age` | demographics | direct | direct | direct | direct |
@@ -34,6 +35,7 @@ concept (base dictionary plus SOFA-2 overlay): **427 concepts × 4 databases**.
 | `ammonia` | chemistry | direct | unavailable | direct | unavailable |
 | `amylase` | chemistry | direct | direct | direct | unavailable |
 | `angiotensin_ii_rate` | cardiovascular | unavailable | unavailable | unavailable | unavailable |
+| `angiotensin_ii_rate_max` | cardiovascular | unavailable | unavailable | unavailable | unavailable |
 | `anion_gap` | chemistry | direct | partial | derived | direct |
 | `apache_iv` | severity | unavailable | unavailable | unavailable | unavailable |
 | `apache_iv_pred_hosp_mort` | severity | unavailable | unavailable | unavailable | unavailable |
@@ -117,9 +119,11 @@ concept (base dictionary plus SOFA-2 overlay): **427 concepts × 4 databases**.
 | `dobu60` | medications | unavailable | unavailable | unavailable | unavailable |
 | `dobu_dur` | medications | unavailable | unavailable | unavailable | unavailable |
 | `dobu_rate` | medications | unavailable | unavailable | unavailable | unavailable |
+| `dobu_rate_max` | medications | unavailable | unavailable | unavailable | unavailable |
 | `dopa60` | medications | unavailable | unavailable | unavailable | unavailable |
 | `dopa_dur` | medications | unavailable | unavailable | unavailable | unavailable |
 | `dopa_rate` | medications | unavailable | unavailable | unavailable | unavailable |
+| `dopa_rate_max` | medications | unavailable | unavailable | unavailable | unavailable |
 | `driving_pres` | ventilator | partial | partial | unavailable | unavailable |
 | `driving_pres_controlled` | ventilator | partial | partial | unavailable | partial |
 | `ecmo` | respiratory | direct | unavailable | direct | unavailable |
@@ -133,10 +137,12 @@ concept (base dictionary plus SOFA-2 overlay): **427 concepts × 4 databases**.
 | `egfr` | renal | derived | derived | derived | derived |
 | `enoxaparin` | medications | direct | direct | direct | direct |
 | `enoximone_rate` | cardiovascular | unavailable | unavailable | unavailable | unavailable |
+| `enoximone_rate_max` | cardiovascular | unavailable | unavailable | unavailable | unavailable |
 | `eos` | hematology | direct | direct | direct | direct |
 | `epi60` | medications | unavailable | unavailable | unavailable | unavailable |
 | `epi_dur` | medications | unavailable | unavailable | unavailable | unavailable |
 | `epi_rate` | medications | unavailable | unavailable | unavailable | unavailable |
+| `epi_rate_max` | medications | unavailable | unavailable | unavailable | unavailable |
 | `esketamine` | medications | unavailable | unavailable | unavailable | unavailable |
 | `esmolol` | medications | direct | direct | direct | direct |
 | `esr` | hematology | unavailable | direct | unavailable | direct |
@@ -235,6 +241,7 @@ concept (base dictionary plus SOFA-2 overlay): **427 concepts × 4 databases**.
 | `midazolam_rate` | medications | unavailable | unavailable | unavailable | unavailable |
 | `milrinone` | medications | direct | direct | direct | direct |
 | `milrinone_rate` | medications | unavailable | unavailable | unavailable | unavailable |
+| `milrinone_rate_max` | medications | unavailable | unavailable | unavailable | unavailable |
 | `minute_vol` | ventilator | unavailable | direct | unavailable | unavailable |
 | `minute_vol_qc` | ventilator | unavailable | unavailable | unavailable | unavailable |
 | `minute_vol_raw` | ventilator | unavailable | unavailable | unavailable | unavailable |
@@ -262,6 +269,7 @@ concept (base dictionary plus SOFA-2 overlay): **427 concepts × 4 databases**.
 | `norepi_equiv` | medications | unavailable | unavailable | unavailable | unavailable |
 | `norepi_order_dur` | medications | unavailable | unavailable | unavailable | unavailable |
 | `norepi_rate` | medications | unavailable | unavailable | unavailable | unavailable |
+| `norepi_rate_max` | medications | unavailable | unavailable | unavailable | unavailable |
 | `nsaid` | medications | unavailable | unavailable | unavailable | unavailable |
 | `ntprobnp` | chemistry | direct | unavailable | direct | unavailable |
 | `o2_flow` | respiratory | unavailable | unavailable | unavailable | unavailable |
@@ -298,6 +306,7 @@ concept (base dictionary plus SOFA-2 overlay): **427 concepts × 4 databases**.
 | `ph_venous` | blood gas | unavailable | unavailable | unavailable | unavailable |
 | `phenytoin` | medications | direct | direct | direct | unavailable |
 | `phn_rate` | medications | unavailable | unavailable | unavailable | unavailable |
+| `phn_rate_max` | medications | unavailable | unavailable | unavailable | unavailable |
 | `phos` | chemistry | direct | direct | direct | direct |
 | `pip` | ventilator | unavailable | direct | unavailable | unavailable |
 | `piperacillin_tazobactam` | medications | unavailable | unavailable | unavailable | unavailable |

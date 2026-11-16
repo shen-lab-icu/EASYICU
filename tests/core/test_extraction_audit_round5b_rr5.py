@@ -298,6 +298,10 @@ def test_rr_06_iv_route_filter_preserves_separate_infusion_groups(tmp_path, name
             for infusion, route, amount in [(7, "iv-inf", 12.), (8, "cv-inf", 24.), (9, "p os", 900.),
                                              (10, "ep-inj", 900.), (11, "sc", 900.), (12, "inh", 900.), (13, None, 900.)]
             for t, dose in [(.25, 0.), (1.25, amount), (2.25, amount)]]
+    if name == 'adh_rate':
+        # S732TW active-time doses must remain inside the existing U/min bound.
+        for row in rows:
+            row['givendose'] *= .01
     root = _source_root(tmp_path, "pharma", rows)
     out = _load(root, [name], **kwargs)[name]
     assert out[name].notna().any()

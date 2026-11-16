@@ -4,9 +4,9 @@ _Generated from the shipped dictionaries, data-source registry, clinical contrac
 
 | Surface | Current count / value |
 | --- | --- |
-| Base concept dictionary | 314 |
+| Base concept dictionary | 417 |
 | SOFA-2 overlay entries | 27 |
-| Unique merged dictionary concepts | 336 |
+| Unique merged dictionary concepts | 439 |
 | Supported public ICU databases | 10: `eicu`, `mimic`, `miiv`, `hirid`, `aumc`, `sic`, `nwicu`, `zhejiang_eicu`, `jinhua`, `zigong` |
 | Clinical definition contracts | 10 |
 | Scientific capabilities | 19 |

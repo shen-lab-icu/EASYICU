@@ -373,7 +373,9 @@ def test_r4_028_hirid_dose_is_split_over_the_hours_it_was_given_in():
     })
     rate = hirid_rate_kg(frame, concept_name="norepi_rate", val_col="givendose", unit_col="doseunit",
                          grp_var="infusionid", index_col="givenat")
-    mass = dict(zip(rate["givenat"], rate["norepi_rate"] * 60 * 50))
+    # S732TW rates divide by active time; integrate that time to recover mass.
+    active_hours = rate['givenat'].map({10: 10 / 60, 11: 1., 12: 5 / 60})
+    mass = dict(zip(rate["givenat"], rate["norepi_rate"] * active_hours * 60 * 50))
     assert mass == pytest.approx({10: 25 * 10 / 15, 11: 25 * 5 / 15 + 60 * 55 / 60, 12: 60 * 5 / 60})
     assert sum(mass.values()) == pytest.approx(85.0)  # the dose is conserved
     dur = hirid_duration(frame, concept_name="norepi_dur", val_col="givendose",
@@ -551,6 +553,10 @@ def test_r4_046_eicu_fentanyl_weight_indexed_rates_become_mass_rates():
         "drugrate": ["1", "0.02", "50", "0.1", "1"],
         "patientweight": [80.0, 80.0, 80.0, 70.0, None],
     })
+    stops = frame.groupby('patientunitstayid', as_index=False).tail(1).copy()
+    stops['infusionoffset'] += 60
+    stops['drugrate'] = '0'
+    frame = pd.concat([frame, stops], ignore_index=True)
     out = eicu_rate_mass_callback("mcg/hour", mg_label_mcg_above=10)(
         frame, val_var="drugrate", sub_var="drugname", concept_name="fentanyl_rate",
     )

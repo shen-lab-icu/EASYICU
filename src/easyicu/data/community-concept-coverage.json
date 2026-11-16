@@ -1,5 +1,5 @@
 {
-  "concept_count": 427,
+  "concept_count": 436,
   "concepts": {
     "abdominal_circumference": {
       "category": "ventilator",
@@ -129,6 +129,28 @@
         }
       },
       "description": "vasopressin rate"
+    },
+    "adh_rate_max": {
+      "category": "medications",
+      "databases": {
+        "jinhua": {
+          "reason": "no validated native field/event in this release",
+          "status": "unavailable"
+        },
+        "nwicu": {
+          "reason": "no validated native field/event in this release",
+          "status": "unavailable"
+        },
+        "zhejiang_eicu": {
+          "reason": "no validated native field/event in this release",
+          "status": "unavailable"
+        },
+        "zigong": {
+          "reason": "no validated native field/event in this release",
+          "status": "unavailable"
+        }
+      },
+      "description": "Maximum concurrent active adh dose rate in the ICU hour"
     },
     "adm": {
       "category": "demographics",
@@ -402,6 +424,28 @@
         }
       },
       "description": "Continuous intravenous angiotensin II infusion rate"
+    },
+    "angiotensin_ii_rate_max": {
+      "category": "cardiovascular",
+      "databases": {
+        "jinhua": {
+          "reason": "no validated native field/event in this release",
+          "status": "unavailable"
+        },
+        "nwicu": {
+          "reason": "no validated native field/event in this release",
+          "status": "unavailable"
+        },
+        "zhejiang_eicu": {
+          "reason": "no validated native field/event in this release",
+          "status": "unavailable"
+        },
+        "zigong": {
+          "reason": "no validated native field/event in this release",
+          "status": "unavailable"
+        }
+      },
+      "description": "Maximum concurrent active angiotensin_ii dose rate in the ICU hour"
     },
     "anion_gap": {
       "category": "chemistry",
@@ -2623,6 +2667,28 @@
       },
       "description": "dobutamine rate"
     },
+    "dobu_rate_max": {
+      "category": "medications",
+      "databases": {
+        "jinhua": {
+          "reason": "no validated native field/event in this release",
+          "status": "unavailable"
+        },
+        "nwicu": {
+          "reason": "no validated native field/event in this release",
+          "status": "unavailable"
+        },
+        "zhejiang_eicu": {
+          "reason": "no validated native field/event in this release",
+          "status": "unavailable"
+        },
+        "zigong": {
+          "reason": "no validated native field/event in this release",
+          "status": "unavailable"
+        }
+      },
+      "description": "Maximum concurrent active dobu dose rate in the ICU hour"
+    },
     "dopa60": {
       "category": "medications",
       "databases": {
@@ -2720,6 +2786,28 @@
         }
       },
       "description": "dopamine rate"
+    },
+    "dopa_rate_max": {
+      "category": "medications",
+      "databases": {
+        "jinhua": {
+          "reason": "no validated native field/event in this release",
+          "status": "unavailable"
+        },
+        "nwicu": {
+          "reason": "no validated native field/event in this release",
+          "status": "unavailable"
+        },
+        "zhejiang_eicu": {
+          "reason": "no validated native field/event in this release",
+          "status": "unavailable"
+        },
+        "zigong": {
+          "reason": "no validated native field/event in this release",
+          "status": "unavailable"
+        }
+      },
+      "description": "Maximum concurrent active dopa dose rate in the ICU hour"
     },
     "driving_pres": {
       "category": "ventilator",
@@ -3118,6 +3206,28 @@
       },
       "description": "Continuous intravenous enoximone infusion rate"
     },
+    "enoximone_rate_max": {
+      "category": "cardiovascular",
+      "databases": {
+        "jinhua": {
+          "reason": "no validated native field/event in this release",
+          "status": "unavailable"
+        },
+        "nwicu": {
+          "reason": "no validated native field/event in this release",
+          "status": "unavailable"
+        },
+        "zhejiang_eicu": {
+          "reason": "no validated native field/event in this release",
+          "status": "unavailable"
+        },
+        "zigong": {
+          "reason": "no validated native field/event in this release",
+          "status": "unavailable"
+        }
+      },
+      "description": "Maximum concurrent active enoximone dose rate in the ICU hour"
+    },
     "eos": {
       "category": "hematology",
       "databases": {
@@ -3241,6 +3351,28 @@
         }
       },
       "description": "epinephrine rate"
+    },
+    "epi_rate_max": {
+      "category": "medications",
+      "databases": {
+        "jinhua": {
+          "reason": "no validated native field/event in this release",
+          "status": "unavailable"
+        },
+        "nwicu": {
+          "reason": "no validated native field/event in this release",
+          "status": "unavailable"
+        },
+        "zhejiang_eicu": {
+          "reason": "no validated native field/event in this release",
+          "status": "unavailable"
+        },
+        "zigong": {
+          "reason": "no validated native field/event in this release",
+          "status": "unavailable"
+        }
+      },
+      "description": "Maximum concurrent active epi dose rate in the ICU hour"
     },
     "esketamine": {
       "category": "medications",
@@ -5969,6 +6101,28 @@
       },
       "description": "milrinone rate"
     },
+    "milrinone_rate_max": {
+      "category": "medications",
+      "databases": {
+        "jinhua": {
+          "reason": "no validated native field/event in this release",
+          "status": "unavailable"
+        },
+        "nwicu": {
+          "reason": "no validated native field/event in this release",
+          "status": "unavailable"
+        },
+        "zhejiang_eicu": {
+          "reason": "no validated native field/event in this release",
+          "status": "unavailable"
+        },
+        "zigong": {
+          "reason": "no validated native field/event in this release",
+          "status": "unavailable"
+        }
+      },
+      "description": "Maximum concurrent active milrinone dose rate in the ICU hour"
+    },
     "minute_vol": {
       "category": "ventilator",
       "databases": {
@@ -6831,6 +6985,28 @@
         }
       },
       "description": "norepinephrine rate"
+    },
+    "norepi_rate_max": {
+      "category": "medications",
+      "databases": {
+        "jinhua": {
+          "reason": "no validated native field/event in this release",
+          "status": "unavailable"
+        },
+        "nwicu": {
+          "reason": "no validated native field/event in this release",
+          "status": "unavailable"
+        },
+        "zhejiang_eicu": {
+          "reason": "no validated native field/event in this release",
+          "status": "unavailable"
+        },
+        "zigong": {
+          "reason": "no validated native field/event in this release",
+          "status": "unavailable"
+        }
+      },
+      "description": "Maximum concurrent active norepi dose rate in the ICU hour"
     },
     "nsaid": {
       "category": "medications",
@@ -7748,6 +7924,28 @@
         }
       },
       "description": "phenylephrine rate"
+    },
+    "phn_rate_max": {
+      "category": "medications",
+      "databases": {
+        "jinhua": {
+          "reason": "no validated native field/event in this release",
+          "status": "unavailable"
+        },
+        "nwicu": {
+          "reason": "no validated native field/event in this release",
+          "status": "unavailable"
+        },
+        "zhejiang_eicu": {
+          "reason": "no validated native field/event in this release",
+          "status": "unavailable"
+        },
+        "zigong": {
+          "reason": "no validated native field/event in this release",
+          "status": "unavailable"
+        }
+      },
+      "description": "Maximum concurrent active phn dose rate in the ICU hour"
     },
     "phos": {
       "category": "chemistry",
@@ -9542,7 +9740,11 @@
             "other_vaso",
             "mech_circ_support",
             "ecmo",
-            "ecmo_indication"
+            "ecmo_indication",
+            "dopa_rate_max",
+            "norepi_rate_max",
+            "dobu_rate_max",
+            "epi_rate_max"
           ],
           "missing_dependencies": [
             "map",
@@ -9552,7 +9754,11 @@
             "dobu60",
             "other_vaso",
             "mech_circ_support",
-            "ecmo_indication"
+            "ecmo_indication",
+            "dopa_rate_max",
+            "norepi_rate_max",
+            "dobu_rate_max",
+            "epi_rate_max"
           ],
           "reason": "some declared dependencies are available; full definition is not",
           "status": "partial"
@@ -9567,7 +9773,11 @@
             "other_vaso",
             "mech_circ_support",
             "ecmo",
-            "ecmo_indication"
+            "ecmo_indication",
+            "dopa_rate_max",
+            "norepi_rate_max",
+            "dobu_rate_max",
+            "epi_rate_max"
           ],
           "missing_dependencies": [
             "map",
@@ -9577,7 +9787,11 @@
             "dobu60",
             "other_vaso",
             "mech_circ_support",
-            "ecmo_indication"
+            "ecmo_indication",
+            "dopa_rate_max",
+            "norepi_rate_max",
+            "dobu_rate_max",
+            "epi_rate_max"
           ],
           "reason": "some declared dependencies are available; full definition is not",
           "status": "partial"
@@ -9592,7 +9806,11 @@
             "other_vaso",
             "mech_circ_support",
             "ecmo",
-            "ecmo_indication"
+            "ecmo_indication",
+            "dopa_rate_max",
+            "norepi_rate_max",
+            "dobu_rate_max",
+            "epi_rate_max"
           ],
           "missing_dependencies": [
             "map",
@@ -9603,7 +9821,11 @@
             "other_vaso",
             "mech_circ_support",
             "ecmo",
-            "ecmo_indication"
+            "ecmo_indication",
+            "dopa_rate_max",
+            "norepi_rate_max",
+            "dobu_rate_max",
+            "epi_rate_max"
           ],
           "reason": "declared dependencies are unavailable",
           "status": "unavailable"
@@ -9618,7 +9840,11 @@
             "other_vaso",
             "mech_circ_support",
             "ecmo",
-            "ecmo_indication"
+            "ecmo_indication",
+            "dopa_rate_max",
+            "norepi_rate_max",
+            "dobu_rate_max",
+            "epi_rate_max"
           ],
           "missing_dependencies": [
             "norepi60",
@@ -9628,7 +9854,11 @@
             "other_vaso",
             "mech_circ_support",
             "ecmo",
-            "ecmo_indication"
+            "ecmo_indication",
+            "dopa_rate_max",
+            "norepi_rate_max",
+            "dobu_rate_max",
+            "epi_rate_max"
           ],
           "reason": "some declared dependencies are available; full definition is not",
           "status": "partial"
@@ -10225,14 +10455,22 @@
             "dopa60",
             "norepi60",
             "dobu60",
-            "epi60"
+            "epi60",
+            "dopa_rate_max",
+            "norepi_rate_max",
+            "dobu_rate_max",
+            "epi_rate_max"
           ],
           "missing_dependencies": [
             "map",
             "dopa60",
             "norepi60",
             "dobu60",
-            "epi60"
+            "epi60",
+            "dopa_rate_max",
+            "norepi_rate_max",
+            "dobu_rate_max",
+            "epi_rate_max"
           ],
           "reason": "declared dependencies are unavailable",
           "status": "unavailable"
@@ -10243,14 +10481,22 @@
             "dopa60",
             "norepi60",
             "dobu60",
-            "epi60"
+            "epi60",
+            "dopa_rate_max",
+            "norepi_rate_max",
+            "dobu_rate_max",
+            "epi_rate_max"
           ],
           "missing_dependencies": [
             "map",
             "dopa60",
             "norepi60",
             "dobu60",
-            "epi60"
+            "epi60",
+            "dopa_rate_max",
+            "norepi_rate_max",
+            "dobu_rate_max",
+            "epi_rate_max"
           ],
           "reason": "declared dependencies are unavailable",
           "status": "unavailable"
@@ -10261,14 +10507,22 @@
             "dopa60",
             "norepi60",
             "dobu60",
-            "epi60"
+            "epi60",
+            "dopa_rate_max",
+            "norepi_rate_max",
+            "dobu_rate_max",
+            "epi_rate_max"
           ],
           "missing_dependencies": [
             "map",
             "dopa60",
             "norepi60",
             "dobu60",
-            "epi60"
+            "epi60",
+            "dopa_rate_max",
+            "norepi_rate_max",
+            "dobu_rate_max",
+            "epi_rate_max"
           ],
           "reason": "declared dependencies are unavailable",
           "status": "unavailable"
@@ -10279,13 +10533,21 @@
             "dopa60",
             "norepi60",
             "dobu60",
-            "epi60"
+            "epi60",
+            "dopa_rate_max",
+            "norepi_rate_max",
+            "dobu_rate_max",
+            "epi_rate_max"
           ],
           "missing_dependencies": [
             "dopa60",
             "norepi60",
             "dobu60",
-            "epi60"
+            "epi60",
+            "dopa_rate_max",
+            "norepi_rate_max",
+            "dobu_rate_max",
+            "epi_rate_max"
           ],
           "reason": "some declared dependencies are available; full definition is not",
           "status": "partial"
@@ -12804,25 +13066,25 @@
       "derived": 19,
       "direct": 135,
       "partial": 34,
-      "unavailable": 239
+      "unavailable": 248
     },
     "nwicu": {
       "derived": 19,
       "direct": 137,
       "partial": 37,
-      "unavailable": 234
+      "unavailable": 243
     },
     "zhejiang_eicu": {
       "derived": 39,
       "direct": 128,
       "partial": 25,
-      "unavailable": 235
+      "unavailable": 244
     },
     "zigong": {
       "derived": 27,
       "direct": 125,
       "partial": 41,
-      "unavailable": 234
+      "unavailable": 243
     }
   },
   "databases": [

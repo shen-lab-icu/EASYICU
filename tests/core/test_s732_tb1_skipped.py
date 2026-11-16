@@ -350,6 +350,9 @@ EXPECTED = json.loads(r'''
   }
 }
 ''')
+for _rate_name in ('remifentanil_rate', 'enoximone_rate', 'milrinone_rate'):
+    EXPECTED[_rate_name]['_hourly_rule'] = 'time_weighted_mean_active_rate'
+
 CODED = ("cam_icu", "ramsay", "sas", "rrt_modality", "crrt_dilution_mode_set", "ecmo_type")
 
 
@@ -412,7 +415,7 @@ def test_aumc_rate_exact_units_and_continuous_gate(name):
         "action": ["Start", "Start", "Flush", "Start", "Start"],
         "iscontinuous": [True, True, True, False, True], "ordercategory": "Infuus"})
     out = _apply_callback(frame, source, name, unit_column="doseunit")
-    assert out[name].tolist() == pytest.approx([1., 1.])
+    assert out[name].tolist() == pytest.approx([2.])  # two valid concurrent rates add
 
 
 def test_milrinone_eicu_all_native_labels_through_loader(tmp_path):
@@ -423,6 +426,7 @@ def test_milrinone_eicu_all_native_labels_through_loader(tmp_path):
     entries = EXPECTED["milrinone_rate"]["sources"]["eicu"]
     frame = pd.DataFrame({"patientunitstayid": 1, "infusionoffset": [0, 60, 120],
         "drugname": [s["ids"][0] for s in entries], "drugrate": [60., 1., 1.], "patientweight": 80.})
+    frame = pd.concat([frame, frame.iloc[[-1]].assign(infusionoffset=180, drugrate=0.)], ignore_index=True)
     frame.to_parquet(tmp_path / "infusiondrug.parquet", index=False)
     pd.DataFrame({"patientunitstayid": [1], "admissionweight": [80.],
         "hospitaldischargeoffset": [4320], "unitdischargeoffset": [4320]}).to_parquet(tmp_path / "patient.parquet", index=False)

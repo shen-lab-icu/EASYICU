@@ -5367,7 +5367,7 @@ def mimic_source_columns(database: str, table: str, columns, available):
     elif database == "miiv" and table == "labevents":
         optional = list(LAB_OPTIONAL_COLUMNS)
     elif database in {"miiv", "mimic", "mimic_demo"} and table in {"inputevents", "inputevents_mv"}:
-        optional = ["rateuom", "patientweight", "statusdescription"]
+        optional = ["rateuom", "patientweight", "statusdescription", "orderid"]
     elif database in {"miiv", "mimic", "mimic_demo"} and table in {"procedureevents", "procedureevents_mv"}:
         optional = ["cancelreason"]
     by_lower = {str(c).lower(): c for c in available}
@@ -5376,7 +5376,7 @@ def mimic_source_columns(database: str, table: str, columns, available):
 
 def mimic_disk_columns(source, path: Path, table: str, columns, *, files=None):
     """Inspect only schemas/CSV headers to retain optional MIMIC fields."""
-    requested = mimic_source_columns(source.config.name, table, columns, ["error", "iserror", "rateuom", "patientweight", "statusdescription", "cancelreason", *LAB_OPTIONAL_COLUMNS])
+    requested = mimic_source_columns(source.config.name, table, columns, ["error", "iserror", "rateuom", "patientweight", "statusdescription", "orderid", "cancelreason", *LAB_OPTIONAL_COLUMNS])
     if requested == columns:
         return columns
     if path.is_dir() or path.suffix.lower() in {".parquet", ".pq"}:

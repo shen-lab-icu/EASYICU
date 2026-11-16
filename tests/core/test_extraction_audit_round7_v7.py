@@ -163,7 +163,7 @@ def test_r7_f011_miiv_intervals_are_selected_by_overlap_then_clipped(tmp_path, m
 
 
 @pytest.mark.parametrize(("name", "item", "unit"), [("adh_rate", 30051, "units/min"), ("phn_rate", 30128, "mcg/kg/min")])
-def test_r7_f012_carevue_adjunct_support_uses_the_rate_clock(tmp_path, name, item, unit):
+def test_r7_f012_carevue_support_keeps_legacy_coverage_when_dose_time_is_unknown(tmp_path, name, item, unit):
     frame = pd.DataFrame({
         "icustay_id": 1, "subject_id": 11, "hadm_id": 21, "itemid": item,
         "charttime": ORIGIN + pd.to_timedelta([0., 2., 10., 12., 20.], unit="h"),
@@ -177,7 +177,8 @@ def test_r7_f012_carevue_adjunct_support_uses_the_rate_clock(tmp_path, name, ite
         loaded = mimic_synthetic_load(source, [name, "other_vaso", "vaso_ind"], batch=batch)
         rate = loaded[name]
         positive = set(rate.data.loc[rate.data[name].gt(0), rate.index_column])
-        assert _hours(loaded["other_vaso"], "other_vaso") == positive == expected
+        assert _hours(loaded["other_vaso"], "other_vaso") == expected
+        assert positive == {0., 1., 10., 11.}  # S732TW supported active spans only
         assert _hours(loaded["vaso_ind"], "vaso_ind") == expected
 
 

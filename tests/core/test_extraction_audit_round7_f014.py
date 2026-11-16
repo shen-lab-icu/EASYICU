@@ -1,9 +1,9 @@
 """R7-F014: MIMIC-III CareVue charted rates (mimic_rate_cv), synthetic data only.
 
 The published hourly rate must not depend on the dtype or the row order the
-table reader delivers: same-hour charts pool by median, the latest chart of an
-hour carries forward, and an amount-only row at the rate row's exact time does
-not truncate the infusion.
+table reader delivers. S732TW integrates each setting over active time; an
+amount-only row does not truncate it, and an unknown terminal setting adds
+no fabricated active time.
 """
 import itertools
 
@@ -30,12 +30,12 @@ def _run(rows, value_dtype=float):
     return dict(zip(hours.round(6), pd.to_numeric(out["rate"])))
 
 
-def test_object_dtype_rates_pool_same_hour_charts_by_median():
+def test_object_dtype_rates_integrate_same_hour_settings():
     rows = [(1, 1, 5, 7, "1.0"), (2, 1, 40, 7, "3.0"), (3, 1, 190, 7, "2.0")]
     as_object = _run(rows, value_dtype=object)
     as_float = _run([(*r[:4], float(r[4])) for r in rows])
     assert as_object == as_float
-    assert as_object[0.0] == pytest.approx(2.0)  # median of 1 and 3, not the first row
+    assert as_object[0.0] == pytest.approx((35 + 3 * 20) / 55)
     assert as_object[1.0] == pytest.approx(3.0) and as_object[2.0] == pytest.approx(3.0)
 
 
@@ -45,7 +45,7 @@ def test_latest_chart_of_an_hour_carries_forward_whatever_the_row_order():
         out = _run(list(order))
         assert out[1.0] == pytest.approx(3.0)
         assert out[2.0] == pytest.approx(3.0)
-        assert out[3.0] == pytest.approx(2.0)
+        assert out[3.0] == pytest.approx(3.0)  # active until the unknown terminal point
 
 
 def test_amount_only_row_at_the_rate_time_does_not_truncate_the_infusion():
@@ -53,13 +53,13 @@ def test_amount_only_row_at_the_rate_time_does_not_truncate_the_infusion():
     rows = [(1, 1, 10, 7, np.nan), (2, 1, 10, 7, 1.0), (3, 1, 190, 7, 2.0)]
     results = [_run(list(order)) for order in itertools.permutations(rows)]
     assert all(r == results[0] for r in results)
-    assert results[0] == {0.0: 1.0, 1.0: 1.0, 2.0: 1.0, 3.0: 2.0}
+    assert results[0] == {0.0: 1.0, 1.0: 1.0, 2.0: 1.0, 3.0: 1.0}
 
 
-def test_zero_rate_and_six_hour_cap_are_unchanged():
+def test_stop_and_unknown_singleton_contribute_no_active_span():
     rows = [(1, 1, 10, 7, 0.0), (2, 1, 10 + 9 * 60, 7, 1.5)]
     out = _run(rows)
-    assert out == {0.0: 0.0, 1.0: 0.0, 2.0: 0.0, 3.0: 0.0, 4.0: 0.0, 5.0: 0.0, 9.0: 1.5}
+    assert out == {}
 
 
 def test_two_runs_over_the_same_rows_are_bitwise_identical():

@@ -258,6 +258,7 @@ def test_v2_eicu_volume_rates_give_no_dose(concept):
         "drugname": ["Norepinephrine (ml/hr)", "Norepinephrine (mcg/min)"],
         "drugrate": [10.0, 8.0], "patientweight": [80.0, 80.0],
     })
+    frame = pd.concat([frame, frame.iloc[[-1]].assign(infusionoffset=180, drugrate=0.)], ignore_index=True)
     out = _apply_callback(frame, ConceptSource.from_mapping(dict(source, value_var="drugrate")),
                           concept_name=concept)
     rates = out.dropna(subset=[concept])[concept]
