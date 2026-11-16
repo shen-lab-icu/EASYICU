@@ -1672,6 +1672,7 @@ def _compile_distribution(
     counts_only: bool = False,
     study_population: bool = False,
     interval_decision: DescriptiveIntervalDecision | None = None,
+    provenance: Mapping[str, Any] | None = None,
 ) -> ExposureOutcomeDistributionSpec:
     exposure = str(step.primary_exposure or "")
     outcome = str(step.outcome or "")
@@ -1806,7 +1807,7 @@ def _compile_distribution(
         ) from exc
     if interval_decision is not None:
         spec = interval_decision.compile(spec)
-    issues = distribution_policy_issues(spec, variables=variables)
+    issues = distribution_policy_issues(spec, variables=variables, provenance=provenance)
     if issues:
         raise _fail(
             "progressive_distribution_missingness_authority_invalid",
@@ -3118,6 +3119,7 @@ def _compile_one_step(
             ),
             study_population=step.population_scope == STUDY_COHORT_SCOPE,
             interval_decision=interval_decision,
+            provenance=context.cohort.provenance,
         )
         kwargs["exposure_outcome_distribution_spec"] = spec
         kwargs["scientific_capability"] = "descriptive_exposure_outcome_distribution_v1"

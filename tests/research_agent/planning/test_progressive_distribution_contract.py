@@ -168,3 +168,35 @@ def test_missingness_policy_is_never_silently_replaced_with_complete_case(role):
     assert caught.value.reason_code == "progressive_distribution_missingness_authority_invalid"
     assert caught.value.path == f"missing_{role}_policy"
     assert getattr(step, f"missing_{role}_policy") == "fail_closed"
+
+
+@pytest.mark.parametrize("counts_only", [False, True])
+def test_fail_closed_with_measured_zero_missing_values_still_compiles(counts_only):
+    variables = {item.name: item.model_copy(update={
+        "missingness": MissingnessProfile(fraction_missing=0, n_missing=0, n_total=120),
+    }) for item in _context().variables}
+    step = ProgressiveSkeletonStep.model_validate(_payload()["steps"][2])
+    spec = _compile_distribution(variables=variables, step=step, step_index=2, counts_only=counts_only)
+    assert spec.missing_exposure_policy == spec.missing_outcome_policy == "fail_closed"
+
+
+def test_full_compiler_also_reads_the_declared_group_exclusion():
+    context = _context()
+    parameters = {
+        "concept": "age", "window": None, "scale": "nominal",
+        "groups": [
+            {"id": "g1", "rule": {"summary": "value", "op": "<", "value": 65.0, "unit": "years"}},
+            {"id": "g2", "rule": "otherwise"},
+        ],
+        "unmeasured": "exclude", "source_columns": {"value": "age"},
+    }
+    context = context.model_copy(update={"cohort": context.cohort.model_copy(update={"provenance": {
+        **context.cohort.provenance,
+        "exposure_group_labels": [{"variable": "exposure_flag", "concept": "age", "scale": "nominal",
+            "levels": [{"code": 1, "group": "g1", "label": "Younger"}, {"code": 2, "group": "g2", "label": "Older"}],
+            "parameters": parameters}],
+    }})})
+    with pytest.raises(ProgressivePlanCompileError) as caught:
+        compile_progressive_plan(skeleton=ProgressivePlanSkeleton.model_validate(_payload()), context=context)
+    assert caught.value.reason_code == "progressive_distribution_missingness_authority_invalid"
+    assert caught.value.path == "missing_exposure_policy"

@@ -170,6 +170,16 @@ def _design_selection(
             else "missing outcomes stop this analysis pending a reviewed revision; "
             "each outcome-rate denominator contains all declared rows in that group."
         )
+    missing_statement += "".join(
+        (
+            f" {name}：输入中已知缺失 {facts.n_missing} 行；实际排除数随结果报告。"
+            if language == "zh"
+            else f" {name}: {facts.n_missing} known missing input rows; "
+            "the actual excluded count is reported with the result."
+        )
+        for name, facts in request.distribution_missingness.items()
+        if facts.n_missing
+    )
     selected = ResearchDesignCandidate(
         design_id="stay_level_descriptive",
         analysis_type="descriptive_epidemiology",
@@ -372,8 +382,8 @@ def build_descriptive_skeleton(
     exposure = request.primary_exposure
     outcome = request.outcome
     identity = request.identity_column
-    # The candidate's declared policy is fixed for review and later execution.
-    # Legacy observed-data requests retain their prior host defaults.
+    # Bind host-known missingness and the study's declared grouping exclusion
+    # before review. The Planner chooses policies only for unbound roles.
     if request.distribution_missingness_unobserved and spec.distribution_missing_policies is None:
         raise FamilySpecError(
             "family_spec_missing_policies_required",
@@ -385,6 +395,17 @@ def build_descriptive_skeleton(
         missing_exposure_policy="fail_closed",
         missing_outcome_policy="fail_closed",
     )
+    bound = missing_policies.model_dump()
+    for role, name in (("exposure", exposure), ("outcome", outcome)):
+        facts = request.distribution_missingness.get(name)
+        if facts is not None and facts.requires_exclusion:
+            bound[f"missing_{role}_policy"] = "exclude_from_denominator"
+    bound["denominator_policy"] = (
+        "observed_outcome_rows"
+        if bound["missing_outcome_policy"] == "exclude_from_denominator"
+        else "all_declared_rows"
+    )
+    missing_policies = DistributionMissingPolicies.model_validate(bound)
     baseline = [str(value).strip() for value in spec.baseline_variables]
     # An accepted baseline roster keeps its rows beside the Planner's choice.
     retained_baseline = accepted_baseline_additions(request, [exposure, *baseline])

@@ -32,6 +32,7 @@ from ..adjustment_authority import HostTemporalRole
 from ..association_scope import MAX_ASSOCIATION_EXPOSURE_LEVELS
 from ..benchmark_comparator import ComparatorKind
 from ..design_selection import ResearchDesignCandidate
+from ..distribution_authority import DistributionMissingnessFacts
 from ..literature_design_authority import (
     LITERATURE_DESIGN_DIMENSIONS,
     CandidateLiteratureDesignDecision,
@@ -840,6 +841,11 @@ class FamilySpecRequest(BaseModel):
     #: existed, and requests without known missing values, keep their identity.
     distribution_missing_policies: Optional[DistributionMissingPolicies] = Field(
         default=None, exclude_if=lambda value: value is None
+    )
+    #: Exact-column facts that bind complete-case handling before review.
+    #: Empty on legacy requests, whose proposed policies remain reviewable.
+    distribution_missingness: dict[str, DistributionMissingnessFacts] = Field(
+        default_factory=dict, exclude_if=lambda value: not value
     )
     #: No patient rows were inspected, or no missingness denominator is known.
     #: Zero missing observations in that context is not evidence of completeness.

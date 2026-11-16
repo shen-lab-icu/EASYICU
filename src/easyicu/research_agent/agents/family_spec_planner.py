@@ -294,15 +294,21 @@ def family_spec_user_prompt(
     )
     if request.family_id == DESCRIPTIVE_FAMILY_ID:
         sections.append(
-            "Descriptive missingness evidence (not a policy choice):\n"
+            "Descriptive missingness authority (binding before review):\n"
             + json.dumps({
                 "missingness_unobserved": request.distribution_missingness_unobserved,
-                "legacy_host_default": (
+                "host_default": (
                     request.distribution_missing_policies.model_dump(mode="json")
                     if request.distribution_missing_policies is not None else None
                 ),
+                "bound_complete_case_facts": {
+                    name: facts.model_dump(mode="json")
+                    for name, facts in request.distribution_missingness.items()
+                },
             }, sort_keys=True)
             + "\nDeclare distribution_missing_policies in the candidate for review. "
+            "Known missing values and declared grouping exclusions bind exclude_from_denominator "
+            "for that exact variable; choose policies for other roles only. "
             "An unobserved missingness profile is not evidence that all values are present."
         )
     sections.append(
@@ -1143,9 +1149,9 @@ def run_family_spec_attempt(
     """One spec call, then a host-projected skeleton through the same gates.
 
     The Planner fills the family spec; the host template projects outline,
-    foundation, and every step. Foundation validation runs inside parsing,
-    so a population quote refusal reaches structured retry with its existing
-    budget. The fresh-plan outline authority, prefix compiler, and final
+    foundation, and every step. Foundation and prefix validation run inside
+    parsing, so located population or distribution refusals reach structured
+    retry with its existing budget. The fresh-plan outline authority and final
     acceptance run unchanged (injected by the Progressive agent). A rejected
     projection keeps the validator's own reason code; there is no Provider
     suffix repair on this path. A request the host refuses stops the same way, so the run
@@ -1315,25 +1321,49 @@ def run_family_spec_attempt(
         )
         return draft
 
+    def compile_draft_prefixes(draft: FamilySkeletonDraft) -> tuple[ProgressivePrefixState, ...]:
+        # Keep compile-time policy findings inside the same bounded spec retry
+        # as schema/foundation findings, before publishing an accepted checkpoint.
+        states = []
+        state = ProgressivePrefixState()
+        for materialization in draft.materializations:
+            state = compile_progressive_prefix(
+                state, materialization,
+                outline=draft.outline,
+                foundation=draft.foundation.foundation,
+                context=context,
+                allowed_literature_citation_keys=allowed_citations,
+                allowed_know_how_decisions=allowed_know_how_decisions,
+                reporting_method_source_keys=reporting_source_keys,
+            )
+            states.append(state)
+        return tuple(states)
+
     def retryable_parse_error(exc: Exception) -> bool:
         # JSON, Pydantic and family/question validation errors derive from
-        # ValueError. Of the compiler's refusals, only the quote check moved
-        # into retry; the capability-gap check was already retried here.
+        # ValueError. Only located refusals the small spec can repair belong
+        # here; unrelated host/compiler defects must retain their own failures.
         return isinstance(exc, ValueError) and (
             not isinstance(exc, ProgressivePlanCompileError)
             or exc.reason_code in {
                 "progressive_population_quote_not_verbatim",
                 "progressive_capability_gap_claim_unverified",
+                "progressive_distribution_spec_invalid",
+                "progressive_distribution_missingness_authority_invalid",
             }
         )
 
-    def parse_spec(raw: str) -> tuple[FamilyPlanSpec, FamilySkeletonDraft]:
+    def parse_spec(raw: str) -> tuple[
+        FamilyPlanSpec, FamilySkeletonDraft, tuple[ProgressivePrefixState, ...]
+    ]:
         try:
             spec = parse_family_plan_spec(raw, request)
             check_question_requirement_gaps(
                 spec, context=context, planning_contract_context=planning_contract_context
             )
-            return spec, project_spec(spec)
+            draft = project_spec(spec)
+            validate_outline(draft.outline)
+            return spec, draft, compile_draft_prefixes(draft)
         except ValueError as exc:
             if not retryable_parse_error(exc):
                 raise
@@ -1348,7 +1378,7 @@ def run_family_spec_attempt(
             )
             raise
 
-    spec, draft = call_llm_with_structured_retry(
+    spec, draft, compiled_prefixes = call_llm_with_structured_retry(
         llm,
         messages,
         parser=parse_spec,
@@ -1389,7 +1419,6 @@ def run_family_spec_attempt(
         item.model_dump(mode="json") for item in association_analysis_omissions(draft, context, request)
     ]
     outline = draft.outline
-    validate_outline(outline)
     attempt.outline = outline
     attempt.foundation = None
     attempt.materializations = []
@@ -1413,17 +1442,7 @@ def run_family_spec_attempt(
         prompt_metrics=attempt.prompt_metrics,
     )
     prefix_state = ProgressivePrefixState()
-    for materialization in draft.materializations:
-        prefix_state = compile_progressive_prefix(
-            prefix_state,
-            materialization,
-            outline=outline,
-            foundation=foundation,
-            context=context,
-            allowed_literature_citation_keys=allowed_citations,
-            allowed_know_how_decisions=allowed_know_how_decisions,
-            reporting_method_source_keys=reporting_source_keys,
-        )
+    for prefix_state in compiled_prefixes:
         attempt.materializations = list(prefix_state.materializations)
         attempt.prompt_metrics["host_step_materialization_count"] += 1
         attempt.prompt_metrics["step_materialization_payload_bytes"].append(0)

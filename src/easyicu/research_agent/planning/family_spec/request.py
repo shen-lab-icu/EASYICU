@@ -49,6 +49,7 @@ from ..analysis_types import (
 from ..baseline_requirements import baseline_requirement_projection
 from ..cohort_contract import event_status_reading
 from ..exposure_group_compile import exposure_group_contrast
+from ..distribution_authority import distribution_missingness_facts
 from ..cohort_eligibility import (
     ICU_LENGTH_OF_STAY_CONCEPT,
     eligibility_after_time_zero,
@@ -2275,6 +2276,10 @@ def _build_descriptive_request(
         reference=0,
         contrast=len(exposure_levels) - 1,
     )
+    missingness = distribution_missingness_facts(
+        {name: variables[name] for name in (exposure, outcome)},
+        provenance=context.cohort.provenance,
+    )
     return FamilySpecRequest(
         family_id=DESCRIPTIVE_FAMILY_ID,
         analysis_type="descriptive_epidemiology",
@@ -2317,11 +2322,14 @@ def _build_descriptive_request(
         distribution_missing_policies=_distribution_missing_policies(
             context, exposure=exposure, outcome=outcome
         ),
+        distribution_missingness={
+            name: facts for name, facts in missingness.items() if facts.requires_exclusion
+        },
         distribution_missingness_unobserved=(
             context.cohort.provenance.get("evidence_stage") == "metadata_only_planning"
             or context.cohort.provenance.get("patient_rows_read") is False
             or any(
-                not getattr(context.variable(name).missingness, "n_total", 0)
+                missingness[name].n_missing is None
                 for name in (exposure, outcome)
             )
         ),
@@ -2331,17 +2339,15 @@ def _build_descriptive_request(
 def _distribution_missing_policies(
     context: ResearchContext, *, exposure: str, outcome: str
 ) -> Optional[DistributionMissingPolicies]:
-    """Complete-case on a variable with known missing values; ``None`` without any.
+    """Complete-case for known missingness or a declared grouping exclusion."""
 
-    Prepared data recorded stays with no age: the template's fail-closed
-    distribution then stopped data preparation for every grouped study.
-    """
-
-    def known_missing(name: str) -> bool:
-        missingness = getattr(context.variable(name), "missingness", None)
-        return bool(getattr(missingness, "n_missing", 0))
-
-    exposure_missing, outcome_missing = known_missing(exposure), known_missing(outcome)
+    facts = distribution_missingness_facts(
+        {name: context.variable(name) for name in (exposure, outcome)},
+        provenance=context.cohort.provenance,
+    )
+    exposure_missing, outcome_missing = (
+        facts[name].requires_exclusion for name in (exposure, outcome)
+    )
     if not (exposure_missing or outcome_missing):
         return None
     return DistributionMissingPolicies(
