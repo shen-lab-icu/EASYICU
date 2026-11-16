@@ -1,7 +1,7 @@
 # Community database concept coverage
 
 Generated from `tools/build_community_concept_registry.py`. The matrix covers every standard
-concept (base dictionary plus SOFA-2 overlay): **336 concepts × 4 databases**.
+concept (base dictionary plus SOFA-2 overlay): **427 concepts × 4 databases**.
 
 `partial` is deliberately not advertised as extractable: it records useful ingredients while preventing an incomplete score or phenotype from being mistaken for a complete definition.
 
@@ -9,15 +9,16 @@ concept (base dictionary plus SOFA-2 overlay): **336 concepts × 4 databases**.
 
 | Database | Direct | Derived | Partial | Unavailable |
 |---|---:|---:|---:|---:|
-| nwicu | 137 | 19 | 35 | 145 |
-| zhejiang_eicu | 128 | 39 | 23 | 146 |
-| jinhua | 135 | 19 | 32 | 150 |
-| zigong | 125 | 27 | 39 | 145 |
+| nwicu | 137 | 19 | 37 | 234 |
+| zhejiang_eicu | 128 | 39 | 25 | 235 |
+| jinhua | 135 | 19 | 34 | 239 |
+| zigong | 125 | 27 | 41 | 234 |
 
 ## Complete matrix
 
 | Concept | Category | NWICU | Zhejiang eICU | Jinhua | Zigong |
 |---|---|---|---|---|---|
+| `abdominal_circumference` | ventilator | unavailable | unavailable | unavailable | unavailable |
 | `abx` | medications | direct | direct | direct | direct |
 | `acetazolamide` | medications | unavailable | unavailable | unavailable | unavailable |
 | `acute_rrt_input` | renal | derived | derived | derived | unavailable |
@@ -32,6 +33,7 @@ concept (base dictionary plus SOFA-2 overlay): **336 concepts × 4 databases**.
 | `amiodarone` | medications | direct | direct | direct | direct |
 | `ammonia` | chemistry | direct | unavailable | direct | unavailable |
 | `amylase` | chemistry | direct | direct | direct | unavailable |
+| `angiotensin_ii_rate` | cardiovascular | unavailable | unavailable | unavailable | unavailable |
 | `anion_gap` | chemistry | direct | partial | derived | direct |
 | `apache_iv` | severity | unavailable | unavailable | unavailable | unavailable |
 | `apache_iv_pred_hosp_mort` | severity | unavailable | unavailable | unavailable | unavailable |
@@ -41,6 +43,8 @@ concept (base dictionary plus SOFA-2 overlay): **336 concepts × 4 databases**.
 | `avpu` | neurological | unavailable | unavailable | unavailable | partial |
 | `basos` | hematology | direct | direct | direct | direct |
 | `be` | blood gas | unavailable | direct | direct | direct |
+| `be_venous` | blood gas | unavailable | unavailable | unavailable | unavailable |
+| `beta2_microglobulin_urine` | renal | unavailable | unavailable | unavailable | unavailable |
 | `bicar` | chemistry | direct | direct | direct | direct |
 | `bicarb` | chemistry | direct | direct | direct | direct |
 | `bicarbonate` | medications | direct | direct | direct | direct |
@@ -49,6 +53,7 @@ concept (base dictionary plus SOFA-2 overlay): **336 concepts × 4 databases**.
 | `bmi` | demographics | derived | derived | direct | unavailable |
 | `bnd` | hematology | unavailable | unavailable | unavailable | unavailable |
 | `bnp` | chemistry | unavailable | unavailable | direct | direct |
+| `bps` | neurological | unavailable | unavailable | unavailable | unavailable |
 | `bun` | chemistry | direct | direct | direct | direct |
 | `bun_creatinine_ratio` | renal | derived | derived | derived | derived |
 | `bun_qc` | chemistry | unavailable | unavailable | unavailable | unavailable |
@@ -57,27 +62,47 @@ concept (base dictionary plus SOFA-2 overlay): **336 concepts × 4 databases**.
 | `cai` | blood gas | direct | direct | direct | direct |
 | `cai_ph74` | blood gas | unavailable | unavailable | unavailable | unavailable |
 | `calcium_iv` | medications | direct | direct | direct | direct |
+| `cam_icu` | neurological | unavailable | unavailable | unavailable | unavailable |
 | `cholesterol` | chemistry | direct | direct | direct | direct |
+| `ci` | cardiovascular | unavailable | unavailable | unavailable | unavailable |
 | `cisatracurium` | medications | direct | direct | direct | direct |
 | `ck` | chemistry | direct | direct | direct | direct |
 | `ckmb` | chemistry | direct | unavailable | unavailable | unavailable |
+| `ckmb_activity` | chemistry | unavailable | unavailable | unavailable | unavailable |
 | `ckmb_hirid_raw` | chemistry | unavailable | unavailable | unavailable | unavailable |
 | `cl` | chemistry | direct | unavailable | direct | direct |
 | `co` | cardiovascular | unavailable | unavailable | unavailable | unavailable |
+| `co2_tidal` | ventilator | unavailable | unavailable | unavailable | unavailable |
+| `colloid_input_ml` | output | unavailable | unavailable | unavailable | unavailable |
 | `compliance` | ventilator | unavailable | unavailable | unavailable | unavailable |
 | `corrected_calcium` | chemistry | derived | derived | derived | derived |
 | `cort` | medications | direct | direct | direct | direct |
 | `cortisol` | chemistry | direct | unavailable | unavailable | unavailable |
 | `crea` | chemistry | direct | direct | direct | direct |
+| `crea_clearance_measured` | renal | unavailable | unavailable | unavailable | unavailable |
 | `crea_qc` | chemistry | unavailable | unavailable | unavailable | unavailable |
 | `crea_raw` | chemistry | unavailable | unavailable | unavailable | unavailable |
 | `crp` | chemistry | direct | direct | direct | direct |
+| `crrt_blood_flow` | renal | unavailable | unavailable | unavailable | unavailable |
+| `crrt_blood_flow_set` | renal | unavailable | unavailable | unavailable | unavailable |
+| `crrt_citrate_flow` | renal | unavailable | unavailable | unavailable | unavailable |
+| `crrt_dialysate_flow` | renal | unavailable | unavailable | unavailable | unavailable |
+| `crrt_dilution_mode_set` | renal | unavailable | unavailable | unavailable | unavailable |
 | `crrt_mode_input` | renal | unavailable | unavailable | unavailable | unavailable |
+| `crrt_replacement_flow` | renal | unavailable | unavailable | unavailable | unavailable |
+| `crrt_replacement_flow_set` | renal | unavailable | unavailable | unavailable | unavailable |
+| `crrt_replacement_post_flow` | renal | unavailable | unavailable | unavailable | unavailable |
+| `crrt_replacement_post_flow_set` | renal | unavailable | unavailable | unavailable | unavailable |
+| `crrt_replacement_pre_flow` | renal | unavailable | unavailable | unavailable | unavailable |
+| `crrt_replacement_pre_flow_set` | renal | unavailable | unavailable | unavailable | unavailable |
+| `crystalloid_input_ml` | output | unavailable | unavailable | unavailable | unavailable |
 | `cvp` | vitals | partial | derived | partial | derived |
 | `cvp_qc` | vitals | partial | derived | partial | derived |
 | `cvp_raw` | vitals | unavailable | direct | unavailable | direct |
 | `d_dimer` | chemistry | direct | direct | direct | direct |
 | `dbp` | vitals | direct | direct | direct | direct |
+| `dbp_invasive` | vitals | unavailable | unavailable | unavailable | unavailable |
+| `dbp_nibp` | vitals | unavailable | unavailable | unavailable | unavailable |
 | `death` | outcome | direct | direct | direct | unavailable |
 | `delirium_positive` | neurology | unavailable | unavailable | unavailable | unavailable |
 | `delirium_tx` | neurology | unavailable | unavailable | unavailable | unavailable |
@@ -98,24 +123,35 @@ concept (base dictionary plus SOFA-2 overlay): **336 concepts × 4 databases**.
 | `driving_pres` | ventilator | partial | partial | unavailable | unavailable |
 | `driving_pres_controlled` | ventilator | partial | partial | unavailable | partial |
 | `ecmo` | respiratory | direct | unavailable | direct | unavailable |
+| `ecmo_blood_flow` | ventilator | unavailable | unavailable | unavailable | unavailable |
+| `ecmo_fio2` | ventilator | unavailable | unavailable | unavailable | unavailable |
 | `ecmo_indication` | respiratory | unavailable | unavailable | unavailable | unavailable |
+| `ecmo_pump_speed` | ventilator | unavailable | unavailable | unavailable | unavailable |
+| `ecmo_sweep_flow` | ventilator | unavailable | unavailable | unavailable | unavailable |
+| `ecmo_type` | ventilator | unavailable | unavailable | unavailable | unavailable |
 | `egcs` | neurological | unavailable | unavailable | unavailable | direct |
 | `egfr` | renal | derived | derived | derived | derived |
 | `enoxaparin` | medications | direct | direct | direct | direct |
+| `enoximone_rate` | cardiovascular | unavailable | unavailable | unavailable | unavailable |
 | `eos` | hematology | direct | direct | direct | direct |
 | `epi60` | medications | unavailable | unavailable | unavailable | unavailable |
 | `epi_dur` | medications | unavailable | unavailable | unavailable | unavailable |
 | `epi_rate` | medications | unavailable | unavailable | unavailable | unavailable |
+| `esketamine` | medications | unavailable | unavailable | unavailable | unavailable |
 | `esmolol` | medications | direct | direct | direct | direct |
 | `esr` | hematology | unavailable | direct | unavailable | direct |
 | `etco2` | ventilator | unavailable | unavailable | unavailable | unavailable |
 | `etco2_qc` | ventilator | unavailable | unavailable | unavailable | unavailable |
 | `etco2_raw` | ventilator | unavailable | unavailable | unavailable | unavailable |
 | `ett_gcs` | respiratory | unavailable | unavailable | unavailable | unavailable |
+| `evlwi` | cardiovascular | unavailable | unavailable | unavailable | unavailable |
+| `fena` | renal | partial | partial | partial | partial |
 | `fentanyl` | medications | direct | direct | direct | direct |
 | `fentanyl_rate` | medications | unavailable | unavailable | unavailable | unavailable |
 | `ferritin` | chemistry | direct | unavailable | direct | unavailable |
+| `feurea` | renal | partial | partial | partial | partial |
 | `ffp` | medications | unavailable | unavailable | direct | unavailable |
+| `ffp_input_ml` | output | unavailable | unavailable | unavailable | unavailable |
 | `fgn` | hematology | direct | unavailable | direct | direct |
 | `fio2` | blood gas | direct | direct | direct | unavailable |
 | `fio2_chart` | respiratory | unavailable | unavailable | unavailable | unavailable |
@@ -124,7 +160,10 @@ concept (base dictionary plus SOFA-2 overlay): **336 concepts × 4 databases**.
 | `fluid_balance_cumulative` | output | unavailable | partial | unavailable | partial |
 | `ft4` | chemistry | direct | direct | direct | unavailable |
 | `furosemide` | medications | direct | direct | direct | direct |
+| `furosemide_active` | medications | unavailable | unavailable | unavailable | unavailable |
 | `gcs` | neurological | unavailable | unavailable | unavailable | partial |
+| `gedvi` | cardiovascular | unavailable | unavailable | unavailable | unavailable |
+| `gef` | cardiovascular | unavailable | unavailable | unavailable | unavailable |
 | `ggt` | chemistry | direct | direct | direct | direct |
 | `glu` | chemistry | direct | direct | direct | direct |
 | `hba1c` | hematology | direct | direct | direct | unavailable |
@@ -139,13 +178,17 @@ concept (base dictionary plus SOFA-2 overlay): **336 concepts × 4 databases**.
 | `hgb_qc` | hematology | unavailable | unavailable | unavailable | unavailable |
 | `hgb_raw` | hematology | unavailable | unavailable | unavailable | unavailable |
 | `hr` | vitals | direct | direct | direct | direct |
+| `hydromorphone` | medications | unavailable | unavailable | unavailable | unavailable |
 | `icp` | neurological | unavailable | unavailable | unavailable | unavailable |
 | `icu_stay_is_readmission` | demographics | unavailable | unavailable | unavailable | unavailable |
 | `icu_unit_type` | demographics | direct | unavailable | unavailable | unavailable |
+| `il6` | chemistry | unavailable | unavailable | unavailable | unavailable |
 | `infection_icd` | outcome | unavailable | unavailable | unavailable | unavailable |
 | `inr_pt` | hematology | direct | direct | direct | direct |
 | `ins` | medications | unavailable | unavailable | unavailable | unavailable |
+| `insp_time` | ventilator | unavailable | unavailable | unavailable | unavailable |
 | `insulin` | medications | direct | direct | direct | direct |
+| `intra_abdominal_pres` | cardiovascular | unavailable | unavailable | unavailable | unavailable |
 | `iron` | chemistry | direct | unavailable | direct | unavailable |
 | `k` | chemistry | direct | unavailable | direct | direct |
 | `kdigo_aki` | renal | partial | partial | partial | partial |
@@ -156,9 +199,11 @@ concept (base dictionary plus SOFA-2 overlay): **336 concepts × 4 databases**.
 | `ketamine` | medications | direct | direct | unavailable | direct |
 | `labetalol` | medications | direct | direct | unavailable | unavailable |
 | `lact` | blood gas | direct | direct | direct | direct |
+| `lact_venous` | cardiovascular | unavailable | unavailable | unavailable | unavailable |
 | `ldh` | chemistry | unavailable | direct | direct | direct |
 | `ldl` | chemistry | direct | direct | direct | direct |
 | `levetiracetam` | medications | direct | unavailable | direct | direct |
+| `levosimendan` | cardiovascular | unavailable | unavailable | unavailable | unavailable |
 | `lipase` | chemistry | direct | unavailable | direct | unavailable |
 | `loop_diuretic` | medications | unavailable | unavailable | unavailable | unavailable |
 | `loop_diuretic_furosemide_eq` | medications | unavailable | unavailable | unavailable | unavailable |
@@ -166,6 +211,7 @@ concept (base dictionary plus SOFA-2 overlay): **336 concepts × 4 databases**.
 | `los_hosp` | outcome | direct | direct | direct | unavailable |
 | `los_icu` | outcome | direct | unavailable | direct | direct |
 | `lymph` | hematology | direct | direct | direct | direct |
+| `lymph_abs` | hematology | unavailable | unavailable | unavailable | unavailable |
 | `magnesium_iv` | medications | direct | direct | direct | direct |
 | `mannitol` | medications | direct | direct | direct | unavailable |
 | `map` | vitals | unavailable | unavailable | unavailable | direct |
@@ -180,6 +226,7 @@ concept (base dictionary plus SOFA-2 overlay): **336 concepts × 4 databases**.
 | `mech_vent_opioid_sensitivity` | respiratory | unavailable | unavailable | unavailable | unavailable |
 | `mech_vent_rule` | respiratory | unavailable | unavailable | unavailable | unavailable |
 | `meropenem` | medications | direct | direct | direct | direct |
+| `methadone` | medications | unavailable | unavailable | unavailable | unavailable |
 | `methb` | blood gas | direct | unavailable | direct | direct |
 | `mews` | outcome | partial | partial | partial | partial |
 | `mg` | chemistry | direct | unavailable | direct | direct |
@@ -187,9 +234,11 @@ concept (base dictionary plus SOFA-2 overlay): **336 concepts × 4 databases**.
 | `midazolam` | medications | direct | direct | direct | direct |
 | `midazolam_rate` | medications | unavailable | unavailable | unavailable | unavailable |
 | `milrinone` | medications | direct | direct | direct | direct |
+| `milrinone_rate` | medications | unavailable | unavailable | unavailable | unavailable |
 | `minute_vol` | ventilator | unavailable | direct | unavailable | unavailable |
 | `minute_vol_qc` | ventilator | unavailable | unavailable | unavailable | unavailable |
 | `minute_vol_raw` | ventilator | unavailable | unavailable | unavailable | unavailable |
+| `minute_vol_spont` | ventilator | unavailable | unavailable | unavailable | unavailable |
 | `modified_shock_index` | cardiovascular | partial | partial | partial | derived |
 | `monos` | hematology | direct | direct | direct | direct |
 | `morphine` | medications | direct | direct | direct | direct |
@@ -203,6 +252,7 @@ concept (base dictionary plus SOFA-2 overlay): **336 concepts × 4 databases**.
 | `na_raw` | chemistry | unavailable | unavailable | unavailable | unavailable |
 | `neostigmine` | medications | direct | direct | direct | direct |
 | `neut` | hematology | direct | direct | direct | direct |
+| `neut_abs` | hematology | unavailable | unavailable | unavailable | unavailable |
 | `news` | outcome | partial | partial | partial | partial |
 | `nicardipine` | medications | direct | direct | unavailable | direct |
 | `nitroglycerin` | medications | direct | direct | direct | direct |
@@ -212,6 +262,7 @@ concept (base dictionary plus SOFA-2 overlay): **336 concepts × 4 databases**.
 | `norepi_equiv` | medications | unavailable | unavailable | unavailable | unavailable |
 | `norepi_order_dur` | medications | unavailable | unavailable | unavailable | unavailable |
 | `norepi_rate` | medications | unavailable | unavailable | unavailable | unavailable |
+| `nsaid` | medications | unavailable | unavailable | unavailable | unavailable |
 | `ntprobnp` | chemistry | direct | unavailable | direct | unavailable |
 | `o2_flow` | respiratory | unavailable | unavailable | unavailable | unavailable |
 | `o2sat` | respiratory | direct | direct | direct | direct |
@@ -219,37 +270,53 @@ concept (base dictionary plus SOFA-2 overlay): **336 concepts × 4 databases**.
 | `osmolality` | chemistry | direct | unavailable | unavailable | unavailable |
 | `other_output_ml` | output | unavailable | unavailable | unavailable | unavailable |
 | `other_vaso` | cardiovascular | unavailable | unavailable | unavailable | unavailable |
+| `oxycodone` | medications | unavailable | unavailable | unavailable | unavailable |
 | `oxygenation_index` | respiratory | partial | partial | partial | partial |
 | `packed_rbc` | medications | unavailable | unavailable | direct | unavailable |
+| `packed_rbc_input_ml` | output | unavailable | unavailable | unavailable | unavailable |
 | `pafi` | respiratory | partial | derived | derived | partial |
 | `pantoprazole` | medications | direct | direct | direct | direct |
 | `pap_dia` | cardiovascular | unavailable | unavailable | unavailable | unavailable |
 | `pap_mean` | cardiovascular | unavailable | unavailable | unavailable | unavailable |
 | `pap_sys` | cardiovascular | unavailable | unavailable | unavailable | unavailable |
+| `parenteral_input_ml` | output | unavailable | unavailable | unavailable | unavailable |
 | `pawp` | cardiovascular | unavailable | unavailable | unavailable | unavailable |
+| `pc_above_peep_set` | ventilator | unavailable | unavailable | unavailable | unavailable |
 | `pco2` | blood gas | unavailable | direct | direct | direct |
+| `pco2_mixed_venous` | blood gas | unavailable | unavailable | unavailable | unavailable |
+| `pco2_venous` | blood gas | unavailable | unavailable | unavailable | unavailable |
 | `pct` | chemistry | unavailable | direct | direct | unavailable |
 | `peep` | ventilator | direct | direct | unavailable | unavailable |
+| `peep_intrinsic` | ventilator | unavailable | unavailable | unavailable | unavailable |
 | `peep_set` | ventilator | unavailable | unavailable | unavailable | unavailable |
 | `peep_total` | ventilator | unavailable | unavailable | unavailable | unavailable |
 | `persistent_critical_illness` | outcome | derived | unavailable | derived | derived |
 | `ph` | blood gas | direct | direct | direct | direct |
+| `ph_mixed_venous` | blood gas | unavailable | unavailable | unavailable | unavailable |
 | `ph_qc` | blood gas | unavailable | unavailable | unavailable | unavailable |
 | `ph_raw` | blood gas | unavailable | unavailable | unavailable | unavailable |
+| `ph_venous` | blood gas | unavailable | unavailable | unavailable | unavailable |
 | `phenytoin` | medications | direct | direct | direct | unavailable |
 | `phn_rate` | medications | unavailable | unavailable | unavailable | unavailable |
 | `phos` | chemistry | direct | direct | direct | direct |
 | `pip` | ventilator | unavailable | direct | unavailable | unavailable |
+| `piperacillin_tazobactam` | medications | unavailable | unavailable | unavailable | unavailable |
+| `piritramide` | medications | unavailable | unavailable | unavailable | unavailable |
 | `plateau_pres` | ventilator | partial | partial | unavailable | unavailable |
 | `plateau_pres_raw` | ventilator | unavailable | unavailable | unavailable | unavailable |
+| `platelet_input_ml` | output | unavailable | unavailable | unavailable | unavailable |
 | `platelets` | medications | direct | unavailable | direct | unavailable |
 | `plr` | hematology | derived | derived | derived | derived |
 | `plt` | hematology | direct | direct | direct | direct |
 | `po2` | blood gas | unavailable | direct | direct | direct |
+| `po2_mixed_venous` | blood gas | unavailable | unavailable | unavailable | unavailable |
+| `po2_venous` | blood gas | unavailable | unavailable | unavailable | unavailable |
 | `potassium` | chemistry | direct | unavailable | direct | direct |
 | `potassium_iv` | medications | direct | direct | direct | direct |
 | `potassium_sparing_diuretic` | medications | unavailable | unavailable | unavailable | unavailable |
+| `ppv` | cardiovascular | unavailable | unavailable | unavailable | unavailable |
 | `prealbumin` | chemistry | unavailable | direct | direct | direct |
+| `prone` | ventilator | unavailable | unavailable | unavailable | unavailable |
 | `propofol` | medications | direct | direct | direct | direct |
 | `propofol_rate` | medications | unavailable | unavailable | unavailable | unavailable |
 | `ps` | ventilator | unavailable | direct | unavailable | unavailable |
@@ -257,19 +324,28 @@ concept (base dictionary plus SOFA-2 overlay): **336 concepts × 4 databases**.
 | `ptt` | hematology | direct | direct | direct | direct |
 | `pulse_pressure` | vitals | derived | derived | derived | derived |
 | `qsofa` | outcome | partial | partial | partial | partial |
+| `ramsay` | neurological | unavailable | unavailable | unavailable | unavailable |
 | `rass` | neurological | unavailable | unavailable | unavailable | direct |
 | `rbc` | hematology | direct | direct | direct | direct |
 | `rdw` | hematology | direct | direct | direct | direct |
+| `remifentanil` | medications | unavailable | unavailable | unavailable | unavailable |
+| `remifentanil_rate` | neurological | unavailable | unavailable | unavailable | unavailable |
+| `renal_resistive_index` | renal | unavailable | unavailable | unavailable | unavailable |
 | `resp` | respiratory | direct | direct | direct | direct |
+| `resp_spont` | ventilator | unavailable | unavailable | unavailable | unavailable |
 | `retic` | hematology | unavailable | direct | direct | unavailable |
 | `rocuronium` | medications | direct | direct | unavailable | direct |
 | `rrt` | renal | direct | direct | direct | unavailable |
 | `rrt_criteria` | renal | partial | partial | partial | partial |
+| `rrt_modality` | renal | unavailable | unavailable | unavailable | unavailable |
 | `safi` | respiratory | derived | derived | derived | partial |
 | `samp` | microbiology | unavailable | direct | direct | unavailable |
 | `sao2` | respiratory | direct | direct | direct | direct |
 | `saps3` | severity | unavailable | unavailable | unavailable | unavailable |
+| `sas` | neurological | unavailable | unavailable | unavailable | unavailable |
 | `sbp` | vitals | direct | direct | direct | direct |
+| `sbp_invasive` | vitals | unavailable | unavailable | unavailable | unavailable |
+| `sbp_nibp` | vitals | unavailable | unavailable | unavailable | unavailable |
 | `scvo2` | cardiovascular | unavailable | unavailable | unavailable | unavailable |
 | `sedated_gcs` | neurology | unavailable | unavailable | unavailable | unavailable |
 | `sep3` | outcome | partial | partial | partial | partial |
@@ -296,23 +372,33 @@ concept (base dictionary plus SOFA-2 overlay): **336 concepts × 4 databases**.
 | `sofa_renal` | outcome | partial | derived | partial | derived |
 | `sofa_resp` | outcome | partial | partial | partial | partial |
 | `spo2` | respiratory | direct | direct | direct | direct |
+| `sufentanil` | medications | unavailable | unavailable | unavailable | unavailable |
 | `supp_o2` | respiratory | partial | partial | partial | unavailable |
 | `susp_inf` | outcome | partial | partial | partial | partial |
 | `svo2` | cardiovascular | unavailable | unavailable | unavailable | unavailable |
+| `svr` | cardiovascular | unavailable | unavailable | unavailable | unavailable |
+| `svv` | cardiovascular | unavailable | unavailable | unavailable | unavailable |
 | `t4` | chemistry | direct | direct | direct | unavailable |
 | `tco2` | blood gas | direct | direct | direct | direct |
 | `temp` | vitals | direct | direct | direct | direct |
 | `temp_qc` | vitals | unavailable | unavailable | unavailable | unavailable |
 | `temp_raw` | vitals | unavailable | unavailable | unavailable | unavailable |
+| `terlipressin` | cardiovascular | unavailable | unavailable | unavailable | unavailable |
 | `tgcs` | neurological | unavailable | unavailable | unavailable | unavailable |
 | `thiazide_diuretic` | medications | unavailable | unavailable | unavailable | unavailable |
 | `tibc` | chemistry | direct | unavailable | direct | unavailable |
 | `tidal_vol` | ventilator | direct | direct | unavailable | direct |
 | `tidal_vol_set` | ventilator | unavailable | direct | unavailable | direct |
+| `tidal_vol_spont` | ventilator | unavailable | unavailable | unavailable | unavailable |
 | `tnt` | chemistry | direct | unavailable | unavailable | unavailable |
+| `tnt_hs` | chemistry | unavailable | unavailable | unavailable | unavailable |
+| `torasemide` | medications | unavailable | unavailable | unavailable | unavailable |
 | `total_input_ml` | output | unavailable | unavailable | unavailable | unavailable |
 | `total_protein` | chemistry | direct | direct | direct | direct |
+| `tramadol` | medications | unavailable | unavailable | unavailable | unavailable |
 | `transferrin` | chemistry | direct | unavailable | direct | unavailable |
+| `transpulm_pres_exp` | ventilator | unavailable | unavailable | unavailable | unavailable |
+| `transpulm_pres_insp` | ventilator | unavailable | unavailable | unavailable | unavailable |
 | `tri` | chemistry | direct | direct | direct | direct |
 | `trig` | chemistry | direct | direct | direct | direct |
 | `tsh` | chemistry | direct | direct | direct | unavailable |
@@ -334,12 +420,17 @@ concept (base dictionary plus SOFA-2 overlay): **336 concepts × 4 databases**.
 | `urine24_est_available_at` | output | unavailable | derived | unavailable | derived |
 | `urine24_observed_ml` | output | unavailable | derived | unavailable | derived |
 | `urine24_uses_future` | output | unavailable | derived | unavailable | derived |
+| `urine_cl` | renal | unavailable | unavailable | unavailable | unavailable |
 | `urine_crea` | renal | unavailable | unavailable | unavailable | unavailable |
+| `urine_k` | renal | unavailable | unavailable | unavailable | unavailable |
 | `urine_na` | renal | unavailable | unavailable | unavailable | unavailable |
 | `urine_osm` | renal | unavailable | unavailable | unavailable | unavailable |
 | `urine_urea` | renal | unavailable | unavailable | unavailable | unavailable |
 | `vancomycin` | medications | direct | direct | direct | direct |
+| `vancomycin_iv` | medications | unavailable | unavailable | unavailable | unavailable |
+| `vancomycin_piperacillin_tazobactam` | medications | unavailable | unavailable | unavailable | unavailable |
 | `vaso_ind` | medications | unavailable | unavailable | unavailable | unavailable |
+| `vco2` | ventilator | unavailable | unavailable | unavailable | unavailable |
 | `vecuronium` | medications | direct | direct | direct | direct |
 | `vent_breath_seq` | ventilator | unavailable | direct | unavailable | direct |
 | `vent_end` | respiratory | direct | unavailable | unavailable | unavailable |

@@ -49,15 +49,27 @@ def test_urine_lab_sources_have_only_verified_specimens_and_canonical_units(name
     for database in ("miiv", "mimic", "mimic_demo"):
         source, = definition.sources[database]
         assert source.table == "labevents" and source.sub_var == "itemid" and source.ids == [item]
-    # No checked-in AUMC/HiRID/SICdb dictionary proves a urine-specific item.
-    assert not {"aumc", "hirid", "sic"} & definition.sources.keys()
+    # Preserve the original S907 mappings alongside the reviewed S732 extensions.
+    for source in definition.sources.get("aumc", []):
+        assert source.table == "numericitems" and source.unit_var == "unit"
+    original_aumc = {"urine_na": [7848, 10269], "urine_crea": [10279]}.get(name)
+    if original_aumc:
+        assert any(source.ids == original_aumc for source in definition.sources["aumc"])
+    if name == "urine_crea":
+        assert any(source.table == "laboratory" and source.ids == [370]
+                   for source in definition.sources["sic"])
     if name in {"urine_na", "urine_crea"}:
         label = {"urine_na": "urinary sodium", "urine_crea": "urinary creatinine"}[name]
         for database in ("eicu", "eicu_demo"):
             source, = definition.sources[database]
             assert source.table == "lab" and source.sub_var == "labname" and source.ids == [label]
+    elif name == "urine_osm":
+        source, = definition.sources["eicu"]
+        assert source.table == "lab" and source.ids == ["urinary osmolality"]
+        assert "eicu_demo" not in definition.sources
     else:
         assert not {"eicu", "eicu_demo"} & definition.sources.keys()
+
 
 
 @pytest.mark.parametrize("database", ["miiv", "mimic", "mimic_demo", "eicu", "eicu_demo"])
@@ -172,7 +184,7 @@ def test_urine_and_history_concepts_are_registered_once_in_their_own_module(name
     assert EXTRACT_MODULES["renal_urine_chem"].count(name) == 1
     assert name not in EXTRACT_MODULES["renal"]
     assert name in CONCEPT_DICTIONARY and name in CONCEPT_DESCRIPTIONS
-    assert CONCEPT_DB_COVERAGE[name] == (1 if name == HISTORY else 3 if name in {"urine_na", "urine_crea"} else 2)
+    assert CONCEPT_DB_COVERAGE[name] == {HISTORY: 1, "urine_na": 6, "urine_crea": 6, "urine_osm": 5, "urine_urea": 5}[name]
     payload = json.loads((ROOT / "src/easyicu/data/concept-dict.json").read_text())
     assert payload[name]["category"] == "renal"
     assert payload[name]["_comment"]

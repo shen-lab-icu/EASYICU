@@ -10,9 +10,12 @@ from easyicu.api.concepts import clear_global_loader
 from tests.support.urine_chemistry_source import urine_module_source
 
 
-CONCEPTS = ["urine_na", "urine_crea", "urine_osm", "urine_urea",
+CONCEPTS = ["urine_na", "urine_crea", "urine_osm", "urine_urea", "fena", "feurea",
             "sic_precondition_renal_dysfunction"]
+HISTORY = CONCEPTS[-1]
 MODULE = "renal_urine_chem"
+# S732 adds eICU urine osmolality. Derived concepts still need every input.
+EICU_MAPPED = ["urine_na", "urine_crea", "urine_osm", "fena"]
 
 
 @pytest.mark.parametrize("database", ["miiv", "mimic", "eicu", "aumc", "hirid", "sic"])
@@ -47,10 +50,21 @@ def test_native_urine_module_preserves_existing_module_bytes(tmp_path, monkeypat
         frame = pd.read_parquet(after / f"{MODULE}.parquet")
         assert list(frame) == ["stay_id", "charttime", *CONCEPTS]
         assert frame[CONCEPTS].notna().any(axis=1).all()
-        if database in {"aumc", "hirid"}:
-            assert frame.empty
+        if database == "hirid":
+            assert frame.charttime.notna().all()
+            assert frame[["urine_na", "urine_crea", "urine_urea", "fena", "feurea"]].notna().any().all()
+            assert frame.urine_osm.isna().all()
+        elif database == "aumc":
+            # S732 extends S907's timed urine inputs; both fractions can derive.
+            assert frame.charttime.notna().all()
+            assert frame[CONCEPTS[:4]].notna().all().all()
+            assert frame[["fena", "feurea"]].notna().any().all()
         elif database == "sic":
-            assert frame.set_index("stay_id")[CONCEPTS[-1]].to_dict() == {1: True, 2: False}
+            # Spot-urine creatinine rows are timed; the id-level flag keeps its own untimed rows.
+            flags = frame.dropna(subset=[HISTORY])
+            assert flags.charttime.isna().all()
+            assert flags.set_index("stay_id")[HISTORY].to_dict() == {1: True, 2: False}
+            assert frame.dropna(subset=["urine_crea"]).charttime.notna().all()
         else:
             assert frame.charttime.tolist() == [0., 1., 2.]
             assert frame.urine_na.tolist() == [40., 0., 400.]
@@ -72,7 +86,7 @@ def test_urine_module_has_one_owner_and_uses_the_lab_group():
 
 
 @pytest.mark.parametrize("database,mapped", [
-    ("miiv", CONCEPTS[:4]), ("eicu", CONCEPTS[:2]), ("sic", CONCEPTS[-1:]),
+    ("miiv", CONCEPTS[:6]), ("eicu", EICU_MAPPED),
 ])
 def test_sparse_module_keeps_zero_and_false_but_omits_value_less_keys(database, mapped):
     def load(**kwargs):
@@ -93,9 +107,9 @@ def test_sparse_module_keeps_zero_and_false_but_omits_value_less_keys(database, 
 
 @pytest.mark.parametrize("database,mapped,id_col,repeated", [
     # MIMIC-III: each zero-row concept frame keeps its own time column.
-    ("mimic", CONCEPTS[:4], "icustay_id", "charttime"),
+    ("mimic", CONCEPTS[:6], "icustay_id", "charttime"),
     # eICU: each keeps its lab source's unit/sub-item column.
-    ("eicu", CONCEPTS[:2], "patientunitstayid", "labmeasurenameinterface"),
+    ("eicu", EICU_MAPPED, "patientunitstayid", "labmeasurenameinterface"),
 ])
 def test_zero_row_module_publishes_one_typed_axis_and_records_unmapped_concepts(
     database, mapped, id_col, repeated,
@@ -126,11 +140,12 @@ def test_zero_row_module_publishes_one_typed_axis_and_records_unmapped_concepts(
 
 
 def test_module_with_rows_keeps_its_columns_and_records_unmapped_concepts():
-    mapped = CONCEPTS[:2]
+    mapped = EICU_MAPPED
 
     def load(**kwargs):
         return pd.DataFrame({"patientunitstayid": [1], "charttime": [1.0],
-                             "urine_na": [40.0], "urine_crea": [120.0]})
+                             "urine_na": [40.0], "urine_crea": [120.0],
+                             "urine_osm": [600.0], "fena": [0.24]})
 
     sink = {}
     frame = api._load_module_concepts(
@@ -141,3 +156,28 @@ def test_module_with_rows_keeps_its_columns_and_records_unmapped_concepts():
     assert list(frame) == ["patientunitstayid", "charttime", *mapped]
     assert frame["urine_na"].tolist() == [40.0]
     assert sorted(sink) == sorted(set(CONCEPTS) - set(mapped))
+
+
+def test_sic_lab_rows_and_id_level_flag_keep_their_own_grain():
+    calls = []
+
+    def load(**kwargs):
+        calls.append(kwargs["concepts"])
+        assert kwargs["r_compatible"] is False
+        if kwargs["concepts"] == [HISTORY]:
+            return pd.DataFrame({"stay_id": [1, 2, 3],
+                                 HISTORY: pd.Series([True, False, pd.NA], dtype="boolean")})
+        return pd.DataFrame({"stay_id": [1, 1], "charttime": [0.0, 6.0],
+                             **{name: [80.0, 0.0] for name in CONCEPTS[:6]}})
+
+    frame = api._load_module_concepts(
+        load, module_name=MODULE,
+        load_kwargs={"concepts": CONCEPTS, "database": "sic", "merge": True},
+    )
+    # One merge axis cannot hold both grains: each group is loaded on its own.
+    assert calls == [CONCEPTS[:6], [HISTORY]]
+    assert frame.charttime.tolist()[:2] == [0.0, 6.0] and frame.charttime.iloc[2:].isna().all()
+    assert frame.urine_crea.tolist()[:2] == [80.0, 0.0]
+    flags = frame.dropna(subset=[HISTORY])
+    assert flags.charttime.isna().all()
+    assert flags.set_index("stay_id")[HISTORY].to_dict() == {1: True, 2: False}

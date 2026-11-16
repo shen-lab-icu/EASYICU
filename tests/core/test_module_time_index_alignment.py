@@ -93,9 +93,7 @@ def test_all_twenty_modules_publish_from_synthetic_aumc(aumc_source, tmp_path):
     published_modules = {entry["module"] for entry in manifest["files"]}
     # The SICdb landmark and the round-5 bounds audit are opt-in modules.
     # Opt-in modules (S732/S740) are published only when requested.
-    assert published_modules == set(api.EXTRACT_MODULES) - {
-        "sic_case_landmark", "bounds_audit", "weight_strict", "subhour_signals", "vent_native",
-    }
+    assert published_modules == set(api.EXTRACT_MODULES) - {"sic_case_landmark", "bounds_audit", "weight_strict", "subhour_signals", "vent_native", "haemo_native", "cardiac_markers", "inflam_detail", "renal_detail", 'rrt_detail', 'haemo_advanced', 'vent_mechanics', 'sedation_analgesia', 'diuretic_nephrotoxin', 'vis_inputs', 'gas_specimen', 'fluid_io'}
     assert published_modules == set(api.EXTRACT_MODULE_ORDER)
     assert "sic_case_landmark" not in result["modules"]
     assert "bounds_audit" not in result["modules"]

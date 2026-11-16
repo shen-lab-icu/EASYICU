@@ -284,12 +284,13 @@ CONCEPT_DICTIONARY = {
     'norepi60': ('Norepinephrine Rate (>60min)', '去甲肾上腺素速率（持续>60分钟）', 'mcg/kg/min'),
     'epi60': ('Epinephrine Rate (>60min)', '肾上腺素速率（持续>60分钟）', 'mcg/kg/min'),
     'phn_rate': ('Phenylephrine Rate', '去氧肾上腺素速率', 'mcg/kg/min'),
-
     # 肾脏与尿量率
     'urine_na': ('Urine Sodium', '尿钠', 'mmol/L'),
     'urine_crea': ('Urine Creatinine', '尿肌酐', 'mg/dL'),
     'urine_osm': ('Urine Osmolality', '尿渗透压', 'mOsm/kg'),
     'urine_urea': ('Urine Urea Nitrogen', '尿尿素氮', 'mg/dL'),
+    'fena': ('Fractional Excretion of Sodium', '钠排泄分数', '%'),
+    'feurea': ('Fractional Excretion of Urea', '尿素排泄分数', '%'),
     'sic_precondition_renal_dysfunction': ('SICdb Pre-existing Renal Dysfunction', 'SICdb既往肾功能障碍', 'boolean'),
     'rrt': ('Renal Replacement Therapy', '肾脏替代治疗', 'boolean'),
     'rrt_criteria': ('RRT Criteria Met', '满足RRT标准', 'boolean'),
@@ -505,6 +506,8 @@ CONCEPT_DESCRIPTIONS = {
     'urine_crea': ('Urine creatinine concentration, separate from serum creatinine', '尿肌酐浓度，与血清肌酐分开'),
     'urine_osm': ('Urine osmolality in mOsm/kg; eICU mOsm/L is not pooled', '尿渗透压（mOsm/kg）；不混合eICU的mOsm/L记录'),
     'urine_urea': ('Urine urea nitrogen concentration in mg/dL of nitrogen, not whole urea', '尿尿素氮浓度（mg/dL氮），不按全尿素质量计算'),
+    'fena': ('FENa from a spot urine pair and the latest plasma sodium and creatinine within 24 h', '同一次尿样的尿钠/尿肌酐与24小时内最近的血钠、血肌酐计算'),
+    'feurea': ('FEUrea from a spot urine pair and the latest BUN and plasma creatinine within 24 h', '同一次尿样的尿尿素氮/尿肌酐与24小时内最近的血尿素氮、血肌酐计算'),
     'sic_precondition_renal_dysfunction': ('SICdb Yes/No renal precondition; unknown stays missing; distinct from hospital ICD comorbidity flags', 'SICdb既往肾功能障碍Yes/No标志；未知保留缺失，与住院ICD合并症标志分开'),
     'crea': ('Serum creatinine - kidney function marker, key for SOFA renal scoring', '血清肌酐 - 肾功能标志物，SOFA肾脏评分关键指标'),
     'bili': ('Total bilirubin - liver function marker, key for SOFA liver scoring', '总胆红素 - 肝功能标志物，SOFA肝脏评分关键指标'),
@@ -662,7 +665,7 @@ CONCEPT_GROUPS_INTERNAL = {
               'fluid_balance', 'fluid_balance_cumulative', 'total_input_ml',
               # 衍生肾功能指数 (Tier 1, 2026-06-22)
               'bun_creatinine_ratio', 'egfr'],
-    'renal_urine_chem': ['urine_na', 'urine_crea', 'urine_osm', 'urine_urea',
+    'renal_urine_chem': ['urine_na', 'urine_crea', 'urine_osm', 'urine_urea', 'fena', 'feurea',
                          'sic_precondition_renal_dysfunction'],
     'neurological': ['avpu', 'egcs', 'gcs', 'mgcs', 'rass', 'tgcs', 'vgcs', 'sedated_gcs', 'motor_response', 'delirium_positive', 'delirium_tx_proxy', 'delirium_tx_evidence', 'delirium_tx', 'icp'],
     'circulatory': ['mech_circ_support', 'circ_failure', 'circ_event', 'pap_sys', 'pap_dia', 'pap_mean', 'co', 'svo2', 'scvo2', 'pawp'],  # 🔧 添加循环衰竭特征 + 肺动脉压/心输出量 + 静脉血氧/楔压 (2026-07-04)
@@ -701,7 +704,257 @@ SUBHOUR_SIGNAL_CONCEPTS = ('map_invasive', 'cvp', 'peep_set', 'peep_total', 'hr'
 # apart, charted static compliance, arterial pO2 and bedside FiO2.
 VENT_NATIVE_CONCEPTS = ('plateau_pres_raw', 'tidal_vol', 'peep_set', 'peep_total', 'compliance', 'po2', 'fio2_chart')
 
+# S2HN (2026-11-16): haemodynamics at the one-minute grid, exported only by the
+# opt-in ``haemo_native`` module (owner: concept/minute_resolution.py). Pressures
+# keep the combined value and its arterial-line / cuff channels apart; cardiac
+# output/index and SVV/PPV where charted; norepi_equiv rates binned per minute.
+BP_CHANNEL_CONCEPTS = ('sbp_invasive', 'sbp_nibp', 'dbp_invasive', 'dbp_nibp')
+BP_CHANNEL_METADATA = {
+    'sbp_invasive': ('Arterial-line systolic blood pressure', '有创（动脉置管）收缩压', 'mmHg'),
+    'sbp_nibp': ('Cuff systolic blood pressure', '无创袖带收缩压', 'mmHg'),
+    'dbp_invasive': ('Arterial-line diastolic blood pressure', '有创（动脉置管）舒张压', 'mmHg'),
+    'dbp_nibp': ('Cuff diastolic blood pressure', '无创袖带舒张压', 'mmHg'),
+}
+HAEMO_NATIVE_CONCEPTS = (
+    'map', 'map_invasive', 'map_nibp', 'sbp', 'sbp_invasive', 'sbp_nibp',
+    'dbp', 'dbp_invasive', 'dbp_nibp', 'hr', 'cvp', 'co', 'ci', 'svv', 'ppv', 'norepi_equiv',
+)
+
+# S732: explicit opt-in markers retain their separate assay semantics.
+CARDIAC_MARKERS_CONCEPTS = ('ckmb_activity', 'tnt_hs')
+CARDIAC_MARKERS_METADATA = {
+    'ckmb_activity': ('CK-MB enzymatic activity; separate from mass', 'CK-MB酶活性（与质量浓度分开）', 'U/L'),
+    'tnt_hs': ('High-sensitivity cardiac troponin T; assay subset of tnt', '高敏肌钙蛋白T（tnt的检测方法子集）', 'ng/mL'),
+}
+
+INFLAM_DETAIL_CONCEPTS = ('il6', 'lymph_abs', 'neut_abs')
+INFLAM_DETAIL_METADATA = {
+    'il6': ('Interleukin-6 concentration in blood', '血白细胞介素6浓度', 'pg/mL'),
+    'lymph_abs': ('Absolute blood lymphocyte count', '血淋巴细胞绝对计数', '10^9/L'),
+    'neut_abs': ('Absolute blood neutrophil count', '血中性粒细胞绝对计数', '10^9/L'),
+}
+
+RENAL_DETAIL_CONCEPTS = (
+    'abdominal_circumference',
+    'beta2_microglobulin_urine',
+    'crea_clearance_measured',
+    'intra_abdominal_pres',
+    'renal_resistive_index',
+    'urine_cl',
+    'urine_k',
+)
+RENAL_DETAIL_METADATA = {
+    'abdominal_circumference': ('Abdominal circumference; flagged proxy, not pressure', '腹围（代理指标，不代表腹内压）', 'cm'),
+    'beta2_microglobulin_urine': ('Urinary beta-2 microglobulin concentration', '尿β2微球蛋白浓度', 'ug/L'),
+    'crea_clearance_measured': ('Measured urinary creatinine clearance', '实测尿肌酐清除率', 'mL/min'),
+    'intra_abdominal_pres': ('Intra-abdominal pressure measured through bladder', '经膀胱测量的腹内压', 'mmHg'),
+    'renal_resistive_index': ('Renal Doppler resistive index', '肾多普勒阻力指数', 'ratio'),
+    'urine_cl': ('Urine chloride concentration', '尿氯浓度', 'mmol/L'),
+    'urine_k': ('Urine potassium concentration', '尿钾浓度', 'mmol/L'),
+}
+
+RRT_DETAIL_CONCEPTS = (
+    'crrt_blood_flow',
+    'crrt_blood_flow_set',
+    'crrt_citrate_flow',
+    'crrt_dialysate_flow',
+    'crrt_dilution_mode_set',
+    'crrt_replacement_flow',
+    'crrt_replacement_flow_set',
+    'crrt_replacement_post_flow',
+    'crrt_replacement_post_flow_set',
+    'crrt_replacement_pre_flow',
+    'crrt_replacement_pre_flow_set',
+    'rrt_modality',
+)
+RRT_DETAIL_METADATA = {
+    'crrt_dilution_mode_set': ('Prescribed CRRT dilution mode', '医嘱设置的CRRT稀释方式', 'category'),
+    'rrt_modality': ('Charted CRRT modality', '记录的CRRT模式', 'category'),
+    'crrt_blood_flow': ('Charted CRRT blood flow', '记录的CRRT血流量', 'mL/min'),
+    'crrt_blood_flow_set': ('Prescribed CRRT blood flow', '医嘱设置的CRRT血流量', 'mL/min'),
+    'crrt_citrate_flow': ('Charted CRRT citrate solution flow', '记录的CRRT枸橼酸溶液流量', 'mL/h'),
+    'crrt_dialysate_flow': ('Charted CRRT dialysate flow', '记录的CRRT透析液流量', 'mL/h'),
+    'crrt_replacement_flow': ('Charted total CRRT replacement flow', '记录的CRRT总置换液流量', 'mL/h'),
+    'crrt_replacement_flow_set': ('Prescribed total CRRT replacement flow', '医嘱设置的CRRT总置换液流量', 'mL/h'),
+    'crrt_replacement_post_flow': ('Charted postfilter CRRT replacement flow', '记录的CRRT后稀释置换液流量', 'mL/h'),
+    'crrt_replacement_post_flow_set': ('Prescribed postfilter CRRT replacement flow', '医嘱设置的CRRT后稀释置换液流量', 'mL/h'),
+    'crrt_replacement_pre_flow': ('Charted prefilter CRRT replacement flow', '记录的CRRT前稀释置换液流量', 'mL/h'),
+    'crrt_replacement_pre_flow_set': ('Prescribed prefilter CRRT replacement flow', '医嘱设置的CRRT前稀释置换液流量', 'mL/h'),
+}
+
+HAEMO_ADVANCED_CONCEPTS = (
+    'ci',
+    'ecmo_blood_flow',
+    'ecmo_fio2',
+    'ecmo_pump_speed',
+    'ecmo_sweep_flow',
+    'ecmo_type',
+    'evlwi',
+    'gedvi',
+    'gef',
+    'ppv',
+    'svr',
+    'svv',
+)
+HAEMO_ADVANCED_METADATA = {
+    'ecmo_type': ('ECMO circuit configuration', 'ECMO回路类型', 'category'),
+    'ci': ('Cardiac index', '心脏指数', 'L/min/m2'),
+    'ecmo_blood_flow': ('ECMO blood flow', 'ECMO血流量', 'L/min'),
+    'ecmo_fio2': ('ECMO oxygenator oxygen concentration', 'ECMO氧合器氧浓度', '%'),
+    'ecmo_pump_speed': ('ECMO pump speed', 'ECMO泵转速', 'rpm'),
+    'ecmo_sweep_flow': ('ECMO oxygenator sweep gas flow', 'ECMO氧合器扫气流量', 'L/min'),
+    'evlwi': ('Extravascular lung water index', '血管外肺水指数', 'mL/kg'),
+    'gedvi': ('Global end-diastolic volume index', '全心舒张末期容积指数', 'mL/m2'),
+    'gef': ('Global ejection fraction', '全心射血分数', '%'),
+    'ppv': ('Pulse pressure variation', '脉压变异度', '%'),
+    'svr': ('Systemic vascular resistance, unindexed', '体循环血管阻力（非指数）', 'dyn.s/cm5'),
+    'svv': ('Stroke volume variation', '每搏量变异度', '%'),
+}
+
+VENT_MECHANICS_CONCEPTS = (
+    'co2_tidal',
+    'insp_time',
+    'minute_vol_spont',
+    'pc_above_peep_set',
+    'peep_intrinsic',
+    'prone',
+    'resp_spont',
+    'tidal_vol_spont',
+    'transpulm_pres_exp',
+    'transpulm_pres_insp',
+    'vco2',
+)
+VENT_MECHANICS_METADATA = {
+    'co2_tidal': ('Exhaled CO2 volume per breath', '每次呼吸呼出二氧化碳量', 'mL'),
+    'insp_time': ('Charted inspiratory time', '记录的吸气时间', 's'),
+    'minute_vol_spont': ('Spontaneous minute ventilation', '自主呼吸分钟通气量', 'L/min'),
+    'pc_above_peep_set': ('Set inspiratory pressure above PEEP', 'PEEP以上的吸气压力设置', 'cmH2O'),
+    'peep_intrinsic': ('Measured intrinsic PEEP', '测量的内源性PEEP', 'cmH2O'),
+    'prone': ('Recorded prone positioning evidence', '记录的俯卧位证据', 'boolean'),
+    'resp_spont': ('Spontaneous respiratory rate', '自主呼吸频率', 'breaths/min'),
+    'tidal_vol_spont': ('Spontaneous tidal volume', '自主呼吸潮气量', 'mL'),
+    'transpulm_pres_exp': ('Expiratory-hold transpulmonary pressure', '呼气末阻断跨肺压', 'cmH2O'),
+    'transpulm_pres_insp': ('Inspiratory-hold transpulmonary pressure', '吸气末阻断跨肺压', 'cmH2O'),
+    'vco2': ('Exhaled CO2 production per minute', '每分钟呼出二氧化碳生成量', 'mL/min'),
+}
+
+SEDATION_ANALGESIA_CONCEPTS = (
+    'remifentanil',
+    'sufentanil',
+    'piritramide',
+    'esketamine',
+    'hydromorphone',
+    'methadone',
+    'oxycodone',
+    'tramadol',
+    'bps',
+    'cam_icu',
+    'ramsay',
+    'remifentanil_rate',
+    'sas',
+)
+SEDATION_ANALGESIA_METADATA = {
+    'cam_icu': ('Explicit CAM-ICU result; unassessable stays missing', '明确的CAM-ICU结果（无法评估保留缺失）', 'boolean'),
+    'ramsay': ('Ramsay sedation score', 'Ramsay镇静评分', 'score'),
+    'remifentanil_rate': ('Continuous intravenous remifentanil infusion rate', '瑞芬太尼持续静脉输注速率', 'mcg/kg/min'),
+    'sas': ('Riker Sedation-Agitation Scale', 'Riker镇静躁动评分', 'score'),
+
+    'remifentanil': ('remifentanil given in the hour (administration or running infusion)', '瑞芬太尼给药时段', 'boolean'),
+    'sufentanil': ('sufentanil (intravenous) given in the hour', '舒芬太尼静脉给药时段', 'boolean'),
+    'piritramide': ('piritramide given in the hour', '哌腈米特给药时段', 'boolean'),
+    'esketamine': ('esketamine (S-ketamine) given in the hour', '艾司氯胺酮给药时段', 'boolean'),
+    'hydromorphone': ('hydromorphone given in the hour, any systemic route', '氢吗啡酮给药时段', 'boolean'),
+    'methadone': ('methadone given in the hour, any systemic route', '美沙酮给药时段', 'boolean'),
+    'oxycodone': ('oxycodone given in the hour (enteral; immediate or prolonged release, alone or combined)', '羟考酮给药时段', 'boolean'),
+    'tramadol': ('tramadol given in the hour, any systemic route', '曲马多给药时段', 'boolean'),
+    'bps': ('Behavioral Pain Scale total; invalid 0–2 remain missing', '行为疼痛量表总分（0至2为无效值）', 'score'),
+}
+
+DIURETIC_NEPHROTOXIN_CONCEPTS = (
+    'furosemide_active',
+    'torasemide',
+    'piperacillin_tazobactam',
+    'vancomycin_piperacillin_tazobactam',
+    'nsaid',
+)
+DIURETIC_NEPHROTOXIN_METADATA = {
+    'furosemide_active': ('furosemide given in the hour: an administration at that hour or a running infusion covering it (any route)', '呋塞米给药时段', 'boolean'),
+    'torasemide': ('torasemide (torsemide) administration, any route', '托拉塞米给药', 'boolean'),
+    'piperacillin_tazobactam': ('piperacillin-tazobactam intravenous administration', '哌拉西林他唑巴坦给药', 'boolean'),
+    'vancomycin_piperacillin_tazobactam': ('vancomycin and piperacillin-tazobactam co-exposure: TRUE at an administration hour of either agent when the other agent was given in the same or the preceding 23 hours', '万古霉素与哌拉西林他唑巴坦联合暴露', 'boolean'),
+    'nsaid': ('systemic non-steroidal anti-inflammatory drug administration (non-aspirin COX inhibitors)', '全身用非甾体抗炎药', 'boolean'),
+    'vancomycin_iv': ('vancomycin systemic (intravenous) administration; input of vancomycin_piperacillin_tazobactam', '静脉万古霉素给药', 'boolean'),
+}
+
+VIS_INPUT_CONCEPTS = (
+    'milrinone_rate',
+    'angiotensin_ii_rate',
+    'enoximone_rate',
+    'levosimendan',
+    'terlipressin',
+)
+VIS_INPUT_METADATA = {
+    'enoximone_rate': ('Continuous intravenous enoximone infusion rate', '依诺昔酮持续静脉输注速率', 'mcg/kg/min'),
+    'milrinone_rate': ('milrinone rate', '米力农持续输注速率', 'mcg/kg/min'),
+    'angiotensin_ii_rate': ('Continuous intravenous angiotensin II infusion rate', '血管紧张素II持续静脉输注速率', 'ng/kg/min'),
+    'levosimendan': ('Levosimendan administration exposure', '左西孟旦给药暴露', 'boolean'),
+    'terlipressin': ('Terlipressin administration exposure', '特利加压素给药暴露', 'boolean'),
+}
+
+GAS_SPECIMEN_CONCEPTS = (
+    'be_venous',
+    'lact_venous',
+    'pco2_mixed_venous',
+    'pco2_venous',
+    'ph_mixed_venous',
+    'ph_venous',
+    'po2_mixed_venous',
+    'po2_venous',
+)
+GAS_SPECIMEN_METADATA = {
+    'be_venous': ('Venous arterial base excess', '静脉血（采样部位未指定）碱剩余', 'mEq/L'),
+    'lact_venous': ('Venous lactate', '静脉血（采样部位未指定）乳酸', 'mmol/L'),
+    'pco2_mixed_venous': ('Mixed-venous CO2 partial pressure', '混合静脉血二氧化碳分压', 'mmHg'),
+    'pco2_venous': ('Venous CO2 partial pressure', '静脉血（采样部位未指定）二氧化碳分压', 'mmHg'),
+    'ph_mixed_venous': ('Mixed-venous pH of blood', '混合静脉血pH', ''),
+    'ph_venous': ('Venous pH of blood', '静脉血（采样部位未指定）pH', ''),
+    'po2_mixed_venous': ('Mixed-venous O2 partial pressure', '混合静脉血氧分压', 'mmHg'),
+    'po2_venous': ('Venous O2 partial pressure', '静脉血（采样部位未指定）氧分压', 'mmHg'),
+}
+
+FLUID_IO_CONCEPTS = (
+    'crystalloid_input_ml',
+    'colloid_input_ml',
+    'other_output_ml',
+    'ffp_input_ml',
+    'packed_rbc_input_ml',
+    'parenteral_input_ml',
+    'platelet_input_ml',
+)
+FLUID_IO_METADATA = {
+    'other_output_ml': ('Recorded non-urine output volume', '记录的非尿液输出量', 'mL'),
+    'colloid_input_ml': ('hourly IV colloid volume (mL): human albumin, gelatin, hydroxyethyl starch and dextran solutions. Blood products and crystalloids are excluded. MIIV inputevents amounts and AUMC drugitems.fluidin are overlap-allocated to ICU hours with volume conservation; HiRID uses increments of the daily colloid counter 30005080; SICdb uses medication Amount (mL), infusions allocated over Offset..OffsetDrugEnd. Not additive with total_input_ml, which already contains colloids in MIIV, AUMC and HiRID.', '胶体输入量', 'mL'),
+    'crystalloid_input_ml': ('hourly IV crystalloid volume (mL): saline (0.45-23.4%), balanced (lactated Ringer and similar), dextrose, sodium bicarbonate and, where the source charts their volume, crystalloid drug carriers and pressure-bag flushes. Colloids, blood products, parenteral and enteral nutrition are excluded. MIIV inputevents amounts and AUMC drugitems.fluidin are overlap-allocated to ICU hours with volume conservation; HiRID uses increments of the daily saline counter 30005075 (it charts no other crystalloid counter); SICdb uses medication Amount (mL), infusions allocated over Offset..OffsetDrugEnd. Not additive with total_input_ml.', '晶体输入量', 'mL'),
+    'ffp_input_ml': ('Fresh frozen plasma volume per ICU hour', '新鲜冰冻血浆输入量（每ICU小时）', 'mL'),
+    'packed_rbc_input_ml': ('Packed red-cell volume per ICU hour', '红细胞输入量（每ICU小时）', 'mL'),
+    'parenteral_input_ml': ('Complete parenteral nutrition bag volume per ICU hour', '完整肠外营养袋输入量（每ICU小时）', 'mL'),
+    'platelet_input_ml': ('Platelet product volume per ICU hour', '血小板制品输入量（每ICU小时）', 'mL'),
+}
+
 HIDDEN_DICTIONARY_CONCEPTS = {
+    *BP_CHANNEL_CONCEPTS,
+    *FLUID_IO_CONCEPTS,
+    *GAS_SPECIMEN_CONCEPTS,
+    *VIS_INPUT_CONCEPTS,
+    'vancomycin_iv',
+    *DIURETIC_NEPHROTOXIN_CONCEPTS,
+    *SEDATION_ANALGESIA_CONCEPTS,
+    *VENT_MECHANICS_CONCEPTS,
+    *HAEMO_ADVANCED_CONCEPTS,
+    *RRT_DETAIL_CONCEPTS,
+    *CARDIAC_MARKERS_CONCEPTS,
+    *INFLAM_DETAIL_CONCEPTS,
+    *RENAL_DETAIL_CONCEPTS,
     # R5C-HIRID-013: native U/L CK-MB remains explicitly loadable, but its
     # unresolved assay identity cannot enter the cross-source mass catalog.
     'ckmb_hirid_raw',
@@ -870,7 +1123,7 @@ CLINICAL_LANES = {
 
 # 跨库概念可用性（用于 harmonization badge）
 CONCEPT_DB_COVERAGE = {
-    'urine_na': 3, 'urine_crea': 3, 'urine_osm': 2, 'urine_urea': 2,
+    'urine_na': 6, 'urine_crea': 6, 'urine_osm': 5, 'urine_urea': 5, 'fena': 4, 'feurea': 2,
     'sic_precondition_renal_dysfunction': 1,
     'hr': 6, 'map': 6, 'sbp': 6, 'dbp': 6, 'resp': 6, 'spo2': 6, 'temp': 6,
     'glu': 6, 'crea': 6, 'bili': 6, 'plt': 6, 'hgb': 6, 'wbc': 6, 'na': 6, 'k': 6,

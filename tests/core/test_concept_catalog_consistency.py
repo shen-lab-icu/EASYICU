@@ -20,6 +20,7 @@ from easyicu.concept.catalog import (
     CONCEPT_DICTIONARY,
     CONCEPT_GROUP_NAMES,
     CONCEPT_GROUPS_INTERNAL,
+    FLUID_IO_CONCEPTS,
     HIDDEN_DICTIONARY_CONCEPTS,
 )
 
@@ -183,7 +184,8 @@ def test_web_catalog_groups_are_unique_and_complete() -> None:
     # UC1-K5/K6: four urine chemistry concepts and one SICdb precondition.
     # Round 12: norepi_order_dur, the order-derived companion of norepi_dur,
     # and three mort_<h>_assumption_based outcome flags.
-    assert len(CONCEPT_DICTIONARY) == 371
+    # S907: fena and feurea, derived in renal_urine_chem. 371 -> 373.
+    assert len(CONCEPT_DICTIONARY) == 373
     assert set(CONCEPT_GROUP_NAMES) >= set(CONCEPT_GROUPS_INTERNAL)
     assert len(grouped) == len(set(grouped))
     assert set(grouped) == set(CONCEPT_DICTIONARY)
@@ -252,9 +254,15 @@ def test_static_data_catalog_js_matches_python_catalog() -> None:
 def test_extract_database_modules_use_the_shared_catalog() -> None:
     from easyicu.api import EXTRACT_MODULE_ORDER, EXTRACT_MODULES
     from easyicu.concept.catalog import (
-        BOUNDS_AUDIT_CONCEPTS,
+        GAS_SPECIMEN_CONCEPTS,
+        VIS_INPUT_CONCEPTS,
+        DIURETIC_NEPHROTOXIN_CONCEPTS,
+        SEDATION_ANALGESIA_CONCEPTS,
+        VENT_MECHANICS_CONCEPTS, HAEMO_ADVANCED_CONCEPTS, BOUNDS_AUDIT_CONCEPTS, CARDIAC_MARKERS_CONCEPTS, INFLAM_DETAIL_CONCEPTS,
+        RENAL_DETAIL_CONCEPTS, RRT_DETAIL_CONCEPTS,
         SUBHOUR_SIGNAL_CONCEPTS,
         VENT_NATIVE_CONCEPTS,
+        HAEMO_NATIVE_CONCEPTS,
         WEIGHT_STRICT_CONCEPTS,
     )
 
@@ -264,7 +272,19 @@ def test_extract_database_modules_use_the_shared_catalog() -> None:
     } | {"sic_case_landmark": [
         "care_unit_to_case_closure_days", "death_time_during_case_hours", "death_during_case",
     ], "bounds_audit": list(BOUNDS_AUDIT_CONCEPTS), "weight_strict": list(WEIGHT_STRICT_CONCEPTS),
-       "subhour_signals": list(SUBHOUR_SIGNAL_CONCEPTS), "vent_native": list(VENT_NATIVE_CONCEPTS)}
+       "cardiac_markers": list(CARDIAC_MARKERS_CONCEPTS),
+       "inflam_detail": list(INFLAM_DETAIL_CONCEPTS),
+       "renal_detail": list(RENAL_DETAIL_CONCEPTS),
+       'rrt_detail': list(RRT_DETAIL_CONCEPTS),
+       'haemo_advanced': list(HAEMO_ADVANCED_CONCEPTS),
+       'vent_mechanics': list(VENT_MECHANICS_CONCEPTS),
+       'sedation_analgesia': list(SEDATION_ANALGESIA_CONCEPTS),
+       'diuretic_nephrotoxin': list(DIURETIC_NEPHROTOXIN_CONCEPTS),
+       'fluid_io': list(FLUID_IO_CONCEPTS),
+       'vis_inputs': list(VIS_INPUT_CONCEPTS),
+       'gas_specimen': list(GAS_SPECIMEN_CONCEPTS),
+       "subhour_signals": list(SUBHOUR_SIGNAL_CONCEPTS), "vent_native": list(VENT_NATIVE_CONCEPTS),
+       "haemo_native": list(HAEMO_NATIVE_CONCEPTS)}
     # The SIC case module is explicitly selected, not part of the six-source
     # default extraction order.
     assert set(EXTRACT_MODULE_ORDER) == set(CONCEPT_GROUPS_INTERNAL)
@@ -277,6 +297,7 @@ def test_extract_database_modules_use_the_shared_catalog() -> None:
     # S853: minute-grid signals are an explicitly selected module.
     assert "subhour_signals" not in EXTRACT_MODULE_ORDER
     assert "vent_native" not in EXTRACT_MODULE_ORDER
+    assert "haemo_native" not in EXTRACT_MODULE_ORDER
 
 
 def test_web_catalog_aligns_with_merged_extraction_dictionary() -> None:

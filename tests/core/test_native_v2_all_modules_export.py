@@ -48,7 +48,8 @@ def _assert_published(database: str, output: Path, result: dict) -> None:
     assert "renal_urine_chem" in EXTRACT_MODULE_ORDER
     urine = next(row for row in manifest["files"] if row["module"] == "renal_urine_chem")
     assert urine["physical_concept_ids"] == [
-        "urine_na", "urine_crea", "urine_osm", "urine_urea", "sic_precondition_renal_dysfunction",
+        "urine_na", "urine_crea", "urine_osm", "urine_urea", "fena", "feurea",
+        "sic_precondition_renal_dysfunction",
     ]
     for module in EXTRACT_MODULE_ORDER:
         path = output / f"{module}.parquet"
@@ -118,3 +119,218 @@ def test_real_database_publishes_all_modules(tmp_path, database):
         native_export_v2=True, stream_output_batches=True, verbose=False,
     )
     _assert_published(database, output, result)
+
+
+@pytest.mark.parametrize("database", ["hirid", "aumc", "sic"])
+def test_opt_in_cardiac_markers_publish_on_native_hours(tmp_path, database):
+    from easyicu.api.extraction import extract_database
+    from easyicu.synthetic_sources import generate_source
+
+    source = tmp_path / "source"
+    generate_source(source, database, stays=12)
+    output = tmp_path / "out"
+    result = extract_database(
+        database, data_path=str(source), output_dir=str(output),
+        modules=["outcome", "cardiac_markers"], native_export_v2=True, verbose=False,
+    )
+    assert not result["modules"]["cardiac_markers"].get("errors")
+    frame = pd.read_parquet(output / "cardiac_markers.parquet")
+    assert {"stay_id", "charttime"} <= set(frame.columns)
+    assert pd.api.types.is_numeric_dtype(frame.charttime)
+    expected = {"aumc": "ckmb_activity", "hirid": "tnt_hs", "sic": "tnt_hs"}[database]
+    assert frame[expected].notna().any()
+
+
+@pytest.mark.parametrize("database", ["aumc", "sic"])
+def test_opt_in_inflam_detail_publishes_on_native_hours(tmp_path, database):
+    from easyicu.api.extraction import extract_database
+    from easyicu.synthetic_sources import generate_source
+
+    source = tmp_path / "source"
+    generate_source(source, database, stays=12)
+    output = tmp_path / "out"
+    result = extract_database(
+        database, data_path=str(source), output_dir=str(output),
+        modules=["outcome", "inflam_detail"], native_export_v2=True, verbose=False,
+    )
+    assert not result["modules"]["inflam_detail"].get("errors")
+    frame = pd.read_parquet(output / "inflam_detail.parquet")
+    assert {"stay_id", "charttime"} <= set(frame.columns)
+    assert pd.api.types.is_numeric_dtype(frame.charttime)
+    assert frame["lymph_abs"].notna().any()
+
+
+@pytest.mark.parametrize("database", ["aumc", "sic"])
+def test_opt_in_renal_detail_publishes_on_native_hours(tmp_path, database):
+    from easyicu.api.extraction import extract_database
+    from easyicu.synthetic_sources import generate_source
+
+    source = tmp_path / "source"
+    generate_source(source, database, stays=12)
+    output = tmp_path / "out"
+    result = extract_database(
+        database, data_path=str(source), output_dir=str(output),
+        modules=["outcome", "renal_detail"], native_export_v2=True, verbose=False,
+    )
+    assert not result["modules"]["renal_detail"].get("errors")
+    frame = pd.read_parquet(output / "renal_detail.parquet")
+    assert {"stay_id", "charttime"} <= set(frame.columns)
+    assert pd.api.types.is_numeric_dtype(frame.charttime)
+    assert frame["urine_k"].notna().any()
+
+
+@pytest.mark.parametrize("database", ["aumc", "sic"])
+def test_opt_in_rrt_detail_publishes_on_native_hours(tmp_path, database):
+    from easyicu.api.extraction import extract_database
+    from easyicu.synthetic_sources import generate_source
+
+    source = tmp_path / "source"
+    generate_source(source, database, stays=12)
+    output = tmp_path / "out"
+    result = extract_database(
+        database, data_path=str(source), output_dir=str(output),
+        modules=["outcome", "rrt_detail"], native_export_v2=True, verbose=False,
+    )
+    assert not result["modules"]["rrt_detail"].get("errors")
+    frame = pd.read_parquet(output / "rrt_detail.parquet")
+    assert {"stay_id", "charttime"} <= set(frame.columns)
+    assert pd.api.types.is_numeric_dtype(frame.charttime)
+    assert frame["crrt_blood_flow"].notna().any()
+
+
+@pytest.mark.parametrize("database", ["aumc", "sic"])
+def test_opt_in_haemo_advanced_publishes_on_native_hours(tmp_path, database):
+    from easyicu.api.extraction import extract_database
+    from easyicu.synthetic_sources import generate_source
+
+    source = tmp_path / "source"
+    generate_source(source, database, stays=12)
+    output = tmp_path / "out"
+    result = extract_database(
+        database, data_path=str(source), output_dir=str(output),
+        modules=["outcome", "haemo_advanced"], native_export_v2=True, verbose=False,
+    )
+    assert not result["modules"]["haemo_advanced"].get("errors")
+    frame = pd.read_parquet(output / "haemo_advanced.parquet")
+    assert {"stay_id", "charttime"} <= set(frame.columns)
+    assert pd.api.types.is_numeric_dtype(frame.charttime)
+    assert frame["ecmo_fio2"].notna().any()
+
+
+@pytest.mark.parametrize("database", ["aumc", "sic"])
+def test_opt_in_vent_mechanics_publishes_on_native_hours(tmp_path, database):
+    from easyicu.api.extraction import extract_database
+    from easyicu.synthetic_sources import generate_source
+
+    source = tmp_path / "source"
+    generate_source(source, database, stays=12)
+    output = tmp_path / "out"
+    result = extract_database(
+        database, data_path=str(source), output_dir=str(output),
+        modules=["outcome", "vent_mechanics"], native_export_v2=True, verbose=False,
+    )
+    assert not result["modules"]["vent_mechanics"].get("errors")
+    frame = pd.read_parquet(output / "vent_mechanics.parquet")
+    assert {"stay_id", "charttime"} <= set(frame.columns)
+    assert pd.api.types.is_numeric_dtype(frame.charttime)
+    assert frame["pc_above_peep_set"].notna().any()
+
+
+@pytest.mark.parametrize("database", ["aumc", "hirid", "sic"])
+def test_opt_in_sedation_analgesia_publishes_on_native_hours(tmp_path, database):
+    from easyicu.api.extraction import extract_database
+    from easyicu.synthetic_sources import generate_source
+
+    source = tmp_path / "source"
+    generate_source(source, database, stays=12)
+    output = tmp_path / "out"
+    result = extract_database(
+        database, data_path=str(source), output_dir=str(output),
+        modules=["outcome", "sedation_analgesia"], native_export_v2=True, verbose=False,
+    )
+    assert not result["modules"]["sedation_analgesia"].get("errors")
+    frame = pd.read_parquet(output / "sedation_analgesia.parquet")
+    assert {"stay_id", "charttime"} <= set(frame.columns)
+    assert pd.api.types.is_numeric_dtype(frame.charttime)
+    assert frame["remifentanil"].notna().any()
+
+
+@pytest.mark.parametrize("database", ["hirid", "sic"])
+def test_opt_in_diuretic_nephrotoxin_publishes_on_native_hours(tmp_path, database):
+    from easyicu.api.extraction import extract_database
+    from easyicu.synthetic_sources import generate_source
+
+    source = tmp_path / "source"
+    generate_source(source, database, stays=12)
+    output = tmp_path / "out"
+    result = extract_database(
+        database, data_path=str(source), output_dir=str(output),
+        modules=["outcome", "diuretic_nephrotoxin"], native_export_v2=True, verbose=False,
+    )
+    assert not result["modules"]["diuretic_nephrotoxin"].get("errors")
+    frame = pd.read_parquet(output / "diuretic_nephrotoxin.parquet")
+    assert {"stay_id", "charttime"} <= set(frame.columns)
+    assert pd.api.types.is_numeric_dtype(frame.charttime)
+    assert frame["vancomycin_piperacillin_tazobactam"].notna().any()
+    assert "vancomycin_iv" not in frame.columns
+
+
+@pytest.mark.parametrize("database", ["hirid", "sic"])
+def test_opt_in_vis_inputs_publishes_on_native_hours(tmp_path, database):
+    from easyicu.api.extraction import extract_database
+    from easyicu.synthetic_sources import generate_source
+
+    source = tmp_path / "source"
+    generate_source(source, database, stays=12)
+    output = tmp_path / "out"
+    result = extract_database(
+        database, data_path=str(source), output_dir=str(output),
+        modules=["outcome", "vis_inputs"], native_export_v2=True, verbose=False,
+    )
+    assert not result["modules"]["vis_inputs"].get("errors")
+    frame = pd.read_parquet(output / "vis_inputs.parquet")
+    assert {"stay_id", "charttime"} <= set(frame.columns)
+    assert pd.api.types.is_numeric_dtype(frame.charttime)
+    assert frame["terlipressin"].notna().any()
+
+
+@pytest.mark.parametrize("database", ["hirid", "sic"])
+def test_opt_in_venous_gases_publish_on_native_hours(tmp_path, database):
+    from easyicu.api.extraction import extract_database
+    from easyicu.synthetic_sources import generate_source
+
+    source = tmp_path / "source"
+    generate_source(source, database, stays=12)
+    output = tmp_path / "out"
+    result = extract_database(
+        database, data_path=str(source), output_dir=str(output),
+        modules=["outcome", "gas_specimen"], native_export_v2=True, verbose=False,
+    )
+    assert not result["modules"]["gas_specimen"].get("errors")
+    frame = pd.read_parquet(output / "gas_specimen.parquet")
+    assert {"stay_id", "charttime"} <= set(frame.columns)
+    assert pd.api.types.is_numeric_dtype(frame.charttime)
+    assert frame["lact_venous" if database == "hirid" else "ph_venous"].notna().any()
+
+
+@pytest.mark.parametrize("database", ["aumc", "hirid", "sic"])
+@pytest.mark.parametrize("streamed", [False, True])
+def test_opt_in_fluid_io_publishes_on_native_hours(tmp_path, database, streamed):
+    from easyicu.api.extraction import extract_database
+    from easyicu.concept.catalog import FLUID_IO_CONCEPTS
+    from easyicu.synthetic_sources import generate_source
+
+    source = tmp_path / "source"
+    generate_source(source, database, stays=12)
+    output = tmp_path / "out"
+    result = extract_database(
+        database, data_path=str(source), output_dir=str(output), modules=["outcome", "fluid_io"],
+        batch_size=4, native_export_v2=True, stream_output_batches=streamed, verbose=False,
+    )
+    assert not result["modules"]["fluid_io"].get("errors")
+    frame = pd.read_parquet(output / "fluid_io.parquet")
+    assert frame.columns.tolist() == ["stay_id", "charttime", *FLUID_IO_CONCEPTS]
+    assert pd.api.types.is_numeric_dtype(frame.charttime)
+    assert frame.crystalloid_input_ml.notna().any()
+    assert frame.colloid_input_ml.notna().any()
+    assert frame.charttime.min() >= 0

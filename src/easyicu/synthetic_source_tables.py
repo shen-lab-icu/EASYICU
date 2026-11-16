@@ -61,6 +61,20 @@ def _events(database, config, concepts, p):
     rng = np.random.default_rng(SEED + 1)
     rows = {name: [] for name in config["tables"]}
     seen = set()
+    # Aliases share one physical channel. Project declared gates even when a
+    # later alias needs columns that the first source declaration omitted.
+    channel_gates = {}
+    channel_categories = {}
+    for definition in concepts.values():
+        for source in definition.get("sources", {}).get(database, []):
+            ids = source.get("ids", [None])
+            item = ids[0] if isinstance(ids, list) else ids
+            key = (source.get("table"), source.get("sub_var"), item, source.get("regex"))
+            gates = channel_gates.setdefault(key, {})
+            for column, pattern in (source.get("require_regex") or {}).items():
+                gates.setdefault(column, []).append(pattern)
+            if (source.get("callback") or "").strip().startswith("apply_map("):
+                channel_categories.setdefault(key, source)
     for name, definition in sorted(concepts.items(), key=lambda pair: pair[0] not in CORE):
         for source in definition.get("sources", {}).get(database, []):
             table = source.get("table")
@@ -96,7 +110,7 @@ def _events(database, config, concepts, p):
             if database == "hirid" and name == "weight":
                 value = np.round(value / 5) * 5
             if table in {"listitems", "processitems", "procedureorderitems"}:
-                value = category_values(name, source, count, database)
+                value = category_values(name, channel_categories.get(key, source), count, database)
             if database == "hirid" and name in {"mech_vent", "vent_mode", "vent_breath_seq"}:
                 value = np.ones(count)
             if database == "hirid" and name == "adm":
@@ -118,9 +132,9 @@ def _events(database, config, concepts, p):
                     unit = "IU" if name == "adh_rate" else "mg"
                     # R5C-HIRID-008: fixtures obey declared route eligibility,
                     # including SC LMWH, instead of fabricating IV LMWH rows.
-                    route_pattern = (source.get("require_regex") or {}).get("route", ".*")
+                    route_patterns = channel_gates[key].get("route", [".*"])
                     route = next(r for r in ("i.v.", "iv-inf", "cv-inf", "sc-inj", "po")
-                                 if re.search(route_pattern, r))
+                                 if all(re.search(pattern, r) for pattern in route_patterns))
                     record.update(enteredentryat=time, doseunit=unit, infusionid=p["stay"][index] * 100000 + int(item),
                                   givendose=np.full(count, .1), route=route, typeid=1, recordstatus=0)
             elif database == "aumc":
@@ -152,6 +166,16 @@ def _events(database, config, concepts, p):
                               orderid=np.arange(count) + 1, islabresult=True,
                               fluidin=50., solutionadministered=50.,
                               administered=.1, administeredunit="mg")
+                gates = channel_gates[key[:4]]
+                if "isadditive" in gates:
+                    # Converted drugitems uses a logical flag, not numeric 0/1.
+                    record["isadditive"] = next(flag for flag in (False, True)
+                        if all(re.search(pattern, str(flag)) for pattern in gates["isadditive"]))
+                if "ordercategoryid" in gates:
+                    category = re.search(r"\(\?:([0-9]+)", gates["ordercategoryid"][0])
+                    if category is None:
+                        raise ValueError("Synthetic IV category needs an explicit numeric selector")
+                    record["ordercategoryid"] = int(category.group(1))
             else:
                 time = (6 + p["stay"][index] % 4 * 3) * 3600 + hour * 3600
                 record.update(CaseID=p["stay"][index], PatientID=p["patient"][index],
@@ -160,6 +184,10 @@ def _events(database, config, concepts, p):
                               Amount=.00036, AmountPerMinute=.000006, Cnt=1,
                               # 2296 = arterial: blood-gas sources keep arterial samples only.
                               LaboratoryType=2296)
+                if source.get("callback") == "sicdb_volume_allocate":
+                    record["Amount"] = 100.
+                if name in {"ph_venous", "po2_venous"}:
+                    record["LaboratoryType"] = None  # Explicitly venous item; do not invent an arterial specimen.
                 if table == "data_range":
                     record["Data"] = "synthetic ventilation"
                 if table == "medication" and item == 2148:
@@ -252,6 +280,9 @@ def source_tables(database: str, stays: int):
             yield f"{converted}.parquet", table
 
 
+_AUMC_SOURCE_UNITS = ("mmol/l", "mol/l", "umol/l", "mg/l", "IE/l", "µg/l", "Geen", "mOsmol/kg", "ml/uur", "/min", "dynes.sec.cm-5", "mbar", "g/l", "sec")
+
+
 def _aumc_unit(name, source, definition):
     """The unit label of an AUMC synthetic row.
 
@@ -260,10 +291,17 @@ def _aumc_unit(name, source, definition):
     would be read as mmHg. A required unit filter selects a matching declared
     concept unit; incompatible declarations stop generation.
     """
+    # Absolute cell channels also feed the existing differential ratio callback.
+    if name in {"lymph", "neut"} and source.get("ids") in (14258, 14254):
+        return "10^9/L"
     required_unit = (source.get("require_regex") or {}).get("unit")
     if required_unit:
         units = definition.get("unit") or []
         units = [units] if isinstance(units, str) else units
+        if "convert_unit(" in (source.get("callback") or ""):
+            # A converting source selects rows in its own unit (values are
+            # already inverse-converted): label them with an AUMC spelling.
+            units = [*units, *_AUMC_SOURCE_UNITS]
         for unit in units:
             if re.search(required_unit, unit):
                 return unit

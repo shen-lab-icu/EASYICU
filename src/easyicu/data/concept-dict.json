@@ -1056,6 +1056,18 @@
      "table": "numericitems",
      "sub_var": "itemid",
      "callback": "convert_unit(binary_op(`*`, 0.1), 'g/dL')"
+    },
+    {
+     "ids": [
+      9975
+     ],
+     "table": "numericitems",
+     "sub_var": "itemid",
+     "unit_var": "unit",
+     "require_regex": {
+      "unit": "(?i)^\\s*g/l\\s*$"
+     },
+     "callback": "convert_unit(binary_op(`*`, 0.1), 'g/dL')"
     }
    ],
    "eicu": [
@@ -10666,6 +10678,18 @@
      "table": "numericitems",
      "sub_var": "itemid",
      "_comment": "2026-07-04 variant audit: added 11894 'Prothrombinetijd  (bloed)' (double-space duplicate of 11893, 127k rows, median 1.27)."
+    },
+    {
+     "ids": [
+      6789
+     ],
+     "table": "numericitems",
+     "sub_var": "itemid",
+     "unit_var": "unit",
+     "require_regex": {
+      "unit": "(?i)^\\s*sec\\s*$"
+     },
+     "callback": "convert_unit(binary_op(`*`, 1), 'ratio', '(?i)^\\s*sec\\s*$')"
     }
    ],
    "eicu": [
@@ -10709,6 +10733,15 @@
      "ids": 51237,
      "table": "labevents",
      "sub_var": "itemid"
+    }
+   ],
+   "sic": [
+    {
+     "ids": [
+      3128
+     ],
+     "table": "laboratory",
+     "sub_var": "LaboratoryID"
     }
    ]
   }
@@ -33236,6 +33269,28 @@
      "table": "numericitems",
      "sub_var": "itemid",
      "_comment": "2026-11-04 audit round 3 (full-dictionary M): 20955 'CCO' continuous cardiac output (187,823 rows) added."
+    },
+    {
+     "ids": [
+      14060
+     ],
+     "table": "numericitems",
+     "sub_var": "itemid",
+     "unit_var": "unit",
+     "require_regex": {
+      "unit": "(?i)^\\s*l/min\\s*$"
+     }
+    },
+    {
+     "ids": [
+      14062
+     ],
+     "table": "numericitems",
+     "sub_var": "itemid",
+     "unit_var": "unit",
+     "require_regex": {
+      "unit": "(?i)^\\s*l/min\\s*$"
+     }
     }
    ],
    "hirid": [
@@ -34085,6 +34140,18 @@
      ],
      "table": "numericitems",
      "sub_var": "itemid"
+    },
+    {
+     "ids": [
+      15565
+     ],
+     "table": "numericitems",
+     "sub_var": "itemid",
+     "unit_var": "unit",
+     "require_regex": {
+      "unit": "(?i)^\\s*µg/l\\s*$"
+     },
+     "callback": "convert_unit(binary_op(`*`, 1), 'ng/mL')"
     }
    ],
    "hirid": [
@@ -34127,6 +34194,19 @@
      "ids": "BNP",
      "table": "lab",
      "sub_var": "labname"
+    }
+   ],
+   "miiv": [
+    {
+     "ids": [
+      227446
+     ],
+     "table": "chartevents",
+     "sub_var": "itemid",
+     "unit_var": "valueuom",
+     "require_regex": {
+      "valueuom": "(?i)^\\s*pg/mL\\s*$"
+     }
     }
    ]
   }
@@ -35419,6 +35499,500 @@
     {
      "ids": [
       706
+     ],
+     "table": "data_float_h",
+     "sub_var": "DataID"
+    }
+   ]
+  }
+ },
+ "sbp_invasive": {
+  "unit": [
+   "mmHg",
+   "mm Hg"
+  ],
+  "min": 1,
+  "max": 300,
+  "description": "systolic blood pressure from an arterial line (invasive channel of sbp)",
+  "category": "vitals",
+  "_comment": "2026-11-16 S2HN: the arterial-line channel of sbp, the same per-database source split as sbp's source_channel tags (mirrors map_invasive); opt-in, used by the haemo_native minute module.",
+  "source_channel_priority": [
+   "invasive",
+   "invasive_secondary"
+  ],
+  "sources": {
+   "aumc": [
+    {
+     "ids": [
+      6641
+     ],
+     "table": "numericitems",
+     "sub_var": "itemid",
+     "callback": "transform_fun(na_below(1))",
+     "source_channel": "invasive"
+    },
+    {
+     "ids": [
+      8841
+     ],
+     "table": "numericitems",
+     "sub_var": "itemid",
+     "callback": "transform_fun(na_below(1))",
+     "source_channel": "invasive_secondary"
+    }
+   ],
+   "eicu": [
+    {
+     "table": "vitalperiodic",
+     "val_var": "systemicsystolic",
+     "class_name": "col_itm"
+    },
+    {
+     "ids": [
+      "Invasive BP Systolic"
+     ],
+     "table": "nursecharting",
+     "sub_var": "nursingchartcelltypevalname"
+    },
+    {
+     "ids": [
+      "Arterial Line SBP (mmHg)"
+     ],
+     "table": "nursecharting",
+     "sub_var": "nursingchartcelltypevallabel",
+     "val_var": "nursingchartvalue",
+     "extra_vars": [
+      "nursingchartcelltypevalname"
+     ],
+     "exclude_regex": {
+      "nursingchartcelltypevalname": "^Invasive BP Systolic$"
+     }
+    }
+   ],
+   "eicu_demo": [
+    {
+     "table": "vitalperiodic",
+     "val_var": "systemicsystolic",
+     "class_name": "col_itm"
+    },
+    {
+     "ids": [
+      "Invasive BP Systolic"
+     ],
+     "table": "nursecharting",
+     "sub_var": "nursingchartcelltypevalname"
+    },
+    {
+     "ids": [
+      "Arterial Line SBP (mmHg)"
+     ],
+     "table": "nursecharting",
+     "sub_var": "nursingchartcelltypevallabel",
+     "val_var": "nursingchartvalue",
+     "extra_vars": [
+      "nursingchartcelltypevalname"
+     ],
+     "exclude_regex": {
+      "nursingchartcelltypevalname": "^Invasive BP Systolic$"
+     }
+    }
+   ],
+   "hirid": [
+    {
+     "ids": [
+      100
+     ],
+     "table": "observations",
+     "sub_var": "variableid",
+     "class_name": "hrd_itm"
+    }
+   ],
+   "miiv": [
+    {
+     "ids": [
+      220050,
+      225309
+     ],
+     "table": "chartevents",
+     "sub_var": "itemid",
+     "index_var": "charttime"
+    }
+   ],
+   "mimic": [
+    {
+     "ids": [
+      51,
+      6701,
+      220050,
+      225309
+     ],
+     "table": "chartevents",
+     "sub_var": "itemid"
+    }
+   ],
+   "mimic_demo": [
+    {
+     "ids": [
+      51,
+      6701,
+      220050,
+      225309
+     ],
+     "table": "chartevents",
+     "sub_var": "itemid"
+    }
+   ],
+   "sic": [
+    {
+     "ids": [
+      701
+     ],
+     "table": "data_float_h",
+     "sub_var": "DataID"
+    }
+   ]
+  }
+ },
+ "sbp_nibp": {
+  "unit": [
+   "mmHg",
+   "mm Hg"
+  ],
+  "min": 1,
+  "max": 300,
+  "description": "systolic blood pressure from a non-invasive (oscillometric or manual) cuff (cuff channel of sbp)",
+  "category": "vitals",
+  "_comment": "2026-11-16 S2HN: the cuff channel of sbp, the same per-database source split as sbp's source_channel tags (mirrors map_nibp); opt-in, used by the haemo_native minute module.",
+  "sources": {
+   "aumc": [
+    {
+     "ids": [
+      6678
+     ],
+     "table": "numericitems",
+     "sub_var": "itemid",
+     "callback": "transform_fun(na_below(1))"
+    }
+   ],
+   "eicu": [
+    {
+     "table": "vitalaperiodic",
+     "val_var": "noninvasivesystolic",
+     "class_name": "col_itm"
+    },
+    {
+     "ids": [
+      "Non-Invasive BP Systolic"
+     ],
+     "table": "nursecharting",
+     "sub_var": "nursingchartcelltypevalname"
+    }
+   ],
+   "eicu_demo": [
+    {
+     "table": "vitalaperiodic",
+     "val_var": "noninvasivesystolic",
+     "class_name": "col_itm"
+    },
+    {
+     "ids": [
+      "Non-Invasive BP Systolic"
+     ],
+     "table": "nursecharting",
+     "sub_var": "nursingchartcelltypevalname"
+    }
+   ],
+   "hirid": [
+    {
+     "ids": [
+      600
+     ],
+     "table": "observations",
+     "sub_var": "variableid",
+     "class_name": "hrd_itm"
+    }
+   ],
+   "miiv": [
+    {
+     "ids": [
+      220179
+     ],
+     "table": "chartevents",
+     "sub_var": "itemid",
+     "index_var": "charttime"
+    }
+   ],
+   "mimic": [
+    {
+     "ids": [
+      455,
+      220179
+     ],
+     "table": "chartevents",
+     "sub_var": "itemid"
+    }
+   ],
+   "mimic_demo": [
+    {
+     "ids": [
+      455,
+      220179
+     ],
+     "table": "chartevents",
+     "sub_var": "itemid"
+    }
+   ],
+   "sic": [
+    {
+     "ids": [
+      704
+     ],
+     "table": "data_float_h",
+     "sub_var": "DataID"
+    }
+   ]
+  }
+ },
+ "dbp_invasive": {
+  "unit": [
+   "mmHg",
+   "mm Hg"
+  ],
+  "min": 1,
+  "max": 200,
+  "description": "diastolic blood pressure from an arterial line (invasive channel of dbp)",
+  "category": "vitals",
+  "_comment": "2026-11-16 S2HN: the arterial-line channel of dbp, the same per-database source split as dbp's source_channel tags (mirrors map_invasive); opt-in, used by the haemo_native minute module.",
+  "source_channel_priority": [
+   "invasive",
+   "invasive_secondary"
+  ],
+  "sources": {
+   "aumc": [
+    {
+     "ids": [
+      6643
+     ],
+     "table": "numericitems",
+     "sub_var": "itemid",
+     "callback": "transform_fun(na_below(1))",
+     "source_channel": "invasive"
+    },
+    {
+     "ids": [
+      8842
+     ],
+     "table": "numericitems",
+     "sub_var": "itemid",
+     "callback": "transform_fun(na_below(1))",
+     "source_channel": "invasive_secondary"
+    }
+   ],
+   "eicu": [
+    {
+     "table": "vitalperiodic",
+     "val_var": "systemicdiastolic",
+     "class_name": "col_itm"
+    },
+    {
+     "ids": [
+      "Invasive BP Diastolic"
+     ],
+     "table": "nursecharting",
+     "sub_var": "nursingchartcelltypevalname"
+    },
+    {
+     "ids": [
+      "Arterial Line DBP (mmHg)"
+     ],
+     "table": "nursecharting",
+     "sub_var": "nursingchartcelltypevallabel",
+     "val_var": "nursingchartvalue",
+     "extra_vars": [
+      "nursingchartcelltypevalname"
+     ],
+     "exclude_regex": {
+      "nursingchartcelltypevalname": "^Invasive BP Diastolic$"
+     }
+    }
+   ],
+   "eicu_demo": [
+    {
+     "table": "vitalperiodic",
+     "val_var": "systemicdiastolic",
+     "class_name": "col_itm"
+    },
+    {
+     "ids": [
+      "Invasive BP Diastolic"
+     ],
+     "table": "nursecharting",
+     "sub_var": "nursingchartcelltypevalname"
+    },
+    {
+     "ids": [
+      "Arterial Line DBP (mmHg)"
+     ],
+     "table": "nursecharting",
+     "sub_var": "nursingchartcelltypevallabel",
+     "val_var": "nursingchartvalue",
+     "extra_vars": [
+      "nursingchartcelltypevalname"
+     ],
+     "exclude_regex": {
+      "nursingchartcelltypevalname": "^Invasive BP Diastolic$"
+     }
+    }
+   ],
+   "hirid": [
+    {
+     "ids": [
+      120
+     ],
+     "table": "observations",
+     "sub_var": "variableid",
+     "class_name": "hrd_itm"
+    }
+   ],
+   "miiv": [
+    {
+     "ids": [
+      220051,
+      225310
+     ],
+     "table": "chartevents",
+     "sub_var": "itemid",
+     "index_var": "charttime"
+    }
+   ],
+   "mimic": [
+    {
+     "ids": [
+      8368,
+      8555,
+      220051,
+      225310
+     ],
+     "table": "chartevents",
+     "sub_var": "itemid"
+    }
+   ],
+   "mimic_demo": [
+    {
+     "ids": [
+      8368,
+      8555,
+      220051,
+      225310
+     ],
+     "table": "chartevents",
+     "sub_var": "itemid"
+    }
+   ],
+   "sic": [
+    {
+     "ids": [
+      702
+     ],
+     "table": "data_float_h",
+     "sub_var": "DataID"
+    }
+   ]
+  }
+ },
+ "dbp_nibp": {
+  "unit": [
+   "mmHg",
+   "mm Hg"
+  ],
+  "min": 1,
+  "max": 200,
+  "description": "diastolic blood pressure from a non-invasive (oscillometric or manual) cuff (cuff channel of dbp)",
+  "category": "vitals",
+  "_comment": "2026-11-16 S2HN: the cuff channel of dbp, the same per-database source split as dbp's source_channel tags (mirrors map_nibp); opt-in, used by the haemo_native minute module.",
+  "sources": {
+   "aumc": [
+    {
+     "ids": [
+      6680
+     ],
+     "table": "numericitems",
+     "sub_var": "itemid",
+     "callback": "transform_fun(na_below(1))"
+    }
+   ],
+   "eicu": [
+    {
+     "table": "vitalaperiodic",
+     "val_var": "noninvasivediastolic",
+     "class_name": "col_itm"
+    },
+    {
+     "ids": [
+      "Non-Invasive BP Diastolic"
+     ],
+     "table": "nursecharting",
+     "sub_var": "nursingchartcelltypevalname"
+    }
+   ],
+   "eicu_demo": [
+    {
+     "table": "vitalaperiodic",
+     "val_var": "noninvasivediastolic",
+     "class_name": "col_itm"
+    },
+    {
+     "ids": [
+      "Non-Invasive BP Diastolic"
+     ],
+     "table": "nursecharting",
+     "sub_var": "nursingchartcelltypevalname"
+    }
+   ],
+   "hirid": [
+    {
+     "ids": [
+      620
+     ],
+     "table": "observations",
+     "sub_var": "variableid",
+     "class_name": "hrd_itm"
+    }
+   ],
+   "miiv": [
+    {
+     "ids": [
+      220180
+     ],
+     "table": "chartevents",
+     "sub_var": "itemid",
+     "index_var": "charttime"
+    }
+   ],
+   "mimic": [
+    {
+     "ids": [
+      8441,
+      220180
+     ],
+     "table": "chartevents",
+     "sub_var": "itemid"
+    }
+   ],
+   "mimic_demo": [
+    {
+     "ids": [
+      8441,
+      220180
+     ],
+     "table": "chartevents",
+     "sub_var": "itemid"
+    }
+   ],
+   "sic": [
+    {
+     "ids": [
+      705
      ],
      "table": "data_float_h",
      "sub_var": "DataID"
@@ -38057,7 +38631,7 @@
   "max": 400,
   "description": "urine sodium",
   "category": "renal",
-  "_comment": "2026-11-05 UC1-K5: urine concentration only, never serum chemistry or 24-hour excretion. AUMC, HiRID and SICdb remain unmapped: no checked-in source dictionary verifies an item name, urine specimen and unit together. Community databases remain unavailable without validated urine-specific mappings. FENa/FEUrea are not derived: the existing arithmetic callbacks do not provide a nearest plasma sample within 24 hours. Bounds are broad analytical limits in canonical units; zero is retained, negative and above-limit values are missing. Only explicitly labelled compatible units are accepted. Sodium is monovalent: mEq/L equals mmol/L (explicit identity conversion); no mass-to-molar conversion is inferred.",
+  "_comment": "2026-11-05 UC1-K5: urine concentration only, never serum chemistry or 24-hour excretion. 2026-11-12 S907: AUMC numericitems 10269 'Natrium (urine)' and 7848 'Natrium in urine' are mapped; each row carries the urine item name and unit mmol/l, and the unit is gated per row. Server aggregate check (counts rounded to 10): 10269 4970 rows, median 51 mmol/L; 7848 110 rows, median 58 mmol/L. HiRID has no urine sodium item. SICdb has none either: laboratory 469 'Natrium (ZL)' is serum or plasma (LOINC 2951-2). Community databases remain unavailable without validated urine-specific mappings. 2026-11-12 S907: FENa and FEUrea are now derived by the fena and feurea concepts (fractional_excretion.py: same-bucket urine pair, most recent plasma value at or before it within 24 hours). Bounds are broad analytical limits in canonical units; zero is retained, negative and above-limit values are missing. Only explicitly labelled compatible units are accepted. Sodium is monovalent: mEq/L equals mmol/L (explicit identity conversion); no mass-to-molar conversion is inferred.",
   "sources": {
    "miiv": [
     {
@@ -38117,6 +38691,50 @@
       "labmeasurenameinterface": "(?i)^\\s*(?:mmol|meq)\\s*/\\s*l\\s*$"
      },
      "callback": "convert_unit(binary_op(`*`, 1), 'mmol/L', '(?i)^\\s*meq\\s*/\\s*l\\s*$')"
+    }
+   ],
+   "aumc": [
+    {
+     "ids": [
+      7848,
+      10269
+     ],
+     "table": "numericitems",
+     "sub_var": "itemid",
+     "unit_var": "unit",
+     "require_regex": {
+      "unit": "(?i)^\\s*mmol\\s*/\\s*l\\s*$"
+     }
+    },
+    {
+     "ids": [
+      10270
+     ],
+     "table": "numericitems",
+     "sub_var": "itemid",
+     "unit_var": "unit",
+     "require_regex": {
+      "unit": "(?i)^\\s*mmol/l\\s*$"
+     }
+    }
+   ],
+   "hirid": [
+    {
+     "ids": [
+      20003200
+     ],
+     "table": "observations",
+     "sub_var": "variableid",
+     "class_name": "hrd_itm"
+    }
+   ],
+   "sic": [
+    {
+     "ids": [
+      470
+     ],
+     "table": "laboratory",
+     "sub_var": "LaboratoryID"
     }
    ]
   }
@@ -38127,7 +38745,7 @@
   "max": 1000,
   "description": "urine creatinine",
   "category": "renal",
-  "_comment": "2026-11-05 UC1-K5: urine concentration only, never serum chemistry or 24-hour excretion. AUMC, HiRID and SICdb remain unmapped: no checked-in source dictionary verifies an item name, urine specimen and unit together. Community databases remain unavailable without validated urine-specific mappings. FENa/FEUrea are not derived: the existing arithmetic callbacks do not provide a nearest plasma sample within 24 hours. Bounds are broad analytical limits in canonical units; zero is retained, negative and above-limit values are missing. Only explicitly labelled compatible units are accepted. Native mg/dL values are unchanged; molar units require an explicit conversion and are excluded here.",
+  "_comment": "2026-11-05 UC1-K5: urine concentration only, never serum chemistry or 24-hour excretion. 2026-11-12 S907: AUMC numericitems 10279 'Kreatinine (urine)' is mapped from mmol/l (unit gated per row) at 113.12 g/mol, so 1 mmol/L = 11.312 mg/dL; server aggregate check: 3340 rows, median 4.15 mmol/L (47 mg/dL). SICdb laboratory 370 'Kreatinin im Spontanurin (ZL)' (spot urine, dictionary unit mg/dl) is mapped without conversion: 1880 rows, median 80 mg/dL. Its d_references LOINC 2162-6 names a 24-hour excretion rate, which contradicts the spot-urine name, the mg/dl unit and the value distribution; the name, unit and values decide. SICdb 340 'Kreatinin im Urin(CKR)' has no rows and stays unmapped. HiRID has no urine creatinine item. Community databases remain unavailable without validated urine-specific mappings. 2026-11-12 S907: FENa and FEUrea are now derived by the fena and feurea concepts (fractional_excretion.py: same-bucket urine pair, most recent plasma value at or before it within 24 hours). Bounds are broad analytical limits in canonical units; zero is retained, negative and above-limit values are missing. Only explicitly labelled compatible units are accepted. Native mg/dL values are unchanged; molar units require an explicit conversion and are excluded here.",
   "sources": {
    "miiv": [
     {
@@ -38183,6 +38801,52 @@
       "labmeasurenameinterface": "(?i)^\\s*mg\\s*/\\s*dl\\s*$"
      }
     }
+   ],
+   "aumc": [
+    {
+     "ids": [
+      10279
+     ],
+     "table": "numericitems",
+     "sub_var": "itemid",
+     "unit_var": "unit",
+     "require_regex": {
+      "unit": "(?i)^\\s*mmol\\s*/\\s*l\\s*$"
+     },
+     "callback": "convert_unit(binary_op(`*`, 11.312217194570135), 'mg/dL', '(?i)^\\s*mmol\\s*/\\s*l\\s*$')"
+    },
+    {
+     "ids": [
+      7109
+     ],
+     "table": "numericitems",
+     "sub_var": "itemid",
+     "unit_var": "unit",
+     "require_regex": {
+      "unit": "(?i)^\\s*mmol/l\\s*$"
+     },
+     "callback": "convert_unit(binary_op(`*`, 11.312217194570135), 'mg/dL')"
+    }
+   ],
+   "sic": [
+    {
+     "ids": [
+      370
+     ],
+     "table": "laboratory",
+     "sub_var": "LaboratoryID"
+    }
+   ],
+   "hirid": [
+    {
+     "ids": [
+      24000572
+     ],
+     "table": "observations",
+     "sub_var": "variableid",
+     "class_name": "hrd_itm",
+     "callback": "convert_unit(binary_op(`*`, 0.011312217194570135), 'mg/dL')"
+    }
    ]
   }
  },
@@ -38192,7 +38856,7 @@
   "max": 2000,
   "description": "urine osmolality",
   "category": "renal",
-  "_comment": "2026-11-05 UC1-K5: urine concentration only, never serum chemistry or 24-hour excretion. AUMC, HiRID and SICdb remain unmapped: no checked-in source dictionary verifies an item name, urine specimen and unit together. Community databases remain unavailable without validated urine-specific mappings. FENa/FEUrea are not derived: the existing arithmetic callbacks do not provide a nearest plasma sample within 24 hours. Bounds are broad analytical limits in canonical units; zero is retained, negative and above-limit values are missing. Only explicitly labelled compatible units are accepted. eICU urinary osmolality is reported in mOsm/L; the repository has no policy equating osmolarity with mOsm/kg, so eICU and its demo are deliberately unmapped. mOsm/L rows in MIMIC are also excluded.",
+  "_comment": "2026-11-05 UC1-K5: urine concentration only, never serum chemistry or 24-hour excretion. AUMC, HiRID and SICdb remain unmapped: no checked-in source dictionary verifies an item name, urine specimen and unit together. Community databases remain unavailable without validated urine-specific mappings. 2026-11-12 S907: FENa and FEUrea are now derived by the fena and feurea concepts (fractional_excretion.py: same-bucket urine pair, most recent plasma value at or before it within 24 hours). Bounds are broad analytical limits in canonical units; zero is retained, negative and above-limit values are missing. Only explicitly labelled compatible units are accepted. eICU urinary osmolality is reported in mOsm/L; the repository has no policy equating osmolarity with mOsm/kg, so eICU and its demo are deliberately unmapped. mOsm/L rows in MIMIC are also excluded.",
   "sources": {
    "miiv": [
     {
@@ -38225,6 +38889,54 @@
      "require_regex": {
       "valueuom": "(?i)^\\s*mosm\\s*/\\s*kg(?:\\s*h2o)?\\s*$"
      }
+    }
+   ],
+   "aumc": [
+    {
+     "ids": [
+      11921
+     ],
+     "table": "numericitems",
+     "sub_var": "itemid",
+     "unit_var": "unit",
+     "require_regex": {
+      "unit": "(?i)^\\s*mosmol/kg\\s*$"
+     },
+     "callback": "convert_unit(binary_op(`*`, 1), 'mOsm/kg')"
+    },
+    {
+     "ids": [
+      11922
+     ],
+     "table": "numericitems",
+     "sub_var": "itemid",
+     "unit_var": "unit",
+     "require_regex": {
+      "unit": "(?i)^\\s*mosmol/kg\\s*$"
+     },
+     "callback": "convert_unit(binary_op(`*`, 1), 'mOsm/kg')"
+    }
+   ],
+   "eicu": [
+    {
+     "ids": [
+      "urinary osmolality"
+     ],
+     "table": "lab",
+     "sub_var": "labname",
+     "unit_var": "labmeasurenameinterface",
+     "require_regex": {
+      "labmeasurenameinterface": "(?i)^\\s*mOsm/kg\\s*$"
+     }
+    }
+   ],
+   "sic": [
+    {
+     "ids": [
+      475
+     ],
+     "table": "laboratory",
+     "sub_var": "LaboratoryID"
     }
    ]
   }
@@ -38235,7 +38947,7 @@
   "max": 5000,
   "description": "urine urea nitrogen",
   "category": "renal",
-  "_comment": "2026-11-05 UC1-K5: urine concentration only, never serum chemistry or 24-hour excretion. AUMC, HiRID and SICdb remain unmapped: no checked-in source dictionary verifies an item name, urine specimen and unit together. Community databases remain unavailable without validated urine-specific mappings. FENa/FEUrea are not derived: the existing arithmetic callbacks do not provide a nearest plasma sample within 24 hours. Bounds are broad analytical limits in canonical units; zero is retained, negative and above-limit values are missing. Only explicitly labelled compatible units are accepted. MIMIC item 51104 reports urea nitrogen mass, not whole urea mass; mg/dL is nitrogen-equivalent and is never multiplied by a whole-urea factor.",
+  "_comment": "2026-11-05 UC1-K5: urine concentration only, never serum chemistry or 24-hour excretion. AUMC, HiRID and SICdb remain unmapped: no checked-in source dictionary verifies an item name, urine specimen and unit together. Community databases remain unavailable without validated urine-specific mappings. 2026-11-12 S907: FENa and FEUrea are now derived by the fena and feurea concepts (fractional_excretion.py: same-bucket urine pair, most recent plasma value at or before it within 24 hours). Bounds are broad analytical limits in canonical units; zero is retained, negative and above-limit values are missing. Only explicitly labelled compatible units are accepted. MIMIC item 51104 reports urea nitrogen mass, not whole urea mass; mg/dL is nitrogen-equivalent and is never multiplied by a whole-urea factor.",
   "sources": {
    "miiv": [
     {
@@ -38269,8 +38981,123 @@
       "valueuom": "(?i)^\\s*mg\\s*/\\s*dl\\s*$"
      }
     }
+   ],
+   "aumc": [
+    {
+     "ids": [
+      10280
+     ],
+     "table": "numericitems",
+     "sub_var": "itemid",
+     "unit_var": "unit",
+     "require_regex": {
+      "unit": "(?i)^\\s*mmol/l\\s*$"
+     },
+     "callback": "convert_unit(binary_op(`*`, 2.80134), 'mg/dL')"
+    },
+    {
+     "ids": [
+      10281
+     ],
+     "table": "numericitems",
+     "sub_var": "itemid",
+     "unit_var": "unit",
+     "require_regex": {
+      "unit": "(?i)^\\s*mmol/l\\s*$"
+     },
+     "callback": "convert_unit(binary_op(`*`, 2.80134), 'mg/dL')"
+    },
+    {
+     "ids": [
+      7846
+     ],
+     "table": "numericitems",
+     "sub_var": "itemid",
+     "unit_var": "unit",
+     "require_regex": {
+      "unit": "(?i)^\\s*mmol/l\\s*$"
+     },
+     "callback": "convert_unit(binary_op(`*`, 2.80134), 'mg/dL')"
+    }
+   ],
+   "hirid": [
+    {
+     "ids": [
+      24000754
+     ],
+     "table": "observations",
+     "sub_var": "variableid",
+     "class_name": "hrd_itm",
+     "callback": "convert_unit(binary_op(`*`, 2.80134), 'mg/dL')"
+    }
+   ],
+   "sic": [
+    {
+     "ids": [
+      356
+     ],
+     "table": "laboratory",
+     "sub_var": "LaboratoryID",
+     "callback": "convert_unit(binary_op(`*`, 0.466459), 'mg/dL')"
+    },
+    {
+     "ids": [
+      396
+     ],
+     "table": "laboratory",
+     "sub_var": "LaboratoryID",
+     "callback": "convert_unit(binary_op(`*`, 0.1), 'mg/dL')"
+    }
    ]
   }
+ },
+ "fena": {
+  "unit": [
+   "%"
+  ],
+  "min": 0.0,
+  "max": 100.0,
+  "description": "fractional excretion of sodium (FENa)",
+  "category": "renal",
+  "concepts": [
+   "urine_na",
+   "urine_crea",
+   "na",
+   "crea"
+  ],
+  "aggregate": [
+   "median",
+   "median",
+   "median",
+   "median"
+  ],
+  "callback": "fena",
+  "class_name": "rec_cncpt",
+  "_comment": "2026-11-12 S907: fractional excretion from a spot urine sample, 100 * (U_Na * P_cr) / (P_Na * U_cr). The urine solute and urine creatinine come from the same time bucket; plasma na and crea are the most recent values in the same or an earlier bucket, no older than 24 hours (callback kwarg plasma_lookback). A urine pair without plasma values in the lookback has no result; nothing is imputed. Units cancel because every input is normalised to its canonical unit first (sodium mmol/L or mEq/L, creatinine mg/dL). Bounds 0-100 % are inclusive; the owner logs how many urine pairs lacked plasma values, had a non-positive denominator or fell outside the bounds."
+ },
+ "feurea": {
+  "unit": [
+   "%"
+  ],
+  "min": 0.0,
+  "max": 100.0,
+  "description": "fractional excretion of urea (FEUrea)",
+  "category": "renal",
+  "concepts": [
+   "urine_urea",
+   "urine_crea",
+   "bun",
+   "crea"
+  ],
+  "aggregate": [
+   "median",
+   "median",
+   "median",
+   "median"
+  ],
+  "callback": "feurea",
+  "class_name": "rec_cncpt",
+  "_comment": "2026-11-12 S907: fractional excretion from a spot urine sample, 100 * (U_urea * P_cr) / (P_urea * U_cr). The urine solute and urine creatinine come from the same time bucket; plasma bun and crea are the most recent values in the same or an earlier bucket, no older than 24 hours (callback kwarg plasma_lookback). A urine pair without plasma values in the lookback has no result; nothing is imputed. Units cancel because every input is normalised to its canonical unit first (urea nitrogen mg/dL against BUN mg/dL, creatinine mg/dL). Bounds 0-100 % are inclusive; the owner logs how many urine pairs lacked plasma values, had a non-positive denominator or fell outside the bounds."
  },
  "sic_precondition_renal_dysfunction": {
   "unit": "boolean",
@@ -38414,6 +39241,5855 @@
     {
      "class_name": "fun_itm",
      "callback": "weight_admit_strict_fields"
+    }
+   ]
+  }
+ },
+ "ckmb_activity": {
+  "unit": "U/L",
+  "min": 0,
+  "description": "CK-MB enzymatic activity; separate from mass",
+  "category": "chemistry",
+  "sources": {
+   "aumc": [
+    {
+     "ids": [
+      6824
+     ],
+     "table": "numericitems",
+     "sub_var": "itemid",
+     "unit_var": "unit",
+     "require_regex": {
+      "unit": "(?i)^\\s*IE/l\\s*$"
+     },
+     "callback": "convert_unit(binary_op(`*`, 1), 'U/L')"
+    }
+   ],
+   "sic": [
+    {
+     "ids": [
+      612
+     ],
+     "table": "laboratory",
+     "sub_var": "LaboratoryID",
+     "callback": "convert_unit(binary_op(`*`, 1), 'U/L')"
+    }
+   ]
+  }
+ },
+ "tnt_hs": {
+  "unit": "ng/mL",
+  "min": 0,
+  "description": "High-sensitivity cardiac troponin T; assay subset of tnt",
+  "category": "chemistry",
+  "sources": {
+   "hirid": [
+    {
+     "ids": [
+      24000806
+     ],
+     "table": "observations",
+     "sub_var": "variableid",
+     "class_name": "hrd_itm",
+     "callback": "convert_unit(binary_op(`*`, 0.001), 'ng/mL')"
+    }
+   ],
+   "sic": [
+    {
+     "ids": [
+      481
+     ],
+     "table": "laboratory",
+     "sub_var": "LaboratoryID",
+     "callback": "convert_unit(binary_op(`*`, 0.001), 'ng/mL')"
+    }
+   ]
+  }
+ },
+ "il6": {
+  "unit": "pg/mL",
+  "min": 0,
+  "description": "Interleukin-6 concentration in blood",
+  "category": "chemistry",
+  "sources": {
+   "sic": [
+    {
+     "ids": [
+      569
+     ],
+     "table": "laboratory",
+     "sub_var": "LaboratoryID"
+    }
+   ]
+  }
+ },
+ "lymph_abs": {
+  "unit": "10^9/L",
+  "min": 0,
+  "max": 1000,
+  "description": "Absolute blood lymphocyte count",
+  "category": "hematology",
+  "sources": {
+   "aumc": [
+    {
+     "ids": [
+      14258
+     ],
+     "table": "numericitems",
+     "sub_var": "itemid",
+     "unit_var": "unit",
+     "require_regex": {
+      "unit": "(?i)^\\s*10\\^9/l\\s*$"
+     },
+     "callback": "convert_unit(binary_op(`*`, 1), '10^9/L')"
+    },
+    {
+     "ids": [
+      6780
+     ],
+     "table": "numericitems",
+     "sub_var": "itemid",
+     "unit_var": "unit",
+     "require_regex": {
+      "unit": "(?i)^\\s*10\\^9/l\\s*$"
+     },
+     "callback": "convert_unit(binary_op(`*`, 1), '10^9/L')"
+    }
+   ],
+   "miiv": [
+    {
+     "ids": [
+      229358
+     ],
+     "table": "chartevents",
+     "sub_var": "itemid",
+     "unit_var": "valueuom",
+     "require_regex": {
+      "valueuom": "(?i)^\\s*K/uL\\s*$"
+     },
+     "callback": "convert_unit(binary_op(`*`, 1), '10^9/L')"
+    },
+    {
+     "ids": [
+      51133
+     ],
+     "table": "labevents",
+     "sub_var": "itemid",
+     "unit_var": "valueuom",
+     "require_regex": {
+      "valueuom": "(?i)^\\s*K/uL\\s*$"
+     },
+     "callback": "convert_unit(binary_op(`*`, 1), '10^9/L')"
+    },
+    {
+     "ids": [
+      52769
+     ],
+     "table": "labevents",
+     "sub_var": "itemid",
+     "unit_var": "valueuom",
+     "require_regex": {
+      "valueuom": "(?i)^\\s*\\#/uL\\s*$"
+     },
+     "callback": "convert_unit(binary_op(`*`, 0.001), '10^9/L')"
+    }
+   ],
+   "sic": [
+    {
+     "ids": [
+      302
+     ],
+     "table": "laboratory",
+     "sub_var": "LaboratoryID",
+     "callback": "convert_unit(binary_op(`*`, 1), '10^9/L')"
+    },
+    {
+     "ids": [
+      303
+     ],
+     "table": "laboratory",
+     "sub_var": "LaboratoryID",
+     "callback": "convert_unit(binary_op(`*`, 1), '10^9/L')"
+    }
+   ]
+  }
+ },
+ "neut_abs": {
+  "unit": "10^9/L",
+  "min": 0,
+  "max": 1000,
+  "description": "Absolute blood neutrophil count",
+  "category": "hematology",
+  "sources": {
+   "aumc": [
+    {
+     "ids": [
+      14254
+     ],
+     "table": "numericitems",
+     "sub_var": "itemid",
+     "unit_var": "unit",
+     "require_regex": {
+      "unit": "(?i)^\\s*10\\^9/l\\s*$"
+     },
+     "callback": "convert_unit(binary_op(`*`, 1), '10^9/L')"
+    }
+   ],
+   "miiv": [
+    {
+     "ids": [
+      229355
+     ],
+     "table": "chartevents",
+     "sub_var": "itemid",
+     "unit_var": "valueuom",
+     "require_regex": {
+      "valueuom": "(?i)^\\s*K/uL\\s*$"
+     },
+     "callback": "convert_unit(binary_op(`*`, 1), '10^9/L')"
+    },
+    {
+     "ids": [
+      229357
+     ],
+     "table": "chartevents",
+     "sub_var": "itemid",
+     "unit_var": "valueuom",
+     "require_regex": {
+      "valueuom": "(?i)^\\s*K/uL\\s*$"
+     },
+     "callback": "convert_unit(binary_op(`*`, 1), '10^9/L')"
+    },
+    {
+     "ids": [
+      52075
+     ],
+     "table": "labevents",
+     "sub_var": "itemid",
+     "unit_var": "valueuom",
+     "require_regex": {
+      "valueuom": "(?i)^\\s*K/uL\\s*$"
+     },
+     "callback": "convert_unit(binary_op(`*`, 1), '10^9/L')"
+    }
+   ]
+  }
+ },
+ "abdominal_circumference": {
+  "unit": "cm",
+  "min": 0,
+  "max": 300,
+  "description": "Abdominal circumference; flagged proxy, not pressure",
+  "category": "ventilator",
+  "sources": {
+   "aumc": [
+    {
+     "ids": [
+      12087
+     ],
+     "table": "numericitems",
+     "sub_var": "itemid",
+     "unit_var": "unit",
+     "require_regex": {
+      "unit": "(?i)^\\s*cm\\s*$"
+     }
+    }
+   ]
+  }
+ },
+ "beta2_microglobulin_urine": {
+  "unit": "ug/L",
+  "min": 0,
+  "description": "Urinary beta-2 microglobulin concentration",
+  "category": "renal",
+  "sources": {
+   "aumc": [
+    {
+     "ids": [
+      10164
+     ],
+     "table": "numericitems",
+     "sub_var": "itemid",
+     "unit_var": "unit",
+     "require_regex": {
+      "unit": "(?i)^\\s*\u00b5g/l\\s*$"
+     },
+     "callback": "convert_unit(binary_op(`*`, 1), 'ug/L')"
+    },
+    {
+     "ids": [
+      10165
+     ],
+     "table": "numericitems",
+     "sub_var": "itemid",
+     "unit_var": "unit",
+     "require_regex": {
+      "unit": "(?i)^\\s*\u00b5g/l\\s*$"
+     },
+     "callback": "convert_unit(binary_op(`*`, 1), 'ug/L')"
+    }
+   ]
+  }
+ },
+ "crea_clearance_measured": {
+  "unit": "mL/min",
+  "min": 0,
+  "max": 500,
+  "description": "Measured urinary creatinine clearance",
+  "category": "renal",
+  "sources": {
+   "aumc": [
+    {
+     "ids": [
+      7108
+     ],
+     "table": "numericitems",
+     "sub_var": "itemid",
+     "unit_var": "unit",
+     "require_regex": {
+      "unit": "(?i)^\\s*ml/min\\s*$"
+     }
+    }
+   ],
+   "miiv": [
+    {
+     "ids": [
+      51080
+     ],
+     "table": "labevents",
+     "sub_var": "itemid",
+     "unit_var": "valueuom",
+     "require_regex": {
+      "valueuom": "(?i)^\\s*mL/min\\s*$"
+     }
+    }
+   ]
+  }
+ },
+ "intra_abdominal_pres": {
+  "unit": "mmHg",
+  "min": 0,
+  "max": 100,
+  "description": "Intra-abdominal pressure measured through bladder",
+  "category": "cardiovascular",
+  "sources": {
+   "aumc": [
+    {
+     "ids": [
+      8463
+     ],
+     "table": "numericitems",
+     "sub_var": "itemid",
+     "unit_var": "unit",
+     "require_regex": {
+      "unit": "(?i)^\\s*mmHg\\s*$"
+     }
+    }
+   ]
+  }
+ },
+ "renal_resistive_index": {
+  "unit": "ratio",
+  "min": 0,
+  "max": 1,
+  "description": "Renal Doppler resistive index",
+  "category": "renal",
+  "sources": {
+   "aumc": [
+    {
+     "ids": [
+      20631
+     ],
+     "table": "numericitems",
+     "sub_var": "itemid",
+     "unit_var": "unit",
+     "require_regex": {
+      "unit": "(?i)^\\s*Geen\\s*$"
+     },
+     "callback": "convert_unit(binary_op(`*`, 1), 'ratio')"
+    }
+   ]
+  }
+ },
+ "urine_cl": {
+  "unit": "mmol/L",
+  "min": 0,
+  "max": 400,
+  "description": "Urine chloride concentration",
+  "category": "renal",
+  "sources": {
+   "aumc": [
+    {
+     "ids": [
+      10273
+     ],
+     "table": "numericitems",
+     "sub_var": "itemid",
+     "unit_var": "unit",
+     "require_regex": {
+      "unit": "(?i)^\\s*mmol/l\\s*$"
+     }
+    },
+    {
+     "ids": [
+      10274
+     ],
+     "table": "numericitems",
+     "sub_var": "itemid",
+     "unit_var": "unit",
+     "require_regex": {
+      "unit": "(?i)^\\s*mmol/l\\s*$"
+     }
+    },
+    {
+     "ids": [
+      8917
+     ],
+     "table": "numericitems",
+     "sub_var": "itemid",
+     "unit_var": "unit",
+     "require_regex": {
+      "unit": "(?i)^\\s*mol/l\\s*$"
+     },
+     "callback": "convert_unit(binary_op(`*`, 1000), 'mmol/L')"
+    }
+   ],
+   "miiv": [
+    {
+     "ids": [
+      51078
+     ],
+     "table": "labevents",
+     "sub_var": "itemid",
+     "unit_var": "valueuom",
+     "require_regex": {
+      "valueuom": "(?i)^\\s*mEq/L\\s*$"
+     },
+     "callback": "convert_unit(binary_op(`*`, 1), 'mmol/L')"
+    }
+   ]
+  }
+ },
+ "urine_k": {
+  "unit": "mmol/L",
+  "min": 0,
+  "max": 400,
+  "description": "Urine potassium concentration",
+  "category": "renal",
+  "sources": {
+   "aumc": [
+    {
+     "ids": [
+      10271
+     ],
+     "table": "numericitems",
+     "sub_var": "itemid",
+     "unit_var": "unit",
+     "require_regex": {
+      "unit": "(?i)^\\s*mmol/l\\s*$"
+     }
+    },
+    {
+     "ids": [
+      10272
+     ],
+     "table": "numericitems",
+     "sub_var": "itemid",
+     "unit_var": "unit",
+     "require_regex": {
+      "unit": "(?i)^\\s*mmol/l\\s*$"
+     }
+    },
+    {
+     "ids": [
+      7101
+     ],
+     "table": "numericitems",
+     "sub_var": "itemid",
+     "unit_var": "unit",
+     "require_regex": {
+      "unit": "(?i)^\\s*mmol/l\\s*$"
+     }
+    }
+   ],
+   "miiv": [
+    {
+     "ids": [
+      51097
+     ],
+     "table": "labevents",
+     "sub_var": "itemid",
+     "unit_var": "valueuom",
+     "require_regex": {
+      "valueuom": "(?i)^\\s*mEq/L\\s*$"
+     },
+     "callback": "convert_unit(binary_op(`*`, 1), 'mmol/L')"
+    }
+   ],
+   "sic": [
+    {
+     "ids": [
+      464
+     ],
+     "table": "laboratory",
+     "sub_var": "LaboratoryID"
+    }
+   ]
+  }
+ },
+ "crrt_blood_flow": {
+  "unit": "mL/min",
+  "min": 0,
+  "max": 1000,
+  "description": "Charted CRRT blood flow",
+  "category": "renal",
+  "sources": {
+   "aumc": [
+    {
+     "ids": [
+      10736
+     ],
+     "table": "numericitems",
+     "sub_var": "itemid",
+     "unit_var": "unit",
+     "require_regex": {
+      "unit": "(?i)^\\s*ml/min\\s*$"
+     }
+    },
+    {
+     "ids": [
+      12460
+     ],
+     "table": "numericitems",
+     "sub_var": "itemid",
+     "unit_var": "unit",
+     "require_regex": {
+      "unit": "(?i)^\\s*ml/min\\s*$"
+     }
+    }
+   ],
+   "miiv": [
+    {
+     "ids": [
+      224144
+     ],
+     "table": "chartevents",
+     "sub_var": "itemid",
+     "unit_var": "valueuom",
+     "require_regex": {
+      "valueuom": "(?i)^\\s*ml/min\\s*$"
+     }
+    }
+   ],
+   "sic": [
+    {
+     "ids": [
+      723
+     ],
+     "table": "data_float_h",
+     "sub_var": "DataID"
+    }
+   ]
+  }
+ },
+ "crrt_blood_flow_set": {
+  "unit": "mL/min",
+  "min": 0,
+  "max": 1000,
+  "description": "Prescribed CRRT blood flow",
+  "category": "renal",
+  "sources": {
+   "aumc": [
+    {
+     "ids": [
+      12444
+     ],
+     "table": "numericitems",
+     "sub_var": "itemid",
+     "unit_var": "unit",
+     "require_regex": {
+      "unit": "(?i)^\\s*ml/min\\s*$"
+     }
+    },
+    {
+     "ids": [
+      14850
+     ],
+     "table": "numericitems",
+     "sub_var": "itemid",
+     "unit_var": "unit",
+     "require_regex": {
+      "unit": "(?i)^\\s*ml/min\\s*$"
+     }
+    },
+    {
+     "ids": [
+      20538
+     ],
+     "table": "numericitems",
+     "sub_var": "itemid",
+     "unit_var": "unit",
+     "require_regex": {
+      "unit": "(?i)^\\s*ml/min\\s*$"
+     }
+    }
+   ]
+  }
+ },
+ "crrt_citrate_flow": {
+  "unit": "mL/h",
+  "min": 0,
+  "max": 3000,
+  "description": "Charted CRRT citrate solution flow",
+  "category": "renal",
+  "sources": {
+   "miiv": [
+    {
+     "ids": [
+      228004
+     ],
+     "table": "chartevents",
+     "sub_var": "itemid",
+     "unit_var": "valueuom",
+     "require_regex": {
+      "valueuom": "(?i)^\\s*ml/hr\\s*$"
+     },
+     "callback": "convert_unit(binary_op(`*`, 1), 'mL/h')"
+    }
+   ]
+  }
+ },
+ "crrt_dialysate_flow": {
+  "unit": "mL/h",
+  "min": 0,
+  "max": 15000,
+  "description": "Charted CRRT dialysate flow",
+  "category": "renal",
+  "sources": {
+   "miiv": [
+    {
+     "ids": [
+      224154
+     ],
+     "table": "chartevents",
+     "sub_var": "itemid",
+     "unit_var": "valueuom",
+     "require_regex": {
+      "valueuom": "(?i)^\\s*ml/hr\\s*$"
+     },
+     "callback": "convert_unit(binary_op(`*`, 1), 'mL/h')"
+    }
+   ],
+   "sic": [
+    {
+     "ids": [
+      730
+     ],
+     "table": "data_float_h",
+     "sub_var": "DataID"
+    }
+   ]
+  }
+ },
+ "crrt_replacement_flow": {
+  "unit": "mL/h",
+  "min": 0,
+  "max": 15000,
+  "description": "Charted total CRRT replacement flow",
+  "category": "renal",
+  "sources": {
+   "aumc": [
+    {
+     "ids": [
+      10735
+     ],
+     "table": "numericitems",
+     "sub_var": "itemid",
+     "unit_var": "unit",
+     "require_regex": {
+      "unit": "(?i)^\\s*ml/uur\\s*$"
+     },
+     "callback": "convert_unit(binary_op(`*`, 1), 'mL/h')"
+    },
+    {
+     "ids": [
+      12461
+     ],
+     "table": "numericitems",
+     "sub_var": "itemid",
+     "unit_var": "unit",
+     "require_regex": {
+      "unit": "(?i)^\\s*ml/uur\\s*$"
+     },
+     "callback": "convert_unit(binary_op(`*`, 1), 'mL/h')"
+    }
+   ],
+   "miiv": [
+    {
+     "ids": [
+      224153
+     ],
+     "table": "chartevents",
+     "sub_var": "itemid",
+     "unit_var": "valueuom",
+     "require_regex": {
+      "valueuom": "(?i)^\\s*ml/hr\\s*$"
+     },
+     "callback": "convert_unit(binary_op(`*`, 1), 'mL/h')"
+    }
+   ]
+  }
+ },
+ "crrt_replacement_flow_set": {
+  "unit": "mL/h",
+  "min": 0,
+  "max": 15000,
+  "description": "Prescribed total CRRT replacement flow",
+  "category": "renal",
+  "sources": {
+   "aumc": [
+    {
+     "ids": [
+      12452
+     ],
+     "table": "numericitems",
+     "sub_var": "itemid",
+     "unit_var": "unit",
+     "require_regex": {
+      "unit": "(?i)^\\s*ml/uur\\s*$"
+     },
+     "callback": "convert_unit(binary_op(`*`, 1), 'mL/h')"
+    }
+   ]
+  }
+ },
+ "crrt_replacement_post_flow": {
+  "unit": "mL/h",
+  "min": 0,
+  "max": 15000,
+  "description": "Charted postfilter CRRT replacement flow",
+  "category": "renal",
+  "sources": {
+   "miiv": [
+    {
+     "ids": [
+      228006
+     ],
+     "table": "chartevents",
+     "sub_var": "itemid",
+     "unit_var": "valueuom",
+     "require_regex": {
+      "valueuom": "(?i)^\\s*ml/hr\\s*$"
+     },
+     "callback": "convert_unit(binary_op(`*`, 1), 'mL/h')"
+    }
+   ],
+   "sic": [
+    {
+     "ids": [
+      732
+     ],
+     "table": "data_float_h",
+     "sub_var": "DataID"
+    }
+   ]
+  }
+ },
+ "crrt_replacement_post_flow_set": {
+  "unit": "mL/h",
+  "min": 0,
+  "max": 15000,
+  "description": "Prescribed postfilter CRRT replacement flow",
+  "category": "renal",
+  "sources": {
+   "aumc": [
+    {
+     "ids": [
+      20716
+     ],
+     "table": "numericitems",
+     "sub_var": "itemid",
+     "unit_var": "unit",
+     "require_regex": {
+      "unit": "(?i)^\\s*ml/uur\\s*$"
+     },
+     "callback": "convert_unit(binary_op(`*`, 1), 'mL/h')"
+    }
+   ]
+  }
+ },
+ "crrt_replacement_pre_flow": {
+  "unit": "mL/h",
+  "min": 0,
+  "max": 15000,
+  "description": "Charted prefilter CRRT replacement flow",
+  "category": "renal",
+  "sources": {
+   "miiv": [
+    {
+     "ids": [
+      228005
+     ],
+     "table": "chartevents",
+     "sub_var": "itemid",
+     "unit_var": "valueuom",
+     "require_regex": {
+      "valueuom": "(?i)^\\s*ml/hr\\s*$"
+     },
+     "callback": "convert_unit(binary_op(`*`, 1), 'mL/h')"
+    }
+   ],
+   "sic": [
+    {
+     "ids": [
+      731
+     ],
+     "table": "data_float_h",
+     "sub_var": "DataID"
+    }
+   ]
+  }
+ },
+ "crrt_replacement_pre_flow_set": {
+  "unit": "mL/h",
+  "min": 0,
+  "max": 15000,
+  "description": "Prescribed prefilter CRRT replacement flow",
+  "category": "renal",
+  "sources": {
+   "aumc": [
+    {
+     "ids": [
+      20710
+     ],
+     "table": "numericitems",
+     "sub_var": "itemid",
+     "unit_var": "unit",
+     "require_regex": {
+      "unit": "(?i)^\\s*ml/uur\\s*$"
+     },
+     "callback": "convert_unit(binary_op(`*`, 1), 'mL/h')"
+    }
+   ]
+  }
+ },
+ "ci": {
+  "unit": "L/min/m2",
+  "min": 0,
+  "max": 20,
+  "description": "Cardiac index",
+  "category": "cardiovascular",
+  "sources": {
+   "aumc": [
+    {
+     "ids": [
+      13150
+     ],
+     "table": "numericitems",
+     "sub_var": "itemid",
+     "unit_var": "unit",
+     "require_regex": {
+      "unit": "(?i)^\\s*l/min/m2\\s*$"
+     }
+    }
+   ],
+   "miiv": [
+    {
+     "ids": [
+      228177
+     ],
+     "table": "chartevents",
+     "sub_var": "itemid",
+     "unit_var": "valueuom",
+     "require_regex": {
+      "valueuom": "(?i)^\\s*L/min/m2\\s*$"
+     }
+    },
+    {
+     "ids": [
+      228368
+     ],
+     "table": "chartevents",
+     "sub_var": "itemid",
+     "unit_var": "valueuom",
+     "require_regex": {
+      "valueuom": "(?i)^\\s*L/min/m2\\s*$"
+     }
+    }
+   ]
+  }
+ },
+ "ecmo_blood_flow": {
+  "unit": "L/min",
+  "min": 0,
+  "max": 20,
+  "description": "ECMO blood flow",
+  "category": "ventilator",
+  "sources": {
+   "aumc": [
+    {
+     "ids": [
+      20648
+     ],
+     "table": "numericitems",
+     "sub_var": "itemid",
+     "unit_var": "unit",
+     "require_regex": {
+      "unit": "(?i)^\\s*l/min\\s*$"
+     }
+    }
+   ],
+   "miiv": [
+    {
+     "ids": [
+      229270
+     ],
+     "table": "chartevents",
+     "sub_var": "itemid",
+     "unit_var": "valueuom",
+     "require_regex": {
+      "valueuom": "(?i)^\\s*L/min\\s*$"
+     }
+    }
+   ]
+  }
+ },
+ "ecmo_fio2": {
+  "unit": "%",
+  "min": 0,
+  "max": 100,
+  "description": "ECMO oxygenator oxygen concentration",
+  "category": "ventilator",
+  "sources": {
+   "aumc": [
+    {
+     "ids": [
+      20656
+     ],
+     "table": "numericitems",
+     "sub_var": "itemid",
+     "unit_var": "unit",
+     "require_regex": {
+      "unit": "(?i)^\\s*Geen\\s*$"
+     },
+     "callback": "convert_unit(binary_op(`*`, 1), '%')"
+    }
+   ],
+   "miiv": [
+    {
+     "ids": [
+      229280
+     ],
+     "table": "chartevents",
+     "sub_var": "itemid",
+     "unit_var": "valueuom",
+     "require_regex": {
+      "valueuom": "(?i)^\\s*%\\s*$"
+     }
+    }
+   ],
+   "sic": [
+    {
+     "ids": [
+      2025
+     ],
+     "table": "data_float_h",
+     "sub_var": "DataID"
+    }
+   ]
+  }
+ },
+ "ecmo_pump_speed": {
+  "unit": "rpm",
+  "min": 0,
+  "max": 15000,
+  "description": "ECMO pump speed",
+  "category": "ventilator",
+  "sources": {
+   "aumc": [
+    {
+     "ids": [
+      20649
+     ],
+     "table": "numericitems",
+     "sub_var": "itemid",
+     "unit_var": "unit",
+     "require_regex": {
+      "unit": "(?i)^\\s*/min\\s*$"
+     },
+     "callback": "convert_unit(binary_op(`*`, 1), 'rpm')"
+    }
+   ],
+   "miiv": [
+    {
+     "ids": [
+      229277
+     ],
+     "table": "chartevents",
+     "sub_var": "itemid",
+     "unit_var": "valueuom",
+     "require_regex": {
+      "valueuom": "(?i)^\\s*RPM\\s*$"
+     }
+    }
+   ],
+   "sic": [
+    {
+     "ids": [
+      2023
+     ],
+     "table": "data_float_h",
+     "sub_var": "DataID",
+     "callback": "convert_unit(binary_op(`*`, 1), 'rpm')"
+    }
+   ]
+  }
+ },
+ "ecmo_sweep_flow": {
+  "unit": "L/min",
+  "min": 0,
+  "max": 30,
+  "description": "ECMO oxygenator sweep gas flow",
+  "category": "ventilator",
+  "sources": {
+   "aumc": [
+    {
+     "ids": [
+      20657
+     ],
+     "table": "numericitems",
+     "sub_var": "itemid",
+     "unit_var": "unit",
+     "require_regex": {
+      "unit": "(?i)^\\s*l/min\\s*$"
+     }
+    }
+   ],
+   "miiv": [
+    {
+     "ids": [
+      228192
+     ],
+     "table": "chartevents",
+     "sub_var": "itemid",
+     "unit_var": "valueuom",
+     "require_regex": {
+      "valueuom": "(?i)^\\s*L/min\\s*$"
+     }
+    }
+   ]
+  }
+ },
+ "evlwi": {
+  "unit": "mL/kg",
+  "min": 0,
+  "max": 100,
+  "description": "Extravascular lung water index",
+  "category": "cardiovascular",
+  "sources": {
+   "aumc": [
+    {
+     "ids": [
+      13153
+     ],
+     "table": "numericitems",
+     "sub_var": "itemid",
+     "unit_var": "unit",
+     "require_regex": {
+      "unit": "(?i)^\\s*ml/kg\\s*$"
+     }
+    }
+   ],
+   "miiv": [
+    {
+     "ids": [
+      228179
+     ],
+     "table": "chartevents",
+     "sub_var": "itemid",
+     "unit_var": "valueuom",
+     "require_regex": {
+      "valueuom": "(?i)^\\s*ml/kg\\s*$"
+     }
+    }
+   ]
+  }
+ },
+ "gedvi": {
+  "unit": "mL/m2",
+  "min": 0,
+  "max": 3000,
+  "description": "Global end-diastolic volume index",
+  "category": "cardiovascular",
+  "sources": {
+   "aumc": [
+    {
+     "ids": [
+      13152
+     ],
+     "table": "numericitems",
+     "sub_var": "itemid",
+     "unit_var": "unit",
+     "require_regex": {
+      "unit": "(?i)^\\s*ml/m2\\s*$"
+     }
+    }
+   ],
+   "miiv": [
+    {
+     "ids": [
+      228180
+     ],
+     "table": "chartevents",
+     "sub_var": "itemid",
+     "unit_var": "valueuom",
+     "require_regex": {
+      "valueuom": "(?i)^\\s*mL/m2\\s*$"
+     }
+    }
+   ]
+  }
+ },
+ "gef": {
+  "unit": "%",
+  "min": 0,
+  "max": 100,
+  "description": "Global ejection fraction",
+  "category": "cardiovascular",
+  "sources": {
+   "aumc": [
+    {
+     "ids": [
+      14064
+     ],
+     "table": "numericitems",
+     "sub_var": "itemid",
+     "unit_var": "unit",
+     "require_regex": {
+      "unit": "(?i)^\\s*Geen\\s*$"
+     },
+     "callback": "convert_unit(binary_op(`*`, 1), '%')"
+    }
+   ]
+  }
+ },
+ "ppv": {
+  "unit": "%",
+  "min": 0,
+  "max": 100,
+  "description": "Pulse pressure variation",
+  "category": "cardiovascular",
+  "sources": {
+   "aumc": [
+    {
+     "ids": [
+      13155
+     ],
+     "table": "numericitems",
+     "sub_var": "itemid",
+     "unit_var": "unit",
+     "require_regex": {
+      "unit": "(?i)^\\s*Geen\\s*$"
+     },
+     "callback": "convert_unit(binary_op(`*`, 1), '%')"
+    }
+   ]
+  }
+ },
+ "svr": {
+  "unit": "dyn.s/cm5",
+  "min": 0,
+  "max": 10000,
+  "description": "Systemic vascular resistance, unindexed",
+  "category": "cardiovascular",
+  "sources": {
+   "aumc": [
+    {
+     "ids": [
+      14074
+     ],
+     "table": "numericitems",
+     "sub_var": "itemid",
+     "unit_var": "unit",
+     "require_regex": {
+      "unit": "(?i)^\\s*dynes\\.sec\\.cm\\-5\\s*$"
+     },
+     "callback": "convert_unit(binary_op(`*`, 1), 'dyn.s/cm5')"
+    }
+   ]
+  }
+ },
+ "svv": {
+  "unit": "%",
+  "min": 0,
+  "max": 100,
+  "description": "Stroke volume variation",
+  "category": "cardiovascular",
+  "sources": {
+   "aumc": [
+    {
+     "ids": [
+      13154
+     ],
+     "table": "numericitems",
+     "sub_var": "itemid",
+     "unit_var": "unit",
+     "require_regex": {
+      "unit": "(?i)^\\s*Geen\\s*$"
+     },
+     "callback": "convert_unit(binary_op(`*`, 1), '%')"
+    }
+   ],
+   "miiv": [
+    {
+     "ids": [
+      228184
+     ],
+     "table": "chartevents",
+     "sub_var": "itemid",
+     "unit_var": "valueuom",
+     "require_regex": {
+      "valueuom": "(?i)^\\s*%\\s*$"
+     }
+    }
+   ]
+  }
+ },
+ "co2_tidal": {
+  "unit": "mL",
+  "min": 0,
+  "max": 200,
+  "description": "Exhaled CO2 volume per breath",
+  "category": "ventilator",
+  "sources": {
+   "aumc": [
+    {
+     "ids": [
+      12270
+     ],
+     "table": "numericitems",
+     "sub_var": "itemid",
+     "unit_var": "unit",
+     "require_regex": {
+      "unit": "(?i)^\\s*ml\\s*$"
+     }
+    },
+    {
+     "ids": [
+      12352
+     ],
+     "table": "numericitems",
+     "sub_var": "itemid",
+     "unit_var": "unit",
+     "require_regex": {
+      "unit": "(?i)^\\s*ml\\s*$"
+     }
+    }
+   ]
+  }
+ },
+ "insp_time": {
+  "unit": "s",
+  "min": 0,
+  "max": 20,
+  "description": "Charted inspiratory time",
+  "category": "ventilator",
+  "sources": {
+   "miiv": [
+    {
+     "ids": [
+      224738
+     ],
+     "table": "chartevents",
+     "sub_var": "itemid",
+     "unit_var": "valueuom",
+     "require_regex": {
+      "valueuom": "(?i)^\\s*sec\\s*$"
+     },
+     "callback": "convert_unit(binary_op(`*`, 1), 's')"
+    }
+   ]
+  }
+ },
+ "minute_vol_spont": {
+  "unit": "L/min",
+  "min": 0,
+  "max": 100,
+  "description": "Spontaneous minute ventilation",
+  "category": "ventilator",
+  "sources": {
+   "aumc": [
+    {
+     "ids": [
+      12578
+     ],
+     "table": "numericitems",
+     "sub_var": "itemid",
+     "unit_var": "unit",
+     "require_regex": {
+      "unit": "(?i)^\\s*l/min\\s*$"
+     }
+    },
+    {
+     "ids": [
+      8875
+     ],
+     "table": "numericitems",
+     "sub_var": "itemid",
+     "unit_var": "unit",
+     "require_regex": {
+      "unit": "(?i)^\\s*l/min\\s*$"
+     }
+    },
+    {
+     "ids": [
+      9663
+     ],
+     "table": "numericitems",
+     "sub_var": "itemid",
+     "unit_var": "unit",
+     "require_regex": {
+      "unit": "(?i)^\\s*l/min\\s*$"
+     }
+    }
+   ]
+  }
+ },
+ "pc_above_peep_set": {
+  "unit": "cmH2O",
+  "min": 0,
+  "max": 100,
+  "description": "Set inspiratory pressure above PEEP",
+  "category": "ventilator",
+  "sources": {
+   "aumc": [
+    {
+     "ids": [
+      12285
+     ],
+     "table": "numericitems",
+     "sub_var": "itemid",
+     "unit_var": "unit",
+     "require_regex": {
+      "unit": "(?i)^\\s*cmH2O\\s*$"
+     }
+    },
+    {
+     "ids": [
+      12335
+     ],
+     "table": "numericitems",
+     "sub_var": "itemid",
+     "unit_var": "unit",
+     "require_regex": {
+      "unit": "(?i)^\\s*cmH2O\\s*$"
+     }
+    }
+   ],
+   "sic": [
+    {
+     "ids": [
+      3040
+     ],
+     "table": "data_float_h",
+     "sub_var": "DataID",
+     "callback": "convert_unit(binary_op(`*`, 1.0197162129779282), 'cmH2O')"
+    }
+   ]
+  }
+ },
+ "peep_intrinsic": {
+  "unit": "cmH2O",
+  "min": 0,
+  "max": 60,
+  "description": "Measured intrinsic PEEP",
+  "category": "ventilator",
+  "sources": {
+   "aumc": [
+    {
+     "ids": [
+      8882
+     ],
+     "table": "numericitems",
+     "sub_var": "itemid",
+     "unit_var": "unit",
+     "require_regex": {
+      "unit": "(?i)^\\s*mbar\\s*$"
+     },
+     "callback": "convert_unit(binary_op(`*`, 1.0197162129779282), 'cmH2O')"
+    },
+    {
+     "ids": [
+      9661
+     ],
+     "table": "numericitems",
+     "sub_var": "itemid",
+     "unit_var": "unit",
+     "require_regex": {
+      "unit": "(?i)^\\s*mbar\\s*$"
+     },
+     "callback": "convert_unit(binary_op(`*`, 1.0197162129779282), 'cmH2O')"
+    }
+   ]
+  }
+ },
+ "prone": {
+  "unit": "boolean",
+  "description": "Recorded prone positioning evidence",
+  "category": "ventilator",
+  "class_name": "lgl_cncpt",
+  "aggregate": "max",
+  "sources": {
+   "aumc": [
+    {
+     "ids": [
+      7927
+     ],
+     "table": "processitems",
+     "sub_var": "itemid",
+     "val_var": "item",
+     "index_var": "start",
+     "dur_var": "stop",
+     "callback": "transform_fun(set_val(TRUE))"
+    }
+   ],
+   "eicu": [
+    {
+     "ids": [
+      "pulmonary|ventilation and oxygenation|prone position"
+     ],
+     "table": "treatment",
+     "sub_var": "treatmentstring",
+     "val_var": "treatmentstring",
+     "index_var": "treatmentoffset",
+     "callback": "transform_fun(set_val(TRUE))"
+    }
+   ]
+  }
+ },
+ "resp_spont": {
+  "unit": "breaths/min",
+  "min": 0,
+  "max": 100,
+  "description": "Spontaneous respiratory rate",
+  "category": "ventilator",
+  "sources": {
+   "aumc": [
+    {
+     "ids": [
+      12577
+     ],
+     "table": "numericitems",
+     "sub_var": "itemid",
+     "unit_var": "unit",
+     "require_regex": {
+      "unit": "(?i)^\\s*/min\\s*$"
+     },
+     "callback": "convert_unit(binary_op(`*`, 1), 'breaths/min')"
+    }
+   ],
+   "eicu": [
+    {
+     "ids": [
+      "Spontaneous Rate"
+     ],
+     "table": "lab",
+     "sub_var": "labname",
+     "unit_var": "labmeasurenameinterface",
+     "require_regex": {
+      "labmeasurenameinterface": "(?i)^\\s*Breaths\\s*$"
+     },
+     "callback": "convert_unit(binary_op(`*`, 1), 'breaths/min')"
+    }
+   ],
+   "miiv": [
+    {
+     "ids": [
+      224422
+     ],
+     "table": "chartevents",
+     "sub_var": "itemid",
+     "unit_var": "valueuom",
+     "require_regex": {
+      "valueuom": "(?i)^\\s*bpm\\s*$"
+     },
+     "callback": "convert_unit(binary_op(`*`, 1), 'breaths/min')"
+    },
+    {
+     "ids": [
+      224689
+     ],
+     "table": "chartevents",
+     "sub_var": "itemid",
+     "unit_var": "valueuom",
+     "require_regex": {
+      "valueuom": "(?i)^\\s*insp/min\\s*$"
+     },
+     "callback": "convert_unit(binary_op(`*`, 1), 'breaths/min')"
+    }
+   ],
+   "sic": [
+    {
+     "ids": [
+      2280
+     ],
+     "table": "data_float_h",
+     "sub_var": "DataID",
+     "callback": "convert_unit(binary_op(`*`, 1), 'breaths/min')"
+    }
+   ]
+  }
+ },
+ "tidal_vol_spont": {
+  "unit": "mL",
+  "min": 0,
+  "max": 3000,
+  "description": "Spontaneous tidal volume",
+  "category": "ventilator",
+  "sources": {
+   "eicu": [
+    {
+     "ids": [
+      "Vt Spontaneous (mL)"
+     ],
+     "table": "respiratorycharting",
+     "sub_var": "respchartvaluelabel",
+     "val_var": "respchartvalue"
+    }
+   ],
+   "miiv": [
+    {
+     "ids": [
+      224421
+     ],
+     "table": "chartevents",
+     "sub_var": "itemid",
+     "unit_var": "valueuom",
+     "require_regex": {
+      "valueuom": "(?i)^\\s*mL\\s*$"
+     }
+    },
+    {
+     "ids": [
+      224686
+     ],
+     "table": "chartevents",
+     "sub_var": "itemid",
+     "unit_var": "valueuom",
+     "require_regex": {
+      "valueuom": "(?i)^\\s*mL\\s*$"
+     }
+    }
+   ]
+  }
+ },
+ "transpulm_pres_exp": {
+  "unit": "cmH2O",
+  "min": -100,
+  "max": 100,
+  "description": "Expiratory-hold transpulmonary pressure",
+  "category": "ventilator",
+  "sources": {
+   "miiv": [
+    {
+     "ids": [
+      224746
+     ],
+     "table": "chartevents",
+     "sub_var": "itemid",
+     "unit_var": "valueuom",
+     "require_regex": {
+      "valueuom": "(?i)^\\s*cmH2O\\s*$"
+     }
+    }
+   ]
+  }
+ },
+ "transpulm_pres_insp": {
+  "unit": "cmH2O",
+  "min": -100,
+  "max": 100,
+  "description": "Inspiratory-hold transpulmonary pressure",
+  "category": "ventilator",
+  "sources": {
+   "miiv": [
+    {
+     "ids": [
+      224747
+     ],
+     "table": "chartevents",
+     "sub_var": "itemid",
+     "unit_var": "valueuom",
+     "require_regex": {
+      "valueuom": "(?i)^\\s*cmH2O\\s*$"
+     }
+    }
+   ]
+  }
+ },
+ "vco2": {
+  "unit": "mL/min",
+  "min": 0,
+  "max": 3000,
+  "description": "Exhaled CO2 production per minute",
+  "category": "ventilator",
+  "sources": {
+   "aumc": [
+    {
+     "ids": [
+      12350
+     ],
+     "table": "numericitems",
+     "sub_var": "itemid",
+     "unit_var": "unit",
+     "require_regex": {
+      "unit": "(?i)^\\s*ml/min\\s*$"
+     }
+    },
+    {
+     "ids": [
+      12432
+     ],
+     "table": "numericitems",
+     "sub_var": "itemid",
+     "unit_var": "unit",
+     "require_regex": {
+      "unit": "(?i)^\\s*ml/min\\s*$"
+     }
+    },
+    {
+     "ids": [
+      8080
+     ],
+     "table": "numericitems",
+     "sub_var": "itemid",
+     "unit_var": "unit",
+     "require_regex": {
+      "unit": "(?i)^\\s*ml/min\\s*$"
+     }
+    }
+   ]
+  }
+ },
+ "remifentanil": {
+  "class_name": "lgl_cncpt",
+  "description": "remifentanil given in the hour (administration or running infusion)",
+  "category": "medications",
+  "aggregate": "max",
+  "sources": {
+   "aumc": [
+    {
+     "ids": [
+      12402
+     ],
+     "table": "drugitems",
+     "sub_var": "itemid",
+     "index_var": "start",
+     "dur_var": "stop",
+     "callback": "aumc_positive_dose",
+     "val_var": "dose"
+    }
+   ],
+   "hirid": [
+    {
+     "ids": [
+      1000705
+     ],
+     "table": "pharma",
+     "sub_var": "pharmaid",
+     "callback": "transform_fun(comp_na(`>`, 0.000001))"
+    }
+   ],
+   "sic": [
+    {
+     "ids": [
+      1546
+     ],
+     "table": "medication",
+     "sub_var": "DrugID",
+     "val_var": "Amount",
+     "callback": "sicdb_active_exposure",
+     "extra_vars": [
+      "OffsetDrugEnd"
+     ]
+    }
+   ]
+  }
+ },
+ "sufentanil": {
+  "class_name": "lgl_cncpt",
+  "description": "sufentanil (intravenous) given in the hour",
+  "category": "medications",
+  "aggregate": "max",
+  "sources": {
+   "aumc": [
+    {
+     "ids": [
+      7014
+     ],
+     "table": "drugitems",
+     "sub_var": "itemid",
+     "index_var": "start",
+     "dur_var": "stop",
+     "callback": "aumc_positive_dose",
+     "val_var": "dose",
+     "extra_vars": [
+      "ordercategory"
+     ],
+     "exclude_regex": {
+      "ordercategory": "(?i)niet iv|epidura|intratheca"
+     }
+    }
+   ],
+   "hirid": [
+    {
+     "ids": [
+      1000771
+     ],
+     "table": "pharma",
+     "sub_var": "pharmaid",
+     "callback": "transform_fun(comp_na(`>`, 0.000001))",
+     "extra_vars": [
+      "route"
+     ],
+     "require_regex": {
+      "route": "(?i)^\\s*(?:[ci]v(?:-(?:inf|inj))?|i\\.?v\\.?|intravenous)\\s*$"
+     }
+    }
+   ],
+   "sic": [
+    {
+     "ids": [
+      1547
+     ],
+     "table": "medication",
+     "sub_var": "DrugID",
+     "val_var": "Amount",
+     "callback": "sicdb_active_exposure",
+     "extra_vars": [
+      "OffsetDrugEnd"
+     ]
+    }
+   ]
+  }
+ },
+ "piritramide": {
+  "class_name": "lgl_cncpt",
+  "description": "piritramide given in the hour",
+  "category": "medications",
+  "aggregate": "max",
+  "sources": {
+   "aumc": [
+    {
+     "ids": [
+      6910
+     ],
+     "table": "drugitems",
+     "sub_var": "itemid",
+     "index_var": "start",
+     "dur_var": "stop",
+     "callback": "aumc_positive_dose",
+     "val_var": "dose"
+    }
+   ],
+   "sic": [
+    {
+     "ids": [
+      1521
+     ],
+     "table": "medication",
+     "sub_var": "DrugID",
+     "val_var": "Amount",
+     "callback": "sicdb_active_exposure",
+     "extra_vars": [
+      "OffsetDrugEnd"
+     ]
+    }
+   ]
+  }
+ },
+ "esketamine": {
+  "class_name": "lgl_cncpt",
+  "description": "esketamine (S-ketamine) given in the hour",
+  "category": "medications",
+  "aggregate": "max",
+  "sources": {
+   "aumc": [
+    {
+     "ids": [
+      9018
+     ],
+     "table": "drugitems",
+     "sub_var": "itemid",
+     "index_var": "start",
+     "dur_var": "stop",
+     "callback": "aumc_positive_dose",
+     "val_var": "dose"
+    }
+   ],
+   "sic": [
+    {
+     "ids": [
+      1578
+     ],
+     "table": "medication",
+     "sub_var": "DrugID",
+     "val_var": "Amount",
+     "callback": "sicdb_active_exposure",
+     "extra_vars": [
+      "OffsetDrugEnd"
+     ]
+    }
+   ]
+  }
+ },
+ "hydromorphone": {
+  "class_name": "lgl_cncpt",
+  "description": "hydromorphone given in the hour, any systemic route",
+  "category": "medications",
+  "aggregate": "max",
+  "sources": {
+   "miiv": [
+    {
+     "ids": [
+      221833
+     ],
+     "table": "inputevents",
+     "sub_var": "itemid",
+     "index_var": "starttime",
+     "dur_var": "endtime",
+     "callback": "mimic_positive_dose",
+     "val_var": "rate",
+     "extra_vars": [
+      "amount",
+      "statusdescription"
+     ],
+     "status_var": "statusdescription",
+     "excluded_statuses": [
+      "Rewritten"
+     ]
+    }
+   ],
+   "sic": [
+    {
+     "ids": [
+      1652,
+      1671
+     ],
+     "table": "medication",
+     "sub_var": "DrugID",
+     "val_var": "Amount",
+     "callback": "sicdb_active_exposure",
+     "extra_vars": [
+      "OffsetDrugEnd"
+     ]
+    }
+   ]
+  }
+ },
+ "methadone": {
+  "class_name": "lgl_cncpt",
+  "description": "methadone given in the hour, any systemic route",
+  "category": "medications",
+  "aggregate": "max",
+  "sources": {
+   "miiv": [
+    {
+     "ids": [
+      227520
+     ],
+     "table": "inputevents",
+     "sub_var": "itemid",
+     "index_var": "starttime",
+     "dur_var": "endtime",
+     "callback": "mimic_positive_dose",
+     "val_var": "rate",
+     "extra_vars": [
+      "amount",
+      "statusdescription"
+     ],
+     "status_var": "statusdescription",
+     "excluded_statuses": [
+      "Rewritten"
+     ]
+    }
+   ],
+   "aumc": [
+    {
+     "ids": [
+      9090,
+      12750
+     ],
+     "table": "drugitems",
+     "sub_var": "itemid",
+     "index_var": "start",
+     "dur_var": "stop",
+     "callback": "aumc_positive_dose",
+     "val_var": "dose"
+    }
+   ],
+   "hirid": [
+    {
+     "ids": [
+      215,
+      1000427
+     ],
+     "table": "pharma",
+     "sub_var": "pharmaid",
+     "callback": "transform_fun(comp_na(`>`, 0.000001))"
+    }
+   ],
+   "sic": [
+    {
+     "ids": [
+      1855
+     ],
+     "table": "medication",
+     "sub_var": "DrugID",
+     "val_var": "Amount",
+     "callback": "sicdb_active_exposure",
+     "extra_vars": [
+      "OffsetDrugEnd"
+     ]
+    }
+   ]
+  }
+ },
+ "oxycodone": {
+  "class_name": "lgl_cncpt",
+  "description": "oxycodone given in the hour (enteral; immediate or prolonged release, alone or combined)",
+  "category": "medications",
+  "aggregate": "max",
+  "sources": {
+   "aumc": [
+    {
+     "ids": [
+      13883,
+      19221
+     ],
+     "table": "drugitems",
+     "sub_var": "itemid",
+     "index_var": "start",
+     "dur_var": "stop",
+     "callback": "aumc_positive_dose",
+     "val_var": "dose"
+    }
+   ],
+   "hirid": [
+    {
+     "ids": [
+      1000935,
+      1000936,
+      1000937,
+      1000989,
+      1000990
+     ],
+     "table": "pharma",
+     "sub_var": "pharmaid",
+     "callback": "transform_fun(comp_na(`>`, 0.000001))"
+    }
+   ],
+   "sic": [
+    {
+     "ids": [
+      1639,
+      1640
+     ],
+     "table": "medication",
+     "sub_var": "DrugID",
+     "val_var": "Amount",
+     "callback": "sicdb_active_exposure",
+     "extra_vars": [
+      "OffsetDrugEnd"
+     ]
+    }
+   ]
+  }
+ },
+ "tramadol": {
+  "class_name": "lgl_cncpt",
+  "description": "tramadol given in the hour, any systemic route",
+  "category": "medications",
+  "aggregate": "max",
+  "sources": {
+   "aumc": [
+    {
+     "ids": [
+      7052
+     ],
+     "table": "drugitems",
+     "sub_var": "itemid",
+     "index_var": "start",
+     "dur_var": "stop",
+     "callback": "aumc_positive_dose",
+     "val_var": "dose"
+    }
+   ],
+   "hirid": [
+    {
+     "ids": [
+      1000523,
+      1000984,
+      1000985
+     ],
+     "table": "pharma",
+     "sub_var": "pharmaid",
+     "callback": "transform_fun(comp_na(`>`, 0.000001))"
+    }
+   ],
+   "sic": [
+    {
+     "ids": [
+      1634
+     ],
+     "table": "medication",
+     "sub_var": "DrugID",
+     "val_var": "Amount",
+     "callback": "sicdb_active_exposure",
+     "extra_vars": [
+      "OffsetDrugEnd"
+     ]
+    }
+   ]
+  }
+ },
+ "furosemide_active": {
+  "class_name": "lgl_cncpt",
+  "description": "furosemide given in the hour: an administration at that hour or a running infusion covering it (any route)",
+  "category": "medications",
+  "aggregate": "max",
+  "sources": {
+   "miiv": [
+    {
+     "ids": [
+      221794,
+      228340
+     ],
+     "table": "inputevents",
+     "sub_var": "itemid",
+     "callback": "mimic_positive_dose",
+     "val_var": "rate",
+     "extra_vars": [
+      "amount",
+      "statusdescription"
+     ],
+     "status_var": "statusdescription",
+     "excluded_statuses": [
+      "Rewritten"
+     ],
+     "index_var": "starttime",
+     "dur_var": "endtime"
+    }
+   ],
+   "aumc": [
+    {
+     "ids": [
+      7244
+     ],
+     "table": "drugitems",
+     "sub_var": "itemid",
+     "callback": "aumc_positive_dose",
+     "val_var": "dose",
+     "index_var": "start",
+     "dur_var": "stop"
+    }
+   ],
+   "hirid": [
+    {
+     "ids": [
+      4,
+      482,
+      1000232,
+      1000747
+     ],
+     "table": "pharma",
+     "sub_var": "pharmaid",
+     "callback": "transform_fun(comp_na(`>`, 0.000001))"
+    }
+   ],
+   "sic": [
+    {
+     "ids": [
+      1417,
+      1654
+     ],
+     "table": "medication",
+     "sub_var": "DrugID",
+     "val_var": "Amount",
+     "callback": "sicdb_active_exposure",
+     "extra_vars": [
+      "OffsetDrugEnd"
+     ]
+    }
+   ],
+   "eicu": [
+    {
+     "table": "infusiondrug",
+     "sub_var": "drugname",
+     "val_var": "drugrate",
+     "callback": "eicu_positive_infusion",
+     "extra_vars": [
+      "drugrate",
+      "drugname"
+     ],
+     "ids": [
+      "Furosemide",
+      "Furosemide ()",
+      "Furosemide (Lasix) MAX 500 mg Sodium Chloride 0.9% 100 ml (mg/hr)",
+      "Furosemide (Lasix) STD 250 mg Sodium Chloride 0.9% 250 ml (mg/hr)",
+      "Furosemide (mg/hr)",
+      "Furosemide (ml/hr)",
+      "LASIX",
+      "LASIX (ml/hr)",
+      "Lasix (mg/hr)"
+     ]
+    }
+   ]
+  }
+ },
+ "torasemide": {
+  "class_name": "lgl_cncpt",
+  "description": "torasemide (torsemide) administration, any route",
+  "category": "medications",
+  "aggregate": "max",
+  "sources": {
+   "hirid": [
+    {
+     "ids": [
+      1000520,
+      1000521,
+      1000522,
+      1000986
+     ],
+     "table": "pharma",
+     "sub_var": "pharmaid",
+     "callback": "transform_fun(comp_na(`>`, 0.000001))"
+    }
+   ],
+   "sic": [
+    {
+     "ids": [
+      1450
+     ],
+     "table": "medication",
+     "sub_var": "DrugID",
+     "callback": "transform_fun(comp_na(`>`, 0))"
+    }
+   ]
+  }
+ },
+ "piperacillin_tazobactam": {
+  "class_name": "lgl_cncpt",
+  "description": "piperacillin-tazobactam intravenous administration",
+  "category": "medications",
+  "aggregate": "max",
+  "sources": {
+   "miiv": [
+    {
+     "ids": [
+      225893
+     ],
+     "table": "inputevents",
+     "sub_var": "itemid",
+     "callback": "mimic_positive_dose",
+     "val_var": "rate",
+     "extra_vars": [
+      "amount",
+      "statusdescription"
+     ],
+     "status_var": "statusdescription",
+     "excluded_statuses": [
+      "Rewritten"
+     ]
+    }
+   ],
+   "hirid": [
+    {
+     "ids": [
+      405,
+      1000837
+     ],
+     "table": "pharma",
+     "sub_var": "pharmaid",
+     "callback": "transform_fun(comp_na(`>`, 0.000001))",
+     "extra_vars": [
+      "route"
+     ],
+     "require_regex": {
+      "route": "(?i)^\\s*(?:[ci]v(?:-(?:inf|inj))?|i\\.?v\\.?|intravenous)\\s*$"
+     }
+    }
+   ],
+   "sic": [
+    {
+     "ids": [
+      1459
+     ],
+     "table": "medication",
+     "sub_var": "DrugID",
+     "callback": "sicdb_exposure",
+     "val_var": "Amount"
+    }
+   ]
+  }
+ },
+ "vancomycin_piperacillin_tazobactam": {
+  "class_name": "rec_cncpt",
+  "description": "vancomycin and piperacillin-tazobactam co-exposure: TRUE at an administration hour of either agent when the other agent was given in the same or the preceding 23 hours",
+  "category": "medications",
+  "aggregate": "max",
+  "unit": "boolean",
+  "concepts": [
+   "vancomycin_iv",
+   "piperacillin_tazobactam"
+  ],
+  "callback": "vpt_coexposure",
+  "target": "ts_tbl",
+  "sources": {}
+ },
+ "nsaid": {
+  "class_name": "lgl_cncpt",
+  "description": "systemic non-steroidal anti-inflammatory drug administration (non-aspirin COX inhibitors)",
+  "category": "medications",
+  "aggregate": "max",
+  "sources": {
+   "miiv": [
+    {
+     "ids": [
+      229072
+     ],
+     "table": "inputevents",
+     "sub_var": "itemid",
+     "callback": "mimic_positive_dose",
+     "val_var": "rate",
+     "extra_vars": [
+      "amount",
+      "statusdescription"
+     ],
+     "status_var": "statusdescription",
+     "excluded_statuses": [
+      "Rewritten"
+     ]
+    }
+   ],
+   "aumc": [
+    {
+     "ids": [
+      7407,
+      9063,
+      9064,
+      9081,
+      9103,
+      19162
+     ],
+     "table": "drugitems",
+     "sub_var": "itemid",
+     "callback": "aumc_positive_dose",
+     "val_var": "dose"
+    }
+   ],
+   "hirid": [
+    {
+     "ids": [
+      1000401,
+      1000809,
+      1000859,
+      1000883,
+      1000884,
+      1000885
+     ],
+     "table": "pharma",
+     "sub_var": "pharmaid",
+     "callback": "transform_fun(comp_na(`>`, 0.000001))"
+    }
+   ],
+   "sic": [
+    {
+     "ids": [
+      1575,
+      1732,
+      1733,
+      1753,
+      1804,
+      1865,
+      1971,
+      1972
+     ],
+     "table": "medication",
+     "sub_var": "DrugID",
+     "callback": "transform_fun(comp_na(`>`, 0))"
+    }
+   ]
+  }
+ },
+ "vancomycin_iv": {
+  "class_name": "lgl_cncpt",
+  "description": "vancomycin systemic (intravenous) administration; input of vancomycin_piperacillin_tazobactam",
+  "category": "medications",
+  "aggregate": "max",
+  "sources": {
+   "miiv": [
+    {
+     "ids": 225798,
+     "table": "inputevents",
+     "sub_var": "itemid",
+     "callback": "mimic_positive_dose",
+     "val_var": "rate",
+     "extra_vars": [
+      "amount",
+      "statusdescription"
+     ],
+     "status_var": "statusdescription",
+     "excluded_statuses": [
+      "Rewritten"
+     ]
+    }
+   ],
+   "hirid": [
+    {
+     "ids": [
+      189
+     ],
+     "table": "pharma",
+     "sub_var": "pharmaid",
+     "callback": "transform_fun(comp_na(`>`, 0.000001))",
+     "extra_vars": [
+      "route"
+     ],
+     "require_regex": {
+      "route": "(?i)^\\s*(?:[ci]v(?:-(?:inf|inj))?|i\\.?v\\.?|intravenous)\\s*$"
+     }
+    }
+   ],
+   "sic": [
+    {
+     "ids": [
+      1461
+     ],
+     "table": "medication",
+     "sub_var": "DrugID",
+     "callback": "sicdb_exposure",
+     "val_var": "Amount"
+    }
+   ]
+  }
+ },
+ "angiotensin_ii_rate": {
+  "unit": "ng/kg/min",
+  "min": 0,
+  "max": 1000,
+  "description": "Continuous intravenous angiotensin II infusion rate",
+  "category": "cardiovascular",
+  "sources": {
+   "miiv": [
+    {
+     "ids": [
+      229709
+     ],
+     "table": "inputevents",
+     "sub_var": "itemid",
+     "stop_var": "endtime",
+     "callback": "miiv_angiotensin_rate",
+     "extra_vars": [
+      "ordercategorydescription",
+      "rateuom",
+      "statusdescription"
+     ],
+     "status_var": "statusdescription",
+     "excluded_statuses": [
+      "Rewritten",
+      "Cancelled",
+      "Canceled",
+      "Bolus"
+     ],
+     "require_regex": {
+      "rateuom": "(?i)^\\s*mcg/kg/min\\s*$",
+      "ordercategorydescription": "^Continuous Med$"
+     }
+    },
+    {
+     "ids": [
+      229764
+     ],
+     "table": "inputevents",
+     "sub_var": "itemid",
+     "stop_var": "endtime",
+     "callback": "miiv_angiotensin_rate",
+     "extra_vars": [
+      "ordercategorydescription",
+      "rateuom",
+      "statusdescription"
+     ],
+     "status_var": "statusdescription",
+     "excluded_statuses": [
+      "Rewritten",
+      "Cancelled",
+      "Canceled",
+      "Bolus"
+     ],
+     "require_regex": {
+      "rateuom": "(?i)^\\s*ng/kg/min\\s*$",
+      "ordercategorydescription": "^Continuous Med$"
+     }
+    }
+   ]
+  }
+ },
+ "levosimendan": {
+  "unit": "boolean",
+  "description": "Levosimendan administration exposure",
+  "category": "cardiovascular",
+  "class_name": "lgl_cncpt",
+  "aggregate": "max",
+  "sources": {
+   "hirid": [
+    {
+     "ids": [
+      1000606
+     ],
+     "table": "pharma",
+     "sub_var": "pharmaid",
+     "callback": "transform_fun(comp_na(`>`, 0.000001))",
+     "extra_vars": [
+      "route"
+     ],
+     "require_regex": {
+      "route": "(?i)^\\s*(?:[ci]v(?:-(?:inf|inj))?|i\\.?v\\.?|intravenous)\\s*$"
+     }
+    }
+   ],
+   "sic": [
+    {
+     "ids": [
+      1548
+     ],
+     "table": "medication",
+     "sub_var": "DrugID",
+     "val_var": "Amount",
+     "callback": "sicdb_exposure"
+    }
+   ]
+  }
+ },
+ "terlipressin": {
+  "unit": "boolean",
+  "description": "Terlipressin administration exposure",
+  "category": "cardiovascular",
+  "class_name": "lgl_cncpt",
+  "aggregate": "max",
+  "sources": {
+   "aumc": [
+    {
+     "ids": [
+      12467
+     ],
+     "table": "drugitems",
+     "sub_var": "itemid",
+     "val_var": "dose",
+     "callback": "aumc_positive_dose",
+     "index_var": "start",
+     "dur_var": "stop",
+     "extra_vars": [
+      "ordercategory"
+     ],
+     "exclude_regex": {
+      "ordercategory": "(?i)^\\s*niet iv"
+     }
+    }
+   ],
+   "hirid": [
+    {
+     "ids": [
+      1000793
+     ],
+     "table": "pharma",
+     "sub_var": "pharmaid",
+     "callback": "transform_fun(comp_na(`>`, 0.000001))",
+     "extra_vars": [
+      "route"
+     ],
+     "require_regex": {
+      "route": "(?i)^\\s*(?:[ci]v(?:-(?:inf|inj))?|i\\.?v\\.?|intravenous)\\s*$"
+     }
+    }
+   ],
+   "sic": [
+    {
+     "ids": [
+      1483
+     ],
+     "table": "medication",
+     "sub_var": "DrugID",
+     "val_var": "Amount",
+     "callback": "sicdb_exposure"
+    }
+   ]
+  }
+ },
+ "bps": {
+  "unit": "score",
+  "min": 3,
+  "max": 12,
+  "description": "Behavioral Pain Scale total; invalid 0–2 remain missing",
+  "category": "neurological",
+  "sources": {
+   "aumc": [
+    {
+     "ids": [
+      19609
+     ],
+     "table": "numericitems",
+     "sub_var": "itemid",
+     "unit_var": "unit",
+     "require_regex": {
+      "unit": "(?i)^\\s*Geen\\s*$"
+     },
+     "callback": "convert_unit(binary_op(`*`, 1), 'score')"
+    }
+   ]
+  }
+ },
+ "be_venous": {
+  "unit": "mEq/L",
+  "min": -25,
+  "max": 25,
+  "description": "Venous arterial base excess",
+  "category": "blood gas",
+  "sources": {
+   "miiv": [
+    {
+     "ids": [
+      50802
+     ],
+     "table": "labevents",
+     "sub_var": "itemid",
+     "unit_var": "valueuom",
+     "require_regex": {
+      "valueuom": "(?i)^\\s*mEq/L\\s*$"
+     },
+     "callback": "miiv_specimen_site",
+     "extra_vars": [
+      "specimen_id",
+      "subject_id"
+     ],
+     "specimen_token": "VEN."
+    }
+   ]
+  }
+ },
+ "lact_venous": {
+  "unit": "mmol/L",
+  "min": 0,
+  "max": 50,
+  "description": "Venous lactate",
+  "category": "cardiovascular",
+  "sources": {
+   "hirid": [
+    {
+     "ids": [
+      24000485
+     ],
+     "table": "observations",
+     "sub_var": "variableid",
+     "class_name": "hrd_itm"
+    },
+    {
+     "ids": [
+      24000732
+     ],
+     "table": "observations",
+     "sub_var": "variableid",
+     "class_name": "hrd_itm"
+    }
+   ],
+   "miiv": [
+    {
+     "ids": [
+      50813
+     ],
+     "table": "labevents",
+     "sub_var": "itemid",
+     "unit_var": "valueuom",
+     "require_regex": {
+      "valueuom": "(?i)^\\s*mmol/L\\s*$"
+     },
+     "callback": "miiv_specimen_site",
+     "extra_vars": [
+      "specimen_id",
+      "subject_id"
+     ],
+     "specimen_token": "VEN."
+    }
+   ]
+  }
+ },
+ "pco2_mixed_venous": {
+  "unit": "mmHg",
+  "min": 10,
+  "max": 150,
+  "description": "Mixed-venous CO2 partial pressure",
+  "category": "blood gas",
+  "sources": {
+   "miiv": [
+    {
+     "ids": [
+      50818
+     ],
+     "table": "labevents",
+     "sub_var": "itemid",
+     "unit_var": "valueuom",
+     "require_regex": {
+      "valueuom": "(?i)^\\s*mm\\ Hg\\s*$"
+     },
+     "callback": "miiv_specimen_site",
+     "extra_vars": [
+      "specimen_id",
+      "subject_id"
+     ],
+     "specimen_token": "MIX."
+    }
+   ]
+  }
+ },
+ "pco2_venous": {
+  "unit": "mmHg",
+  "min": 10,
+  "max": 150,
+  "description": "Venous CO2 partial pressure",
+  "category": "blood gas",
+  "sources": {
+   "miiv": [
+    {
+     "ids": [
+      50818
+     ],
+     "table": "labevents",
+     "sub_var": "itemid",
+     "unit_var": "valueuom",
+     "require_regex": {
+      "valueuom": "(?i)^\\s*mm\\ Hg\\s*$"
+     },
+     "callback": "miiv_specimen_site",
+     "extra_vars": [
+      "specimen_id",
+      "subject_id"
+     ],
+     "specimen_token": "VEN."
+    }
+   ]
+  }
+ },
+ "ph_mixed_venous": {
+  "min": 6.8,
+  "max": 8,
+  "description": "Mixed-venous pH of blood",
+  "category": "blood gas",
+  "sources": {
+   "miiv": [
+    {
+     "ids": [
+      50820
+     ],
+     "table": "labevents",
+     "sub_var": "itemid",
+     "unit_var": "valueuom",
+     "require_regex": {
+      "valueuom": "(?i)^\\s*units\\s*$"
+     },
+     "callback": "miiv_specimen_site",
+     "extra_vars": [
+      "specimen_id",
+      "subject_id"
+     ],
+     "specimen_token": "MIX."
+    }
+   ]
+  }
+ },
+ "ph_venous": {
+  "min": 6.8,
+  "max": 8,
+  "description": "Venous pH of blood",
+  "category": "blood gas",
+  "sources": {
+   "miiv": [
+    {
+     "ids": [
+      50820
+     ],
+     "table": "labevents",
+     "sub_var": "itemid",
+     "unit_var": "valueuom",
+     "require_regex": {
+      "valueuom": "(?i)^\\s*units\\s*$"
+     },
+     "callback": "miiv_specimen_site",
+     "extra_vars": [
+      "specimen_id",
+      "subject_id"
+     ],
+     "specimen_token": "VEN."
+    }
+   ],
+   "sic": [
+    {
+     "ids": [
+      697
+     ],
+     "table": "laboratory",
+     "sub_var": "LaboratoryID"
+    }
+   ]
+  }
+ },
+ "po2_mixed_venous": {
+  "unit": "mmHg",
+  "min": 20,
+  "max": 600,
+  "description": "Mixed-venous O2 partial pressure",
+  "category": "blood gas",
+  "sources": {
+   "miiv": [
+    {
+     "ids": [
+      50821
+     ],
+     "table": "labevents",
+     "sub_var": "itemid",
+     "unit_var": "valueuom",
+     "require_regex": {
+      "valueuom": "(?i)^\\s*mm\\ Hg\\s*$"
+     },
+     "callback": "miiv_specimen_site",
+     "extra_vars": [
+      "specimen_id",
+      "subject_id"
+     ],
+     "specimen_token": "MIX."
+    }
+   ]
+  }
+ },
+ "po2_venous": {
+  "unit": "mmHg",
+  "min": 20,
+  "max": 600,
+  "description": "Venous O2 partial pressure",
+  "category": "blood gas",
+  "sources": {
+   "miiv": [
+    {
+     "ids": [
+      50821
+     ],
+     "table": "labevents",
+     "sub_var": "itemid",
+     "unit_var": "valueuom",
+     "require_regex": {
+      "valueuom": "(?i)^\\s*mm\\ Hg\\s*$"
+     },
+     "callback": "miiv_specimen_site",
+     "extra_vars": [
+      "specimen_id",
+      "subject_id"
+     ],
+     "specimen_token": "VEN."
+    }
+   ],
+   "sic": [
+    {
+     "ids": [
+      694
+     ],
+     "table": "laboratory",
+     "sub_var": "LaboratoryID"
+    }
+   ]
+  }
+ },
+ "cam_icu": {
+  "unit": "boolean",
+  "description": "Explicit CAM-ICU result; unassessable stays missing",
+  "category": "neurological",
+  "class_name": "lgl_cncpt",
+  "aggregate": "max",
+  "sources": {
+   "aumc": [
+    {
+     "ids": [
+      20351
+     ],
+     "table": "listitems",
+     "sub_var": "itemid",
+     "val_var": "value",
+     "callback": "apply_map(c(`POSITIEF` = 1, `NEGATIEF` = 0), strict = TRUE)"
+    }
+   ]
+  }
+ },
+ "colloid_input_ml": {
+  "unit": "mL",
+  "min": 0,
+  "max": 10000,
+  "aggregate": "sum",
+  "category": "output",
+  "description": "hourly IV colloid volume (mL): human albumin, gelatin, hydroxyethyl starch and dextran solutions. Blood products and crystalloids are excluded. MIIV inputevents amounts and AUMC drugitems.fluidin are overlap-allocated to ICU hours with volume conservation; HiRID uses increments of the daily colloid counter 30005080; SICdb uses medication Amount (mL), infusions allocated over Offset..OffsetDrugEnd. Not additive with total_input_ml, which already contains colloids in MIIV, AUMC and HiRID.",
+  "sources": {
+   "aumc": [
+    {
+     "ids": [
+      7252
+     ],
+     "table": "drugitems",
+     "sub_var": "itemid",
+     "val_var": "fluidin",
+     "index_var": "start",
+     "callback": "distribute_volume_hourly",
+     "value_unit": "mL",
+     "end_var": "stop",
+     "extra_vars": [
+      "stop",
+      "ordercategoryid",
+      "isadditive"
+     ],
+     "require_regex": {
+      "isadditive": "^(?:0(?:\\.0)?|[Ff]alse)$",
+      "ordercategoryid": "^(?:17)(?:\\.0)?$"
+     }
+    },
+    {
+     "ids": [
+      8932
+     ],
+     "table": "drugitems",
+     "sub_var": "itemid",
+     "val_var": "fluidin",
+     "index_var": "start",
+     "callback": "distribute_volume_hourly",
+     "value_unit": "mL",
+     "end_var": "stop",
+     "extra_vars": [
+      "stop",
+      "ordercategoryid",
+      "isadditive"
+     ],
+     "require_regex": {
+      "isadditive": "^(?:0(?:\\.0)?|[Ff]alse)$",
+      "ordercategoryid": "^(?:17)(?:\\.0)?$"
+     }
+    },
+    {
+     "ids": [
+      8933
+     ],
+     "table": "drugitems",
+     "sub_var": "itemid",
+     "val_var": "fluidin",
+     "index_var": "start",
+     "callback": "distribute_volume_hourly",
+     "value_unit": "mL",
+     "end_var": "stop",
+     "extra_vars": [
+      "stop",
+      "ordercategoryid",
+      "isadditive"
+     ],
+     "require_regex": {
+      "isadditive": "^(?:0(?:\\.0)?|[Ff]alse)$",
+      "ordercategoryid": "^(?:17)(?:\\.0)?$"
+     }
+    },
+    {
+     "ids": [
+      8971
+     ],
+     "table": "drugitems",
+     "sub_var": "itemid",
+     "val_var": "fluidin",
+     "index_var": "start",
+     "callback": "distribute_volume_hourly",
+     "value_unit": "mL",
+     "end_var": "stop",
+     "extra_vars": [
+      "stop",
+      "ordercategoryid",
+      "isadditive"
+     ],
+     "require_regex": {
+      "isadditive": "^(?:0(?:\\.0)?|[Ff]alse)$",
+      "ordercategoryid": "^(?:17)(?:\\.0)?$"
+     }
+    },
+    {
+     "ids": [
+      9599
+     ],
+     "table": "drugitems",
+     "sub_var": "itemid",
+     "val_var": "fluidin",
+     "index_var": "start",
+     "callback": "distribute_volume_hourly",
+     "value_unit": "mL",
+     "end_var": "stop",
+     "extra_vars": [
+      "stop",
+      "ordercategoryid",
+      "isadditive"
+     ],
+     "require_regex": {
+      "isadditive": "^(?:0(?:\\.0)?|[Ff]alse)$",
+      "ordercategoryid": "^(?:17)(?:\\.0)?$"
+     }
+    }
+   ],
+   "miiv": [
+    {
+     "ids": [
+      220862
+     ],
+     "table": "inputevents",
+     "sub_var": "itemid",
+     "val_var": "amount",
+     "unit_var": "amountuom",
+     "index_var": "starttime",
+     "callback": "distribute_volume_hourly",
+     "end_var": "endtime",
+     "extra_vars": [
+      "endtime",
+      "statusdescription",
+      "ordercategoryname"
+     ],
+     "status_var": "statusdescription",
+     "excluded_statuses": [
+      "Rewritten",
+      "Cancelled",
+      "Canceled"
+     ],
+     "require_regex": {
+      "amountuom": "(?i)^\\s*mL\\s*$"
+     },
+     "exclude_regex": {
+      "ordercategoryname": "(?i)pre.admission|cath.lab|operating|\\bOR\\b|PACU|emergency|\\bED\\b"
+     }
+    },
+    {
+     "ids": [
+      220864
+     ],
+     "table": "inputevents",
+     "sub_var": "itemid",
+     "val_var": "amount",
+     "unit_var": "amountuom",
+     "index_var": "starttime",
+     "callback": "distribute_volume_hourly",
+     "end_var": "endtime",
+     "extra_vars": [
+      "endtime",
+      "statusdescription",
+      "ordercategoryname"
+     ],
+     "status_var": "statusdescription",
+     "excluded_statuses": [
+      "Rewritten",
+      "Cancelled",
+      "Canceled"
+     ],
+     "require_regex": {
+      "amountuom": "(?i)^\\s*mL\\s*$"
+     },
+     "exclude_regex": {
+      "ordercategoryname": "(?i)pre.admission|cath.lab|operating|\\bOR\\b|PACU|emergency|\\bED\\b"
+     }
+    },
+    {
+     "ids": [
+      225174
+     ],
+     "table": "inputevents",
+     "sub_var": "itemid",
+     "val_var": "amount",
+     "unit_var": "amountuom",
+     "index_var": "starttime",
+     "callback": "distribute_volume_hourly",
+     "end_var": "endtime",
+     "extra_vars": [
+      "endtime",
+      "statusdescription",
+      "ordercategoryname"
+     ],
+     "status_var": "statusdescription",
+     "excluded_statuses": [
+      "Rewritten",
+      "Cancelled",
+      "Canceled"
+     ],
+     "require_regex": {
+      "amountuom": "(?i)^\\s*mL\\s*$"
+     },
+     "exclude_regex": {
+      "ordercategoryname": "(?i)pre.admission|cath.lab|operating|\\bOR\\b|PACU|emergency|\\bED\\b"
+     }
+    },
+    {
+     "ids": [
+      225795
+     ],
+     "table": "inputevents",
+     "sub_var": "itemid",
+     "val_var": "amount",
+     "unit_var": "amountuom",
+     "index_var": "starttime",
+     "callback": "distribute_volume_hourly",
+     "end_var": "endtime",
+     "extra_vars": [
+      "endtime",
+      "statusdescription",
+      "ordercategoryname"
+     ],
+     "status_var": "statusdescription",
+     "excluded_statuses": [
+      "Rewritten",
+      "Cancelled",
+      "Canceled"
+     ],
+     "require_regex": {
+      "amountuom": "(?i)^\\s*mL\\s*$"
+     },
+     "exclude_regex": {
+      "ordercategoryname": "(?i)pre.admission|cath.lab|operating|\\bOR\\b|PACU|emergency|\\bED\\b"
+     }
+    }
+   ],
+   "hirid": [
+    {
+     "table": "observations",
+     "sub_var": "variableid",
+     "ids": [
+      30005080
+     ],
+     "callback": "hirid_fluid_counter_hourly"
+    }
+   ],
+   "sic": [
+    {
+     "ids": [
+      2039
+     ],
+     "table": "medication",
+     "sub_var": "DrugID",
+     "val_var": "Amount",
+     "index_var": "Offset",
+     "callback": "sicdb_volume_allocate",
+     "extra_vars": [
+      "OffsetDrugEnd",
+      "IsSingleDose"
+     ],
+     "stop_var": "OffsetDrugEnd"
+    },
+    {
+     "ids": [
+      2040
+     ],
+     "table": "medication",
+     "sub_var": "DrugID",
+     "val_var": "Amount",
+     "index_var": "Offset",
+     "callback": "sicdb_volume_allocate",
+     "extra_vars": [
+      "OffsetDrugEnd",
+      "IsSingleDose"
+     ],
+     "stop_var": "OffsetDrugEnd"
+    },
+    {
+     "ids": [
+      2049
+     ],
+     "table": "medication",
+     "sub_var": "DrugID",
+     "val_var": "Amount",
+     "index_var": "Offset",
+     "callback": "sicdb_volume_allocate",
+     "extra_vars": [
+      "OffsetDrugEnd",
+      "IsSingleDose"
+     ],
+     "stop_var": "OffsetDrugEnd"
+    },
+    {
+     "ids": [
+      2090
+     ],
+     "table": "medication",
+     "sub_var": "DrugID",
+     "val_var": "Amount",
+     "index_var": "Offset",
+     "callback": "sicdb_volume_allocate",
+     "extra_vars": [
+      "OffsetDrugEnd",
+      "IsSingleDose"
+     ],
+     "stop_var": "OffsetDrugEnd"
+    },
+    {
+     "ids": [
+      2123
+     ],
+     "table": "medication",
+     "sub_var": "DrugID",
+     "val_var": "Amount",
+     "index_var": "Offset",
+     "callback": "sicdb_volume_allocate",
+     "extra_vars": [
+      "OffsetDrugEnd",
+      "IsSingleDose"
+     ],
+     "stop_var": "OffsetDrugEnd"
+    },
+    {
+     "ids": [
+      2169
+     ],
+     "table": "medication",
+     "sub_var": "DrugID",
+     "val_var": "Amount",
+     "index_var": "Offset",
+     "callback": "sicdb_volume_allocate",
+     "extra_vars": [
+      "OffsetDrugEnd",
+      "IsSingleDose"
+     ],
+     "stop_var": "OffsetDrugEnd"
+    },
+    {
+     "ids": [
+      2170
+     ],
+     "table": "medication",
+     "sub_var": "DrugID",
+     "val_var": "Amount",
+     "index_var": "Offset",
+     "callback": "sicdb_volume_allocate",
+     "extra_vars": [
+      "OffsetDrugEnd",
+      "IsSingleDose"
+     ],
+     "stop_var": "OffsetDrugEnd"
+    }
+   ],
+   "eicu": [
+    {
+     "ids": [
+      "flowsheet|Flowsheet Cell Labels|I&O|Intake (ml)|Generic Intake (ml)|Albumin 25%"
+     ],
+     "table": "intakeoutput",
+     "sub_var": "cellpath",
+     "val_var": "cellvaluenumeric",
+     "extra_vars": [
+      "cellpath",
+      "celllabel",
+      "intakeoutputoffset",
+      "intakeoutputentryoffset"
+     ],
+     "callback": "eicu_systemic_intake"
+    },
+    {
+     "ids": [
+      "flowsheet|Flowsheet Cell Labels|I&O|Intake (ml)|Generic Intake (ml)|Albumin 5%"
+     ],
+     "table": "intakeoutput",
+     "sub_var": "cellpath",
+     "val_var": "cellvaluenumeric",
+     "extra_vars": [
+      "cellpath",
+      "celllabel",
+      "intakeoutputoffset",
+      "intakeoutputentryoffset"
+     ],
+     "callback": "eicu_systemic_intake"
+    }
+   ]
+  }
+ },
+ "crrt_dilution_mode_set": {
+  "unit": "category",
+  "description": "Prescribed CRRT dilution mode",
+  "category": "renal",
+  "class_name": "fct_cncpt",
+  "target": "ts_tbl",
+  "levels": [
+   "pre",
+   "pre_post"
+  ],
+  "sources": {
+   "aumc": [
+    {
+     "ids": [
+      20542
+     ],
+     "table": "listitems",
+     "sub_var": "itemid",
+     "val_var": "value",
+     "callback": "apply_map(c(`Predilutie` = 'pre', `Pre+Postdilutie` = 'pre_post'), strict = TRUE)"
+    }
+   ]
+  }
+ },
+ "crystalloid_input_ml": {
+  "unit": "mL",
+  "min": 0,
+  "max": 10000,
+  "aggregate": "sum",
+  "category": "output",
+  "description": "hourly IV crystalloid volume (mL): saline (0.45-23.4%), balanced (lactated Ringer and similar), dextrose, sodium bicarbonate and, where the source charts their volume, crystalloid drug carriers and pressure-bag flushes. Colloids, blood products, parenteral and enteral nutrition are excluded. MIIV inputevents amounts and AUMC drugitems.fluidin are overlap-allocated to ICU hours with volume conservation; HiRID uses increments of the daily saline counter 30005075 (it charts no other crystalloid counter); SICdb uses medication Amount (mL), infusions allocated over Offset..OffsetDrugEnd. Not additive with total_input_ml.",
+  "sources": {
+   "aumc": [
+    {
+     "ids": [
+      10738
+     ],
+     "table": "drugitems",
+     "sub_var": "itemid",
+     "val_var": "fluidin",
+     "index_var": "start",
+     "callback": "distribute_volume_hourly",
+     "value_unit": "mL",
+     "end_var": "stop",
+     "extra_vars": [
+      "stop",
+      "ordercategoryid",
+      "isadditive"
+     ],
+     "require_regex": {
+      "isadditive": "^(?:0(?:\\.0)?|[Ff]alse)$",
+      "ordercategoryid": "^(?:55)(?:\\.0)?$"
+     }
+    },
+    {
+     "ids": [
+      10739
+     ],
+     "table": "drugitems",
+     "sub_var": "itemid",
+     "val_var": "fluidin",
+     "index_var": "start",
+     "callback": "distribute_volume_hourly",
+     "value_unit": "mL",
+     "end_var": "stop",
+     "extra_vars": [
+      "stop",
+      "ordercategoryid",
+      "isadditive"
+     ],
+     "require_regex": {
+      "isadditive": "^(?:0(?:\\.0)?|[Ff]alse)$",
+      "ordercategoryid": "^(?:55)(?:\\.0)?$"
+     }
+    },
+    {
+     "ids": [
+      12892
+     ],
+     "table": "drugitems",
+     "sub_var": "itemid",
+     "val_var": "fluidin",
+     "index_var": "start",
+     "callback": "distribute_volume_hourly",
+     "value_unit": "mL",
+     "end_var": "stop",
+     "extra_vars": [
+      "stop",
+      "ordercategoryid",
+      "isadditive"
+     ],
+     "require_regex": {
+      "isadditive": "^(?:0(?:\\.0)?|[Ff]alse)$",
+      "ordercategoryid": "^(?:55)(?:\\.0)?$"
+     }
+    },
+    {
+     "ids": [
+      13951
+     ],
+     "table": "drugitems",
+     "sub_var": "itemid",
+     "val_var": "fluidin",
+     "index_var": "start",
+     "callback": "distribute_volume_hourly",
+     "value_unit": "mL",
+     "end_var": "stop",
+     "extra_vars": [
+      "stop",
+      "ordercategoryid",
+      "isadditive"
+     ],
+     "require_regex": {
+      "isadditive": "^(?:0(?:\\.0)?|[Ff]alse)$",
+      "ordercategoryid": "^(?:65)(?:\\.0)?$"
+     }
+    },
+    {
+     "ids": [
+      16904
+     ],
+     "table": "drugitems",
+     "sub_var": "itemid",
+     "val_var": "fluidin",
+     "index_var": "start",
+     "callback": "distribute_volume_hourly",
+     "value_unit": "mL",
+     "end_var": "stop",
+     "extra_vars": [
+      "stop",
+      "ordercategoryid",
+      "isadditive"
+     ],
+     "require_regex": {
+      "isadditive": "^(?:0(?:\\.0)?|[Ff]alse)$",
+      "ordercategoryid": "^(?:55)(?:\\.0)?$"
+     }
+    },
+    {
+     "ids": [
+      19932
+     ],
+     "table": "drugitems",
+     "sub_var": "itemid",
+     "val_var": "fluidin",
+     "index_var": "start",
+     "callback": "distribute_volume_hourly",
+     "value_unit": "mL",
+     "end_var": "stop",
+     "extra_vars": [
+      "stop",
+      "ordercategoryid",
+      "isadditive"
+     ],
+     "require_regex": {
+      "isadditive": "^(?:0(?:\\.0)?|[Ff]alse)$",
+      "ordercategoryid": "^(?:55)(?:\\.0)?$"
+     }
+    },
+    {
+     "ids": [
+      7254
+     ],
+     "table": "drugitems",
+     "sub_var": "itemid",
+     "val_var": "fluidin",
+     "index_var": "start",
+     "callback": "distribute_volume_hourly",
+     "value_unit": "mL",
+     "end_var": "stop",
+     "extra_vars": [
+      "stop",
+      "ordercategoryid",
+      "isadditive"
+     ],
+     "require_regex": {
+      "isadditive": "^(?:0(?:\\.0)?|[Ff]alse)$",
+      "ordercategoryid": "^(?:55)(?:\\.0)?$"
+     }
+    },
+    {
+     "ids": [
+      7255
+     ],
+     "table": "drugitems",
+     "sub_var": "itemid",
+     "val_var": "fluidin",
+     "index_var": "start",
+     "callback": "distribute_volume_hourly",
+     "value_unit": "mL",
+     "end_var": "stop",
+     "extra_vars": [
+      "stop",
+      "ordercategoryid",
+      "isadditive"
+     ],
+     "require_regex": {
+      "isadditive": "^(?:0(?:\\.0)?|[Ff]alse)$",
+      "ordercategoryid": "^(?:55)(?:\\.0)?$"
+     }
+    },
+    {
+     "ids": [
+      7256
+     ],
+     "table": "drugitems",
+     "sub_var": "itemid",
+     "val_var": "fluidin",
+     "index_var": "start",
+     "callback": "distribute_volume_hourly",
+     "value_unit": "mL",
+     "end_var": "stop",
+     "extra_vars": [
+      "stop",
+      "ordercategoryid",
+      "isadditive"
+     ],
+     "require_regex": {
+      "isadditive": "^(?:0(?:\\.0)?|[Ff]alse)$",
+      "ordercategoryid": "^(?:55)(?:\\.0)?$"
+     }
+    },
+    {
+     "ids": [
+      7257
+     ],
+     "table": "drugitems",
+     "sub_var": "itemid",
+     "val_var": "fluidin",
+     "index_var": "start",
+     "callback": "distribute_volume_hourly",
+     "value_unit": "mL",
+     "end_var": "stop",
+     "extra_vars": [
+      "stop",
+      "ordercategoryid",
+      "isadditive"
+     ],
+     "require_regex": {
+      "isadditive": "^(?:0(?:\\.0)?|[Ff]alse)$",
+      "ordercategoryid": "^(?:55)(?:\\.0)?$"
+     }
+    },
+    {
+     "ids": [
+      7291
+     ],
+     "table": "drugitems",
+     "sub_var": "itemid",
+     "val_var": "fluidin",
+     "index_var": "start",
+     "callback": "distribute_volume_hourly",
+     "value_unit": "mL",
+     "end_var": "stop",
+     "extra_vars": [
+      "stop",
+      "ordercategoryid",
+      "isadditive"
+     ],
+     "require_regex": {
+      "isadditive": "^(?:0(?:\\.0)?|[Ff]alse)$",
+      "ordercategoryid": "^(?:55)(?:\\.0)?$"
+     }
+    },
+    {
+     "ids": [
+      7292
+     ],
+     "table": "drugitems",
+     "sub_var": "itemid",
+     "val_var": "fluidin",
+     "index_var": "start",
+     "callback": "distribute_volume_hourly",
+     "value_unit": "mL",
+     "end_var": "stop",
+     "extra_vars": [
+      "stop",
+      "ordercategoryid",
+      "isadditive"
+     ],
+     "require_regex": {
+      "isadditive": "^(?:0(?:\\.0)?|[Ff]alse)$",
+      "ordercategoryid": "^(?:55)(?:\\.0)?$"
+     }
+    },
+    {
+     "ids": [
+      7293
+     ],
+     "table": "drugitems",
+     "sub_var": "itemid",
+     "val_var": "fluidin",
+     "index_var": "start",
+     "callback": "distribute_volume_hourly",
+     "value_unit": "mL",
+     "end_var": "stop",
+     "extra_vars": [
+      "stop",
+      "ordercategoryid",
+      "isadditive"
+     ],
+     "require_regex": {
+      "isadditive": "^(?:0(?:\\.0)?|[Ff]alse)$",
+      "ordercategoryid": "^(?:55)(?:\\.0)?$"
+     }
+    },
+    {
+     "ids": [
+      7295
+     ],
+     "table": "drugitems",
+     "sub_var": "itemid",
+     "val_var": "fluidin",
+     "index_var": "start",
+     "callback": "distribute_volume_hourly",
+     "value_unit": "mL",
+     "end_var": "stop",
+     "extra_vars": [
+      "stop",
+      "ordercategoryid",
+      "isadditive"
+     ],
+     "require_regex": {
+      "isadditive": "^(?:0(?:\\.0)?|[Ff]alse)$",
+      "ordercategoryid": "^(?:55)(?:\\.0)?$"
+     }
+    },
+    {
+     "ids": [
+      7316
+     ],
+     "table": "drugitems",
+     "sub_var": "itemid",
+     "val_var": "fluidin",
+     "index_var": "start",
+     "callback": "distribute_volume_hourly",
+     "value_unit": "mL",
+     "end_var": "stop",
+     "extra_vars": [
+      "stop",
+      "ordercategoryid",
+      "isadditive"
+     ],
+     "require_regex": {
+      "isadditive": "^(?:0(?:\\.0)?|[Ff]alse)$",
+      "ordercategoryid": "^(?:55)(?:\\.0)?$"
+     }
+    },
+    {
+     "ids": [
+      8267
+     ],
+     "table": "drugitems",
+     "sub_var": "itemid",
+     "val_var": "fluidin",
+     "index_var": "start",
+     "callback": "distribute_volume_hourly",
+     "value_unit": "mL",
+     "end_var": "stop",
+     "extra_vars": [
+      "stop",
+      "ordercategoryid",
+      "isadditive"
+     ],
+     "require_regex": {
+      "isadditive": "^(?:0(?:\\.0)?|[Ff]alse)$",
+      "ordercategoryid": "^(?:55)(?:\\.0)?$"
+     }
+    },
+    {
+     "ids": [
+      8936
+     ],
+     "table": "drugitems",
+     "sub_var": "itemid",
+     "val_var": "fluidin",
+     "index_var": "start",
+     "callback": "distribute_volume_hourly",
+     "value_unit": "mL",
+     "end_var": "stop",
+     "extra_vars": [
+      "stop",
+      "ordercategoryid",
+      "isadditive"
+     ],
+     "require_regex": {
+      "isadditive": "^(?:0(?:\\.0)?|[Ff]alse)$",
+      "ordercategoryid": "^(?:55)(?:\\.0)?$"
+     }
+    },
+    {
+     "ids": [
+      8937
+     ],
+     "table": "drugitems",
+     "sub_var": "itemid",
+     "val_var": "fluidin",
+     "index_var": "start",
+     "callback": "distribute_volume_hourly",
+     "value_unit": "mL",
+     "end_var": "stop",
+     "extra_vars": [
+      "stop",
+      "ordercategoryid",
+      "isadditive"
+     ],
+     "require_regex": {
+      "isadditive": "^(?:0(?:\\.0)?|[Ff]alse)$",
+      "ordercategoryid": "^(?:55)(?:\\.0)?$"
+     }
+    },
+    {
+     "ids": [
+      8938
+     ],
+     "table": "drugitems",
+     "sub_var": "itemid",
+     "val_var": "fluidin",
+     "index_var": "start",
+     "callback": "distribute_volume_hourly",
+     "value_unit": "mL",
+     "end_var": "stop",
+     "extra_vars": [
+      "stop",
+      "ordercategoryid",
+      "isadditive"
+     ],
+     "require_regex": {
+      "isadditive": "^(?:0(?:\\.0)?|[Ff]alse)$",
+      "ordercategoryid": "^(?:55)(?:\\.0)?$"
+     }
+    },
+    {
+     "ids": [
+      8939
+     ],
+     "table": "drugitems",
+     "sub_var": "itemid",
+     "val_var": "fluidin",
+     "index_var": "start",
+     "callback": "distribute_volume_hourly",
+     "value_unit": "mL",
+     "end_var": "stop",
+     "extra_vars": [
+      "stop",
+      "ordercategoryid",
+      "isadditive"
+     ],
+     "require_regex": {
+      "isadditive": "^(?:0(?:\\.0)?|[Ff]alse)$",
+      "ordercategoryid": "^(?:55)(?:\\.0)?$"
+     }
+    },
+    {
+     "ids": [
+      8940
+     ],
+     "table": "drugitems",
+     "sub_var": "itemid",
+     "val_var": "fluidin",
+     "index_var": "start",
+     "callback": "distribute_volume_hourly",
+     "value_unit": "mL",
+     "end_var": "stop",
+     "extra_vars": [
+      "stop",
+      "ordercategoryid",
+      "isadditive"
+     ],
+     "require_regex": {
+      "isadditive": "^(?:0(?:\\.0)?|[Ff]alse)$",
+      "ordercategoryid": "^(?:55)(?:\\.0)?$"
+     }
+    },
+    {
+     "ids": [
+      8943
+     ],
+     "table": "drugitems",
+     "sub_var": "itemid",
+     "val_var": "fluidin",
+     "index_var": "start",
+     "callback": "distribute_volume_hourly",
+     "value_unit": "mL",
+     "end_var": "stop",
+     "extra_vars": [
+      "stop",
+      "ordercategoryid",
+      "isadditive"
+     ],
+     "require_regex": {
+      "isadditive": "^(?:0(?:\\.0)?|[Ff]alse)$",
+      "ordercategoryid": "^(?:55)(?:\\.0)?$"
+     }
+    },
+    {
+     "ids": [
+      8998
+     ],
+     "table": "drugitems",
+     "sub_var": "itemid",
+     "val_var": "fluidin",
+     "index_var": "start",
+     "callback": "distribute_volume_hourly",
+     "value_unit": "mL",
+     "end_var": "stop",
+     "extra_vars": [
+      "stop",
+      "ordercategoryid",
+      "isadditive"
+     ],
+     "require_regex": {
+      "isadditive": "^(?:0(?:\\.0)?|[Ff]alse)$",
+      "ordercategoryid": "^(?:55|65)(?:\\.0)?$"
+     }
+    },
+    {
+     "ids": [
+      9424
+     ],
+     "table": "drugitems",
+     "sub_var": "itemid",
+     "val_var": "fluidin",
+     "index_var": "start",
+     "callback": "distribute_volume_hourly",
+     "value_unit": "mL",
+     "end_var": "stop",
+     "extra_vars": [
+      "stop",
+      "ordercategoryid",
+      "isadditive"
+     ],
+     "require_regex": {
+      "isadditive": "^(?:0(?:\\.0)?|[Ff]alse)$",
+      "ordercategoryid": "^(?:65)(?:\\.0)?$"
+     }
+    },
+    {
+     "ids": [
+      9569
+     ],
+     "table": "drugitems",
+     "sub_var": "itemid",
+     "val_var": "fluidin",
+     "index_var": "start",
+     "callback": "distribute_volume_hourly",
+     "value_unit": "mL",
+     "end_var": "stop",
+     "extra_vars": [
+      "stop",
+      "ordercategoryid",
+      "isadditive"
+     ],
+     "require_regex": {
+      "isadditive": "^(?:0(?:\\.0)?|[Ff]alse)$",
+      "ordercategoryid": "^(?:65)(?:\\.0)?$"
+     }
+    },
+    {
+     "ids": [
+      9571
+     ],
+     "table": "drugitems",
+     "sub_var": "itemid",
+     "val_var": "fluidin",
+     "index_var": "start",
+     "callback": "distribute_volume_hourly",
+     "value_unit": "mL",
+     "end_var": "stop",
+     "extra_vars": [
+      "stop",
+      "ordercategoryid",
+      "isadditive"
+     ],
+     "require_regex": {
+      "isadditive": "^(?:0(?:\\.0)?|[Ff]alse)$",
+      "ordercategoryid": "^(?:65)(?:\\.0)?$"
+     }
+    },
+    {
+     "ids": [
+      9612
+     ],
+     "table": "drugitems",
+     "sub_var": "itemid",
+     "val_var": "fluidin",
+     "index_var": "start",
+     "callback": "distribute_volume_hourly",
+     "value_unit": "mL",
+     "end_var": "stop",
+     "extra_vars": [
+      "stop",
+      "ordercategoryid",
+      "isadditive"
+     ],
+     "require_regex": {
+      "isadditive": "^(?:0(?:\\.0)?|[Ff]alse)$",
+      "ordercategoryid": "^(?:27)(?:\\.0)?$"
+     }
+    }
+   ],
+   "miiv": [
+    {
+     "ids": [
+      220949
+     ],
+     "table": "inputevents",
+     "sub_var": "itemid",
+     "val_var": "amount",
+     "unit_var": "amountuom",
+     "index_var": "starttime",
+     "callback": "distribute_volume_hourly",
+     "end_var": "endtime",
+     "extra_vars": [
+      "endtime",
+      "statusdescription",
+      "ordercategoryname"
+     ],
+     "status_var": "statusdescription",
+     "excluded_statuses": [
+      "Rewritten",
+      "Cancelled",
+      "Canceled"
+     ],
+     "require_regex": {
+      "amountuom": "(?i)^\\s*mL\\s*$"
+     },
+     "exclude_regex": {
+      "ordercategoryname": "(?i)pre.admission|cath.lab|operating|\\bOR\\b|PACU|emergency|\\bED\\b"
+     }
+    },
+    {
+     "ids": [
+      220950
+     ],
+     "table": "inputevents",
+     "sub_var": "itemid",
+     "val_var": "amount",
+     "unit_var": "amountuom",
+     "index_var": "starttime",
+     "callback": "distribute_volume_hourly",
+     "end_var": "endtime",
+     "extra_vars": [
+      "endtime",
+      "statusdescription",
+      "ordercategoryname"
+     ],
+     "status_var": "statusdescription",
+     "excluded_statuses": [
+      "Rewritten",
+      "Cancelled",
+      "Canceled"
+     ],
+     "require_regex": {
+      "amountuom": "(?i)^\\s*mL\\s*$"
+     },
+     "exclude_regex": {
+      "ordercategoryname": "(?i)pre.admission|cath.lab|operating|\\bOR\\b|PACU|emergency|\\bED\\b"
+     }
+    },
+    {
+     "ids": [
+      220952
+     ],
+     "table": "inputevents",
+     "sub_var": "itemid",
+     "val_var": "amount",
+     "unit_var": "amountuom",
+     "index_var": "starttime",
+     "callback": "distribute_volume_hourly",
+     "end_var": "endtime",
+     "extra_vars": [
+      "endtime",
+      "statusdescription",
+      "ordercategoryname"
+     ],
+     "status_var": "statusdescription",
+     "excluded_statuses": [
+      "Rewritten",
+      "Cancelled",
+      "Canceled"
+     ],
+     "require_regex": {
+      "amountuom": "(?i)^\\s*mL\\s*$"
+     },
+     "exclude_regex": {
+      "ordercategoryname": "(?i)pre.admission|cath.lab|operating|\\bOR\\b|PACU|emergency|\\bED\\b"
+     }
+    },
+    {
+     "ids": [
+      225158
+     ],
+     "table": "inputevents",
+     "sub_var": "itemid",
+     "val_var": "amount",
+     "unit_var": "amountuom",
+     "index_var": "starttime",
+     "callback": "distribute_volume_hourly",
+     "end_var": "endtime",
+     "extra_vars": [
+      "endtime",
+      "statusdescription",
+      "ordercategoryname"
+     ],
+     "status_var": "statusdescription",
+     "excluded_statuses": [
+      "Rewritten",
+      "Cancelled",
+      "Canceled"
+     ],
+     "require_regex": {
+      "amountuom": "(?i)^\\s*mL\\s*$"
+     },
+     "exclude_regex": {
+      "ordercategoryname": "(?i)pre.admission|cath.lab|operating|\\bOR\\b|PACU|emergency|\\bED\\b"
+     }
+    },
+    {
+     "ids": [
+      225159
+     ],
+     "table": "inputevents",
+     "sub_var": "itemid",
+     "val_var": "amount",
+     "unit_var": "amountuom",
+     "index_var": "starttime",
+     "callback": "distribute_volume_hourly",
+     "end_var": "endtime",
+     "extra_vars": [
+      "endtime",
+      "statusdescription",
+      "ordercategoryname"
+     ],
+     "status_var": "statusdescription",
+     "excluded_statuses": [
+      "Rewritten",
+      "Cancelled",
+      "Canceled"
+     ],
+     "require_regex": {
+      "amountuom": "(?i)^\\s*mL\\s*$"
+     },
+     "exclude_regex": {
+      "ordercategoryname": "(?i)pre.admission|cath.lab|operating|\\bOR\\b|PACU|emergency|\\bED\\b"
+     }
+    },
+    {
+     "ids": [
+      225161
+     ],
+     "table": "inputevents",
+     "sub_var": "itemid",
+     "val_var": "amount",
+     "unit_var": "amountuom",
+     "index_var": "starttime",
+     "callback": "distribute_volume_hourly",
+     "end_var": "endtime",
+     "extra_vars": [
+      "endtime",
+      "statusdescription",
+      "ordercategoryname"
+     ],
+     "status_var": "statusdescription",
+     "excluded_statuses": [
+      "Rewritten",
+      "Cancelled",
+      "Canceled"
+     ],
+     "require_regex": {
+      "amountuom": "(?i)^\\s*mL\\s*$"
+     },
+     "exclude_regex": {
+      "ordercategoryname": "(?i)pre.admission|cath.lab|operating|\\bOR\\b|PACU|emergency|\\bED\\b"
+     }
+    },
+    {
+     "ids": [
+      225823
+     ],
+     "table": "inputevents",
+     "sub_var": "itemid",
+     "val_var": "amount",
+     "unit_var": "amountuom",
+     "index_var": "starttime",
+     "callback": "distribute_volume_hourly",
+     "end_var": "endtime",
+     "extra_vars": [
+      "endtime",
+      "statusdescription",
+      "ordercategoryname"
+     ],
+     "status_var": "statusdescription",
+     "excluded_statuses": [
+      "Rewritten",
+      "Cancelled",
+      "Canceled"
+     ],
+     "require_regex": {
+      "amountuom": "(?i)^\\s*mL\\s*$"
+     },
+     "exclude_regex": {
+      "ordercategoryname": "(?i)pre.admission|cath.lab|operating|\\bOR\\b|PACU|emergency|\\bED\\b"
+     }
+    },
+    {
+     "ids": [
+      225825
+     ],
+     "table": "inputevents",
+     "sub_var": "itemid",
+     "val_var": "amount",
+     "unit_var": "amountuom",
+     "index_var": "starttime",
+     "callback": "distribute_volume_hourly",
+     "end_var": "endtime",
+     "extra_vars": [
+      "endtime",
+      "statusdescription",
+      "ordercategoryname"
+     ],
+     "status_var": "statusdescription",
+     "excluded_statuses": [
+      "Rewritten",
+      "Cancelled",
+      "Canceled"
+     ],
+     "require_regex": {
+      "amountuom": "(?i)^\\s*mL\\s*$"
+     },
+     "exclude_regex": {
+      "ordercategoryname": "(?i)pre.admission|cath.lab|operating|\\bOR\\b|PACU|emergency|\\bED\\b"
+     }
+    },
+    {
+     "ids": [
+      225827
+     ],
+     "table": "inputevents",
+     "sub_var": "itemid",
+     "val_var": "amount",
+     "unit_var": "amountuom",
+     "index_var": "starttime",
+     "callback": "distribute_volume_hourly",
+     "end_var": "endtime",
+     "extra_vars": [
+      "endtime",
+      "statusdescription",
+      "ordercategoryname"
+     ],
+     "status_var": "statusdescription",
+     "excluded_statuses": [
+      "Rewritten",
+      "Cancelled",
+      "Canceled"
+     ],
+     "require_regex": {
+      "amountuom": "(?i)^\\s*mL\\s*$"
+     },
+     "exclude_regex": {
+      "ordercategoryname": "(?i)pre.admission|cath.lab|operating|\\bOR\\b|PACU|emergency|\\bED\\b"
+     }
+    },
+    {
+     "ids": [
+      225828
+     ],
+     "table": "inputevents",
+     "sub_var": "itemid",
+     "val_var": "amount",
+     "unit_var": "amountuom",
+     "index_var": "starttime",
+     "callback": "distribute_volume_hourly",
+     "end_var": "endtime",
+     "extra_vars": [
+      "endtime",
+      "statusdescription",
+      "ordercategoryname"
+     ],
+     "status_var": "statusdescription",
+     "excluded_statuses": [
+      "Rewritten",
+      "Cancelled",
+      "Canceled"
+     ],
+     "require_regex": {
+      "amountuom": "(?i)^\\s*mL\\s*$"
+     },
+     "exclude_regex": {
+      "ordercategoryname": "(?i)pre.admission|cath.lab|operating|\\bOR\\b|PACU|emergency|\\bED\\b"
+     }
+    },
+    {
+     "ids": [
+      225941
+     ],
+     "table": "inputevents",
+     "sub_var": "itemid",
+     "val_var": "amount",
+     "unit_var": "amountuom",
+     "index_var": "starttime",
+     "callback": "distribute_volume_hourly",
+     "end_var": "endtime",
+     "extra_vars": [
+      "endtime",
+      "statusdescription",
+      "ordercategoryname"
+     ],
+     "status_var": "statusdescription",
+     "excluded_statuses": [
+      "Rewritten",
+      "Cancelled",
+      "Canceled"
+     ],
+     "require_regex": {
+      "amountuom": "(?i)^\\s*mL\\s*$"
+     },
+     "exclude_regex": {
+      "ordercategoryname": "(?i)pre.admission|cath.lab|operating|\\bOR\\b|PACU|emergency|\\bED\\b"
+     }
+    },
+    {
+     "ids": [
+      227533
+     ],
+     "table": "inputevents",
+     "sub_var": "itemid",
+     "val_var": "amount",
+     "unit_var": "amountuom",
+     "index_var": "starttime",
+     "callback": "distribute_volume_hourly",
+     "end_var": "endtime",
+     "extra_vars": [
+      "endtime",
+      "statusdescription",
+      "ordercategoryname"
+     ],
+     "status_var": "statusdescription",
+     "excluded_statuses": [
+      "Rewritten",
+      "Cancelled",
+      "Canceled"
+     ],
+     "require_regex": {
+      "amountuom": "(?i)^\\s*mL\\s*$"
+     },
+     "exclude_regex": {
+      "ordercategoryname": "(?i)pre.admission|cath.lab|operating|\\bOR\\b|PACU|emergency|\\bED\\b"
+     }
+    },
+    {
+     "ids": [
+      228140
+     ],
+     "table": "inputevents",
+     "sub_var": "itemid",
+     "val_var": "amount",
+     "unit_var": "amountuom",
+     "index_var": "starttime",
+     "callback": "distribute_volume_hourly",
+     "end_var": "endtime",
+     "extra_vars": [
+      "endtime",
+      "statusdescription",
+      "ordercategoryname"
+     ],
+     "status_var": "statusdescription",
+     "excluded_statuses": [
+      "Rewritten",
+      "Cancelled",
+      "Canceled"
+     ],
+     "require_regex": {
+      "amountuom": "(?i)^\\s*mL\\s*$"
+     },
+     "exclude_regex": {
+      "ordercategoryname": "(?i)pre.admission|cath.lab|operating|\\bOR\\b|PACU|emergency|\\bED\\b"
+     }
+    },
+    {
+     "ids": [
+      228141
+     ],
+     "table": "inputevents",
+     "sub_var": "itemid",
+     "val_var": "amount",
+     "unit_var": "amountuom",
+     "index_var": "starttime",
+     "callback": "distribute_volume_hourly",
+     "end_var": "endtime",
+     "extra_vars": [
+      "endtime",
+      "statusdescription",
+      "ordercategoryname"
+     ],
+     "status_var": "statusdescription",
+     "excluded_statuses": [
+      "Rewritten",
+      "Cancelled",
+      "Canceled"
+     ],
+     "require_regex": {
+      "amountuom": "(?i)^\\s*mL\\s*$"
+     },
+     "exclude_regex": {
+      "ordercategoryname": "(?i)pre.admission|cath.lab|operating|\\bOR\\b|PACU|emergency|\\bED\\b"
+     }
+    },
+    {
+     "ids": [
+      228142
+     ],
+     "table": "inputevents",
+     "sub_var": "itemid",
+     "val_var": "amount",
+     "unit_var": "amountuom",
+     "index_var": "starttime",
+     "callback": "distribute_volume_hourly",
+     "end_var": "endtime",
+     "extra_vars": [
+      "endtime",
+      "statusdescription",
+      "ordercategoryname"
+     ],
+     "status_var": "statusdescription",
+     "excluded_statuses": [
+      "Rewritten",
+      "Cancelled",
+      "Canceled"
+     ],
+     "require_regex": {
+      "amountuom": "(?i)^\\s*mL\\s*$"
+     },
+     "exclude_regex": {
+      "ordercategoryname": "(?i)pre.admission|cath.lab|operating|\\bOR\\b|PACU|emergency|\\bED\\b"
+     }
+    },
+    {
+     "ids": [
+      228341
+     ],
+     "table": "inputevents",
+     "sub_var": "itemid",
+     "val_var": "amount",
+     "unit_var": "amountuom",
+     "index_var": "starttime",
+     "callback": "distribute_volume_hourly",
+     "end_var": "endtime",
+     "extra_vars": [
+      "endtime",
+      "statusdescription",
+      "ordercategoryname"
+     ],
+     "status_var": "statusdescription",
+     "excluded_statuses": [
+      "Rewritten",
+      "Cancelled",
+      "Canceled"
+     ],
+     "require_regex": {
+      "amountuom": "(?i)^\\s*mL\\s*$"
+     },
+     "exclude_regex": {
+      "ordercategoryname": "(?i)pre.admission|cath.lab|operating|\\bOR\\b|PACU|emergency|\\bED\\b"
+     }
+    }
+   ],
+   "hirid": [
+    {
+     "table": "observations",
+     "sub_var": "variableid",
+     "ids": [
+      30005075
+     ],
+     "callback": "hirid_fluid_counter_hourly"
+    }
+   ],
+   "sic": [
+    {
+     "ids": [
+      2032
+     ],
+     "table": "medication",
+     "sub_var": "DrugID",
+     "val_var": "Amount",
+     "index_var": "Offset",
+     "callback": "sicdb_volume_allocate",
+     "extra_vars": [
+      "OffsetDrugEnd",
+      "IsSingleDose"
+     ],
+     "stop_var": "OffsetDrugEnd"
+    },
+    {
+     "ids": [
+      2033
+     ],
+     "table": "medication",
+     "sub_var": "DrugID",
+     "val_var": "Amount",
+     "index_var": "Offset",
+     "callback": "sicdb_volume_allocate",
+     "extra_vars": [
+      "OffsetDrugEnd",
+      "IsSingleDose"
+     ],
+     "stop_var": "OffsetDrugEnd"
+    },
+    {
+     "ids": [
+      2034
+     ],
+     "table": "medication",
+     "sub_var": "DrugID",
+     "val_var": "Amount",
+     "index_var": "Offset",
+     "callback": "sicdb_volume_allocate",
+     "extra_vars": [
+      "OffsetDrugEnd",
+      "IsSingleDose"
+     ],
+     "stop_var": "OffsetDrugEnd"
+    },
+    {
+     "ids": [
+      2035
+     ],
+     "table": "medication",
+     "sub_var": "DrugID",
+     "val_var": "Amount",
+     "index_var": "Offset",
+     "callback": "sicdb_volume_allocate",
+     "extra_vars": [
+      "OffsetDrugEnd",
+      "IsSingleDose"
+     ],
+     "stop_var": "OffsetDrugEnd"
+    },
+    {
+     "ids": [
+      2036
+     ],
+     "table": "medication",
+     "sub_var": "DrugID",
+     "val_var": "Amount",
+     "index_var": "Offset",
+     "callback": "sicdb_volume_allocate",
+     "extra_vars": [
+      "OffsetDrugEnd",
+      "IsSingleDose"
+     ],
+     "stop_var": "OffsetDrugEnd"
+    },
+    {
+     "ids": [
+      2037
+     ],
+     "table": "medication",
+     "sub_var": "DrugID",
+     "val_var": "Amount",
+     "index_var": "Offset",
+     "callback": "sicdb_volume_allocate",
+     "extra_vars": [
+      "OffsetDrugEnd",
+      "IsSingleDose"
+     ],
+     "stop_var": "OffsetDrugEnd"
+    },
+    {
+     "ids": [
+      2038
+     ],
+     "table": "medication",
+     "sub_var": "DrugID",
+     "val_var": "Amount",
+     "index_var": "Offset",
+     "callback": "sicdb_volume_allocate",
+     "extra_vars": [
+      "OffsetDrugEnd",
+      "IsSingleDose"
+     ],
+     "stop_var": "OffsetDrugEnd"
+    },
+    {
+     "ids": [
+      2041
+     ],
+     "table": "medication",
+     "sub_var": "DrugID",
+     "val_var": "Amount",
+     "index_var": "Offset",
+     "callback": "sicdb_volume_allocate",
+     "extra_vars": [
+      "OffsetDrugEnd",
+      "IsSingleDose"
+     ],
+     "stop_var": "OffsetDrugEnd"
+    },
+    {
+     "ids": [
+      2042
+     ],
+     "table": "medication",
+     "sub_var": "DrugID",
+     "val_var": "Amount",
+     "index_var": "Offset",
+     "callback": "sicdb_volume_allocate",
+     "extra_vars": [
+      "OffsetDrugEnd",
+      "IsSingleDose"
+     ],
+     "stop_var": "OffsetDrugEnd"
+    },
+    {
+     "ids": [
+      2043
+     ],
+     "table": "medication",
+     "sub_var": "DrugID",
+     "val_var": "Amount",
+     "index_var": "Offset",
+     "callback": "sicdb_volume_allocate",
+     "extra_vars": [
+      "OffsetDrugEnd",
+      "IsSingleDose"
+     ],
+     "stop_var": "OffsetDrugEnd"
+    },
+    {
+     "ids": [
+      2044
+     ],
+     "table": "medication",
+     "sub_var": "DrugID",
+     "val_var": "Amount",
+     "index_var": "Offset",
+     "callback": "sicdb_volume_allocate",
+     "extra_vars": [
+      "OffsetDrugEnd",
+      "IsSingleDose"
+     ],
+     "stop_var": "OffsetDrugEnd"
+    },
+    {
+     "ids": [
+      2045
+     ],
+     "table": "medication",
+     "sub_var": "DrugID",
+     "val_var": "Amount",
+     "index_var": "Offset",
+     "callback": "sicdb_volume_allocate",
+     "extra_vars": [
+      "OffsetDrugEnd",
+      "IsSingleDose"
+     ],
+     "stop_var": "OffsetDrugEnd"
+    },
+    {
+     "ids": [
+      2074
+     ],
+     "table": "medication",
+     "sub_var": "DrugID",
+     "val_var": "Amount",
+     "index_var": "Offset",
+     "callback": "sicdb_volume_allocate",
+     "extra_vars": [
+      "OffsetDrugEnd",
+      "IsSingleDose"
+     ],
+     "stop_var": "OffsetDrugEnd"
+    },
+    {
+     "ids": [
+      2075
+     ],
+     "table": "medication",
+     "sub_var": "DrugID",
+     "val_var": "Amount",
+     "index_var": "Offset",
+     "callback": "sicdb_volume_allocate",
+     "extra_vars": [
+      "OffsetDrugEnd",
+      "IsSingleDose"
+     ],
+     "stop_var": "OffsetDrugEnd"
+    },
+    {
+     "ids": [
+      2077
+     ],
+     "table": "medication",
+     "sub_var": "DrugID",
+     "val_var": "Amount",
+     "index_var": "Offset",
+     "callback": "sicdb_volume_allocate",
+     "extra_vars": [
+      "OffsetDrugEnd",
+      "IsSingleDose"
+     ],
+     "stop_var": "OffsetDrugEnd"
+    },
+    {
+     "ids": [
+      2078
+     ],
+     "table": "medication",
+     "sub_var": "DrugID",
+     "val_var": "Amount",
+     "index_var": "Offset",
+     "callback": "sicdb_volume_allocate",
+     "extra_vars": [
+      "OffsetDrugEnd",
+      "IsSingleDose"
+     ],
+     "stop_var": "OffsetDrugEnd"
+    },
+    {
+     "ids": [
+      2079
+     ],
+     "table": "medication",
+     "sub_var": "DrugID",
+     "val_var": "Amount",
+     "index_var": "Offset",
+     "callback": "sicdb_volume_allocate",
+     "extra_vars": [
+      "OffsetDrugEnd",
+      "IsSingleDose"
+     ],
+     "stop_var": "OffsetDrugEnd"
+    },
+    {
+     "ids": [
+      2080
+     ],
+     "table": "medication",
+     "sub_var": "DrugID",
+     "val_var": "Amount",
+     "index_var": "Offset",
+     "callback": "sicdb_volume_allocate",
+     "extra_vars": [
+      "OffsetDrugEnd",
+      "IsSingleDose"
+     ],
+     "stop_var": "OffsetDrugEnd"
+    },
+    {
+     "ids": [
+      2081
+     ],
+     "table": "medication",
+     "sub_var": "DrugID",
+     "val_var": "Amount",
+     "index_var": "Offset",
+     "callback": "sicdb_volume_allocate",
+     "extra_vars": [
+      "OffsetDrugEnd",
+      "IsSingleDose"
+     ],
+     "stop_var": "OffsetDrugEnd"
+    },
+    {
+     "ids": [
+      2082
+     ],
+     "table": "medication",
+     "sub_var": "DrugID",
+     "val_var": "Amount",
+     "index_var": "Offset",
+     "callback": "sicdb_volume_allocate",
+     "extra_vars": [
+      "OffsetDrugEnd",
+      "IsSingleDose"
+     ],
+     "stop_var": "OffsetDrugEnd"
+    },
+    {
+     "ids": [
+      2087
+     ],
+     "table": "medication",
+     "sub_var": "DrugID",
+     "val_var": "Amount",
+     "index_var": "Offset",
+     "callback": "sicdb_volume_allocate",
+     "extra_vars": [
+      "OffsetDrugEnd",
+      "IsSingleDose"
+     ],
+     "stop_var": "OffsetDrugEnd"
+    },
+    {
+     "ids": [
+      2089
+     ],
+     "table": "medication",
+     "sub_var": "DrugID",
+     "val_var": "Amount",
+     "index_var": "Offset",
+     "callback": "sicdb_volume_allocate",
+     "extra_vars": [
+      "OffsetDrugEnd",
+      "IsSingleDose"
+     ],
+     "stop_var": "OffsetDrugEnd"
+    },
+    {
+     "ids": [
+      2125
+     ],
+     "table": "medication",
+     "sub_var": "DrugID",
+     "val_var": "Amount",
+     "index_var": "Offset",
+     "callback": "sicdb_volume_allocate",
+     "extra_vars": [
+      "OffsetDrugEnd",
+      "IsSingleDose"
+     ],
+     "stop_var": "OffsetDrugEnd"
+    },
+    {
+     "ids": [
+      2132
+     ],
+     "table": "medication",
+     "sub_var": "DrugID",
+     "val_var": "Amount",
+     "index_var": "Offset",
+     "callback": "sicdb_volume_allocate",
+     "extra_vars": [
+      "OffsetDrugEnd",
+      "IsSingleDose"
+     ],
+     "stop_var": "OffsetDrugEnd"
+    },
+    {
+     "ids": [
+      2133
+     ],
+     "table": "medication",
+     "sub_var": "DrugID",
+     "val_var": "Amount",
+     "index_var": "Offset",
+     "callback": "sicdb_volume_allocate",
+     "extra_vars": [
+      "OffsetDrugEnd",
+      "IsSingleDose"
+     ],
+     "stop_var": "OffsetDrugEnd"
+    },
+    {
+     "ids": [
+      2137
+     ],
+     "table": "medication",
+     "sub_var": "DrugID",
+     "val_var": "Amount",
+     "index_var": "Offset",
+     "callback": "sicdb_volume_allocate",
+     "extra_vars": [
+      "OffsetDrugEnd",
+      "IsSingleDose"
+     ],
+     "stop_var": "OffsetDrugEnd"
+    },
+    {
+     "ids": [
+      2147
+     ],
+     "table": "medication",
+     "sub_var": "DrugID",
+     "val_var": "Amount",
+     "index_var": "Offset",
+     "callback": "sicdb_volume_allocate",
+     "extra_vars": [
+      "OffsetDrugEnd",
+      "IsSingleDose"
+     ],
+     "stop_var": "OffsetDrugEnd"
+    },
+    {
+     "ids": [
+      2148
+     ],
+     "table": "medication",
+     "sub_var": "DrugID",
+     "val_var": "Amount",
+     "index_var": "Offset",
+     "callback": "sicdb_volume_allocate",
+     "extra_vars": [
+      "OffsetDrugEnd",
+      "IsSingleDose"
+     ],
+     "stop_var": "OffsetDrugEnd"
+    },
+    {
+     "ids": [
+      2168
+     ],
+     "table": "medication",
+     "sub_var": "DrugID",
+     "val_var": "Amount",
+     "index_var": "Offset",
+     "callback": "sicdb_volume_allocate",
+     "extra_vars": [
+      "OffsetDrugEnd",
+      "IsSingleDose"
+     ],
+     "stop_var": "OffsetDrugEnd"
+    }
+   ],
+   "eicu": [
+    {
+     "ids": [
+      "flowsheet|Flowsheet Cell Labels|I&O|Intake (ml)|Generic Intake (ml)|Lactated Ringers Volume"
+     ],
+     "table": "intakeoutput",
+     "sub_var": "cellpath",
+     "val_var": "cellvaluenumeric",
+     "extra_vars": [
+      "cellpath",
+      "celllabel",
+      "intakeoutputoffset",
+      "intakeoutputentryoffset"
+     ],
+     "callback": "eicu_systemic_intake"
+    }
+   ]
+  }
+ },
+ "ecmo_type": {
+  "unit": "category",
+  "description": "ECMO circuit configuration",
+  "category": "ventilator",
+  "class_name": "fct_cncpt",
+  "target": "ts_tbl",
+  "levels": [
+   "va",
+   "vv",
+   "vav",
+   "other",
+   "unknown",
+   "conflicting"
+  ],
+  "sources": {
+   "aumc": [
+    {
+     "ids": [
+      20662
+     ],
+     "table": "listitems",
+     "sub_var": "itemid",
+     "val_var": "value",
+     "callback": "apply_map(c(`VA ECMO` = 'va'), strict = TRUE)"
+    }
+   ],
+   "miiv": [
+    {
+     "ids": [
+      229268
+     ],
+     "table": "chartevents",
+     "sub_var": "itemid",
+     "val_var": "value",
+     "callback": "apply_map(c(`VA` = 'va', `VV` = 'vv', `VAV` = 'vav', `---` = 'unknown'), strict = TRUE)"
+    }
+   ]
+  }
+ },
+ "enoximone_rate": {
+  "unit": "mcg/kg/min",
+  "min": 0,
+  "max": 50,
+  "description": "Continuous intravenous enoximone infusion rate",
+  "category": "cardiovascular",
+  "sources": {
+   "aumc": [
+    {
+     "ids": [
+      7196
+     ],
+     "table": "drugitems",
+     "sub_var": "itemid",
+     "rel_weight": "doserateperkg",
+     "rate_uom": "doserateunit",
+     "stop_var": "stop",
+     "callback": "aumc_rate_kg",
+     "extra_vars": [
+      "action",
+      "doserateperkg",
+      "doserateunit",
+      "doseunit",
+      "iscontinuous",
+      "ordercategory"
+     ],
+     "require_regex": {
+      "iscontinuous": "^(1|1\\.0|True|true)$",
+      "doseunit": "(?i)^(?:mg|µg|ug|mcg|g|ng)$",
+      "doserateunit": "(?i)^(?:min|uur|hour|hr|h|sec|s|dag)$"
+     },
+     "exclude_regex": {
+      "action": "(?i)^\\s*flush\\s*$",
+      "ordercategory": "(?i)^\\s*niet iv"
+     }
+    }
+   ]
+  }
+ },
+ "ffp_input_ml": {
+  "unit": "mL",
+  "min": 0,
+  "max": 10000,
+  "description": "Fresh frozen plasma volume per ICU hour",
+  "category": "output",
+  "aggregate": "sum",
+  "sources": {
+   "aumc": [
+    {
+     "ids": [
+      7367
+     ],
+     "table": "drugitems",
+     "sub_var": "itemid",
+     "val_var": "fluidin",
+     "index_var": "start",
+     "callback": "distribute_volume_hourly",
+     "value_unit": "mL",
+     "end_var": "stop",
+     "extra_vars": [
+      "stop",
+      "ordercategoryid",
+      "isadditive"
+     ],
+     "require_regex": {
+      "isadditive": "^(?:0(?:\\.0)?|[Ff]alse)$",
+      "ordercategoryid": "^(?:61)(?:\\.0)?$"
+     }
+    }
+   ],
+   "miiv": [
+    {
+     "ids": [
+      220970
+     ],
+     "table": "inputevents",
+     "sub_var": "itemid",
+     "val_var": "amount",
+     "unit_var": "amountuom",
+     "index_var": "starttime",
+     "callback": "distribute_volume_hourly",
+     "end_var": "endtime",
+     "extra_vars": [
+      "endtime",
+      "statusdescription",
+      "ordercategoryname"
+     ],
+     "status_var": "statusdescription",
+     "excluded_statuses": [
+      "Rewritten",
+      "Cancelled",
+      "Canceled"
+     ],
+     "require_regex": {
+      "amountuom": "(?i)^\\s*mL\\s*$"
+     },
+     "exclude_regex": {
+      "ordercategoryname": "(?i)pre.admission|cath.lab|operating|\\bOR\\b|PACU|emergency|\\bED\\b"
+     }
+    }
+   ],
+   "eicu": [
+    {
+     "ids": [
+      "flowsheet|Flowsheet Cell Labels|I&O|Intake (ml)|Blood Products (ml)|FFP"
+     ],
+     "table": "intakeoutput",
+     "sub_var": "cellpath",
+     "val_var": "cellvaluenumeric",
+     "extra_vars": [
+      "cellpath",
+      "celllabel",
+      "intakeoutputoffset",
+      "intakeoutputentryoffset"
+     ],
+     "callback": "eicu_systemic_intake"
+    }
+   ]
+  }
+ },
+ "milrinone_rate": {
+  "unit": [
+   "mcg/kg/min",
+   "mcgkgmin"
+  ],
+  "min": 0,
+  "max": 3,
+  "description": "milrinone rate",
+  "category": "medications",
+  "sources": {
+   "miiv": [
+    {
+     "ids": 221986,
+     "table": "inputevents",
+     "sub_var": "itemid",
+     "stop_var": "endtime",
+     "callback": "mimic_rate_mv",
+     "extra_vars": [
+      "ordercategorydescription",
+      "rateuom",
+      "statusdescription"
+     ],
+     "status_var": "statusdescription",
+     "excluded_statuses": [
+      "Rewritten",
+      "Cancelled",
+      "Canceled",
+      "Bolus"
+     ],
+     "require_regex": {
+      "rateuom": "(?i)^\\s*mcg/kg/min\\s*$",
+      "ordercategorydescription": "^Continuous Med$"
+     }
+    }
+   ],
+   "hirid": [
+    {
+     "ids": 1000441,
+     "table": "pharma",
+     "sub_var": "pharmaid",
+     "grp_var": "infusionid",
+     "callback": "hirid_rate_kg",
+     "extra_vars": [
+      "route"
+     ],
+     "require_regex": {
+      "route": "(?i)^\\s*[ci]v-inf\\s*$"
+     }
+    }
+   ],
+   "eicu": [
+    {
+     "ids": [
+      "Milrinone (mcg/kg/hr)"
+     ],
+     "table": "infusiondrug",
+     "sub_var": "drugname",
+     "weight_var": "patientweight",
+     "extra_vars": [
+      "drugname"
+     ],
+     "callback": "eicu_rate_kg(ml_to_mcg = NA)"
+    },
+    {
+     "ids": [
+      "Milrinone (mcg/kg/min)"
+     ],
+     "table": "infusiondrug",
+     "sub_var": "drugname",
+     "weight_var": "patientweight",
+     "extra_vars": [
+      "drugname"
+     ],
+     "callback": "eicu_rate_kg(ml_to_mcg = NA)"
+    },
+    {
+     "ids": [
+      "primacore (mcg/kg/min)"
+     ],
+     "table": "infusiondrug",
+     "sub_var": "drugname",
+     "weight_var": "patientweight",
+     "extra_vars": [
+      "drugname"
+     ],
+     "callback": "eicu_rate_kg(ml_to_mcg = NA)"
+    }
+   ]
+  }
+ },
+ "packed_rbc_input_ml": {
+  "unit": "mL",
+  "min": 0,
+  "max": 10000,
+  "description": "Packed red-cell volume per ICU hour",
+  "category": "output",
+  "aggregate": "sum",
+  "sources": {
+   "aumc": [
+    {
+     "ids": [
+      7366
+     ],
+     "table": "drugitems",
+     "sub_var": "itemid",
+     "val_var": "fluidin",
+     "index_var": "start",
+     "callback": "distribute_volume_hourly",
+     "value_unit": "mL",
+     "end_var": "stop",
+     "extra_vars": [
+      "stop",
+      "ordercategoryid",
+      "isadditive"
+     ],
+     "require_regex": {
+      "isadditive": "^(?:0(?:\\.0)?|[Ff]alse)$",
+      "ordercategoryid": "^(?:61)(?:\\.0)?$"
+     }
+    }
+   ],
+   "miiv": [
+    {
+     "ids": [
+      225168
+     ],
+     "table": "inputevents",
+     "sub_var": "itemid",
+     "val_var": "amount",
+     "unit_var": "amountuom",
+     "index_var": "starttime",
+     "callback": "distribute_volume_hourly",
+     "end_var": "endtime",
+     "extra_vars": [
+      "endtime",
+      "statusdescription",
+      "ordercategoryname"
+     ],
+     "status_var": "statusdescription",
+     "excluded_statuses": [
+      "Rewritten",
+      "Cancelled",
+      "Canceled"
+     ],
+     "require_regex": {
+      "amountuom": "(?i)^\\s*mL\\s*$"
+     },
+     "exclude_regex": {
+      "ordercategoryname": "(?i)pre.admission|cath.lab|operating|\\bOR\\b|PACU|emergency|\\bED\\b"
+     }
+    }
+   ],
+   "sic": [
+    {
+     "ids": [
+      2046
+     ],
+     "table": "medication",
+     "sub_var": "DrugID",
+     "val_var": "Amount",
+     "index_var": "Offset",
+     "callback": "sicdb_volume_allocate",
+     "extra_vars": [
+      "OffsetDrugEnd",
+      "IsSingleDose"
+     ],
+     "stop_var": "OffsetDrugEnd"
+    }
+   ],
+   "eicu": [
+    {
+     "ids": [
+      "flowsheet|Flowsheet Cell Labels|I&O|Intake (ml)|Blood Products (ml)|PRBC"
+     ],
+     "table": "intakeoutput",
+     "sub_var": "cellpath",
+     "val_var": "cellvaluenumeric",
+     "extra_vars": [
+      "cellpath",
+      "celllabel",
+      "intakeoutputoffset",
+      "intakeoutputentryoffset"
+     ],
+     "callback": "eicu_systemic_intake"
+    }
+   ]
+  }
+ },
+ "parenteral_input_ml": {
+  "unit": "mL",
+  "min": 0,
+  "max": 10000,
+  "description": "Complete parenteral nutrition bag volume per ICU hour",
+  "category": "output",
+  "aggregate": "sum",
+  "sources": {
+   "aumc": [
+    {
+     "ids": [
+      10578
+     ],
+     "table": "drugitems",
+     "sub_var": "itemid",
+     "val_var": "fluidin",
+     "index_var": "start",
+     "callback": "distribute_volume_hourly",
+     "value_unit": "mL",
+     "end_var": "stop",
+     "extra_vars": [
+      "stop",
+      "ordercategoryid",
+      "isadditive"
+     ],
+     "require_regex": {
+      "isadditive": "^(?:0(?:\\.0)?|[Ff]alse)$",
+      "ordercategoryid": "^(?:39)(?:\\.0)?$"
+     }
+    },
+    {
+     "ids": [
+      12320
+     ],
+     "table": "drugitems",
+     "sub_var": "itemid",
+     "val_var": "fluidin",
+     "index_var": "start",
+     "callback": "distribute_volume_hourly",
+     "value_unit": "mL",
+     "end_var": "stop",
+     "extra_vars": [
+      "stop",
+      "ordercategoryid",
+      "isadditive"
+     ],
+     "require_regex": {
+      "isadditive": "^(?:0(?:\\.0)?|[Ff]alse)$",
+      "ordercategoryid": "^(?:39)(?:\\.0)?$"
+     }
+    },
+    {
+     "ids": [
+      12321
+     ],
+     "table": "drugitems",
+     "sub_var": "itemid",
+     "val_var": "fluidin",
+     "index_var": "start",
+     "callback": "distribute_volume_hourly",
+     "value_unit": "mL",
+     "end_var": "stop",
+     "extra_vars": [
+      "stop",
+      "ordercategoryid",
+      "isadditive"
+     ],
+     "require_regex": {
+      "isadditive": "^(?:0(?:\\.0)?|[Ff]alse)$",
+      "ordercategoryid": "^(?:39)(?:\\.0)?$"
+     }
+    },
+    {
+     "ids": [
+      12619
+     ],
+     "table": "drugitems",
+     "sub_var": "itemid",
+     "val_var": "fluidin",
+     "index_var": "start",
+     "callback": "distribute_volume_hourly",
+     "value_unit": "mL",
+     "end_var": "stop",
+     "extra_vars": [
+      "stop",
+      "ordercategoryid",
+      "isadditive"
+     ],
+     "require_regex": {
+      "isadditive": "^(?:0(?:\\.0)?|[Ff]alse)$",
+      "ordercategoryid": "^(?:39)(?:\\.0)?$"
+     }
+    },
+    {
+     "ids": [
+      12620
+     ],
+     "table": "drugitems",
+     "sub_var": "itemid",
+     "val_var": "fluidin",
+     "index_var": "start",
+     "callback": "distribute_volume_hourly",
+     "value_unit": "mL",
+     "end_var": "stop",
+     "extra_vars": [
+      "stop",
+      "ordercategoryid",
+      "isadditive"
+     ],
+     "require_regex": {
+      "isadditive": "^(?:0(?:\\.0)?|[Ff]alse)$",
+      "ordercategoryid": "^(?:39)(?:\\.0)?$"
+     }
+    },
+    {
+     "ids": [
+      13019
+     ],
+     "table": "drugitems",
+     "sub_var": "itemid",
+     "val_var": "fluidin",
+     "index_var": "start",
+     "callback": "distribute_volume_hourly",
+     "value_unit": "mL",
+     "end_var": "stop",
+     "extra_vars": [
+      "stop",
+      "ordercategoryid",
+      "isadditive"
+     ],
+     "require_regex": {
+      "isadditive": "^(?:0(?:\\.0)?|[Ff]alse)$",
+      "ordercategoryid": "^(?:39)(?:\\.0)?$"
+     }
+    },
+    {
+     "ids": [
+      13042
+     ],
+     "table": "drugitems",
+     "sub_var": "itemid",
+     "val_var": "fluidin",
+     "index_var": "start",
+     "callback": "distribute_volume_hourly",
+     "value_unit": "mL",
+     "end_var": "stop",
+     "extra_vars": [
+      "stop",
+      "ordercategoryid",
+      "isadditive"
+     ],
+     "require_regex": {
+      "isadditive": "^(?:0(?:\\.0)?|[Ff]alse)$",
+      "ordercategoryid": "^(?:39)(?:\\.0)?$"
+     }
+    },
+    {
+     "ids": [
+      14213
+     ],
+     "table": "drugitems",
+     "sub_var": "itemid",
+     "val_var": "fluidin",
+     "index_var": "start",
+     "callback": "distribute_volume_hourly",
+     "value_unit": "mL",
+     "end_var": "stop",
+     "extra_vars": [
+      "stop",
+      "ordercategoryid",
+      "isadditive"
+     ],
+     "require_regex": {
+      "isadditive": "^(?:0(?:\\.0)?|[Ff]alse)$",
+      "ordercategoryid": "^(?:39)(?:\\.0)?$"
+     }
+    },
+    {
+     "ids": [
+      16799
+     ],
+     "table": "drugitems",
+     "sub_var": "itemid",
+     "val_var": "fluidin",
+     "index_var": "start",
+     "callback": "distribute_volume_hourly",
+     "value_unit": "mL",
+     "end_var": "stop",
+     "extra_vars": [
+      "stop",
+      "ordercategoryid",
+      "isadditive"
+     ],
+     "require_regex": {
+      "isadditive": "^(?:0(?:\\.0)?|[Ff]alse)$",
+      "ordercategoryid": "^(?:39)(?:\\.0)?$"
+     }
+    },
+    {
+     "ids": [
+      18789
+     ],
+     "table": "drugitems",
+     "sub_var": "itemid",
+     "val_var": "fluidin",
+     "index_var": "start",
+     "callback": "distribute_volume_hourly",
+     "value_unit": "mL",
+     "end_var": "stop",
+     "extra_vars": [
+      "stop",
+      "ordercategoryid",
+      "isadditive"
+     ],
+     "require_regex": {
+      "isadditive": "^(?:0(?:\\.0)?|[Ff]alse)$",
+      "ordercategoryid": "^(?:39)(?:\\.0)?$"
+     }
+    },
+    {
+     "ids": [
+      18790
+     ],
+     "table": "drugitems",
+     "sub_var": "itemid",
+     "val_var": "fluidin",
+     "index_var": "start",
+     "callback": "distribute_volume_hourly",
+     "value_unit": "mL",
+     "end_var": "stop",
+     "extra_vars": [
+      "stop",
+      "ordercategoryid",
+      "isadditive"
+     ],
+     "require_regex": {
+      "isadditive": "^(?:0(?:\\.0)?|[Ff]alse)$",
+      "ordercategoryid": "^(?:39)(?:\\.0)?$"
+     }
+    },
+    {
+     "ids": [
+      18795
+     ],
+     "table": "drugitems",
+     "sub_var": "itemid",
+     "val_var": "fluidin",
+     "index_var": "start",
+     "callback": "distribute_volume_hourly",
+     "value_unit": "mL",
+     "end_var": "stop",
+     "extra_vars": [
+      "stop",
+      "ordercategoryid",
+      "isadditive"
+     ],
+     "require_regex": {
+      "isadditive": "^(?:0(?:\\.0)?|[Ff]alse)$",
+      "ordercategoryid": "^(?:39)(?:\\.0)?$"
+     }
+    },
+    {
+     "ids": [
+      8948
+     ],
+     "table": "drugitems",
+     "sub_var": "itemid",
+     "val_var": "fluidin",
+     "index_var": "start",
+     "callback": "distribute_volume_hourly",
+     "value_unit": "mL",
+     "end_var": "stop",
+     "extra_vars": [
+      "stop",
+      "ordercategoryid",
+      "isadditive"
+     ],
+     "require_regex": {
+      "isadditive": "^(?:0(?:\\.0)?|[Ff]alse)$",
+      "ordercategoryid": "^(?:39)(?:\\.0)?$"
+     }
+    },
+    {
+     "ids": [
+      8949
+     ],
+     "table": "drugitems",
+     "sub_var": "itemid",
+     "val_var": "fluidin",
+     "index_var": "start",
+     "callback": "distribute_volume_hourly",
+     "value_unit": "mL",
+     "end_var": "stop",
+     "extra_vars": [
+      "stop",
+      "ordercategoryid",
+      "isadditive"
+     ],
+     "require_regex": {
+      "isadditive": "^(?:0(?:\\.0)?|[Ff]alse)$",
+      "ordercategoryid": "^(?:39)(?:\\.0)?$"
+     }
+    },
+    {
+     "ids": [
+      8972
+     ],
+     "table": "drugitems",
+     "sub_var": "itemid",
+     "val_var": "fluidin",
+     "index_var": "start",
+     "callback": "distribute_volume_hourly",
+     "value_unit": "mL",
+     "end_var": "stop",
+     "extra_vars": [
+      "stop",
+      "ordercategoryid",
+      "isadditive"
+     ],
+     "require_regex": {
+      "isadditive": "^(?:0(?:\\.0)?|[Ff]alse)$",
+      "ordercategoryid": "^(?:39)(?:\\.0)?$"
+     }
+    }
+   ],
+   "miiv": [
+    {
+     "ids": [
+      225916
+     ],
+     "table": "inputevents",
+     "sub_var": "itemid",
+     "val_var": "amount",
+     "unit_var": "amountuom",
+     "index_var": "starttime",
+     "callback": "distribute_volume_hourly",
+     "end_var": "endtime",
+     "extra_vars": [
+      "endtime",
+      "statusdescription",
+      "ordercategoryname"
+     ],
+     "status_var": "statusdescription",
+     "excluded_statuses": [
+      "Rewritten",
+      "Cancelled",
+      "Canceled"
+     ],
+     "require_regex": {
+      "amountuom": "(?i)^\\s*mL\\s*$"
+     },
+     "exclude_regex": {
+      "ordercategoryname": "(?i)pre.admission|cath.lab|operating|\\bOR\\b|PACU|emergency|\\bED\\b"
+     }
+    },
+    {
+     "ids": [
+      225917
+     ],
+     "table": "inputevents",
+     "sub_var": "itemid",
+     "val_var": "amount",
+     "unit_var": "amountuom",
+     "index_var": "starttime",
+     "callback": "distribute_volume_hourly",
+     "end_var": "endtime",
+     "extra_vars": [
+      "endtime",
+      "statusdescription",
+      "ordercategoryname"
+     ],
+     "status_var": "statusdescription",
+     "excluded_statuses": [
+      "Rewritten",
+      "Cancelled",
+      "Canceled"
+     ],
+     "require_regex": {
+      "amountuom": "(?i)^\\s*mL\\s*$"
+     },
+     "exclude_regex": {
+      "ordercategoryname": "(?i)pre.admission|cath.lab|operating|\\bOR\\b|PACU|emergency|\\bED\\b"
+     }
+    },
+    {
+     "ids": [
+      225920
+     ],
+     "table": "inputevents",
+     "sub_var": "itemid",
+     "val_var": "amount",
+     "unit_var": "amountuom",
+     "index_var": "starttime",
+     "callback": "distribute_volume_hourly",
+     "end_var": "endtime",
+     "extra_vars": [
+      "endtime",
+      "statusdescription",
+      "ordercategoryname"
+     ],
+     "status_var": "statusdescription",
+     "excluded_statuses": [
+      "Rewritten",
+      "Cancelled",
+      "Canceled"
+     ],
+     "require_regex": {
+      "amountuom": "(?i)^\\s*mL\\s*$"
+     },
+     "exclude_regex": {
+      "ordercategoryname": "(?i)pre.admission|cath.lab|operating|\\bOR\\b|PACU|emergency|\\bED\\b"
+     }
+    }
+   ],
+   "sic": [
+    {
+     "ids": [
+      2057
+     ],
+     "table": "medication",
+     "sub_var": "DrugID",
+     "val_var": "Amount",
+     "index_var": "Offset",
+     "callback": "sicdb_volume_allocate",
+     "extra_vars": [
+      "OffsetDrugEnd",
+      "IsSingleDose"
+     ],
+     "stop_var": "OffsetDrugEnd"
+    },
+    {
+     "ids": [
+      2059
+     ],
+     "table": "medication",
+     "sub_var": "DrugID",
+     "val_var": "Amount",
+     "index_var": "Offset",
+     "callback": "sicdb_volume_allocate",
+     "extra_vars": [
+      "OffsetDrugEnd",
+      "IsSingleDose"
+     ],
+     "stop_var": "OffsetDrugEnd"
+    },
+    {
+     "ids": [
+      2060
+     ],
+     "table": "medication",
+     "sub_var": "DrugID",
+     "val_var": "Amount",
+     "index_var": "Offset",
+     "callback": "sicdb_volume_allocate",
+     "extra_vars": [
+      "OffsetDrugEnd",
+      "IsSingleDose"
+     ],
+     "stop_var": "OffsetDrugEnd"
+    },
+    {
+     "ids": [
+      2061
+     ],
+     "table": "medication",
+     "sub_var": "DrugID",
+     "val_var": "Amount",
+     "index_var": "Offset",
+     "callback": "sicdb_volume_allocate",
+     "extra_vars": [
+      "OffsetDrugEnd",
+      "IsSingleDose"
+     ],
+     "stop_var": "OffsetDrugEnd"
+    },
+    {
+     "ids": [
+      2124
+     ],
+     "table": "medication",
+     "sub_var": "DrugID",
+     "val_var": "Amount",
+     "index_var": "Offset",
+     "callback": "sicdb_volume_allocate",
+     "extra_vars": [
+      "OffsetDrugEnd",
+      "IsSingleDose"
+     ],
+     "stop_var": "OffsetDrugEnd"
+    },
+    {
+     "ids": [
+      2155
+     ],
+     "table": "medication",
+     "sub_var": "DrugID",
+     "val_var": "Amount",
+     "index_var": "Offset",
+     "callback": "sicdb_volume_allocate",
+     "extra_vars": [
+      "OffsetDrugEnd",
+      "IsSingleDose"
+     ],
+     "stop_var": "OffsetDrugEnd"
+    },
+    {
+     "ids": [
+      2173
+     ],
+     "table": "medication",
+     "sub_var": "DrugID",
+     "val_var": "Amount",
+     "index_var": "Offset",
+     "callback": "sicdb_volume_allocate",
+     "extra_vars": [
+      "OffsetDrugEnd",
+      "IsSingleDose"
+     ],
+     "stop_var": "OffsetDrugEnd"
+    },
+    {
+     "ids": [
+      2175
+     ],
+     "table": "medication",
+     "sub_var": "DrugID",
+     "val_var": "Amount",
+     "index_var": "Offset",
+     "callback": "sicdb_volume_allocate",
+     "extra_vars": [
+      "OffsetDrugEnd",
+      "IsSingleDose"
+     ],
+     "stop_var": "OffsetDrugEnd"
+    },
+    {
+     "ids": [
+      2185
+     ],
+     "table": "medication",
+     "sub_var": "DrugID",
+     "val_var": "Amount",
+     "index_var": "Offset",
+     "callback": "sicdb_volume_allocate",
+     "extra_vars": [
+      "OffsetDrugEnd",
+      "IsSingleDose"
+     ],
+     "stop_var": "OffsetDrugEnd"
+    },
+    {
+     "ids": [
+      2186
+     ],
+     "table": "medication",
+     "sub_var": "DrugID",
+     "val_var": "Amount",
+     "index_var": "Offset",
+     "callback": "sicdb_volume_allocate",
+     "extra_vars": [
+      "OffsetDrugEnd",
+      "IsSingleDose"
+     ],
+     "stop_var": "OffsetDrugEnd"
+    }
+   ]
+  }
+ },
+ "platelet_input_ml": {
+  "unit": "mL",
+  "min": 0,
+  "max": 10000,
+  "description": "Platelet product volume per ICU hour",
+  "category": "output",
+  "aggregate": "sum",
+  "sources": {
+   "aumc": [
+    {
+     "ids": [
+      7369
+     ],
+     "table": "drugitems",
+     "sub_var": "itemid",
+     "val_var": "fluidin",
+     "index_var": "start",
+     "callback": "distribute_volume_hourly",
+     "value_unit": "mL",
+     "end_var": "stop",
+     "extra_vars": [
+      "stop",
+      "ordercategoryid",
+      "isadditive"
+     ],
+     "require_regex": {
+      "isadditive": "^(?:0(?:\\.0)?|[Ff]alse)$",
+      "ordercategoryid": "^(?:61)(?:\\.0)?$"
+     }
+    }
+   ],
+   "miiv": [
+    {
+     "ids": [
+      225170
+     ],
+     "table": "inputevents",
+     "sub_var": "itemid",
+     "val_var": "amount",
+     "unit_var": "amountuom",
+     "index_var": "starttime",
+     "callback": "distribute_volume_hourly",
+     "end_var": "endtime",
+     "extra_vars": [
+      "endtime",
+      "statusdescription",
+      "ordercategoryname"
+     ],
+     "status_var": "statusdescription",
+     "excluded_statuses": [
+      "Rewritten",
+      "Cancelled",
+      "Canceled"
+     ],
+     "require_regex": {
+      "amountuom": "(?i)^\\s*mL\\s*$"
+     },
+     "exclude_regex": {
+      "ordercategoryname": "(?i)pre.admission|cath.lab|operating|\\bOR\\b|PACU|emergency|\\bED\\b"
+     }
+    }
+   ],
+   "sic": [
+    {
+     "ids": [
+      2048
+     ],
+     "table": "medication",
+     "sub_var": "DrugID",
+     "val_var": "Amount",
+     "index_var": "Offset",
+     "callback": "sicdb_volume_allocate",
+     "extra_vars": [
+      "OffsetDrugEnd",
+      "IsSingleDose"
+     ],
+     "stop_var": "OffsetDrugEnd"
+    },
+    {
+     "ids": [
+      2088
+     ],
+     "table": "medication",
+     "sub_var": "DrugID",
+     "val_var": "Amount",
+     "index_var": "Offset",
+     "callback": "sicdb_volume_allocate",
+     "extra_vars": [
+      "OffsetDrugEnd",
+      "IsSingleDose"
+     ],
+     "stop_var": "OffsetDrugEnd"
+    }
+   ],
+   "eicu": [
+    {
+     "ids": [
+      "flowsheet|Flowsheet Cell Labels|I&O|Intake (ml)|Blood Products (ml)|Platelets"
+     ],
+     "table": "intakeoutput",
+     "sub_var": "cellpath",
+     "val_var": "cellvaluenumeric",
+     "extra_vars": [
+      "cellpath",
+      "celllabel",
+      "intakeoutputoffset",
+      "intakeoutputentryoffset"
+     ],
+     "callback": "eicu_systemic_intake"
+    }
+   ]
+  }
+ },
+ "ramsay": {
+  "unit": "score",
+  "min": 1,
+  "max": 6,
+  "description": "Ramsay sedation score",
+  "category": "neurological",
+  "sources": {
+   "aumc": [
+    {
+     "ids": [
+      9232
+     ],
+     "table": "listitems",
+     "sub_var": "itemid",
+     "val_var": "value",
+     "callback": "apply_map(c(`6 in slaap, helemaal geen reactie` = 6, `4 in slaap, maar snelle respons op prikkel` = 4, `3 wakker, alleen respons op opdracht` = 3, `2 wakker, cooperatief, georiënteerd en rustig` = 2, `1 wakker, angstig, geagiteerd of rusteloos` = 1, `5 inslaap, trage, slome reaktie op prikkel` = 5), strict = TRUE)"
+    }
+   ]
+  }
+ },
+ "remifentanil_rate": {
+  "unit": "mcg/kg/min",
+  "min": 0,
+  "max": 10,
+  "description": "Continuous intravenous remifentanil infusion rate",
+  "category": "neurological",
+  "sources": {
+   "aumc": [
+    {
+     "ids": [
+      12402
+     ],
+     "table": "drugitems",
+     "sub_var": "itemid",
+     "rel_weight": "doserateperkg",
+     "rate_uom": "doserateunit",
+     "stop_var": "stop",
+     "callback": "aumc_rate_kg",
+     "extra_vars": [
+      "action",
+      "doserateperkg",
+      "doserateunit",
+      "doseunit",
+      "iscontinuous",
+      "ordercategory"
+     ],
+     "require_regex": {
+      "iscontinuous": "^(1|1\\.0|True|true)$",
+      "doseunit": "(?i)^(?:mg|µg|ug|mcg|g|ng)$",
+      "doserateunit": "(?i)^(?:min|uur|hour|hr|h|sec|s|dag)$"
+     },
+     "exclude_regex": {
+      "action": "(?i)^\\s*flush\\s*$",
+      "ordercategory": "(?i)^\\s*niet iv"
+     }
+    }
+   ],
+   "hirid": [
+    {
+     "ids": [
+      1000705
+     ],
+     "table": "pharma",
+     "sub_var": "pharmaid",
+     "grp_var": "infusionid",
+     "callback": "hirid_rate_kg",
+     "extra_vars": [
+      "route"
+     ],
+     "require_regex": {
+      "route": "(?i)^\\s*[ci]v-inf\\s*$"
+     }
+    }
+   ]
+  }
+ },
+ "rrt_modality": {
+  "unit": "category",
+  "description": "Charted CRRT modality",
+  "category": "renal",
+  "class_name": "fct_cncpt",
+  "target": "ts_tbl",
+  "levels": [
+   "cvvh",
+   "cvvhd",
+   "cvvhdf",
+   "scuf"
+  ],
+  "sources": {
+   "miiv": [
+    {
+     "ids": [
+      227290
+     ],
+     "table": "chartevents",
+     "sub_var": "itemid",
+     "val_var": "value",
+     "callback": "apply_map(c(`CVVH` = 'cvvh', `CVVHD` = 'cvvhd', `CVVHDF` = 'cvvhdf', `SCUF` = 'scuf'), strict = TRUE)"
+    }
+   ]
+  }
+ },
+ "sas": {
+  "unit": "score",
+  "min": 1,
+  "max": 7,
+  "description": "Riker Sedation-Agitation Scale",
+  "category": "neurological",
+  "sources": {
+   "miiv": [
+    {
+     "ids": [
+      223753
+     ],
+     "table": "chartevents",
+     "sub_var": "itemid",
+     "val_var": "value",
+     "callback": "apply_map(c(`Unarousable` = 1, `Very Sedated` = 2, `Sedated` = 3, `Calm/Cooperative` = 4, `Agitated` = 5, `Very Agitated` = 6, `Danger Agitation` = 7), strict = TRUE)"
     }
    ]
   }

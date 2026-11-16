@@ -1,6 +1,28 @@
 {
-  "concept_count": 336,
+  "concept_count": 427,
   "concepts": {
+    "abdominal_circumference": {
+      "category": "ventilator",
+      "databases": {
+        "jinhua": {
+          "reason": "no validated native field/event in this release",
+          "status": "unavailable"
+        },
+        "nwicu": {
+          "reason": "no validated native field/event in this release",
+          "status": "unavailable"
+        },
+        "zhejiang_eicu": {
+          "reason": "no validated native field/event in this release",
+          "status": "unavailable"
+        },
+        "zigong": {
+          "reason": "no validated native field/event in this release",
+          "status": "unavailable"
+        }
+      },
+      "description": "Abdominal circumference; flagged proxy, not pressure"
+    },
     "abx": {
       "category": "medications",
       "databases": {
@@ -359,6 +381,28 @@
       },
       "description": "amylase (blood)"
     },
+    "angiotensin_ii_rate": {
+      "category": "cardiovascular",
+      "databases": {
+        "jinhua": {
+          "reason": "no validated native field/event in this release",
+          "status": "unavailable"
+        },
+        "nwicu": {
+          "reason": "no validated native field/event in this release",
+          "status": "unavailable"
+        },
+        "zhejiang_eicu": {
+          "reason": "no validated native field/event in this release",
+          "status": "unavailable"
+        },
+        "zigong": {
+          "reason": "no validated native field/event in this release",
+          "status": "unavailable"
+        }
+      },
+      "description": "Continuous intravenous angiotensin II infusion rate"
+    },
     "anion_gap": {
       "category": "chemistry",
       "databases": {
@@ -614,6 +658,50 @@
       },
       "description": "arterial base excess"
     },
+    "be_venous": {
+      "category": "blood gas",
+      "databases": {
+        "jinhua": {
+          "reason": "no validated native field/event in this release",
+          "status": "unavailable"
+        },
+        "nwicu": {
+          "reason": "no validated native field/event in this release",
+          "status": "unavailable"
+        },
+        "zhejiang_eicu": {
+          "reason": "no validated native field/event in this release",
+          "status": "unavailable"
+        },
+        "zigong": {
+          "reason": "no validated native field/event in this release",
+          "status": "unavailable"
+        }
+      },
+      "description": "Venous arterial base excess"
+    },
+    "beta2_microglobulin_urine": {
+      "category": "renal",
+      "databases": {
+        "jinhua": {
+          "reason": "no validated native field/event in this release",
+          "status": "unavailable"
+        },
+        "nwicu": {
+          "reason": "no validated native field/event in this release",
+          "status": "unavailable"
+        },
+        "zhejiang_eicu": {
+          "reason": "no validated native field/event in this release",
+          "status": "unavailable"
+        },
+        "zigong": {
+          "reason": "no validated native field/event in this release",
+          "status": "unavailable"
+        }
+      },
+      "description": "Urinary beta-2 microglobulin concentration"
+    },
     "bicar": {
       "category": "chemistry",
       "databases": {
@@ -828,6 +916,28 @@
         }
       },
       "description": "B-type natriuretic peptide (BNP); distinct from NT-proBNP"
+    },
+    "bps": {
+      "category": "neurological",
+      "databases": {
+        "jinhua": {
+          "reason": "no validated native field/event in this release",
+          "status": "unavailable"
+        },
+        "nwicu": {
+          "reason": "no validated native field/event in this release",
+          "status": "unavailable"
+        },
+        "zhejiang_eicu": {
+          "reason": "no validated native field/event in this release",
+          "status": "unavailable"
+        },
+        "zigong": {
+          "reason": "no validated native field/event in this release",
+          "status": "unavailable"
+        }
+      },
+      "description": "Behavioral Pain Scale total; invalid 0–2 remain missing"
     },
     "bun": {
       "category": "chemistry",
@@ -1061,6 +1171,28 @@
       },
       "description": "intravenous calcium (gluconate or chloride) — bolus or infusion"
     },
+    "cam_icu": {
+      "category": "neurological",
+      "databases": {
+        "jinhua": {
+          "reason": "no validated native field/event in this release",
+          "status": "unavailable"
+        },
+        "nwicu": {
+          "reason": "no validated native field/event in this release",
+          "status": "unavailable"
+        },
+        "zhejiang_eicu": {
+          "reason": "no validated native field/event in this release",
+          "status": "unavailable"
+        },
+        "zigong": {
+          "reason": "no validated native field/event in this release",
+          "status": "unavailable"
+        }
+      },
+      "description": "Explicit CAM-ICU result; unassessable stays missing"
+    },
     "cholesterol": {
       "category": "chemistry",
       "databases": {
@@ -1086,6 +1218,28 @@
         }
       },
       "description": "total cholesterol (blood); AUMC mmol/L converted to mg/dL (×38.67)"
+    },
+    "ci": {
+      "category": "cardiovascular",
+      "databases": {
+        "jinhua": {
+          "reason": "no validated native field/event in this release",
+          "status": "unavailable"
+        },
+        "nwicu": {
+          "reason": "no validated native field/event in this release",
+          "status": "unavailable"
+        },
+        "zhejiang_eicu": {
+          "reason": "no validated native field/event in this release",
+          "status": "unavailable"
+        },
+        "zigong": {
+          "reason": "no validated native field/event in this release",
+          "status": "unavailable"
+        }
+      },
+      "description": "Cardiac index"
     },
     "cisatracurium": {
       "category": "medications",
@@ -1162,6 +1316,28 @@
       },
       "description": "creatine kinase MB"
     },
+    "ckmb_activity": {
+      "category": "chemistry",
+      "databases": {
+        "jinhua": {
+          "reason": "no validated native field/event in this release",
+          "status": "unavailable"
+        },
+        "nwicu": {
+          "reason": "no validated native field/event in this release",
+          "status": "unavailable"
+        },
+        "zhejiang_eicu": {
+          "reason": "no validated native field/event in this release",
+          "status": "unavailable"
+        },
+        "zigong": {
+          "reason": "no validated native field/event in this release",
+          "status": "unavailable"
+        }
+      },
+      "description": "CK-MB enzymatic activity; separate from mass"
+    },
     "ckmb_hirid_raw": {
       "category": "chemistry",
       "databases": {
@@ -1230,6 +1406,50 @@
         }
       },
       "description": "cardiac output (thermodilution / continuous / PiCCO)"
+    },
+    "co2_tidal": {
+      "category": "ventilator",
+      "databases": {
+        "jinhua": {
+          "reason": "no validated native field/event in this release",
+          "status": "unavailable"
+        },
+        "nwicu": {
+          "reason": "no validated native field/event in this release",
+          "status": "unavailable"
+        },
+        "zhejiang_eicu": {
+          "reason": "no validated native field/event in this release",
+          "status": "unavailable"
+        },
+        "zigong": {
+          "reason": "no validated native field/event in this release",
+          "status": "unavailable"
+        }
+      },
+      "description": "Exhaled CO2 volume per breath"
+    },
+    "colloid_input_ml": {
+      "category": "output",
+      "databases": {
+        "jinhua": {
+          "reason": "no validated native field/event in this release",
+          "status": "unavailable"
+        },
+        "nwicu": {
+          "reason": "no validated native field/event in this release",
+          "status": "unavailable"
+        },
+        "zhejiang_eicu": {
+          "reason": "no validated native field/event in this release",
+          "status": "unavailable"
+        },
+        "zigong": {
+          "reason": "no validated native field/event in this release",
+          "status": "unavailable"
+        }
+      },
+      "description": "hourly IV colloid volume (mL): human albumin, gelatin, hydroxyethyl starch and dextran solutions. Blood products and crystalloids are excluded. MIIV inputevents amounts and AUMC drugitems.fluidin are overlap-allocated to ICU hours with volume conservation; HiRID uses increments of the daily colloid counter 30005080; SICdb uses medication Amount (mL), infusions allocated over Offset..OffsetDrugEnd. Not additive with total_input_ml, which already contains colloids in MIIV, AUMC and HiRID."
     },
     "compliance": {
       "category": "ventilator",
@@ -1366,6 +1586,28 @@
       },
       "description": "creatinine"
     },
+    "crea_clearance_measured": {
+      "category": "renal",
+      "databases": {
+        "jinhua": {
+          "reason": "no validated native field/event in this release",
+          "status": "unavailable"
+        },
+        "nwicu": {
+          "reason": "no validated native field/event in this release",
+          "status": "unavailable"
+        },
+        "zhejiang_eicu": {
+          "reason": "no validated native field/event in this release",
+          "status": "unavailable"
+        },
+        "zigong": {
+          "reason": "no validated native field/event in this release",
+          "status": "unavailable"
+        }
+      },
+      "description": "Measured urinary creatinine clearance"
+    },
     "crea_qc": {
       "category": "chemistry",
       "databases": {
@@ -1460,6 +1702,116 @@
       },
       "description": "C-reactive protein"
     },
+    "crrt_blood_flow": {
+      "category": "renal",
+      "databases": {
+        "jinhua": {
+          "reason": "no validated native field/event in this release",
+          "status": "unavailable"
+        },
+        "nwicu": {
+          "reason": "no validated native field/event in this release",
+          "status": "unavailable"
+        },
+        "zhejiang_eicu": {
+          "reason": "no validated native field/event in this release",
+          "status": "unavailable"
+        },
+        "zigong": {
+          "reason": "no validated native field/event in this release",
+          "status": "unavailable"
+        }
+      },
+      "description": "Charted CRRT blood flow"
+    },
+    "crrt_blood_flow_set": {
+      "category": "renal",
+      "databases": {
+        "jinhua": {
+          "reason": "no validated native field/event in this release",
+          "status": "unavailable"
+        },
+        "nwicu": {
+          "reason": "no validated native field/event in this release",
+          "status": "unavailable"
+        },
+        "zhejiang_eicu": {
+          "reason": "no validated native field/event in this release",
+          "status": "unavailable"
+        },
+        "zigong": {
+          "reason": "no validated native field/event in this release",
+          "status": "unavailable"
+        }
+      },
+      "description": "Prescribed CRRT blood flow"
+    },
+    "crrt_citrate_flow": {
+      "category": "renal",
+      "databases": {
+        "jinhua": {
+          "reason": "no validated native field/event in this release",
+          "status": "unavailable"
+        },
+        "nwicu": {
+          "reason": "no validated native field/event in this release",
+          "status": "unavailable"
+        },
+        "zhejiang_eicu": {
+          "reason": "no validated native field/event in this release",
+          "status": "unavailable"
+        },
+        "zigong": {
+          "reason": "no validated native field/event in this release",
+          "status": "unavailable"
+        }
+      },
+      "description": "Charted CRRT citrate solution flow"
+    },
+    "crrt_dialysate_flow": {
+      "category": "renal",
+      "databases": {
+        "jinhua": {
+          "reason": "no validated native field/event in this release",
+          "status": "unavailable"
+        },
+        "nwicu": {
+          "reason": "no validated native field/event in this release",
+          "status": "unavailable"
+        },
+        "zhejiang_eicu": {
+          "reason": "no validated native field/event in this release",
+          "status": "unavailable"
+        },
+        "zigong": {
+          "reason": "no validated native field/event in this release",
+          "status": "unavailable"
+        }
+      },
+      "description": "Charted CRRT dialysate flow"
+    },
+    "crrt_dilution_mode_set": {
+      "category": "renal",
+      "databases": {
+        "jinhua": {
+          "reason": "no validated native field/event in this release",
+          "status": "unavailable"
+        },
+        "nwicu": {
+          "reason": "no validated native field/event in this release",
+          "status": "unavailable"
+        },
+        "zhejiang_eicu": {
+          "reason": "no validated native field/event in this release",
+          "status": "unavailable"
+        },
+        "zigong": {
+          "reason": "no validated native field/event in this release",
+          "status": "unavailable"
+        }
+      },
+      "description": "Prescribed CRRT dilution mode"
+    },
     "crrt_mode_input": {
       "category": "renal",
       "databases": {
@@ -1481,6 +1833,160 @@
         }
       },
       "description": "MIMIC-IV CRRT-mode documentation used only by the pinned MIT-LCP source-native AKI profile"
+    },
+    "crrt_replacement_flow": {
+      "category": "renal",
+      "databases": {
+        "jinhua": {
+          "reason": "no validated native field/event in this release",
+          "status": "unavailable"
+        },
+        "nwicu": {
+          "reason": "no validated native field/event in this release",
+          "status": "unavailable"
+        },
+        "zhejiang_eicu": {
+          "reason": "no validated native field/event in this release",
+          "status": "unavailable"
+        },
+        "zigong": {
+          "reason": "no validated native field/event in this release",
+          "status": "unavailable"
+        }
+      },
+      "description": "Charted total CRRT replacement flow"
+    },
+    "crrt_replacement_flow_set": {
+      "category": "renal",
+      "databases": {
+        "jinhua": {
+          "reason": "no validated native field/event in this release",
+          "status": "unavailable"
+        },
+        "nwicu": {
+          "reason": "no validated native field/event in this release",
+          "status": "unavailable"
+        },
+        "zhejiang_eicu": {
+          "reason": "no validated native field/event in this release",
+          "status": "unavailable"
+        },
+        "zigong": {
+          "reason": "no validated native field/event in this release",
+          "status": "unavailable"
+        }
+      },
+      "description": "Prescribed total CRRT replacement flow"
+    },
+    "crrt_replacement_post_flow": {
+      "category": "renal",
+      "databases": {
+        "jinhua": {
+          "reason": "no validated native field/event in this release",
+          "status": "unavailable"
+        },
+        "nwicu": {
+          "reason": "no validated native field/event in this release",
+          "status": "unavailable"
+        },
+        "zhejiang_eicu": {
+          "reason": "no validated native field/event in this release",
+          "status": "unavailable"
+        },
+        "zigong": {
+          "reason": "no validated native field/event in this release",
+          "status": "unavailable"
+        }
+      },
+      "description": "Charted postfilter CRRT replacement flow"
+    },
+    "crrt_replacement_post_flow_set": {
+      "category": "renal",
+      "databases": {
+        "jinhua": {
+          "reason": "no validated native field/event in this release",
+          "status": "unavailable"
+        },
+        "nwicu": {
+          "reason": "no validated native field/event in this release",
+          "status": "unavailable"
+        },
+        "zhejiang_eicu": {
+          "reason": "no validated native field/event in this release",
+          "status": "unavailable"
+        },
+        "zigong": {
+          "reason": "no validated native field/event in this release",
+          "status": "unavailable"
+        }
+      },
+      "description": "Prescribed postfilter CRRT replacement flow"
+    },
+    "crrt_replacement_pre_flow": {
+      "category": "renal",
+      "databases": {
+        "jinhua": {
+          "reason": "no validated native field/event in this release",
+          "status": "unavailable"
+        },
+        "nwicu": {
+          "reason": "no validated native field/event in this release",
+          "status": "unavailable"
+        },
+        "zhejiang_eicu": {
+          "reason": "no validated native field/event in this release",
+          "status": "unavailable"
+        },
+        "zigong": {
+          "reason": "no validated native field/event in this release",
+          "status": "unavailable"
+        }
+      },
+      "description": "Charted prefilter CRRT replacement flow"
+    },
+    "crrt_replacement_pre_flow_set": {
+      "category": "renal",
+      "databases": {
+        "jinhua": {
+          "reason": "no validated native field/event in this release",
+          "status": "unavailable"
+        },
+        "nwicu": {
+          "reason": "no validated native field/event in this release",
+          "status": "unavailable"
+        },
+        "zhejiang_eicu": {
+          "reason": "no validated native field/event in this release",
+          "status": "unavailable"
+        },
+        "zigong": {
+          "reason": "no validated native field/event in this release",
+          "status": "unavailable"
+        }
+      },
+      "description": "Prescribed prefilter CRRT replacement flow"
+    },
+    "crystalloid_input_ml": {
+      "category": "output",
+      "databases": {
+        "jinhua": {
+          "reason": "no validated native field/event in this release",
+          "status": "unavailable"
+        },
+        "nwicu": {
+          "reason": "no validated native field/event in this release",
+          "status": "unavailable"
+        },
+        "zhejiang_eicu": {
+          "reason": "no validated native field/event in this release",
+          "status": "unavailable"
+        },
+        "zigong": {
+          "reason": "no validated native field/event in this release",
+          "status": "unavailable"
+        }
+      },
+      "description": "hourly IV crystalloid volume (mL): saline (0.45-23.4%), balanced (lactated Ringer and similar), dextrose, sodium bicarbonate and, where the source charts their volume, crystalloid drug carriers and pressure-bag flushes. Colloids, blood products, parenteral and enteral nutrition are excluded. MIIV inputevents amounts and AUMC drugitems.fluidin are overlap-allocated to ICU hours with volume conservation; HiRID uses increments of the daily saline counter 30005075 (it charts no other crystalloid counter); SICdb uses medication Amount (mL), infusions allocated over Offset..OffsetDrugEnd. Not additive with total_input_ml."
     },
     "cvp": {
       "category": "vitals",
@@ -1645,6 +2151,50 @@
         }
       },
       "description": "diastolic blood pressure"
+    },
+    "dbp_invasive": {
+      "category": "vitals",
+      "databases": {
+        "jinhua": {
+          "reason": "no validated native field/event in this release",
+          "status": "unavailable"
+        },
+        "nwicu": {
+          "reason": "no validated native field/event in this release",
+          "status": "unavailable"
+        },
+        "zhejiang_eicu": {
+          "reason": "no validated native field/event in this release",
+          "status": "unavailable"
+        },
+        "zigong": {
+          "reason": "no validated native field/event in this release",
+          "status": "unavailable"
+        }
+      },
+      "description": "diastolic blood pressure from an arterial line (invasive channel of dbp)"
+    },
+    "dbp_nibp": {
+      "category": "vitals",
+      "databases": {
+        "jinhua": {
+          "reason": "no validated native field/event in this release",
+          "status": "unavailable"
+        },
+        "nwicu": {
+          "reason": "no validated native field/event in this release",
+          "status": "unavailable"
+        },
+        "zhejiang_eicu": {
+          "reason": "no validated native field/event in this release",
+          "status": "unavailable"
+        },
+        "zigong": {
+          "reason": "no validated native field/event in this release",
+          "status": "unavailable"
+        }
+      },
+      "description": "diastolic blood pressure from a non-invasive (oscillometric or manual) cuff (cuff channel of dbp)"
     },
     "death": {
       "category": "outcome",
@@ -2323,6 +2873,50 @@
       },
       "description": "Extracorporeal membrane oxygenation in use"
     },
+    "ecmo_blood_flow": {
+      "category": "ventilator",
+      "databases": {
+        "jinhua": {
+          "reason": "no validated native field/event in this release",
+          "status": "unavailable"
+        },
+        "nwicu": {
+          "reason": "no validated native field/event in this release",
+          "status": "unavailable"
+        },
+        "zhejiang_eicu": {
+          "reason": "no validated native field/event in this release",
+          "status": "unavailable"
+        },
+        "zigong": {
+          "reason": "no validated native field/event in this release",
+          "status": "unavailable"
+        }
+      },
+      "description": "ECMO blood flow"
+    },
+    "ecmo_fio2": {
+      "category": "ventilator",
+      "databases": {
+        "jinhua": {
+          "reason": "no validated native field/event in this release",
+          "status": "unavailable"
+        },
+        "nwicu": {
+          "reason": "no validated native field/event in this release",
+          "status": "unavailable"
+        },
+        "zhejiang_eicu": {
+          "reason": "no validated native field/event in this release",
+          "status": "unavailable"
+        },
+        "zigong": {
+          "reason": "no validated native field/event in this release",
+          "status": "unavailable"
+        }
+      },
+      "description": "ECMO oxygenator oxygen concentration"
+    },
     "ecmo_indication": {
       "category": "respiratory",
       "databases": {
@@ -2344,6 +2938,72 @@
         }
       },
       "description": "ECMO indication (respiratory/cardiovascular); MIMIC-IV 229268 charts VV/VA explicitly"
+    },
+    "ecmo_pump_speed": {
+      "category": "ventilator",
+      "databases": {
+        "jinhua": {
+          "reason": "no validated native field/event in this release",
+          "status": "unavailable"
+        },
+        "nwicu": {
+          "reason": "no validated native field/event in this release",
+          "status": "unavailable"
+        },
+        "zhejiang_eicu": {
+          "reason": "no validated native field/event in this release",
+          "status": "unavailable"
+        },
+        "zigong": {
+          "reason": "no validated native field/event in this release",
+          "status": "unavailable"
+        }
+      },
+      "description": "ECMO pump speed"
+    },
+    "ecmo_sweep_flow": {
+      "category": "ventilator",
+      "databases": {
+        "jinhua": {
+          "reason": "no validated native field/event in this release",
+          "status": "unavailable"
+        },
+        "nwicu": {
+          "reason": "no validated native field/event in this release",
+          "status": "unavailable"
+        },
+        "zhejiang_eicu": {
+          "reason": "no validated native field/event in this release",
+          "status": "unavailable"
+        },
+        "zigong": {
+          "reason": "no validated native field/event in this release",
+          "status": "unavailable"
+        }
+      },
+      "description": "ECMO oxygenator sweep gas flow"
+    },
+    "ecmo_type": {
+      "category": "ventilator",
+      "databases": {
+        "jinhua": {
+          "reason": "no validated native field/event in this release",
+          "status": "unavailable"
+        },
+        "nwicu": {
+          "reason": "no validated native field/event in this release",
+          "status": "unavailable"
+        },
+        "zhejiang_eicu": {
+          "reason": "no validated native field/event in this release",
+          "status": "unavailable"
+        },
+        "zigong": {
+          "reason": "no validated native field/event in this release",
+          "status": "unavailable"
+        }
+      },
+      "description": "ECMO circuit configuration"
     },
     "egcs": {
       "category": "neurological",
@@ -2435,6 +3095,28 @@
         }
       },
       "description": "low-molecular-weight heparin (LMWH class: enoxaparin/nadroparin/dalteparin/tinzaparin)"
+    },
+    "enoximone_rate": {
+      "category": "cardiovascular",
+      "databases": {
+        "jinhua": {
+          "reason": "no validated native field/event in this release",
+          "status": "unavailable"
+        },
+        "nwicu": {
+          "reason": "no validated native field/event in this release",
+          "status": "unavailable"
+        },
+        "zhejiang_eicu": {
+          "reason": "no validated native field/event in this release",
+          "status": "unavailable"
+        },
+        "zigong": {
+          "reason": "no validated native field/event in this release",
+          "status": "unavailable"
+        }
+      },
+      "description": "Continuous intravenous enoximone infusion rate"
     },
     "eos": {
       "category": "hematology",
@@ -2559,6 +3241,28 @@
         }
       },
       "description": "epinephrine rate"
+    },
+    "esketamine": {
+      "category": "medications",
+      "databases": {
+        "jinhua": {
+          "reason": "no validated native field/event in this release",
+          "status": "unavailable"
+        },
+        "nwicu": {
+          "reason": "no validated native field/event in this release",
+          "status": "unavailable"
+        },
+        "zhejiang_eicu": {
+          "reason": "no validated native field/event in this release",
+          "status": "unavailable"
+        },
+        "zigong": {
+          "reason": "no validated native field/event in this release",
+          "status": "unavailable"
+        }
+      },
+      "description": "esketamine (S-ketamine) given in the hour"
     },
     "esmolol": {
       "category": "medications",
@@ -2722,6 +3426,91 @@
       },
       "description": "invasive airway (endotracheal tube or tracheostomy)"
     },
+    "evlwi": {
+      "category": "cardiovascular",
+      "databases": {
+        "jinhua": {
+          "reason": "no validated native field/event in this release",
+          "status": "unavailable"
+        },
+        "nwicu": {
+          "reason": "no validated native field/event in this release",
+          "status": "unavailable"
+        },
+        "zhejiang_eicu": {
+          "reason": "no validated native field/event in this release",
+          "status": "unavailable"
+        },
+        "zigong": {
+          "reason": "no validated native field/event in this release",
+          "status": "unavailable"
+        }
+      },
+      "description": "Extravascular lung water index"
+    },
+    "fena": {
+      "category": "renal",
+      "databases": {
+        "jinhua": {
+          "dependencies": [
+            "urine_na",
+            "urine_crea",
+            "na",
+            "crea"
+          ],
+          "missing_dependencies": [
+            "urine_na",
+            "urine_crea"
+          ],
+          "reason": "some declared dependencies are available; full definition is not",
+          "status": "partial"
+        },
+        "nwicu": {
+          "dependencies": [
+            "urine_na",
+            "urine_crea",
+            "na",
+            "crea"
+          ],
+          "missing_dependencies": [
+            "urine_na",
+            "urine_crea"
+          ],
+          "reason": "some declared dependencies are available; full definition is not",
+          "status": "partial"
+        },
+        "zhejiang_eicu": {
+          "dependencies": [
+            "urine_na",
+            "urine_crea",
+            "na",
+            "crea"
+          ],
+          "missing_dependencies": [
+            "urine_na",
+            "urine_crea",
+            "na"
+          ],
+          "reason": "some declared dependencies are available; full definition is not",
+          "status": "partial"
+        },
+        "zigong": {
+          "dependencies": [
+            "urine_na",
+            "urine_crea",
+            "na",
+            "crea"
+          ],
+          "missing_dependencies": [
+            "urine_na",
+            "urine_crea"
+          ],
+          "reason": "some declared dependencies are available; full definition is not",
+          "status": "partial"
+        }
+      },
+      "description": "fractional excretion of sodium (FENa)"
+    },
     "fentanyl": {
       "category": "medications",
       "databases": {
@@ -2794,6 +3583,68 @@
       },
       "description": "ferritin (blood)"
     },
+    "feurea": {
+      "category": "renal",
+      "databases": {
+        "jinhua": {
+          "dependencies": [
+            "urine_urea",
+            "urine_crea",
+            "bun",
+            "crea"
+          ],
+          "missing_dependencies": [
+            "urine_urea",
+            "urine_crea"
+          ],
+          "reason": "some declared dependencies are available; full definition is not",
+          "status": "partial"
+        },
+        "nwicu": {
+          "dependencies": [
+            "urine_urea",
+            "urine_crea",
+            "bun",
+            "crea"
+          ],
+          "missing_dependencies": [
+            "urine_urea",
+            "urine_crea"
+          ],
+          "reason": "some declared dependencies are available; full definition is not",
+          "status": "partial"
+        },
+        "zhejiang_eicu": {
+          "dependencies": [
+            "urine_urea",
+            "urine_crea",
+            "bun",
+            "crea"
+          ],
+          "missing_dependencies": [
+            "urine_urea",
+            "urine_crea"
+          ],
+          "reason": "some declared dependencies are available; full definition is not",
+          "status": "partial"
+        },
+        "zigong": {
+          "dependencies": [
+            "urine_urea",
+            "urine_crea",
+            "bun",
+            "crea"
+          ],
+          "missing_dependencies": [
+            "urine_urea",
+            "urine_crea"
+          ],
+          "reason": "some declared dependencies are available; full definition is not",
+          "status": "partial"
+        }
+      },
+      "description": "fractional excretion of urea (FEUrea)"
+    },
     "ffp": {
       "category": "medications",
       "databases": {
@@ -2816,6 +3667,28 @@
         }
       },
       "description": "fresh frozen plasma transfusion"
+    },
+    "ffp_input_ml": {
+      "category": "output",
+      "databases": {
+        "jinhua": {
+          "reason": "no validated native field/event in this release",
+          "status": "unavailable"
+        },
+        "nwicu": {
+          "reason": "no validated native field/event in this release",
+          "status": "unavailable"
+        },
+        "zhejiang_eicu": {
+          "reason": "no validated native field/event in this release",
+          "status": "unavailable"
+        },
+        "zigong": {
+          "reason": "no validated native field/event in this release",
+          "status": "unavailable"
+        }
+      },
+      "description": "Fresh frozen plasma volume per ICU hour"
     },
     "fgn": {
       "category": "hematology",
@@ -3068,6 +3941,28 @@
       },
       "description": "furosemide (Lasix) administration, any route (IV bolus, continuous infusion or enteral)"
     },
+    "furosemide_active": {
+      "category": "medications",
+      "databases": {
+        "jinhua": {
+          "reason": "no validated native field/event in this release",
+          "status": "unavailable"
+        },
+        "nwicu": {
+          "reason": "no validated native field/event in this release",
+          "status": "unavailable"
+        },
+        "zhejiang_eicu": {
+          "reason": "no validated native field/event in this release",
+          "status": "unavailable"
+        },
+        "zigong": {
+          "reason": "no validated native field/event in this release",
+          "status": "unavailable"
+        }
+      },
+      "description": "furosemide given in the hour: an administration at that hour or a running infusion covering it (any route)"
+    },
     "gcs": {
       "category": "neurological",
       "databases": {
@@ -3142,6 +4037,50 @@
         }
       },
       "description": "Glasgow coma scale (non-sedated)"
+    },
+    "gedvi": {
+      "category": "cardiovascular",
+      "databases": {
+        "jinhua": {
+          "reason": "no validated native field/event in this release",
+          "status": "unavailable"
+        },
+        "nwicu": {
+          "reason": "no validated native field/event in this release",
+          "status": "unavailable"
+        },
+        "zhejiang_eicu": {
+          "reason": "no validated native field/event in this release",
+          "status": "unavailable"
+        },
+        "zigong": {
+          "reason": "no validated native field/event in this release",
+          "status": "unavailable"
+        }
+      },
+      "description": "Global end-diastolic volume index"
+    },
+    "gef": {
+      "category": "cardiovascular",
+      "databases": {
+        "jinhua": {
+          "reason": "no validated native field/event in this release",
+          "status": "unavailable"
+        },
+        "nwicu": {
+          "reason": "no validated native field/event in this release",
+          "status": "unavailable"
+        },
+        "zhejiang_eicu": {
+          "reason": "no validated native field/event in this release",
+          "status": "unavailable"
+        },
+        "zigong": {
+          "reason": "no validated native field/event in this release",
+          "status": "unavailable"
+        }
+      },
+      "description": "Global ejection fraction"
     },
     "ggt": {
       "category": "chemistry",
@@ -3536,6 +4475,28 @@
       },
       "description": "heart rate"
     },
+    "hydromorphone": {
+      "category": "medications",
+      "databases": {
+        "jinhua": {
+          "reason": "no validated native field/event in this release",
+          "status": "unavailable"
+        },
+        "nwicu": {
+          "reason": "no validated native field/event in this release",
+          "status": "unavailable"
+        },
+        "zhejiang_eicu": {
+          "reason": "no validated native field/event in this release",
+          "status": "unavailable"
+        },
+        "zigong": {
+          "reason": "no validated native field/event in this release",
+          "status": "unavailable"
+        }
+      },
+      "description": "hydromorphone given in the hour, any systemic route"
+    },
     "icp": {
       "category": "neurological",
       "databases": {
@@ -3602,6 +4563,28 @@
         }
       },
       "description": "ICU unit type"
+    },
+    "il6": {
+      "category": "chemistry",
+      "databases": {
+        "jinhua": {
+          "reason": "no validated native field/event in this release",
+          "status": "unavailable"
+        },
+        "nwicu": {
+          "reason": "no validated native field/event in this release",
+          "status": "unavailable"
+        },
+        "zhejiang_eicu": {
+          "reason": "no validated native field/event in this release",
+          "status": "unavailable"
+        },
+        "zigong": {
+          "reason": "no validated native field/event in this release",
+          "status": "unavailable"
+        }
+      },
+      "description": "Interleukin-6 concentration in blood"
     },
     "infection_icd": {
       "category": "outcome",
@@ -3673,6 +4656,28 @@
       },
       "description": "Insulin administered per hour bin; for HiRID, units/hr is the total U in a one hour bin, not an instantaneous continuous IV infusion rate"
     },
+    "insp_time": {
+      "category": "ventilator",
+      "databases": {
+        "jinhua": {
+          "reason": "no validated native field/event in this release",
+          "status": "unavailable"
+        },
+        "nwicu": {
+          "reason": "no validated native field/event in this release",
+          "status": "unavailable"
+        },
+        "zhejiang_eicu": {
+          "reason": "no validated native field/event in this release",
+          "status": "unavailable"
+        },
+        "zigong": {
+          "reason": "no validated native field/event in this release",
+          "status": "unavailable"
+        }
+      },
+      "description": "Charted inspiratory time"
+    },
     "insulin": {
       "category": "medications",
       "databases": {
@@ -3698,6 +4703,28 @@
         }
       },
       "description": "insulin administration (boolean) — companion to ins rate concept"
+    },
+    "intra_abdominal_pres": {
+      "category": "cardiovascular",
+      "databases": {
+        "jinhua": {
+          "reason": "no validated native field/event in this release",
+          "status": "unavailable"
+        },
+        "nwicu": {
+          "reason": "no validated native field/event in this release",
+          "status": "unavailable"
+        },
+        "zhejiang_eicu": {
+          "reason": "no validated native field/event in this release",
+          "status": "unavailable"
+        },
+        "zigong": {
+          "reason": "no validated native field/event in this release",
+          "status": "unavailable"
+        }
+      },
+      "description": "Intra-abdominal pressure measured through bladder"
     },
     "iron": {
       "category": "chemistry",
@@ -4044,6 +5071,28 @@
       },
       "description": "lactate"
     },
+    "lact_venous": {
+      "category": "cardiovascular",
+      "databases": {
+        "jinhua": {
+          "reason": "no validated native field/event in this release",
+          "status": "unavailable"
+        },
+        "nwicu": {
+          "reason": "no validated native field/event in this release",
+          "status": "unavailable"
+        },
+        "zhejiang_eicu": {
+          "reason": "no validated native field/event in this release",
+          "status": "unavailable"
+        },
+        "zigong": {
+          "reason": "no validated native field/event in this release",
+          "status": "unavailable"
+        }
+      },
+      "description": "Venous lactate"
+    },
     "ldh": {
       "category": "chemistry",
       "databases": {
@@ -4119,6 +5168,28 @@
         }
       },
       "description": "levetiracetam (Keppra) — IV antiepileptic"
+    },
+    "levosimendan": {
+      "category": "cardiovascular",
+      "databases": {
+        "jinhua": {
+          "reason": "no validated native field/event in this release",
+          "status": "unavailable"
+        },
+        "nwicu": {
+          "reason": "no validated native field/event in this release",
+          "status": "unavailable"
+        },
+        "zhejiang_eicu": {
+          "reason": "no validated native field/event in this release",
+          "status": "unavailable"
+        },
+        "zigong": {
+          "reason": "no validated native field/event in this release",
+          "status": "unavailable"
+        }
+      },
+      "description": "Levosimendan administration exposure"
     },
     "lipase": {
       "category": "chemistry",
@@ -4288,6 +5359,28 @@
         }
       },
       "description": "lymphocytes"
+    },
+    "lymph_abs": {
+      "category": "hematology",
+      "databases": {
+        "jinhua": {
+          "reason": "no validated native field/event in this release",
+          "status": "unavailable"
+        },
+        "nwicu": {
+          "reason": "no validated native field/event in this release",
+          "status": "unavailable"
+        },
+        "zhejiang_eicu": {
+          "reason": "no validated native field/event in this release",
+          "status": "unavailable"
+        },
+        "zigong": {
+          "reason": "no validated native field/event in this release",
+          "status": "unavailable"
+        }
+      },
+      "description": "Absolute blood lymphocyte count"
     },
     "magnesium_iv": {
       "category": "medications",
@@ -4623,6 +5716,28 @@
       },
       "description": "meropenem administration (carbapenem antibiotic)"
     },
+    "methadone": {
+      "category": "medications",
+      "databases": {
+        "jinhua": {
+          "reason": "no validated native field/event in this release",
+          "status": "unavailable"
+        },
+        "nwicu": {
+          "reason": "no validated native field/event in this release",
+          "status": "unavailable"
+        },
+        "zhejiang_eicu": {
+          "reason": "no validated native field/event in this release",
+          "status": "unavailable"
+        },
+        "zigong": {
+          "reason": "no validated native field/event in this release",
+          "status": "unavailable"
+        }
+      },
+      "description": "methadone given in the hour, any systemic route"
+    },
     "methb": {
       "category": "blood gas",
       "databases": {
@@ -4832,6 +5947,28 @@
       },
       "description": "PDE3-inhibitor IV inotrope (class: milrinone/enoximone)"
     },
+    "milrinone_rate": {
+      "category": "medications",
+      "databases": {
+        "jinhua": {
+          "reason": "no validated native field/event in this release",
+          "status": "unavailable"
+        },
+        "nwicu": {
+          "reason": "no validated native field/event in this release",
+          "status": "unavailable"
+        },
+        "zhejiang_eicu": {
+          "reason": "no validated native field/event in this release",
+          "status": "unavailable"
+        },
+        "zigong": {
+          "reason": "no validated native field/event in this release",
+          "status": "unavailable"
+        }
+      },
+      "description": "milrinone rate"
+    },
     "minute_vol": {
       "category": "ventilator",
       "databases": {
@@ -4898,6 +6035,28 @@
         }
       },
       "description": "SICdb charted minute ventilation before the analytical gate"
+    },
+    "minute_vol_spont": {
+      "category": "ventilator",
+      "databases": {
+        "jinhua": {
+          "reason": "no validated native field/event in this release",
+          "status": "unavailable"
+        },
+        "nwicu": {
+          "reason": "no validated native field/event in this release",
+          "status": "unavailable"
+        },
+        "zhejiang_eicu": {
+          "reason": "no validated native field/event in this release",
+          "status": "unavailable"
+        },
+        "zigong": {
+          "reason": "no validated native field/event in this release",
+          "status": "unavailable"
+        }
+      },
+      "description": "Spontaneous minute ventilation"
     },
     "modified_shock_index": {
       "category": "cardiovascular",
@@ -5282,6 +6441,28 @@
       },
       "description": "neutrophils"
     },
+    "neut_abs": {
+      "category": "hematology",
+      "databases": {
+        "jinhua": {
+          "reason": "no validated native field/event in this release",
+          "status": "unavailable"
+        },
+        "nwicu": {
+          "reason": "no validated native field/event in this release",
+          "status": "unavailable"
+        },
+        "zhejiang_eicu": {
+          "reason": "no validated native field/event in this release",
+          "status": "unavailable"
+        },
+        "zigong": {
+          "reason": "no validated native field/event in this release",
+          "status": "unavailable"
+        }
+      },
+      "description": "Absolute blood neutrophil count"
+    },
     "news": {
       "category": "outcome",
       "databases": {
@@ -5651,6 +6832,28 @@
       },
       "description": "norepinephrine rate"
     },
+    "nsaid": {
+      "category": "medications",
+      "databases": {
+        "jinhua": {
+          "reason": "no validated native field/event in this release",
+          "status": "unavailable"
+        },
+        "nwicu": {
+          "reason": "no validated native field/event in this release",
+          "status": "unavailable"
+        },
+        "zhejiang_eicu": {
+          "reason": "no validated native field/event in this release",
+          "status": "unavailable"
+        },
+        "zigong": {
+          "reason": "no validated native field/event in this release",
+          "status": "unavailable"
+        }
+      },
+      "description": "systemic non-steroidal anti-inflammatory drug administration (non-aspirin COX inhibitors)"
+    },
     "ntprobnp": {
       "category": "chemistry",
       "databases": {
@@ -5816,6 +7019,28 @@
       },
       "description": "Other vasoactive medication: phenylephrine, vasopressin or milrinone"
     },
+    "oxycodone": {
+      "category": "medications",
+      "databases": {
+        "jinhua": {
+          "reason": "no validated native field/event in this release",
+          "status": "unavailable"
+        },
+        "nwicu": {
+          "reason": "no validated native field/event in this release",
+          "status": "unavailable"
+        },
+        "zhejiang_eicu": {
+          "reason": "no validated native field/event in this release",
+          "status": "unavailable"
+        },
+        "zigong": {
+          "reason": "no validated native field/event in this release",
+          "status": "unavailable"
+        }
+      },
+      "description": "oxycodone given in the hour (enteral; immediate or prolonged release, alone or combined)"
+    },
     "oxygenation_index": {
       "category": "respiratory",
       "databases": {
@@ -5894,6 +7119,28 @@
         }
       },
       "description": "packed red blood cell transfusion"
+    },
+    "packed_rbc_input_ml": {
+      "category": "output",
+      "databases": {
+        "jinhua": {
+          "reason": "no validated native field/event in this release",
+          "status": "unavailable"
+        },
+        "nwicu": {
+          "reason": "no validated native field/event in this release",
+          "status": "unavailable"
+        },
+        "zhejiang_eicu": {
+          "reason": "no validated native field/event in this release",
+          "status": "unavailable"
+        },
+        "zigong": {
+          "reason": "no validated native field/event in this release",
+          "status": "unavailable"
+        }
+      },
+      "description": "Packed red-cell volume per ICU hour"
     },
     "pafi": {
       "category": "respiratory",
@@ -6031,6 +7278,28 @@
       },
       "description": "pulmonary artery pressure, systolic"
     },
+    "parenteral_input_ml": {
+      "category": "output",
+      "databases": {
+        "jinhua": {
+          "reason": "no validated native field/event in this release",
+          "status": "unavailable"
+        },
+        "nwicu": {
+          "reason": "no validated native field/event in this release",
+          "status": "unavailable"
+        },
+        "zhejiang_eicu": {
+          "reason": "no validated native field/event in this release",
+          "status": "unavailable"
+        },
+        "zigong": {
+          "reason": "no validated native field/event in this release",
+          "status": "unavailable"
+        }
+      },
+      "description": "Complete parenteral nutrition bag volume per ICU hour"
+    },
     "pawp": {
       "category": "cardiovascular",
       "databases": {
@@ -6052,6 +7321,28 @@
         }
       },
       "description": "pulmonary artery wedge / occlusion pressure (PCWP/PAOP)"
+    },
+    "pc_above_peep_set": {
+      "category": "ventilator",
+      "databases": {
+        "jinhua": {
+          "reason": "no validated native field/event in this release",
+          "status": "unavailable"
+        },
+        "nwicu": {
+          "reason": "no validated native field/event in this release",
+          "status": "unavailable"
+        },
+        "zhejiang_eicu": {
+          "reason": "no validated native field/event in this release",
+          "status": "unavailable"
+        },
+        "zigong": {
+          "reason": "no validated native field/event in this release",
+          "status": "unavailable"
+        }
+      },
+      "description": "Set inspiratory pressure above PEEP"
     },
     "pco2": {
       "category": "blood gas",
@@ -6077,6 +7368,50 @@
         }
       },
       "description": "CO2 partial pressure"
+    },
+    "pco2_mixed_venous": {
+      "category": "blood gas",
+      "databases": {
+        "jinhua": {
+          "reason": "no validated native field/event in this release",
+          "status": "unavailable"
+        },
+        "nwicu": {
+          "reason": "no validated native field/event in this release",
+          "status": "unavailable"
+        },
+        "zhejiang_eicu": {
+          "reason": "no validated native field/event in this release",
+          "status": "unavailable"
+        },
+        "zigong": {
+          "reason": "no validated native field/event in this release",
+          "status": "unavailable"
+        }
+      },
+      "description": "Mixed-venous CO2 partial pressure"
+    },
+    "pco2_venous": {
+      "category": "blood gas",
+      "databases": {
+        "jinhua": {
+          "reason": "no validated native field/event in this release",
+          "status": "unavailable"
+        },
+        "nwicu": {
+          "reason": "no validated native field/event in this release",
+          "status": "unavailable"
+        },
+        "zhejiang_eicu": {
+          "reason": "no validated native field/event in this release",
+          "status": "unavailable"
+        },
+        "zigong": {
+          "reason": "no validated native field/event in this release",
+          "status": "unavailable"
+        }
+      },
+      "description": "Venous CO2 partial pressure"
     },
     "pct": {
       "category": "chemistry",
@@ -6125,6 +7460,28 @@
         }
       },
       "description": "Positive End Expiratory Pressure"
+    },
+    "peep_intrinsic": {
+      "category": "ventilator",
+      "databases": {
+        "jinhua": {
+          "reason": "no validated native field/event in this release",
+          "status": "unavailable"
+        },
+        "nwicu": {
+          "reason": "no validated native field/event in this release",
+          "status": "unavailable"
+        },
+        "zhejiang_eicu": {
+          "reason": "no validated native field/event in this release",
+          "status": "unavailable"
+        },
+        "zigong": {
+          "reason": "no validated native field/event in this release",
+          "status": "unavailable"
+        }
+      },
+      "description": "Measured intrinsic PEEP"
     },
     "peep_set": {
       "category": "ventilator",
@@ -6233,6 +7590,28 @@
       },
       "description": "pH of blood"
     },
+    "ph_mixed_venous": {
+      "category": "blood gas",
+      "databases": {
+        "jinhua": {
+          "reason": "no validated native field/event in this release",
+          "status": "unavailable"
+        },
+        "nwicu": {
+          "reason": "no validated native field/event in this release",
+          "status": "unavailable"
+        },
+        "zhejiang_eicu": {
+          "reason": "no validated native field/event in this release",
+          "status": "unavailable"
+        },
+        "zigong": {
+          "reason": "no validated native field/event in this release",
+          "status": "unavailable"
+        }
+      },
+      "description": "Mixed-venous pH of blood"
+    },
     "ph_qc": {
       "category": "blood gas",
       "databases": {
@@ -6300,6 +7679,28 @@
         }
       },
       "description": "Charted pH of blood before range filtering"
+    },
+    "ph_venous": {
+      "category": "blood gas",
+      "databases": {
+        "jinhua": {
+          "reason": "no validated native field/event in this release",
+          "status": "unavailable"
+        },
+        "nwicu": {
+          "reason": "no validated native field/event in this release",
+          "status": "unavailable"
+        },
+        "zhejiang_eicu": {
+          "reason": "no validated native field/event in this release",
+          "status": "unavailable"
+        },
+        "zigong": {
+          "reason": "no validated native field/event in this release",
+          "status": "unavailable"
+        }
+      },
+      "description": "Venous pH of blood"
     },
     "phenytoin": {
       "category": "medications",
@@ -6397,6 +7798,50 @@
       },
       "description": "Peak Inspiratory Pressure"
     },
+    "piperacillin_tazobactam": {
+      "category": "medications",
+      "databases": {
+        "jinhua": {
+          "reason": "no validated native field/event in this release",
+          "status": "unavailable"
+        },
+        "nwicu": {
+          "reason": "no validated native field/event in this release",
+          "status": "unavailable"
+        },
+        "zhejiang_eicu": {
+          "reason": "no validated native field/event in this release",
+          "status": "unavailable"
+        },
+        "zigong": {
+          "reason": "no validated native field/event in this release",
+          "status": "unavailable"
+        }
+      },
+      "description": "piperacillin-tazobactam intravenous administration"
+    },
+    "piritramide": {
+      "category": "medications",
+      "databases": {
+        "jinhua": {
+          "reason": "no validated native field/event in this release",
+          "status": "unavailable"
+        },
+        "nwicu": {
+          "reason": "no validated native field/event in this release",
+          "status": "unavailable"
+        },
+        "zhejiang_eicu": {
+          "reason": "no validated native field/event in this release",
+          "status": "unavailable"
+        },
+        "zigong": {
+          "reason": "no validated native field/event in this release",
+          "status": "unavailable"
+        }
+      },
+      "description": "piritramide given in the hour"
+    },
     "plateau_pres": {
       "category": "ventilator",
       "databases": {
@@ -6477,6 +7922,28 @@
         }
       },
       "description": "Plateau Pressure as charted (before the PIP/PEEP consistency check)"
+    },
+    "platelet_input_ml": {
+      "category": "output",
+      "databases": {
+        "jinhua": {
+          "reason": "no validated native field/event in this release",
+          "status": "unavailable"
+        },
+        "nwicu": {
+          "reason": "no validated native field/event in this release",
+          "status": "unavailable"
+        },
+        "zhejiang_eicu": {
+          "reason": "no validated native field/event in this release",
+          "status": "unavailable"
+        },
+        "zigong": {
+          "reason": "no validated native field/event in this release",
+          "status": "unavailable"
+        }
+      },
+      "description": "Platelet product volume per ICU hour"
     },
     "platelets": {
       "category": "medications",
@@ -6595,6 +8062,50 @@
       },
       "description": "O2 partial pressure"
     },
+    "po2_mixed_venous": {
+      "category": "blood gas",
+      "databases": {
+        "jinhua": {
+          "reason": "no validated native field/event in this release",
+          "status": "unavailable"
+        },
+        "nwicu": {
+          "reason": "no validated native field/event in this release",
+          "status": "unavailable"
+        },
+        "zhejiang_eicu": {
+          "reason": "no validated native field/event in this release",
+          "status": "unavailable"
+        },
+        "zigong": {
+          "reason": "no validated native field/event in this release",
+          "status": "unavailable"
+        }
+      },
+      "description": "Mixed-venous O2 partial pressure"
+    },
+    "po2_venous": {
+      "category": "blood gas",
+      "databases": {
+        "jinhua": {
+          "reason": "no validated native field/event in this release",
+          "status": "unavailable"
+        },
+        "nwicu": {
+          "reason": "no validated native field/event in this release",
+          "status": "unavailable"
+        },
+        "zhejiang_eicu": {
+          "reason": "no validated native field/event in this release",
+          "status": "unavailable"
+        },
+        "zigong": {
+          "reason": "no validated native field/event in this release",
+          "status": "unavailable"
+        }
+      },
+      "description": "Venous O2 partial pressure"
+    },
     "potassium": {
       "category": "chemistry",
       "databases": {
@@ -6668,6 +8179,28 @@
       },
       "description": "potassium-sparing diuretic administration (spironolactone, eplerenone, potassium canrenoate, amiloride, triamterene; fixed combinations included), any route"
     },
+    "ppv": {
+      "category": "cardiovascular",
+      "databases": {
+        "jinhua": {
+          "reason": "no validated native field/event in this release",
+          "status": "unavailable"
+        },
+        "nwicu": {
+          "reason": "no validated native field/event in this release",
+          "status": "unavailable"
+        },
+        "zhejiang_eicu": {
+          "reason": "no validated native field/event in this release",
+          "status": "unavailable"
+        },
+        "zigong": {
+          "reason": "no validated native field/event in this release",
+          "status": "unavailable"
+        }
+      },
+      "description": "Pulse pressure variation"
+    },
     "prealbumin": {
       "category": "chemistry",
       "databases": {
@@ -6692,6 +8225,28 @@
         }
       },
       "description": "prealbumin (transthyretin)"
+    },
+    "prone": {
+      "category": "ventilator",
+      "databases": {
+        "jinhua": {
+          "reason": "no validated native field/event in this release",
+          "status": "unavailable"
+        },
+        "nwicu": {
+          "reason": "no validated native field/event in this release",
+          "status": "unavailable"
+        },
+        "zhejiang_eicu": {
+          "reason": "no validated native field/event in this release",
+          "status": "unavailable"
+        },
+        "zigong": {
+          "reason": "no validated native field/event in this release",
+          "status": "unavailable"
+        }
+      },
+      "description": "Recorded prone positioning evidence"
     },
     "propofol": {
       "category": "medications",
@@ -6908,6 +8463,28 @@
       },
       "description": "quick SOFA score"
     },
+    "ramsay": {
+      "category": "neurological",
+      "databases": {
+        "jinhua": {
+          "reason": "no validated native field/event in this release",
+          "status": "unavailable"
+        },
+        "nwicu": {
+          "reason": "no validated native field/event in this release",
+          "status": "unavailable"
+        },
+        "zhejiang_eicu": {
+          "reason": "no validated native field/event in this release",
+          "status": "unavailable"
+        },
+        "zigong": {
+          "reason": "no validated native field/event in this release",
+          "status": "unavailable"
+        }
+      },
+      "description": "Ramsay sedation score"
+    },
     "rass": {
       "category": "neurological",
       "databases": {
@@ -6983,6 +8560,72 @@
       },
       "description": "erythrocyte distribution width"
     },
+    "remifentanil": {
+      "category": "medications",
+      "databases": {
+        "jinhua": {
+          "reason": "no validated native field/event in this release",
+          "status": "unavailable"
+        },
+        "nwicu": {
+          "reason": "no validated native field/event in this release",
+          "status": "unavailable"
+        },
+        "zhejiang_eicu": {
+          "reason": "no validated native field/event in this release",
+          "status": "unavailable"
+        },
+        "zigong": {
+          "reason": "no validated native field/event in this release",
+          "status": "unavailable"
+        }
+      },
+      "description": "remifentanil given in the hour (administration or running infusion)"
+    },
+    "remifentanil_rate": {
+      "category": "neurological",
+      "databases": {
+        "jinhua": {
+          "reason": "no validated native field/event in this release",
+          "status": "unavailable"
+        },
+        "nwicu": {
+          "reason": "no validated native field/event in this release",
+          "status": "unavailable"
+        },
+        "zhejiang_eicu": {
+          "reason": "no validated native field/event in this release",
+          "status": "unavailable"
+        },
+        "zigong": {
+          "reason": "no validated native field/event in this release",
+          "status": "unavailable"
+        }
+      },
+      "description": "Continuous intravenous remifentanil infusion rate"
+    },
+    "renal_resistive_index": {
+      "category": "renal",
+      "databases": {
+        "jinhua": {
+          "reason": "no validated native field/event in this release",
+          "status": "unavailable"
+        },
+        "nwicu": {
+          "reason": "no validated native field/event in this release",
+          "status": "unavailable"
+        },
+        "zhejiang_eicu": {
+          "reason": "no validated native field/event in this release",
+          "status": "unavailable"
+        },
+        "zigong": {
+          "reason": "no validated native field/event in this release",
+          "status": "unavailable"
+        }
+      },
+      "description": "Renal Doppler resistive index"
+    },
     "resp": {
       "category": "respiratory",
       "databases": {
@@ -7008,6 +8651,28 @@
         }
       },
       "description": "respiratory rate"
+    },
+    "resp_spont": {
+      "category": "ventilator",
+      "databases": {
+        "jinhua": {
+          "reason": "no validated native field/event in this release",
+          "status": "unavailable"
+        },
+        "nwicu": {
+          "reason": "no validated native field/event in this release",
+          "status": "unavailable"
+        },
+        "zhejiang_eicu": {
+          "reason": "no validated native field/event in this release",
+          "status": "unavailable"
+        },
+        "zigong": {
+          "reason": "no validated native field/event in this release",
+          "status": "unavailable"
+        }
+      },
+      "description": "Spontaneous respiratory rate"
     },
     "retic": {
       "category": "hematology",
@@ -7166,6 +8831,28 @@
       },
       "description": "Meets criteria for RRT but not receiving it (crea>1.2 mg/dL or oliguria>6h PLUS K+≥6.0 OR acidosis pH≤7.20+HCO3≤12)"
     },
+    "rrt_modality": {
+      "category": "renal",
+      "databases": {
+        "jinhua": {
+          "reason": "no validated native field/event in this release",
+          "status": "unavailable"
+        },
+        "nwicu": {
+          "reason": "no validated native field/event in this release",
+          "status": "unavailable"
+        },
+        "zhejiang_eicu": {
+          "reason": "no validated native field/event in this release",
+          "status": "unavailable"
+        },
+        "zigong": {
+          "reason": "no validated native field/event in this release",
+          "status": "unavailable"
+        }
+      },
+      "description": "Charted CRRT modality"
+    },
     "safi": {
       "category": "respiratory",
       "databases": {
@@ -7279,6 +8966,28 @@
       },
       "description": "SAPS-3 admission severity score (SICdb native)"
     },
+    "sas": {
+      "category": "neurological",
+      "databases": {
+        "jinhua": {
+          "reason": "no validated native field/event in this release",
+          "status": "unavailable"
+        },
+        "nwicu": {
+          "reason": "no validated native field/event in this release",
+          "status": "unavailable"
+        },
+        "zhejiang_eicu": {
+          "reason": "no validated native field/event in this release",
+          "status": "unavailable"
+        },
+        "zigong": {
+          "reason": "no validated native field/event in this release",
+          "status": "unavailable"
+        }
+      },
+      "description": "Riker Sedation-Agitation Scale"
+    },
     "sbp": {
       "category": "vitals",
       "databases": {
@@ -7304,6 +9013,50 @@
         }
       },
       "description": "systolic blood pressure"
+    },
+    "sbp_invasive": {
+      "category": "vitals",
+      "databases": {
+        "jinhua": {
+          "reason": "no validated native field/event in this release",
+          "status": "unavailable"
+        },
+        "nwicu": {
+          "reason": "no validated native field/event in this release",
+          "status": "unavailable"
+        },
+        "zhejiang_eicu": {
+          "reason": "no validated native field/event in this release",
+          "status": "unavailable"
+        },
+        "zigong": {
+          "reason": "no validated native field/event in this release",
+          "status": "unavailable"
+        }
+      },
+      "description": "systolic blood pressure from an arterial line (invasive channel of sbp)"
+    },
+    "sbp_nibp": {
+      "category": "vitals",
+      "databases": {
+        "jinhua": {
+          "reason": "no validated native field/event in this release",
+          "status": "unavailable"
+        },
+        "nwicu": {
+          "reason": "no validated native field/event in this release",
+          "status": "unavailable"
+        },
+        "zhejiang_eicu": {
+          "reason": "no validated native field/event in this release",
+          "status": "unavailable"
+        },
+        "zigong": {
+          "reason": "no validated native field/event in this release",
+          "status": "unavailable"
+        }
+      },
+      "description": "systolic blood pressure from a non-invasive (oscillometric or manual) cuff (cuff channel of sbp)"
     },
     "scvo2": {
       "category": "cardiovascular",
@@ -8777,6 +10530,28 @@
       },
       "description": "oxygen saturation"
     },
+    "sufentanil": {
+      "category": "medications",
+      "databases": {
+        "jinhua": {
+          "reason": "no validated native field/event in this release",
+          "status": "unavailable"
+        },
+        "nwicu": {
+          "reason": "no validated native field/event in this release",
+          "status": "unavailable"
+        },
+        "zhejiang_eicu": {
+          "reason": "no validated native field/event in this release",
+          "status": "unavailable"
+        },
+        "zigong": {
+          "reason": "no validated native field/event in this release",
+          "status": "unavailable"
+        }
+      },
+      "description": "sufentanil (intravenous) given in the hour"
+    },
     "supp_o2": {
       "category": "respiratory",
       "databases": {
@@ -8914,6 +10689,50 @@
         }
       },
       "description": "mixed venous oxygen saturation (SvO2)"
+    },
+    "svr": {
+      "category": "cardiovascular",
+      "databases": {
+        "jinhua": {
+          "reason": "no validated native field/event in this release",
+          "status": "unavailable"
+        },
+        "nwicu": {
+          "reason": "no validated native field/event in this release",
+          "status": "unavailable"
+        },
+        "zhejiang_eicu": {
+          "reason": "no validated native field/event in this release",
+          "status": "unavailable"
+        },
+        "zigong": {
+          "reason": "no validated native field/event in this release",
+          "status": "unavailable"
+        }
+      },
+      "description": "Systemic vascular resistance, unindexed"
+    },
+    "svv": {
+      "category": "cardiovascular",
+      "databases": {
+        "jinhua": {
+          "reason": "no validated native field/event in this release",
+          "status": "unavailable"
+        },
+        "nwicu": {
+          "reason": "no validated native field/event in this release",
+          "status": "unavailable"
+        },
+        "zhejiang_eicu": {
+          "reason": "no validated native field/event in this release",
+          "status": "unavailable"
+        },
+        "zigong": {
+          "reason": "no validated native field/event in this release",
+          "status": "unavailable"
+        }
+      },
+      "description": "Stroke volume variation"
     },
     "t4": {
       "category": "chemistry",
@@ -9060,6 +10879,28 @@
       },
       "description": "Charted temperature before range filtering"
     },
+    "terlipressin": {
+      "category": "cardiovascular",
+      "databases": {
+        "jinhua": {
+          "reason": "no validated native field/event in this release",
+          "status": "unavailable"
+        },
+        "nwicu": {
+          "reason": "no validated native field/event in this release",
+          "status": "unavailable"
+        },
+        "zhejiang_eicu": {
+          "reason": "no validated native field/event in this release",
+          "status": "unavailable"
+        },
+        "zigong": {
+          "reason": "no validated native field/event in this release",
+          "status": "unavailable"
+        }
+      },
+      "description": "Terlipressin administration exposure"
+    },
     "tgcs": {
       "category": "neurological",
       "databases": {
@@ -9177,6 +11018,28 @@
       },
       "description": "Tidal volume setting [2026-07-17 official-code audit: SIC has NO tidal-volume setting — its RespiratorSetting namespace (2278 PEEP, 2282 RespRate, 2283 FIO2, 2284 PressureSupport, 2285 IERatio, 3040 PressureOverPeep) contains no TV. The previous sic source mapped 717 'TV (insp)', a SignalFloat MEASURED channel already used by tidal_vol — it was doing double duty as both measured and set. Source removed rather than fabricate a setting.]"
     },
+    "tidal_vol_spont": {
+      "category": "ventilator",
+      "databases": {
+        "jinhua": {
+          "reason": "no validated native field/event in this release",
+          "status": "unavailable"
+        },
+        "nwicu": {
+          "reason": "no validated native field/event in this release",
+          "status": "unavailable"
+        },
+        "zhejiang_eicu": {
+          "reason": "no validated native field/event in this release",
+          "status": "unavailable"
+        },
+        "zigong": {
+          "reason": "no validated native field/event in this release",
+          "status": "unavailable"
+        }
+      },
+      "description": "Spontaneous tidal volume"
+    },
     "tnt": {
       "category": "chemistry",
       "databases": {
@@ -9199,6 +11062,50 @@
         }
       },
       "description": "troponin t"
+    },
+    "tnt_hs": {
+      "category": "chemistry",
+      "databases": {
+        "jinhua": {
+          "reason": "no validated native field/event in this release",
+          "status": "unavailable"
+        },
+        "nwicu": {
+          "reason": "no validated native field/event in this release",
+          "status": "unavailable"
+        },
+        "zhejiang_eicu": {
+          "reason": "no validated native field/event in this release",
+          "status": "unavailable"
+        },
+        "zigong": {
+          "reason": "no validated native field/event in this release",
+          "status": "unavailable"
+        }
+      },
+      "description": "High-sensitivity cardiac troponin T; assay subset of tnt"
+    },
+    "torasemide": {
+      "category": "medications",
+      "databases": {
+        "jinhua": {
+          "reason": "no validated native field/event in this release",
+          "status": "unavailable"
+        },
+        "nwicu": {
+          "reason": "no validated native field/event in this release",
+          "status": "unavailable"
+        },
+        "zhejiang_eicu": {
+          "reason": "no validated native field/event in this release",
+          "status": "unavailable"
+        },
+        "zigong": {
+          "reason": "no validated native field/event in this release",
+          "status": "unavailable"
+        }
+      },
+      "description": "torasemide (torsemide) administration, any route"
     },
     "total_input_ml": {
       "category": "output",
@@ -9248,6 +11155,28 @@
       },
       "description": "total serum protein; MIMIC/eICU/SIC in g/dL, AUMC/HiRID in g/L"
     },
+    "tramadol": {
+      "category": "medications",
+      "databases": {
+        "jinhua": {
+          "reason": "no validated native field/event in this release",
+          "status": "unavailable"
+        },
+        "nwicu": {
+          "reason": "no validated native field/event in this release",
+          "status": "unavailable"
+        },
+        "zhejiang_eicu": {
+          "reason": "no validated native field/event in this release",
+          "status": "unavailable"
+        },
+        "zigong": {
+          "reason": "no validated native field/event in this release",
+          "status": "unavailable"
+        }
+      },
+      "description": "tramadol given in the hour, any systemic route"
+    },
     "transferrin": {
       "category": "chemistry",
       "databases": {
@@ -9271,6 +11200,50 @@
         }
       },
       "description": "transferrin (blood)"
+    },
+    "transpulm_pres_exp": {
+      "category": "ventilator",
+      "databases": {
+        "jinhua": {
+          "reason": "no validated native field/event in this release",
+          "status": "unavailable"
+        },
+        "nwicu": {
+          "reason": "no validated native field/event in this release",
+          "status": "unavailable"
+        },
+        "zhejiang_eicu": {
+          "reason": "no validated native field/event in this release",
+          "status": "unavailable"
+        },
+        "zigong": {
+          "reason": "no validated native field/event in this release",
+          "status": "unavailable"
+        }
+      },
+      "description": "Expiratory-hold transpulmonary pressure"
+    },
+    "transpulm_pres_insp": {
+      "category": "ventilator",
+      "databases": {
+        "jinhua": {
+          "reason": "no validated native field/event in this release",
+          "status": "unavailable"
+        },
+        "nwicu": {
+          "reason": "no validated native field/event in this release",
+          "status": "unavailable"
+        },
+        "zhejiang_eicu": {
+          "reason": "no validated native field/event in this release",
+          "status": "unavailable"
+        },
+        "zigong": {
+          "reason": "no validated native field/event in this release",
+          "status": "unavailable"
+        }
+      },
+      "description": "Inspiratory-hold transpulmonary pressure"
     },
     "tri": {
       "category": "chemistry",
@@ -10077,6 +12050,28 @@
       },
       "description": "Daily urine value depends on a record charted after the evaluation hour"
     },
+    "urine_cl": {
+      "category": "renal",
+      "databases": {
+        "jinhua": {
+          "reason": "no validated native field/event in this release",
+          "status": "unavailable"
+        },
+        "nwicu": {
+          "reason": "no validated native field/event in this release",
+          "status": "unavailable"
+        },
+        "zhejiang_eicu": {
+          "reason": "no validated native field/event in this release",
+          "status": "unavailable"
+        },
+        "zigong": {
+          "reason": "no validated native field/event in this release",
+          "status": "unavailable"
+        }
+      },
+      "description": "Urine chloride concentration"
+    },
     "urine_crea": {
       "category": "renal",
       "databases": {
@@ -10098,6 +12093,28 @@
         }
       },
       "description": "urine creatinine"
+    },
+    "urine_k": {
+      "category": "renal",
+      "databases": {
+        "jinhua": {
+          "reason": "no validated native field/event in this release",
+          "status": "unavailable"
+        },
+        "nwicu": {
+          "reason": "no validated native field/event in this release",
+          "status": "unavailable"
+        },
+        "zhejiang_eicu": {
+          "reason": "no validated native field/event in this release",
+          "status": "unavailable"
+        },
+        "zigong": {
+          "reason": "no validated native field/event in this release",
+          "status": "unavailable"
+        }
+      },
+      "description": "Urine potassium concentration"
     },
     "urine_na": {
       "category": "renal",
@@ -10190,6 +12207,82 @@
         }
       },
       "description": "vancomycin administration (glycopeptide antibiotic)"
+    },
+    "vancomycin_iv": {
+      "category": "medications",
+      "databases": {
+        "jinhua": {
+          "reason": "no validated native field/event in this release",
+          "status": "unavailable"
+        },
+        "nwicu": {
+          "reason": "no validated native field/event in this release",
+          "status": "unavailable"
+        },
+        "zhejiang_eicu": {
+          "reason": "no validated native field/event in this release",
+          "status": "unavailable"
+        },
+        "zigong": {
+          "reason": "no validated native field/event in this release",
+          "status": "unavailable"
+        }
+      },
+      "description": "vancomycin systemic (intravenous) administration; input of vancomycin_piperacillin_tazobactam"
+    },
+    "vancomycin_piperacillin_tazobactam": {
+      "category": "medications",
+      "databases": {
+        "jinhua": {
+          "dependencies": [
+            "vancomycin_iv",
+            "piperacillin_tazobactam"
+          ],
+          "missing_dependencies": [
+            "vancomycin_iv",
+            "piperacillin_tazobactam"
+          ],
+          "reason": "declared dependencies are unavailable",
+          "status": "unavailable"
+        },
+        "nwicu": {
+          "dependencies": [
+            "vancomycin_iv",
+            "piperacillin_tazobactam"
+          ],
+          "missing_dependencies": [
+            "vancomycin_iv",
+            "piperacillin_tazobactam"
+          ],
+          "reason": "declared dependencies are unavailable",
+          "status": "unavailable"
+        },
+        "zhejiang_eicu": {
+          "dependencies": [
+            "vancomycin_iv",
+            "piperacillin_tazobactam"
+          ],
+          "missing_dependencies": [
+            "vancomycin_iv",
+            "piperacillin_tazobactam"
+          ],
+          "reason": "declared dependencies are unavailable",
+          "status": "unavailable"
+        },
+        "zigong": {
+          "dependencies": [
+            "vancomycin_iv",
+            "piperacillin_tazobactam"
+          ],
+          "missing_dependencies": [
+            "vancomycin_iv",
+            "piperacillin_tazobactam"
+          ],
+          "reason": "declared dependencies are unavailable",
+          "status": "unavailable"
+        }
+      },
+      "description": "vancomycin and piperacillin-tazobactam co-exposure: TRUE at an administration hour of either agent when the other agent was given in the same or the preceding 23 hours"
     },
     "vaso_ind": {
       "category": "medications",
@@ -10316,6 +12409,28 @@
         }
       },
       "description": "vasopressor indicator"
+    },
+    "vco2": {
+      "category": "ventilator",
+      "databases": {
+        "jinhua": {
+          "reason": "no validated native field/event in this release",
+          "status": "unavailable"
+        },
+        "nwicu": {
+          "reason": "no validated native field/event in this release",
+          "status": "unavailable"
+        },
+        "zhejiang_eicu": {
+          "reason": "no validated native field/event in this release",
+          "status": "unavailable"
+        },
+        "zigong": {
+          "reason": "no validated native field/event in this release",
+          "status": "unavailable"
+        }
+      },
+      "description": "Exhaled CO2 production per minute"
     },
     "vecuronium": {
       "category": "medications",
@@ -10688,26 +12803,26 @@
     "jinhua": {
       "derived": 19,
       "direct": 135,
-      "partial": 32,
-      "unavailable": 150
+      "partial": 34,
+      "unavailable": 239
     },
     "nwicu": {
       "derived": 19,
       "direct": 137,
-      "partial": 35,
-      "unavailable": 145
+      "partial": 37,
+      "unavailable": 234
     },
     "zhejiang_eicu": {
       "derived": 39,
       "direct": 128,
-      "partial": 23,
-      "unavailable": 146
+      "partial": 25,
+      "unavailable": 235
     },
     "zigong": {
       "derived": 27,
       "direct": 125,
-      "partial": 39,
-      "unavailable": 145
+      "partial": 41,
+      "unavailable": 234
     }
   },
   "databases": [
