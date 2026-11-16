@@ -66,6 +66,7 @@ from ..scores.sepsis import (
     suspected_infection_mode,
 )
 from ..scores.sepsis_sofa2 import sep3_sofa2 as sep3_sofa2_detector
+from ..scores import sepsis_declared as _sep3_declared
 from ..scores.sepsis_sofa2 import sofa2_total_for_sepsis_delta
 from ..table import ICUTable, WinTbl
 from ..utils import coalesce  # 🔧 统一的 patient_ids hash 函数
@@ -6178,10 +6179,106 @@ def _sepsis_infection_disposition(
     return _evaluated_empty_result(tables, ctx, components)
 
 
+def _sepsis_definition_input(
+    tables: Dict[str, ICUTable], ctx: ConceptCallbackContext, name: str, purpose: str,
+) -> ICUTable:
+    """A concept a declared sepsis option needs beyond the dictionary inputs.
+
+    Taken from ``tables`` when the caller supplied it, else loaded for the
+    same stays.  A failed load raises: the option cannot silently fall back
+    to the canonical definition.
+    """
+    table = tables.get(name)
+    if table is None:
+        if ctx is None or ctx.resolver is None or ctx.data_source is None:
+            raise ValueError(f"{purpose} needs the '{name}' concept, but no resolver is available")
+        try:
+            loaded = ctx.resolver.load_concepts(
+                [name], ctx.data_source, merge=False, patient_ids=ctx.patient_ids,
+                verbose=False, interval=ctx.interval, r_compatible=False,
+            )
+        except TYPED_VALUE_FAILURES:
+            raise  # a typed failure keeps its type (D10D)
+        except Exception as exc:
+            raise RuntimeError(
+                f"sepsis_definition_input_load_failed: {name} for {purpose} "
+                f"({type(exc).__name__}: {exc})"
+            ) from exc
+        table = loaded.get(name) if isinstance(loaded, dict) else loaded
+    if not isinstance(table, ICUTable):
+        raise ValueError(f"{purpose} needs the '{name}' concept, which did not load")
+    return table
+
+
+def _sep3_icu_bounds(
+    tables: Dict[str, ICUTable], ctx: ConceptCallbackContext,
+    id_columns: List[str], sofa: pd.DataFrame, susp: pd.DataFrame, index_column: str,
+) -> pd.DataFrame:
+    """Per-stay [ICU admission, ICU discharge] hours for ``onset_scope="icu"``."""
+    for frame in (sofa, susp):
+        if index_column in frame.columns and not pd.api.types.is_numeric_dtype(frame[index_column]):
+            raise ValueError(
+                "onset_scope='icu' needs a time index in hours since ICU admission "
+                "(align_to_admission=True)"
+            )
+    los = _sepsis_definition_input(tables, ctx, "los_icu", "onset_scope='icu'")
+    los_ids = list(los.id_columns or [])
+    if [c.lower() for c in los_ids] != [c.lower() for c in id_columns]:
+        raise ValueError(
+            f"onset_scope='icu': los_icu is keyed by {los_ids}, sep3 by {list(id_columns)}"
+        )
+    frame = los.data.rename(columns=dict(zip(los_ids, id_columns)))
+    bounds = _sep3_declared.icu_stay_bounds(frame, id_columns, los.value_column or "los_icu")
+    candidates = pd.concat([sofa[id_columns], susp[id_columns]]).drop_duplicates()
+    unbounded = len(candidates.merge(bounds[id_columns], on=id_columns, how="left", indicator=True)
+                    .query("_merge == 'left_only'"))
+    if unbounded:
+        logger.warning(
+            "sep3 onset_scope='icu': %d stay(s) without an ICU length of stay; "
+            "none of their onsets is counted", unbounded,
+        )
+    return bounds
+
+
 def _callback_sep3(
     tables: Dict[str, ICUTable],
     ctx: ConceptCallbackContext,
 ) -> ICUTable:
+    """Sepsis-3 onset (ricu ``sep3``) with declared definition options.
+
+    ``ctx.kwargs`` (validated before any data is touched):
+
+    - ``si_window`` ("first" | "last" | "any", default "first"): which
+      suspected-infection (SI) event(s) open a window.
+    - ``delta_fun`` / ``delta_function`` (default ``delta_cummin``): how the
+      baseline SOFA inside the window is chosen.
+    - ``sofa_thresh`` / ``delta_sofa`` (default 2), ``si_lwr`` (48 h) and
+      ``si_upr`` (24 h): SOFA criterion over [SI - si_lwr, SI + si_upr].
+    - ``baseline_sofa`` ("window" | "zero", default "window"): "zero" takes
+      the baseline SOFA as 0, so the criterion is absolute SOFA >=
+      ``sofa_thresh`` in the window (mimic-code ``sepsis3.sql``); it cannot be
+      combined with an explicit ``delta_fun``.
+    - ``onset_scope`` ("all" | "icu", default "all"): "icu" counts only SI
+      events and SOFA onsets inside [ICU admission, ICU discharge] (hours
+      since ICU admission; discharge from the ``los_icu`` concept).  A stay
+      without an ICU length of stay has no onset in scope.
+    - ``keep_components`` (default False).
+
+    Defaults reproduce the canonical ricu definition unchanged.
+    """
+    kwargs = ctx.kwargs if ctx and ctx.kwargs else {}
+    baseline_sofa = _sep3_declared.declared_choice(
+        "baseline_sofa", kwargs.get("baseline_sofa"), _sep3_declared.BASELINE_SOFA_CHOICES
+    )
+    onset_scope = _sep3_declared.declared_choice(
+        "onset_scope", kwargs.get("onset_scope"), _sep3_declared.ONSET_SCOPE_CHOICES
+    )
+    explicit_delta = kwargs.get("delta_fun", kwargs.get("delta_function"))
+    if baseline_sofa == "zero" and explicit_delta is not None:
+        raise ValueError(
+            "baseline_sofa='zero' fixes the SOFA baseline at 0; it cannot be combined "
+            f"with delta_fun={explicit_delta!r}"
+        )
     disposition = _sepsis_infection_disposition(tables, ctx, ("sofa", "susp_inf"))
     if disposition is not None:
         return disposition
@@ -6219,15 +6316,21 @@ def _callback_sep3(
     if susp_tbl.index_column and susp_tbl.index_column != index_column and susp_tbl.index_column in susp_data.columns:
         susp_data = susp_data.rename(columns={susp_tbl.index_column: index_column})
 
-    kwargs = ctx.kwargs if ctx and ctx.kwargs else {}
+    sep3_index = coalesce(sofa_tbl.index_column, susp_tbl.index_column, index_column)
+    declared = {}
+    if onset_scope == "icu":
+        declared["onset_bounds"] = _sep3_icu_bounds(
+            tables, ctx, list(id_columns), sofa_data, susp_data, sep3_index,
+        )
     result = sep3_detector(
         sofa=sofa_data,
         susp_inf=susp_data,
         id_cols=list(id_columns),
-        index_col=coalesce(sofa_tbl.index_column, susp_tbl.index_column, index_column),
+        index_col=sep3_index,
         si_window=str(kwargs.get("si_window", "first")),
-        delta_fun=_sepsis_delta_fun(
-            kwargs.get("delta_fun", kwargs.get("delta_function"))
+        delta_fun=(
+            _sep3_declared.delta_zero_baseline if baseline_sofa == "zero"
+            else _sepsis_delta_fun(explicit_delta)
         ),
         sofa_thresh=_callback_int(
             kwargs.get("sofa_thresh", kwargs.get("delta_sofa")), 2
@@ -6235,6 +6338,7 @@ def _callback_sep3(
         si_lwr=_callback_timedelta(kwargs.get("si_lwr"), 48),
         si_upr=_callback_timedelta(kwargs.get("si_upr"), 24),
         keep_components=_callback_bool(kwargs.get("keep_components"), False),
+        **declared,
     )
 
     return _with_evaluated_empty_receipt(
@@ -6246,6 +6350,13 @@ def _callback_sep3_sofa2(
     tables: Dict[str, ICUTable],
     ctx: ConceptCallbackContext,
 ) -> ICUTable:
+    sofa2_kwargs = ctx.kwargs if ctx and ctx.kwargs else {}
+    for option, choices in (
+        ("baseline_sofa", _sep3_declared.BASELINE_SOFA_CHOICES),
+        ("onset_scope", _sep3_declared.ONSET_SCOPE_CHOICES),
+    ):
+        if _sep3_declared.declared_choice(option, sofa2_kwargs.get(option), choices) != choices[0]:
+            raise ValueError(f"{option} is declared for sep3 only, not sep3_sofa2")
     disposition = _sepsis_infection_disposition(tables, ctx, ("sofa2", "susp_inf"))
     if disposition is not None:
         return disposition
@@ -6894,6 +7005,41 @@ def _callback_vaso60(
         value_column=ctx.concept_name,
     )
 
+def _susp_inf_death_times(
+    tables: Dict[str, ICUTable], ctx: ConceptCallbackContext,
+    abx_tbl: ICUTable, index_column: str,
+) -> Optional[pd.DataFrame]:
+    """Death times on the antibiotic axis, for the ``abx_min_days`` window end.
+
+    The time is the ``death`` concept's index, or its ``death_time`` companion
+    (hours from ICU admission; per-source meaning in
+    ``utils.death_time_semantics``).  A death without a time ends no window.
+    """
+    from ..utils.death_time_semantics import DEATH_TIME_COMPANION
+
+    death = _sepsis_definition_input(tables, ctx, "death", "abx_min_days")
+    if death.data.empty:
+        return None
+    ids, _, converted = _assert_shared_schema(
+        {"abx": abx_tbl, "death": death}, ctx=ctx, convert_ids=True
+    )
+    if "death" not in converted:
+        return None
+    if list(ids) != list(abx_tbl.id_columns):
+        raise ValueError(f"abx_min_days: death is keyed by {list(ids)}, abx by {list(abx_tbl.id_columns)}")
+    table = converted["death"]
+    data = table.data
+    time_col = next(
+        (c for c in (table.index_column, DEATH_TIME_COMPANION) if c and c in data.columns), None
+    )
+    if time_col is None:
+        raise ValueError("abx_min_days: the death concept carries no death time")
+    value = table.value_column or "death"
+    if value in data.columns:
+        data = data[_sep3_declared.truthy(data[value])]
+    return data[list(ids) + [time_col]].rename(columns={time_col: index_column})
+
+
 def _callback_susp_inf(
     tables: Dict[str, ICUTable],
     ctx: ConceptCallbackContext,
@@ -6922,9 +7068,24 @@ def _callback_susp_inf(
             - 'infection_icd': ICD infection diagnosis data (required for "icd_abx" mode)
         ctx: Callback context with kwargs:
             - si_mode: Detection mode ("and", "or", "abx", "samp", "icd_abx", "auto")
-            - abx_win: Time window after ABX for sampling (default 24h)
-            - samp_win: Time window after sampling for ABX (default 72h)
+            - abx_win: Time window after ABX for sampling (default 24h): a
+              culture at most abx_win AFTER the antibiotic pairs with it; the
+              SI time is the antibiotic time.
+            - samp_win: Time window after sampling for ABX (default 72h): an
+              antibiotic at most samp_win AFTER the culture pairs with it; the
+              SI time is the culture time.
             - abx_min_count: Minimum antibiotic administrations required
+              within abx_count_win (default 24h); counts administrations.
+            - abx_min_days (default None = off): continuous-antibiotic rule of
+              YAIB (App. D.3, ``abx_cont``).  An antibiotic at time t counts
+              only if, over rolling 24-hour blocks [t, t + abx_min_days x 24 h]
+              (ended early by in-hospital death from the ``death`` concept),
+              no gap between consecutive administrations or between the last
+              one and the window end exceeds abx_max_gap.  Not calendar days.
+              Administrations are points (the ``abx`` concept has no
+              durations).  Applies to si_mode "and", "or" and "abx"; any other
+              resolved mode raises ValueError.
+            - abx_max_gap (default 24h; only with abx_min_days).
             - positive_cultures: Whether to require positive cultures
     """
     import logging
@@ -6953,6 +7114,22 @@ def _callback_susp_inf(
             logger.info(f"susp_inf: Using si_mode='icd_abx' for {ds_name} (ICD感染诊断 + 抗生素)")
         else:
             logger.debug(f"susp_inf: Using si_mode='and' for {ds_name}")
+
+    declared_kwargs = ctx.kwargs if ctx and ctx.kwargs else {}
+    abx_min_days = _sep3_declared.declared_min_days(declared_kwargs.get("abx_min_days"))
+    if abx_min_days is not None and si_mode not in _sep3_declared.ABX_CONTINUITY_MODES:
+        raise ValueError(
+            f"abx_min_days applies to si_mode in {list(_sep3_declared.ABX_CONTINUITY_MODES)}; "
+            f"si_mode resolved to {si_mode!r}"
+        )
+    abx_max_gap = declared_kwargs.get("abx_max_gap")
+    if abx_max_gap is not None and abx_min_days is None:
+        raise ValueError("abx_max_gap is declared only together with abx_min_days")
+    abx_max_gap = _callback_timedelta(24 if abx_max_gap is None else abx_max_gap, -1)
+    if abx_max_gap <= pd.Timedelta(0):
+        raise ValueError(
+            f"abx_max_gap={declared_kwargs.get('abx_max_gap')!r} must be a positive duration"
+        )
 
     required = suspected_infection_inputs(si_mode)
     for name in required:
@@ -7081,6 +7258,14 @@ def _callback_susp_inf(
     if samp_tbl.index_column and samp_tbl.index_column != index_column and samp_tbl.index_column in samp_data.columns:
         samp_data = samp_data.rename(columns={samp_tbl.index_column: index_column})
     
+    if abx_min_days is not None:
+        abx_data = _sep3_declared.continuous_antibiotic_anchors(
+            abx_data, list(id_columns), index_column,
+            min_days=abx_min_days, max_gap=abx_max_gap,
+            death=_susp_inf_death_times(tables, ctx, abx_tbl, index_column),
+            value_col=abx_tbl.value_column or "abx",
+        )
+
     # Get other parameters from kwargs
     kwargs = ctx.kwargs if ctx and ctx.kwargs else {}
     abx_count_win = _callback_timedelta(kwargs.get("abx_count_win"), 24)

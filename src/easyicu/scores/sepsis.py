@@ -13,6 +13,8 @@ from typing import Optional, Callable, Literal, List
 import pandas as pd
 import numpy as np
 
+from .sepsis_declared import within_bounds
+
 
 def suspected_infection_mode(database: str) -> str:
     """The source-native default used by runtime and availability metadata."""
@@ -453,6 +455,7 @@ def sep3(
     si_lwr: pd.Timedelta = pd.Timedelta(hours=48),
     si_upr: pd.Timedelta = pd.Timedelta(hours=24),
     keep_components: bool = False,
+    onset_bounds: Optional[pd.DataFrame] = None,
 ) -> pd.DataFrame:
     """Detect Sepsis-3 (R ricu sep3) - 向量化优化版本.
     
@@ -470,6 +473,10 @@ def sep3(
         si_lwr: Time before SI (default 48h)
         si_upr: Time after SI (default 24h)
         keep_components: Whether to keep delta_sofa, samp_time, abx_time
+        onset_bounds: Optional per-stay scope (``id_cols`` plus the bound
+            columns of :func:`easyicu.scores.sepsis_declared.icu_stay_bounds`).
+            When given, only suspected-infection events and SOFA onsets inside
+            the bounds count; None (default) leaves the ricu result unchanged.
         
     Returns:
         DataFrame with Sepsis-3 events
@@ -488,6 +495,9 @@ def sep3(
     else:
         si_events = susp_inf.copy()
     
+    if onset_bounds is not None and not si_events.empty:
+        si_events = si_events[within_bounds(si_events, id_cols, index_col, onset_bounds)]
+
     if si_events.empty or sofa.empty:
         return pd.DataFrame(columns=id_cols + [index_col, 'sep3'])
     
@@ -567,6 +577,8 @@ def sep3(
     
     # Filter by threshold
     meets_thresh = merged['_delta_sofa'] >= sofa_thresh
+    if onset_bounds is not None:
+        meets_thresh &= within_bounds(merged, id_cols, '_sofa_time', onset_bounds)
     sep3_events = merged[meets_thresh].copy()
     
     if sep3_events.empty:
