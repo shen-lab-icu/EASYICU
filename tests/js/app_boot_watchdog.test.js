@@ -2,13 +2,24 @@
 
 const assert = require('node:assert/strict');
 const fs = require('node:fs');
+const test = require('node:test');
 const vm = require('node:vm');
 const source = fs.readFileSync(process.argv[2], 'utf8');
+const appSource = fs.readFileSync(process.argv[3], 'utf8');
 
 function element(tag) {
   return {
     tag, children: [], attributes: {}, listeners: {}, textContent: '',
-    append(...children) { this.children.push(...children); },
+    append(...children) {
+      for (const child of children) child.parentNode = this;
+      this.children.push(...children);
+    },
+    appendChild(child) { this.append(child); },
+    remove() {
+      const siblings = this.parentNode.children;
+      siblings.splice(siblings.indexOf(this), 1);
+      this.parentNode = null;
+    },
     setAttribute(name, value) { this.attributes[name] = value; },
     addEventListener(type, callback) { this.listeners[type] = callback; },
   };
@@ -19,16 +30,22 @@ function setup(hash, headOnly = false) {
   const app = element('div');
   body.append(app);
   app.querySelector = (selector) => {
-    assert.equal(selector, ':scope > [data-eu-app-shell]');
+    if (selector !== ':scope > [data-eu-app-shell]') return null;
     return app.children.find((child) => 'data-eu-app-shell' in child.attributes);
   };
-  Object.defineProperty(app, 'childElementCount', { get: () => app.children.length });
+  app.querySelectorAll = () => [];
+  Object.defineProperties(app, {
+    childElementCount: { get: () => app.children.length },
+    firstElementChild: { get: () => app.children[0] },
+    innerHTML: { set() { app.children.length = 0; app.append(element('main')); } },
+  });
   const document = {
     body: headOnly ? null : body,
     createElement: element,
     readyState: headOnly ? 'loading' : 'complete',
-    documentElement: { classList: { contains: () => true } },
+    documentElement: { classList: { contains: () => true }, toggleAttribute() {} },
     getElementById: (id) => id === 'app' && document.body ? app : null,
+    addEventListener() {},
     startViewTransition() {},
   };
   const timers = [];
@@ -40,11 +57,14 @@ function setup(hash, headOnly = false) {
   const window = {
     innerWidth: 1440, SCREENS: {}, EU_API: {}, EU_GUIDED_STARTUP: {},
     location: { hash, reload() { reloads++; } },
+    scrollTo() {},
     addEventListener(type, callback) { listeners[type] = callback; },
     fetch(url, opts) { posts.push({ url, opts }); return Promise.resolve(); },
   };
-  vm.runInNewContext(source, {
+  const context = vm.createContext({
     document, window, performance: { now: () => now },
+    location: window.location,
+    requestAnimationFrame: (fn) => fn(),
     setTimeout: (fn, ms) => timers.push({ fn, ms }),
     MutationObserver: class {
       constructor(callback) { this.callback = callback; }
@@ -52,13 +72,20 @@ function setup(hash, headOnly = false) {
       disconnect() { onBody = null; }
     },
   });
+  vm.runInContext(source, context);
   assert.equal(timers.length, 1);
   assert.equal(timers[0].ms, 43500);
   return {
     app, body, boot: window.EU_BOOT, listeners, posts,
     reloads: () => reloads,
     expire() { now = 45000; timers[0].fn(); },
-    attachBody() { document.body = body; onBody(); },
+    attachBody() { document.body = body; },
+    notifyBody() { onBody?.(); },
+    observingBody: () => !!onBody,
+    mountApp() {
+      window.SCREENS.guided = { render: () => '<main></main>' };
+      vm.runInContext(appSource, context);
+    },
   };
 }
 
@@ -102,7 +129,9 @@ assert.equal(url, '/api/client/boot-diagnostics');
 assert.equal(opts.method, 'POST');
 assert.equal(opts.credentials, 'same-origin');
 assert.equal(opts.redirect, 'error');
-assert.equal(opts.referrerPolicy, 'no-referrer');
+test('the diagnostic POST requests an origin-only referrer policy', () => {
+  assert.equal(opts.referrerPolicy, 'strict-origin');
+});
 assert.equal(opts.headers['Content-Type'], 'application/json');
 assert.equal(stalled.boot.failure.code, 'app_boot_stalled');
 assert.deepEqual(JSON.parse(opts.body), {
@@ -137,6 +166,41 @@ assert.equal(headOnly.boot.failure.readyState, 'loading');
 assert.equal(headOnly.boot.failure.app_child_count, 0);
 assert.equal(headOnly.boot.failure.route_hash, '#skills');
 headOnly.attachBody();
+headOnly.notifyBody();
 assert.equal(headOnly.body.children[1].attributes['data-app-boot-failed'], 'app_boot_stalled');
 assert.equal(headOnly.posts.length, 1);
+
+test('a late shell removes the watchdog overlay', () => {
+  const late = setup('#guided');
+  late.expire();
+  assert.equal(late.body.children[1].attributes['data-app-boot-failed'], 'app_boot_stalled');
+  late.mountApp();
+  assert.ok('data-eu-app-shell' in late.app.firstElementChild.attributes);
+  assert.equal(late.body.children.length, 2, 'only the app and route announcer remain');
+  assert.equal(late.posts.length, 1);
+  assert.equal(late.boot.failure.code, 'app_boot_stalled');
+});
+
+test('the body observer re-checks for a shell before showing the overlay', () => {
+  const lateBody = setup('#guided', true);
+  lateBody.expire();
+  lateBody.attachBody();
+  const mounted = element('main');
+  mounted.setAttribute('data-eu-app-shell', '');
+  lateBody.app.append(mounted);
+  lateBody.notifyBody();
+  assert.equal(lateBody.body.children.length, 1, 'the recovered app has no overlay');
+  assert.equal(lateBody.observingBody(), false);
+});
+
+test('a shell mounted before observer delivery disconnects the watchdog observer', () => {
+  const lateBody = setup('#guided', true);
+  lateBody.expire();
+  assert.equal(lateBody.observingBody(), true);
+  lateBody.attachBody();
+  lateBody.mountApp();
+  assert.equal(lateBody.observingBody(), false);
+  lateBody.notifyBody();
+  assert.equal(lateBody.body.children.length, 2, 'only the app and route announcer remain');
+});
 process.stdout.write('Healthy shell, typed stop, bounded telemetry, safe route hashes, head-only timeout\n');

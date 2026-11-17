@@ -23,12 +23,20 @@
   ]);
   const marks = {};
   const errors = [];
+  let stop = null;
+  let bodyObserver = null;
   const boot = window.EU_BOOT = {
     mark(name) {
       if (MARK_NAMES.has(name)) marks[name] = Math.min(3600000, Math.floor(performance.now()));
     },
     get marks() { return { ...marks }; },
     failure: null,
+    shellMounted() {
+      bodyObserver?.disconnect();
+      bodyObserver = null;
+      stop?.remove();
+      stop = null;
+    },
   };
 
   function recordError(type, value) {
@@ -45,7 +53,7 @@
   window.addEventListener('unhandledrejection', (event) => recordError('unhandledrejection', event.reason));
 
   function showStop() {
-    const stop = document.createElement('section');
+    stop = document.createElement('section');
     stop.className = 'eu-app-boot-stop';
     stop.setAttribute('data-app-boot-failed', CODE);
     stop.setAttribute('role', 'alert');
@@ -97,19 +105,23 @@
     if (document.body) {
       showStop();
     } else {
-      const observer = new MutationObserver(() => {
+      bodyObserver = new MutationObserver(() => {
         if (!document.body) return;
-        observer.disconnect();
-        showStop();
+        bodyObserver.disconnect();
+        bodyObserver = null;
+        if (!document.getElementById('app')?.querySelector(':scope > [data-eu-app-shell]')) {
+          showStop();
+        }
       });
-      observer.observe(document.documentElement, { childList: true });
+      bodyObserver.observe(document.documentElement, { childList: true });
     }
     window.fetch('/api/client/boot-diagnostics', {
       method: 'POST',
       credentials: 'same-origin',
       keepalive: true,
       redirect: 'error',
-      referrerPolicy: 'no-referrer',
+      // Keep the Origin header on this same-origin POST and omit Referer path/query.
+      referrerPolicy: 'strict-origin',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(payload),
     }).catch(() => {});

@@ -4,34 +4,52 @@ const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const vm = require('node:vm');
 const source = fs.readFileSync(process.argv[2], 'utf8');
+const apiSource = fs.readFileSync(process.argv[3], 'utf8');
 
 function setup() {
   const marks = [];
   const rendered = [];
+  const focused = [];
+  const scrolls = [];
   const transitions = [];
   const timers = new Map();
   const htmlClasses = new Set();
   const listeners = {};
+  const documentListeners = {};
+  const hydrationResponses = {
+    '/api/catalog': { totalConcepts: 0 },
+    '/api/settings': { language: 'en' },
+    '/api/workspaces/registry': { sources: [] },
+    '/api/capabilities': { deployment: { hosted: false } },
+  };
   const location = { hash: '#cohort' };
   let timerId = 0;
   let allowedMotion = true;
   const app = {
     addEventListener() {}, querySelector() { return null; },
     querySelectorAll() { return []; }, setAttribute() {},
+    dataset: {},
+    focus() { focused.push(rendered.at(-1)); },
     set innerHTML(value) {
       rendered.push(value);
       this.firstElementChild = { attributes: {}, setAttribute(name, val) { this.attributes[name] = val; } };
     },
   };
   const document = {
-    getElementById: () => app,
+    readyState: 'loading',
+    querySelector() { return null; },
+    getElementById(id) {
+      if (id === 'app') return app;
+      if (id === 'gdPiShell' && rendered.at(-1) === 'guided') return app.firstElementChild;
+      return null;
+    },
     createElement: () => ({ setAttribute() {} }),
     body: { appendChild() {} },
     documentElement: {
       toggleAttribute() {},
       classList: { add: (name) => htmlClasses.add(name), remove: (name) => htmlClasses.delete(name) },
     },
-    addEventListener() {},
+    addEventListener(type, callback) { documentListeners[type] = callback; },
     startViewTransition(update) {
       let resolve;
       let rejectReady;
@@ -46,22 +64,35 @@ function setup() {
     },
   };
   const window = {
-    SCREENS: Object.fromEntries(['cohort', 'patient', 'extraction'].map((route) => [
+    SCREENS: Object.fromEntries(['cohort', 'guided', 'patient', 'extraction'].map((route) => [
       route, { render: () => route },
     ])),
-    scrollTo() {},
+    EU_LANG: 'en',
+    scrollX: 24,
+    scrollY: 120,
+    scrollTo(x, y) { scrolls.push([x, y]); },
     addEventListener(type, callback) { listeners[type] = callback; },
     matchMedia(query) { return { matches: query.includes('min-width') && allowedMotion }; },
     EU_BOOT: { mark: (name) => marks.push(name) },
   };
-  vm.runInNewContext(source, {
+  const context = vm.createContext({
     document, window, location, requestAnimationFrame: (callback) => callback(),
     setTimeout(fn, ms) { timers.set(++timerId, { fn, ms }); return timerId; },
     clearTimeout(id) { timers.delete(id); },
+    async fetch(path) {
+      assert.ok(Object.hasOwn(hydrationResponses, path), path);
+      return { ok: true, json: async () => hydrationResponses[path] };
+    },
   });
+  vm.runInContext(source, context);
   return {
-    app, marks, rendered, transitions, timers, htmlClasses, reduceMotion: () => { allowedMotion = false; },
+    app, marks, rendered, focused, scrolls, transitions, timers, htmlClasses,
+    reduceMotion: () => { allowedMotion = false; },
     go(route) { location.hash = '#' + route; listeners.hashchange(); },
+    startHydration() {
+      vm.runInContext(apiSource, context);
+      return documentListeners.DOMContentLoaded();
+    },
   };
 }
 
@@ -115,7 +146,32 @@ async function main() {
   reduced.transitions[0].update();
   assert.deepEqual(reduced.rendered, ['cohort', 'extraction']);
   assert.equal(reduced.timers.size, 0);
-  process.stdout.write('Transition deadline, late callbacks, supersession, reduced motion\n');
+
+  for (const first of ['update', 'deadline']) {
+    const hydration = setup();
+    const boot = hydration.startHydration();
+    hydration.go('guided');
+    const [deferred] = hydration.transitions;
+    const [timer] = hydration.timers.values();
+    assert.deepEqual(hydration.rendered, ['cohort']);
+    await boot;
+    assert.ok(hydration.marks.includes('boot_rerender'));
+    assert.deepEqual(hydration.rendered, ['cohort', 'guided']);
+    const guidedShell = hydration.app.firstElementChild;
+    const lateUpdates = { update: deferred.update, deadline: timer.fn };
+    lateUpdates[first]();
+    assert.equal(hydration.app.firstElementChild, guidedShell, `late ${first} replaced the Guided shell`);
+    lateUpdates[first === 'update' ? 'deadline' : 'update']();
+    deferred.resolve();
+    await deferred.transition.finished;
+    assert.deepEqual(hydration.rendered, ['cohort', 'guided']);
+    assert.deepEqual(hydration.focused, ['cohort', 'guided']);
+    assert.deepEqual(hydration.scrolls, [[0, 0], [0, 0]]);
+    assert.equal(deferred.transition.skips, 1);
+    assert.equal(hydration.timers.size, 0);
+    assert.equal(hydration.htmlClasses.has('eu-route-transitioning'), false);
+  }
+  process.stdout.write('Transition deadline, late callbacks, supersession, reduced motion, hydration\n');
 }
 
 main().catch((error) => { console.error(error); process.exitCode = 1; });

@@ -171,6 +171,9 @@
     return ((window.EU_CAPABILITIES || {}).deployment || {}).hosted === true;
   }
   function render(opts = {}) {
+    // A direct render can mount the next route before its transition callback.
+    const pendingRouteOpts = cancelRouteTransition?.({ pendingOnly: true });
+    if (pendingRouteOpts) opts = { ...opts, ...pendingRouteOpts };
     document.documentElement.toggleAttribute('data-eu-hosted', hostedInstance());
     const resetScroll = !!opts.resetScroll;
     const priorContent = app.querySelector('.content');
@@ -241,7 +244,10 @@
       window.scrollTo(scrollState.x, scrollState.y);
       if (preserveRouteFocus) focusRouteContent();
     }
-    app.firstElementChild?.setAttribute('data-eu-app-shell', '');
+    if (app.firstElementChild) {
+      app.firstElementChild.setAttribute('data-eu-app-shell', '');
+      window.EU_BOOT?.shellMounted?.();
+    }
   }
 
   function routeMotionAllowed() {
@@ -282,11 +288,14 @@
       document.documentElement.classList.remove('eu-route-transitioning');
       window.EU_BOOT?.mark('view_transition_finished');
     };
-    const cancel = () => {
+    const cancel = ({ pendingOnly = false } = {}) => {
+      if (pendingOnly && !updatePending) return;
+      const pendingOpts = updatePending ? opts : undefined;
       // Skipping animations still lets the browser invoke the update callback.
       updatePending = false;
       transition.skipTransition();
       finish();
+      return pendingOpts;
     };
     const deadline = setTimeout(() => {
       if (!updatePending) return;

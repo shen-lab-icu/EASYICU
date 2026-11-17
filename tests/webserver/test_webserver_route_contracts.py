@@ -750,10 +750,13 @@ def test_hosted_boot_diagnostics_validates_its_own_bounded_stream(boot_report, m
         pytest.fail("the hosted guard buffered the boot report before its size check")
 
     monkeypatch.setenv("EASYICU_HOSTED", "1")
+    monkeypatch.setenv("EASYICU_WEB_TRUST_PROXY", "1")
+    monkeypatch.setenv("EASYICU_PUBLIC_ORIGIN", "https://icu.example:8443")
     monkeypatch.setattr(Request, "json", reject_unbounded_json)
     client = TestClient(app, client=("127.0.0.5", 50000))
-    assert client.post(BOOT_DIAGNOSTICS, json=boot_report).status_code == 204
-    assert client.post(BOOT_DIAGNOSTICS, content=b" " * 4097).status_code == 422
+    headers = {"Origin": "https://icu.example:8443", "Sec-Fetch-Site": "same-origin"}
+    assert client.post(BOOT_DIAGNOSTICS, json=boot_report, headers=headers).status_code == 204
+    assert client.post(BOOT_DIAGNOSTICS, content=b" " * 4097, headers=headers).status_code == 422
 
 
 def test_boot_diagnostics_is_bounded_per_client(boot_report, caplog, monkeypatch):
@@ -772,11 +775,20 @@ def test_boot_diagnostics_is_bounded_per_client(boot_report, caplog, monkeypatch
     assert caplog.text.count("client boot stalled: ") == 5
 
 
-def test_boot_diagnostics_keeps_cross_origin_write_guard(boot_report, caplog):
+@pytest.mark.parametrize("origin", ["https://other.example", "null"])
+@pytest.mark.parametrize("hosted", [False, True], ids=["local", "hosted"])
+def test_boot_diagnostics_keeps_cross_origin_write_guard(boot_report, caplog, monkeypatch, hosted, origin):
+    if hosted:
+        monkeypatch.setenv("EASYICU_HOSTED", "1")
+        monkeypatch.setenv("EASYICU_WEB_TRUST_PROXY", "1")
+        monkeypatch.setenv("EASYICU_PUBLIC_ORIGIN", "https://icu.example:8443")
     response = TestClient(app).post(
-        BOOT_DIAGNOSTICS, json=boot_report, headers={"Origin": "https://other.example"}
+        BOOT_DIAGNOSTICS,
+        json=boot_report,
+        headers={"Origin": origin, "Sec-Fetch-Site": "same-origin"},
     )
     assert response.status_code == 403
+    assert response.json() == {"detail": "Cross-origin write requests are not allowed."}
     assert "client boot stalled" not in caplog.text
 
 
