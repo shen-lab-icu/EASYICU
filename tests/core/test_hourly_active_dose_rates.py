@@ -450,19 +450,14 @@ def test_legacy_minute_rate_dependencies_keep_their_original_projection():
     assert set(out) == {'stay_id', 'starttime', 'norepi_rate'}
 
 
-def test_sic_propofol_intervals_exclude_boluses_and_sum_concurrent_rates():
-    from types import SimpleNamespace
+def test_sic_propofol_hourly_summary_retains_its_grid_and_converted_dose():
     from easyicu.concept.callback_apply import _apply_callback
     from easyicu.resources import load_dictionary
 
     source = load_dictionary()['propofol_rate'].sources['sic'][0]
-    data_source = SimpleNamespace(config=SimpleNamespace(name='sic'), load_table=lambda *a, **k:
-                                  pd.DataFrame({'CaseID': [1], 'ICUOffset': [3600.]}))
-    frame = pd.DataFrame({'CaseID': 1, 'DrugID': [1499, 1549, 1499, 1499],
-                          'Offset': [3600., 5400., 4500., 7200.],
-                          'OffsetDrugEnd': [7200., 6300., 4560., 7260.],
-                          'propofol_rate': [.000008, .000016, .08, 0.],
-                          'IsSingleDose': [0, 0, 1, 0], 'weight': 80.})
-    out = _apply_callback(frame, source, 'propofol_rate', data_source=data_source, interval=pd.Timedelta(hours=1))
-    assert out.Offset.tolist() == [0.]
-    assert out.propofol_rate.tolist() == pytest.approx([.15])
+    frame = pd.DataFrame({'CaseID': [1, 1, 1], 'Offset': [0., 3600., 10800.],
+                          'propofol_rate': [.000006, 0., .000012]})
+    out = _apply_callback(frame, source, 'propofol_rate', interval=pd.Timedelta(hours=1))
+    assert out.Offset.tolist() == frame.Offset.tolist()
+    assert out.propofol_rate.tolist() == pytest.approx(frame.propofol_rate * 16666.6667)
+    assert not any(c.startswith('_dose_') for c in out)

@@ -154,15 +154,12 @@ same-infusion interval (DEV-RICUC-04), not a forward setting: retain that
 source interpretation and its six-hour valid-amount-interval limit, but
 recover its constant rate as dose / exact interval minutes before applying
 the shared active-time mean. Untimed HiRID amounts retain the existing
-one-hour-bin attribution. SICdb propofol moves from the precomputed
-hourly `data_float_h` 3057 dose-per-weight summary to continuous medication
-1499/1549 (`AmountPerMinute`, verified g/min) over explicit start/stop spans.
-Its `IsSingleDose=1` rows contain bolus totals in that column and are excluded.
-This source/weight change is forced by the new active-time denominator: the
-3057 hourly summary cannot recover it. The existing SIC kg-rate owner supplies
-its case weight and g/min -> mcg/kg/min conversion; other weight sources and
-unit conversions remain unchanged. Apart from this explicit SICdb propofol
-source replacement, minute opt-in paths retain their existing source
+one-hour-bin attribution. **SICdb propofol is an hourly summary source**:
+`data_float_h` DataID 3057 (`PropofolPerHourWeight`, g/h/kg), converted by
+1e6 / 60 to mcg/kg/min. Its dose and coverage retain dev9's native hourly
+summary; an active-time denominator cannot be recovered from that summary.
+The proposed medication 1499/1549 replacement is not used. Other weight
+sources and unit conversions remain unchanged. Minute opt-in paths retain their existing source
 representation; ordinary hourly loads use the same exact
 start/stop spans directly, without materialising a parallel minute table.
 
@@ -179,4 +176,4 @@ components with the existing factors (including dopamine); no potency factor
 changes in S732TW.
 
 Clean re-extraction is required for affected rate and derived score exports;
-the dictionary remains unsealed pending the engineering session's reseal 14.
+the dictionary is sealed under reseal 14, including the S732COV2 SICdb source restoration.

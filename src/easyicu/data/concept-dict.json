@@ -20104,19 +20104,11 @@
    ],
    "sic": [
     {
-     "ids": [
-      1499,
-      1549
-     ],
-     "table": "medication",
-     "sub_var": "DrugID",
-     "val_var": "AmountPerMinute",
-     "stop_var": "OffsetDrugEnd",
-     "callback": "sic_rate_kg",
-     "extra_vars": [
-      "IsSingleDose"
-     ],
-     "_comment": "S732TW 2026-11-16: continuous propofol 1%/2% only (IsSingleDose=0); d_references units g and Amount = AmountPerMinute x elapsed minutes verified for continuous rows. Use the existing SIC kg-rate/weight owner and exact Offset..OffsetDrugEnd spans. Single-dose AmountPerMinute contains bolus totals and is excluded. Replaces DataID 3057 hourly g/h/kg summary, whose active-time denominator cannot be recovered."
+     "ids": 3057,
+     "table": "data_float_h",
+     "sub_var": "DataID",
+     "callback": "transform_fun(binary_op(`*`, 16666.6667))",
+     "_comment": "2026-11-03 extraction audit 2: SICdb d_references DrugDosagePerHour 3057 'PropofolPerHourWeight' (g/h/kg), SICdb's own hourly weight-normalised propofol dose; x 1e6 / 60 = mcg/kg/min."
     }
    ]
   },

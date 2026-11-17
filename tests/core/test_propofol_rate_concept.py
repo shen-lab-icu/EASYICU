@@ -4,12 +4,12 @@ propofol_rate is a ts_tbl rate concept modeled after ``dobu_rate`` / ``norepi_ra
 emitting continuous propofol infusion rate in mcg/kg/min.
 
 Source IDs verified against local reference dictionaries on 2026-05-13;
-SICdb continuous interval units rechecked for S732TW on 2026-11-16:
+SICdb hourly summary restored to dev9 for S732COV2 on 2026-11-17:
 
   - AUMC drugitems itemid 7480 (Propofol (Diprivan))
   - MIMIC-IV inputevents itemid 222168
   - MIMIC-III inputevents_cv itemid 30131, inputevents_mv itemid 222168
-  - SIC medication DrugID 1499 (Propofol 1%) + 1549 (Propofol 2%)
+  - SIC data_float_h DataID 3057 (PropofolPerHourWeight, g/h/kg)
   - eICU infusiondrug regex (?i)^propofol.*\\(.+\\)$ (ml_to_mcg=10000, standard 10 mg/mL)
   - HiRID pharma 208 / 1001050 (Disoprivan 2% infusions)
 
@@ -44,8 +44,7 @@ def test_propofol_rate_is_mcg_kg_min(propofol_rate_entry):
 
 
 def test_propofol_rate_covers_all_six_main_databases(propofol_rate_entry):
-    """All six sources now have explicit infusion-rate paths, including SICdb
-    continuous medication rows. Boluses remain excluded (S732TW)."""
+    """All six databases have a rate source; SICdb supplies its hourly summary."""
     sources = set(propofol_rate_entry["sources"].keys())
     assert sources & MAIN_DBS == {"miiv", "mimic", "eicu", "aumc", "hirid", "sic"}
 
@@ -105,14 +104,15 @@ def test_eicu_regex_and_ml_to_mcg(propofol_rate_entry):
     assert src["weight_var"] == "patientweight"
 
 
-def test_sic_uses_only_verified_continuous_propofol_intervals(propofol_rate_entry):
-    """Mixed APM semantics are separated by the explicit single-dose flag."""
+def test_sic_uses_dev9_hourly_weight_normalised_summary(propofol_rate_entry):
+    """The hourly summary supplies both the legacy dose and its hourly grid."""
     (sic,) = propofol_rate_entry['sources']['sic']
-    assert sic['table'] == 'medication' and sic['ids'] == [1499, 1549]
-    assert sic['callback'] == 'sic_rate_kg'
-    assert sic['val_var'] == 'AmountPerMinute'
-    assert sic['stop_var'] == 'OffsetDrugEnd'
-    assert 'IsSingleDose' in sic['extra_vars']
+    assert sic == {
+        'ids': 3057, 'table': 'data_float_h', 'sub_var': 'DataID',
+        'callback': 'transform_fun(binary_op(`*`, 16666.6667))',
+        '_comment': "2026-11-03 extraction audit 2: SICdb d_references DrugDosagePerHour 3057 'PropofolPerHourWeight' (g/h/kg), SICdb's own hourly weight-normalised propofol dose; x 1e6 / 60 = mcg/kg/min.",
+    }
+    assert '_hourly_coverage_sources' not in propofol_rate_entry
 
 
 def test_hirid_reads_infusions_not_boluses(propofol_rate_entry):

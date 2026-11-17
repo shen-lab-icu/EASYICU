@@ -37,7 +37,7 @@ def _ids(concept: str, database: str, index: int = 0):
         ("ntprobnp", "sic", {571}),
         ("prealbumin", "sic", {382}),
         ("ffp", "sic", {2047}),  # Octaplas
-        ("propofol_rate", "sic", {1499, 1549}),  # Continuous propofol 1%/2% intervals
+        ("propofol_rate", "sic", {3057}),  # Hourly weight-normalised summary
         ("propofol_rate", "hirid", {208, 1001050}),  # Disoprivan 2% infusions
         ("svo2", "eicu", {"SVO2"}),
     ],
@@ -85,15 +85,10 @@ def test_sic_ecmo_is_a_running_pump():
     assert out["ecmo"].tolist() == [True, False]
 
 
-def test_sic_propofol_rate_converts_continuous_g_per_minute_using_case_weight():
-    from types import SimpleNamespace
-
+def test_sic_propofol_rate_converts_hourly_g_per_kg_summary():
     source = ConceptSource.from_mapping(_dictionary()['propofol_rate']['sources']['sic'][0])
-    frame = pd.DataFrame({'CaseID': [1], 'Offset': [0.], 'OffsetDrugEnd': [1800.],
-                          'propofol_rate': [.0024], 'IsSingleDose': [False], 'weight': [80.]})
-    data = SimpleNamespace(config=SimpleNamespace(name='sic'), load_table=lambda *a, **k:
-                           pd.DataFrame({'CaseID': [1], 'ICUOffset': [0.]}))
-    out = _apply_callback(frame, source, concept_name='propofol_rate', data_source=data)
+    frame = pd.DataFrame({'CaseID': [1], 'Offset': [0.], 'propofol_rate': [.0018]})
+    out = _apply_callback(frame, source, concept_name='propofol_rate')
     assert out.propofol_rate.tolist() == pytest.approx([30.])  # mcg/kg/min
 
 
