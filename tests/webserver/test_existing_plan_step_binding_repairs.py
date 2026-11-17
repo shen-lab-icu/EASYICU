@@ -119,7 +119,7 @@ def test_same_id_figure_can_repair_inputs_and_display_bindings(binding_replay, c
     _binding_repair_guard(previous).validate_plan(plan=revised, context=_context())
 
 
-@pytest.mark.parametrize("change", ["variable", "missing_product", "missing_panel_product", "missing_figure_output", "missing_step", "method", "module", "role", "sensitivity", "chart", "new_id"])
+@pytest.mark.parametrize("change", ["variable", "missing_product", "missing_panel_product", "missing_figure_output", "missing_step", "method", "module", "role", "sensitivity", "chart"])
 def test_same_id_cannot_hide_new_coordinates_or_dangling_references(binding_replay, change):
     previous, revised = binding_replay
     figure = revised.steps[-1]
@@ -134,7 +134,6 @@ def test_same_id_cannot_hide_new_coordinates_or_dangling_references(binding_repl
         "role": {"planned_analysis_role": "secondary"},
         "sensitivity": {"sensitivity_spec_ids": ["unrequested_sensitivity"]},
         "chart": {"figure_panels": [figure.figure_panels[0].model_copy(update={"chart_type": "forest"})]},
-        "new_id": {"step_id": "new_display"},
     }[change]
     revised = revised.model_copy(update={"steps": [*revised.steps[:-1], figure.model_copy(update=update)]})
     with pytest.raises(owner.ResearchPipelineRunError) as refused:
@@ -164,6 +163,83 @@ def test_an_unchanged_coordinate_can_still_be_renamed(binding_replay):
     renamed = previous.steps[-1].model_copy(update={"step_id": "renamed_display"})
     revised = previous.model_copy(update={"steps": [*previous.steps[:-1], renamed]})
     _binding_repair_guard(previous).validate_plan(plan=revised, context=_context())
+
+
+def _typed_display(step: AnalysisStep, panels, **update) -> AnalysisStep:
+    return AnalysisStep(**{**step.model_dump(mode="json"), **update, "figure_panels": [
+        {"panel_id": panel_id, "article_role": role, "chart_type": chart, "figure_output": output,
+         "placement": "main", "source_products": [source]}
+        for panel_id, role, chart, output, source in panels
+    ]})
+
+
+def test_an_untyped_display_can_gain_typed_panels_of_existing_products(binding_replay):
+    """Anonymized a22 shape: an authorized primary repair types the display.
+
+    The source display had no panel records. The revision lists the primary
+    product it renders and types each panel of the figure it already made.
+    """
+    previous, _ = binding_replay
+    display = previous.steps[4]
+    typed = _typed_display(display, [
+        ("distribution", "primary_estimand", "forest", "figure:primary_result", "table:distribution_summary"),
+        ("measurement", "descriptive_result", "dot_interval", "figure:primary_result", "table:continuous_outcome_summary"),
+    ], inputs=[*display.inputs, "table:continuous_outcome_summary"])
+    steps = list(previous.steps)
+    steps[4] = typed
+    _binding_repair_guard(previous).validate_plan(plan=previous.model_copy(update={"steps": steps}), context=_context())
+
+
+@pytest.mark.parametrize("change", ["new_figure_output", "absent_product", "typed_source_gains_panel"])
+def test_typing_a_display_cannot_add_a_figure_or_unproduced_evidence(binding_replay, change):
+    previous, _ = binding_replay
+    steps = list(previous.steps)
+    if change == "typed_source_gains_panel":
+        index, display = len(steps) - 1, steps[-1]
+        panels = [(panel.panel_id, panel.article_role, panel.chart_type, panel.figure_output,
+                   panel.source_products[0]) for panel in display.figure_panels]
+        panels.append(("extra", "data_quality", "coverage_heatmap", "figure:data_quality", "table:measurement_audit"))
+        typed = _typed_display(display, panels)
+    else:
+        index, display = 4, steps[4]
+        output, source, update = {
+            "new_figure_output": ("figure:added_display", "table:distribution_summary",
+                                  {"expected_outputs": [*display.expected_outputs, "figure:added_display"]}),
+            "absent_product": ("figure:primary_result", "table:absent_product",
+                               {"inputs": [*display.inputs, "table:absent_product"]}),
+        }[change]
+        typed = _typed_display(display, [("panel", "primary_estimand", "forest", output, source)], **update)
+    steps[index] = typed
+    with pytest.raises(owner.ResearchPipelineRunError) as refused:
+        _binding_repair_guard(previous).validate_plan(plan=previous.model_copy(update={"steps": steps}), context=_context())
+    assert refused.value.code == "revision_added_unrequested_analysis"
+
+
+def test_a_renumbered_figure_may_follow_the_new_order_in_placement_only(binding_replay):
+    previous, revised = binding_replay
+    renumbered = revised.steps[-1].model_copy(update={"step_id": "renumbered_display"})
+    _binding_repair_guard(previous).validate_plan(
+        plan=revised.model_copy(update={"steps": [*revised.steps[:-1], renumbered]}), context=_context(),
+    )
+
+
+@pytest.mark.parametrize("change", ["chart", "source_product", "input", "output"])
+def test_a_renumbered_figure_cannot_change_anything_but_placement(binding_replay, change):
+    previous, revised = binding_replay
+    figure = revised.steps[-1]
+    first = figure.figure_panels[0]
+    update = {
+        "chart": {"figure_panels": [first.model_copy(update={"chart_type": "forest"}), *figure.figure_panels[1:]]},
+        "source_product": {"figure_panels": [first.model_copy(update={"source_products": ["table:cohort_flow"]}), *figure.figure_panels[1:]]},
+        "input": {"inputs": [*figure.inputs, "table:cohort_flow"]},
+        "output": {"expected_outputs": [*figure.expected_outputs, "figure:cohort_flow"]},
+    }[change]
+    renumbered = figure.model_copy(update={"step_id": "renumbered_display", **update})
+    with pytest.raises(owner.ResearchPipelineRunError) as refused:
+        _binding_repair_guard(previous).validate_plan(
+            plan=revised.model_copy(update={"steps": [*revised.steps[:-1], renumbered]}), context=_context(),
+        )
+    assert refused.value.code == "revision_added_unrequested_analysis"
 
 
 @pytest.mark.parametrize("used_by", ["other_step", "model_input", None])

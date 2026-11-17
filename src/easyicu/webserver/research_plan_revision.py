@@ -141,9 +141,21 @@ def _existing_step_binding_repair(
     In particular, model rosters and ordered levels are not sets of inputs:
     changing them must still pass the question or blocker authority below.
     """
-    if source.get("step_id") != step.get("step_id") or source_coordinate[:2] != coordinate[:2]:
+    if source_coordinate[:2] != coordinate[:2]:
         return False
     before, after = (json.loads(item[2]) for item in (source_coordinate, coordinate))
+    if source.get("step_id") != step.get("step_id"):
+        # A renumbered article figure may follow the new figure order in panel
+        # placement only. Every input, output and other coordinate stays exact.
+        def placed(binding: dict[str, Any]) -> dict[str, Any]:
+            return {**binding, "figure_panels": [
+                {key: value for key, value in panel.items() if key not in {"placement", "presentation"}}
+                for panel in binding.get("figure_panels", ())
+            ]}
+
+        return (placed(before) == placed(after)
+                and set(source.get("inputs", ())) == set(step.get("inputs", ()))
+                and list(source.get("expected_outputs", ())) == list(step.get("expected_outputs", ())))
     if before.get("primary_descriptive_summary"):
         old_columns, new_columns = set(before.get("columns", ())), set(after.get("columns", ()))
         # Only typed provenance/identity inputs can be removed here. Retain
@@ -156,6 +168,15 @@ def _existing_step_binding_repair(
     new_panels = after.pop("figure_panels", ())
     if before != after:
         return False
+    if not old_panels:
+        # An untyped source display has no panel coordinate to retain. Typing
+        # it adds presentation lineage only: every panel renders a figure this
+        # step already declared, from products the revised plan admits.
+        return all(
+            set(panel.get("source_products", ())) <= revised_references
+            and panel.get("figure_output") in set(source.get("expected_outputs", ())) & set(step.get("expected_outputs", ()))
+            for panel in new_panels
+        )
     # These are typed FigurePresentationSpec/local lineage fields, not chart
     # grammars or scientific coordinates. Keep the latter exact and consume
     # each old panel at most once, permitting removal and reordering.
