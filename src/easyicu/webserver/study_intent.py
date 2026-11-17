@@ -460,11 +460,30 @@ _ELIGIBILITY_OPENER = re.compile(
     re.IGNORECASE,
 )
 _CLAUSE_BREAK = re.compile(r"[，,。；;？?！!]")
+# A condition can qualify a patient noun through setting/demographic words.
+# These words do not turn the condition into a studied exposure or outcome.
+_POPULATION_QUALIFIER_AFTER = re.compile(
+    r"\s*(?:的\s*)?(?:(?:adult|pediatric|paediatric|icu|hospital|critically\s+ill)(?![A-Za-z0-9_])\s*"
+    r"|成人|成年|重症|监护室|入科时|入院时)*"
+    r"(?:patients?\b|cohort\b|患者|人群|病人)",
+    re.IGNORECASE,
+)
+_POPULATION_SETTING_BEFORE = re.compile(
+    r"\b(?:in|among|amongst)\s+[^,;.!?，。；！？]{0,80}$", re.IGNORECASE,
+)
 
 
-def _population_restriction(text: str, concept: str, start: int, end: int) -> bool:
+def _population_restriction(
+    text: str, concept: str, start: int, end: int, *, include_patient_settings: bool = True,
+) -> bool:
     """Whether the mention at ``start:end`` states whom the study includes."""
 
+    qualifier = _POPULATION_QUALIFIER_AFTER.match(text, end)
+    if include_patient_settings and qualifier and (
+        re.match(r"\s*中", text[qualifier.end():])
+        or _POPULATION_SETTING_BEFORE.search(text[:start])
+    ):
+        return True
     if concept in _BOUNDED_RESTRICTION_CONCEPTS and (
         _BOUND_AFTER.match(text, end)
         or _BOUND_BEFORE.search(text[max(0, start - 40) : start])
@@ -1128,12 +1147,13 @@ def stated_treatment_uses(question: str) -> Tuple[StatedTreatmentUse, ...]:
     return tuple(found.values())
 
 
-def _match_concept(text: str) -> List[Tuple[str, str]]:
+def _match_concept(text: str, *, study_roles: bool = False) -> List[Tuple[str, str]]:
     """Return concept/phrase pairs in dictionary-specificity order.
 
     A phrase the sentence explicitly negates is not a reading — it is skipped,
     which leaves the slot unread rather than wrong.  So is a restriction on
-    whom the study includes (``_population_restriction``).  A phrase inside
+    whom the study includes (``_population_restriction``). Patient-setting
+    qualifiers remain named concepts unless reading study roles. A phrase inside
     another concept's longer name is that concept (``_resolved_reading``).
     A substance both measured and given is read by what the sentence says of
     it (``_measured_or_given``); a later mention that says it decides one
@@ -1150,7 +1170,9 @@ def _match_concept(text: str) -> List[Tuple[str, str]]:
             if (
                 _negated(text, start)
                 or _follow_up_handling(text, start, end)
-                or _population_restriction(text, concept, start, end)
+                or _population_restriction(
+                    text, concept, start, end, include_patient_settings=study_roles,
+                )
             ):
                 continue
             concept = _used_or_dosed(
@@ -1885,7 +1907,7 @@ def _study_concept_readings(
 ) -> Tuple[Optional[str], Optional[str], List[Tuple[str, str]]]:
     """The outcome reading, and every other concept the sentence studies, in text order."""
 
-    concepts = _match_concept(lowered)
+    concepts = _match_concept(lowered, study_roles=True)
     primary = [(c, p) for c, p in concepts if c in _OUTCOME_CONCEPTS_PRIMARY]
     events = [(c, p) for c, p in concepts if c in _OUTCOME_CONCEPTS_EVENT]
 

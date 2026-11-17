@@ -732,3 +732,46 @@ def test_the_refusal_names_the_predicate_its_column_and_the_missing_time() -> No
         f"records '{_EVENT}' over the whole ICU stay and has no '{_EVENT}_time' "
         "to place the event in that window"
     ]
+
+
+@pytest.mark.parametrize("side, op, value", [
+    ("inclusion", "==", 0), ("inclusion", "!=", 1),
+    ("exclusion", "==", 1), ("exclusion", "in", [1]),
+])
+def test_windowed_eligibility_does_not_prove_a_whole_stay_contrast_collapsed(side, op, value):
+    from easyicu.research_agent.cohort.schema import _primary_cohort_contrast_preservation_issues
+
+    definition = _cohort(**{side: [_predicate(_EVENT, op, value)]})
+    frame = _universe(**{f"{_EVENT}_time": [2.0, 300.0, None, None]})
+    kept = _kept(definition, frame)
+    assert kept == [2, 3, 4]
+    assert set(frame.loc[frame.stay_id.isin(kept), _EVENT]) == {0, 1}
+    plan = SimpleNamespace(steps=[SimpleNamespace(
+        table_one_spec=SimpleNamespace(group_by=_EVENT, group_levels=[0, 1]),
+        _table_one_execution_binding=None, model_requirements=[],
+    )])
+    assert _primary_cohort_contrast_preservation_issues(
+        plan=plan, context=_context(), definition=definition,
+        columns=tuple(frame.columns), bindings={},
+    ) == []
+    # Without a time-bound reading, a scalar restriction really does collapse it.
+    static = _cohort(**{side: [_predicate(_EVENT, op, value, end=float("inf"))]})
+    assert _primary_cohort_contrast_preservation_issues(
+        plan=plan, context=_context(), definition=static,
+        columns=tuple(frame.columns), bindings={},
+    )
+
+
+@pytest.mark.parametrize("side, value", [("inclusion", 1), ("exclusion", 0)])
+def test_an_event_time_does_not_hide_a_truly_collapsed_status_comparison(side, value):
+    from easyicu.research_agent.cohort.schema import _primary_cohort_contrast_preservation_issues
+
+    plan = SimpleNamespace(steps=[SimpleNamespace(
+        table_one_spec=SimpleNamespace(group_by=_EVENT, group_levels=[0, 1]),
+        _table_one_execution_binding=None, model_requirements=[],
+    )])
+    assert _primary_cohort_contrast_preservation_issues(
+        plan=plan, context=_context(),
+        definition=_cohort(**{side: [_predicate(_EVENT, "==", value)]}),
+        columns=(_EVENT, f"{_EVENT}_time"), bindings={},
+    )

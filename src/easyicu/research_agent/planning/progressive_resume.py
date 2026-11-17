@@ -982,7 +982,17 @@ def _accept_compiled_plan(
         raise
     except ValueError as exc:
         message = str(exc)
-        index = _step_index_from_error(plan, message)
+        binding_findings = list(getattr(exc, "binding_findings", ()))
+        located = [
+            item for item in binding_findings
+            if type(item.get("step_index")) is int
+            and 0 <= item["step_index"] < len(plan.steps)
+            and plan.steps[item["step_index"]].step_id == item.get("step_id")
+        ]
+        index = (
+            min(item["step_index"] for item in located)
+            if located else _step_index_from_error(plan, message)
+        )
         step = plan.steps[index] if plan.steps else None
         raise ProgressivePlanCompileError(
             f"progressive_{gate}_invalid",
@@ -990,4 +1000,5 @@ def _accept_compiled_plan(
             step_id=step.step_id if step is not None else None,
             step_index=index if step is not None else None,
             path=gate,
+            findings=binding_findings,
         ) from exc

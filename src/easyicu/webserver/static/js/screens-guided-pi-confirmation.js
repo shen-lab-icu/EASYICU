@@ -965,7 +965,7 @@
         ? tr('The model service did not respond; plan generation is paused', '模型服务暂时未响应，计划生成已暂停')
         : failure.reason === 'planner_budget_exhausted'
           ? tr('Plan generation reached its attempt limit', '计划生成已达到本次尝试上限')
-          : attempt.gate_reason_code === 'research_pipeline_plan_contract_exhausted'
+          : failure.reason === 'plan_bindings_invalid' || attempt.gate_reason_code === 'research_pipeline_plan_contract_exhausted'
           ? tr('Plan generation did not finish', '计划生成未完成')
           : tr('Data preparation did not finish', '数据准备未完成');
       const detail = providerFailure ? tr(

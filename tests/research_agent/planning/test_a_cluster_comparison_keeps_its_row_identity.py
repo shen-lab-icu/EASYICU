@@ -175,3 +175,48 @@ def test_an_identity_the_run_did_not_seal_is_not_admitted_by_its_name() -> None:
 
     assert "not an exact executable sealed cohort column" in str(caught.value)
     assert "raw name 'stay_id'" not in str(caught.value)
+
+
+def test_a_prepared_membership_column_keeps_its_run_scope_at_final_acceptance():
+    context = _materialized(_phenotyping_context())
+    request = _request(context, cohort_mode=None)
+    fake, result = _run(context, [json.dumps(_phenotyping_payload(
+        request, features=["hr_max", "lactate_max", "map_min"],
+        baseline=["age", "sex"], membership="phenotype_flag",
+    ))], required_primary_cohort_selection_mode=None)
+    plan = result.output
+    assert len(fake.calls) == 1
+    assert any(p.concept_id == "phenotype_flag" for p in plan.cohort.inclusion)
+    assert _step(plan, "primary_cluster_solution").inputs == [
+        "hr_max", "lactate_max", "map_min", "artifact:analysis_cohort",
+    ]
+    validate_plan_typed_bindings_against_context(plan=plan, context=context)
+
+
+def test_a_truly_absent_prepared_field_has_a_typed_actual_step_owner():
+    from easyicu.research_agent.planning.progressive_resume import _accept_compiled_plan
+    from easyicu.research_agent.planning.progressive_contract import ProgressivePlanCompileError
+    from easyicu.research_agent.providers.mocks import ScriptedMockLLMClient
+    from .family_spec_fixtures import ALLOWED_CITATIONS, DIRECT_COMPARATORS
+
+    context = _materialized(_phenotyping_context())
+    plan = _compiled(context)
+    plan.steps[1].inputs.append("truly_absent_field")
+    with pytest.raises(CohortSchemaError) as caught:
+        validate_plan_typed_bindings_against_context(plan=plan, context=context)
+    finding = caught.value.binding_findings[0]
+    assert finding["reason_code"] == "raw_field_not_prepared"
+    assert finding["step_index"] == 1
+    assert finding["step_id"] == plan.steps[1].step_id
+    with pytest.raises(ProgressivePlanCompileError) as rejected:
+        _accept_compiled_plan(
+            plan=plan, agent_context=context, article_context=context,
+            allowed_literature_citation_keys=ALLOWED_CITATIONS,
+            direct_comparator_literature_keys=DIRECT_COMPARATORS,
+            allowed_know_how_decisions=None, enforce_article_contract=False,
+            llm=ScriptedMockLLMClient([]),
+        )
+    assert rejected.value.reason_code == "progressive_context_bindings_invalid"
+    assert rejected.value.step_index == 1
+    assert rejected.value.step_id == plan.steps[1].step_id
+    assert rejected.value.details["findings"][0] == finding

@@ -886,6 +886,15 @@ def build_research_workflow_snapshot(
         and latest_attempt_failure.checkpoint_resume_available
     ):
         plan_review_reason_code = "planner_checkpoint_resume_available"
+    if (
+        plan_review_reason_code == "plan_execution_upgrade_required"
+        and latest_attempt_failure is not None
+        and latest_attempt_failure.reason == "plan_bindings_invalid"
+    ):
+        # This attempt exhausted planning repair after data preparation. Its
+        # retained metadata candidate is historical; offer the existing fresh
+        # planning action instead of sending the researcher to extraction.
+        plan_review_reason_code = "failed_pipeline_requires_fresh_plan"
     # A live, digest-matching review is an approval gate. A stale or
     # non-resumable plan remains historical evidence, but the next governed
     # action is a fresh planning run rather than approval or in-place editing.

@@ -73,7 +73,6 @@ from ..planning.family_spec.contract import (
 )
 from ..planning.capability_gap import check_capability_gap
 from ..planning.family_spec.landmark_categorical_template import reconcile_population_grouping
-from ..planning.literature_bindings import missing_required_method_layers
 from ..planning.question_requirements import (
     QUESTION_REQUIREMENTS_GUIDE,
     question_effect_measures,
@@ -99,12 +98,8 @@ from ..planning.progressive_contract import (
     ProgressivePredicateValue,
     ProgressivePlanCompileReceipt,
     ProgressivePlanOutline,
+    ProgressivePlanSkeleton,
     ProgressivePlannerCheckpoint,
-)
-from ..planning.progressive_resume import (
-    ProgressivePrefixState,
-    assemble_progressive_skeleton,
-    compile_progressive_prefix,
 )
 from ..providers.capabilities import llm_supports_strict_json_schema
 from ..providers.protocol import LLMMessage, StructuredOutputRequest
@@ -1135,8 +1130,8 @@ def run_family_spec_attempt(
     prompt_byte_limit: int,
     bind_outline: Callable[[ProgressivePlanOutline], ProgressivePlanOutline],
     validate_outline: Callable[[ProgressivePlanOutline], None],
-    compile_and_accept: Callable[
-        ..., tuple[AnalysisPlan, ProgressivePlanCompileReceipt]
+    materialize_and_accept: Callable[
+        [FamilySkeletonDraft], tuple[AnalysisPlan, ProgressivePlanCompileReceipt, ProgressivePlanSkeleton]
     ],
     capture_efficiency_metrics: Callable[[], None],
 ) -> AnalysisPlan:
@@ -1147,8 +1142,8 @@ def run_family_spec_attempt(
     so a population quote refusal reaches structured retry with its existing
     budget. The fresh-plan outline authority, prefix compiler, and final
     acceptance run unchanged (injected by the Progressive agent). A rejected
-    projection keeps the validator's own reason code; there is no Provider
-    suffix repair on this path. A request the host refuses stops the same way, so the run
+    projection keeps the validator's own reason code and uses the shared bounded
+    step/suffix repair lane. A request the host refuses stops the same way, so the run
     records the request's own reason code, and states that the Planner made no
     Provider call (``planner_provider_calls`` 0).
     """
@@ -1403,7 +1398,6 @@ def run_family_spec_attempt(
         prompt_metrics=attempt.prompt_metrics,
     )
     foundation_materialization = draft.foundation
-    foundation = foundation_materialization.foundation
     attempt.foundation = foundation_materialization
     checkpoint_emitter.emit(
         stage="foundation",
@@ -1412,45 +1406,9 @@ def run_family_spec_attempt(
         materializations=[],
         prompt_metrics=attempt.prompt_metrics,
     )
-    prefix_state = ProgressivePrefixState()
-    for materialization in draft.materializations:
-        prefix_state = compile_progressive_prefix(
-            prefix_state,
-            materialization,
-            outline=outline,
-            foundation=foundation,
-            context=context,
-            allowed_literature_citation_keys=allowed_citations,
-            allowed_know_how_decisions=allowed_know_how_decisions,
-            reporting_method_source_keys=reporting_source_keys,
-        )
-        attempt.materializations = list(prefix_state.materializations)
-        attempt.prompt_metrics["host_step_materialization_count"] += 1
-        attempt.prompt_metrics["step_materialization_payload_bytes"].append(0)
-        attempt.prompt_metrics["step_materialization_schema_sha256"].append(None)
-        checkpoint_emitter.emit(
-            stage="step",
-            outline=outline,
-            foundation=foundation_materialization,
-            materializations=attempt.materializations,
-            prompt_metrics=attempt.prompt_metrics,
-        )
-    assert prefix_state.plan is not None
-    missing_method_layers = missing_required_method_layers(
-        prefix_state.plan, allowed_citations, context=context,
-    )
-    if missing_method_layers:
-        raise ProgressivePlanCompileError(
-            "progressive_final_method_layer_unbound",
-            "family template left required method layers unbound",
-            path="literature_bindings",
-            findings=({"missing_method_layers": list(missing_method_layers)},),
-        )
-    skeleton = assemble_progressive_skeleton(
-        outline=outline, foundation=foundation, steps=prefix_state.steps,
-    )
-    # The template's reviewed roster is host-written, never Planner transport.
-    plan, receipt = compile_and_accept(skeleton, adjustment_proposal=draft.adjustment_proposal)
+    # The shared Progressive lane compiles host candidates and repairs only
+    # rejected steps or an unaccepted suffix; no second retry owner lives here.
+    plan, receipt, skeleton = materialize_and_accept(draft)
     attempt.skeleton = skeleton
     attempt.compile_receipt = receipt
     attempt.prompt_metrics["final_skeleton_sha256"] = receipt.skeleton_sha256

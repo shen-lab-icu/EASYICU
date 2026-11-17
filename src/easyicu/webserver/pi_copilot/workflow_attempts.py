@@ -11,12 +11,20 @@ from .contracts import PLAN_RESUME_OFFER_GATE_REASONS
 from .run_authority import workflow_authoritative_run
 
 
+_PLAN_BINDING_FINDINGS = frozenset({
+    "progressive_context_bindings_invalid",
+    "progressive_unknown_variable",
+    "progressive_product_reference_mismatch",
+    "progressive_product_dependency_mismatch",
+})
+
+
 class PreservedPlanFailure(BaseModel):
     model_config = ConfigDict(extra="forbid", frozen=True)
 
     run_id: str
     candidate_run_id: str
-    reason: Literal["provider_unavailable", "planner_budget_exhausted", "preparation_failed"]
+    reason: Literal["provider_unavailable", "planner_budget_exhausted", "preparation_failed", "plan_bindings_invalid"]
     checkpoint_resume_available: bool
 
 
@@ -56,6 +64,17 @@ def preserved_plan_failure(
         "research_pipeline_planner_provider_unavailable": "provider_unavailable",
         "research_pipeline_planner_efficiency_budget_exhausted": "planner_budget_exhausted",
     }.get(reason_code, "preparation_failed")
+    detail = latest_attempt.get("gate_detail")
+    if (
+        reason_code in {
+            "research_pipeline_progressive_compile_failed",
+            "research_pipeline_plan_contract_exhausted",
+        }
+        and isinstance(detail, Mapping)
+        and isinstance(detail.get("reason_code"), str)
+        and detail.get("reason_code") in _PLAN_BINDING_FINDINGS
+    ):
+        reason = "plan_bindings_invalid"
     return PreservedPlanFailure(
         run_id=run_id,
         candidate_run_id=candidate_id,
