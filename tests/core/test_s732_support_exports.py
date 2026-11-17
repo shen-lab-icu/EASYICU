@@ -9,8 +9,12 @@ import pandas as pd
 import pytest
 
 from easyicu.api.extraction import EXTRACT_MODULE_ORDER, EXTRACT_MODULES, extract_database
-from easyicu.concept.support_exports import load_stay_identity
+from easyicu.concept import _apply_callback
+from easyicu.concept.availability_signal import ConceptAvailabilityRecord
+from easyicu.concept.schema import ConceptSource
+from easyicu.concept.support_exports import load_imv_first_episode, load_stay_identity
 from easyicu.synthetic_sources import generate_source
+from easyicu.table import WinTbl
 from tests.support.blood_gas_sources import ADMISSION, _mimic_family, _write
 from tests.support.eicu_source import _eicu_source
 
@@ -131,22 +135,29 @@ def test_miiv_episode_gap_niv_and_explicit_boundaries(tmp_path):
 
 
 def test_mimic_iii_episode_uses_owner_eight_hour_chart_gap(tmp_path):
-    _mimic_family(
-        tmp_path, "mimic", [(10, 50821, "80", None)],
-        [(15, 60, 5.), (495, 60, 5.), (976, 60, 5.), (1036, 60, 5.)], "unused",
+    _write(pd.DataFrame({"icustay_id": [1], "intime": [ADMISSION]}), tmp_path / "icustays.parquet")
+    chart = pd.DataFrame({
+        "icustay_id": 1, "charttime": [.25, 8.25, 976 / 60, 1036 / 60],
+        "itemid": 60, "value": "5", "error": 0,
+    })
+    windows = _apply_callback(
+        chart, ConceptSource(
+            table="chartevents", sub_var="itemid", value_var="value", index_var="charttime",
+            callback="mimiciii_chart_ventilation_intervals",
+        ), concept_name="mech_vent",
     )
-    _write(pd.DataFrame({
-        "itemid": [225794], "starttime": [ADMISSION],
-        "endtime": [ADMISSION + pd.Timedelta(minutes=10)],
-        "icustay_id": 1, "subject_id": 101, "hadm_id": 201, "value": 10.,
-        "valueuom": "min", "statusdescription": "Finished", "cancelreason": 0,
-    }), tmp_path / "procedureevents_mv.parquet")
-    output = tmp_path / "out"
-    extract_database(
-        "mimic", data_path=tmp_path, output_dir=output, modules=["imv_first_episode"],
-        patient_ids={"icustay_id": [1]}, native_export_v2=True, max_workers=1,
-    )
-    episode = pd.read_parquet(output / "imv_first_episode.parquet").iloc[0]
+
+    def read_episode_inputs(*, concepts, patient_ids, availability_sink, **kwargs):
+        assert concepts == ["mech_vent", "vent_end"]
+        assert patient_ids == {"icustay_id": [1]}
+        availability_sink["mech_vent"] = ConceptAvailabilityRecord(
+            concept="mech_vent", database="mimic", reason="mapped_present",
+        )
+        return {"mech_vent": WinTbl(windows, "icustay_id", "charttime", "dur_var")}
+
+    episode = load_imv_first_episode(
+        read_episode_inputs, database="mimic", data_path=tmp_path, patient_ids={"icustay_id": [1]},
+    ).iloc[0]
     assert episode.imv_start_hours == pytest.approx(.25)
     assert episode.imv_end_hours == pytest.approx(8.25)
     assert episode.imv_duration_hours == pytest.approx(8.)
