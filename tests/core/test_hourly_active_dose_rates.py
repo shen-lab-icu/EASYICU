@@ -106,13 +106,63 @@ def test_five_hour_boundary_keeps_terminal_overhang(path):
     ([15], [.2], [0., 1.], [.2, .2]),
     # 45 minutes at .1, then 15 at .3; the final .3 also covers 60..105.
     ([0, 45], [.1, .3], [0., 1.], [.15, .3]),
-    # A >5 h gap breaks the episode; both endpoints retain a one-hour tail.
+    # CareVue episode gaps retain a one-hour tail; eICU keeps dev9 carry.
     ([0, 301], [.1, .2], [0., 5., 6.], [.1, .2, .2]),
 ], ids=['singleton', 'singleton_mid_hour', 'last_mid_hour', 'episode_gap'])
 def test_point_episode_ends_have_one_hour_overhang(path, minutes, rates, hours, expected):
+    if path == 'eicu' and minutes == [0, 301]:
+        hours = [0., 1., 2., 3., 4., 5., 6.]
+        expected = [.1] * 5 + [(1 / 60 * .1 + 59 / 60 * .2), .2]
     out = point_rate(path, minutes, rates)
     assert out.charttime.tolist() == hours
     assert out.norepi_rate.tolist() == pytest.approx(expected)
+
+
+@pytest.mark.parametrize('start', [0, 15])
+@pytest.mark.parametrize('closing', [.3, 0., float('nan')])
+def test_eicu_long_gap_preserves_dev9_carry_and_inclusive_five_hour_boundary(start, closing):
+    out = point_rate('eicu', [start, 600], [.2, closing])
+    carry_hours = list(range(6 if start == 0 else 7))
+    expected_hours = carry_hours + ([10.] if closing > 0 else [])
+    assert out.charttime.tolist() == expected_hours
+    assert out.norepi_rate.tolist() == pytest.approx([.2] * len(carry_hours) + ([.3] if closing > 0 else []))
+
+
+def test_eicu_long_gap_carry_ends_at_the_next_setting_and_integrates_both_rates():
+    out = point_rate('eicu', [0, 330, 360], [.1, .3, 0.])
+    assert out.charttime.tolist() == list(range(6))
+    assert out.norepi_rate.tolist() == pytest.approx([.1] * 5 + [.2])
+
+
+@pytest.mark.parametrize('score', ['sofa_cardio', 'sofa2_cardio'])
+@pytest.mark.parametrize('maximum_state', ['empty', 'partial', 'absent'])
+def test_sofa_missing_maximum_preserves_existing_qualification_and_score(score, maximum_state):
+    from types import SimpleNamespace
+    from easyicu.concept.callbacks import CALLBACK_REGISTRY, ConceptCallbackContext
+    from easyicu.concept.dose_rate_sofa import cardio_max_tables
+    from easyicu.table import ICUTable
+
+    def table(name, hours, values):
+        return ICUTable(pd.DataFrame({'stay_id': [1] * len(hours), 'charttime': hours, name: values}),
+                        id_columns=['stay_id'], index_column='charttime', value_column=name)
+
+    tables = {'map': table('map', [0., 1., 2., 3.], [80.] * 4),
+              'norepi60': table('norepi60', [0., 1., 2., 3.], [.2, 0., -.1, .05])}
+    if maximum_state != 'absent':
+        hours, values = ([1., 2., 3.], [.3, .3, .2]) if maximum_state == 'partial' else ([], [])
+        tables['norepi_rate_max'] = table('norepi_rate_max', hours, values)
+    result = cardio_max_tables(tables, SimpleNamespace(concept_name=score))
+    expected = [.2, 0., -.1, .2 if maximum_state == 'partial' else .05]
+    assert result['norepi60'].data.norepi60.tolist() == pytest.approx(expected)
+    # The adapter must not mutate the duration-qualified dependency.
+    assert tables['norepi60'].data.norepi60.tolist() == [.2, 0., -.1, .05]
+    ctx = ConceptCallbackContext(concept_name=score, target=None, interval=pd.Timedelta(hours=1),
+                                 resolver=None, data_source=None, patient_ids=None)
+    score_tables = dict(tables)
+    score_tables['norepi60'] = table('norepi60', [0., 1., 3.], [.2, 0., .05])
+    scored = CALLBACK_REGISTRY[score](score_tables, ctx).data
+    assert scored[score].notna().all()
+    assert scored.loc[scored.charttime == 0., score].item() == (4. if score == 'sofa_cardio' else 2.)
 
 
 @pytest.mark.parametrize('path', ['cv', 'eicu'])

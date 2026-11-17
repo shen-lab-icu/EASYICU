@@ -130,13 +130,20 @@ At an exact-time conflict a stop wins, otherwise the largest setting wins,
 so table order cannot select a different rate. The final positive setting of
 each sequence remains active for **one hour from its exact charttime**, as in
 ricu 0.6.3 `create_intervals(overhang = 1 h)` and EasyICU's previous rate path.
-A positive setting followed by a gap greater than five hours is the last
-setting of its episode and receives the same one-hour overhang; the gap does
-not erase it or carry it through the gap. The existing episode/stay end rules
+A CareVue positive setting followed by a gap greater than five hours receives
+the same one-hour overhang. eICU retains dev9's carry to the next setting,
+capped at six hours, including every hour whose start is at most five hours
+after the positive setting. Its values use the active-time mean over that
+carry, including partial hours and subsequent within-hour changes. The final
+eICU setting still receives only a one-hour overhang. The existing episode/stay end rules
 still truncate the result. Zero, explicit stop and invalid settings add no
 active time. This declared rate overhang does **not** supply observed episode
 duration: singleton duration stays NULL, duration episode inference and `*60`
 qualification stay unchanged.
+
+Coverage follows dev9 except for zero/stop rows, permitted point-carry hours
+more than five hours after the setting, and exact-clock positive/stop ties.
+Stops win those ties deterministically; dev9 selected by source row order.
 
 MetaVision, AUMC and SICdb retain their explicit interval endpoints. A newer
 setting of the same recorded order supersedes its predecessor at its start;
@@ -165,7 +172,9 @@ counterparts and take the maximum of the concurrent summed active dose.
 They are hidden from default export modules. SOFA-1 and SOFA-2 cardiovascular
 load the four dopamine/dobutamine/epinephrine/norepinephrine maxima and use
 `*60` only as the unchanged administration-duration gate. Existing `vaso60`
-and `*60` outputs remain unchanged. `norepi_equiv` sums its **hourly mean**
+and `*60` outputs remain unchanged. If a maximum companion is absent for an
+hour, the existing `*60` dose is retained. Nonpositive qualification rows are
+also retained and cannot be activated by a maximum. `norepi_equiv` sums its **hourly mean**
 components with the existing factors (including dopamine); no potency factor
 changes in S732TW.
 

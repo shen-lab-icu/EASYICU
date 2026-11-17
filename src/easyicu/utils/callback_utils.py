@@ -3174,9 +3174,10 @@ def units_to_unit(x: pd.Timedelta) -> str:
 def _eicu_expand_rate_hours(frame, id_col, time_col, concept_name):
     """Summarise hourly active settings; retain the legacy minute dependency path.
 
-    Hourly dose rates use next observations within five hours and a one-hour
-    terminal overhang. Legacy *60 dependencies retain their original six-hour
-    cap and one-hour overhang.
+    Hourly dose rates preserve dev9's six-hour carry cap before a later setting,
+    including every hour whose start is at most five hours after the setting.
+    Final settings keep a one-hour overhang. Legacy *60 dependencies retain
+    their original projection.
     """
     from ..concept.window_expansion import expand_wintbl_vectorized
 
@@ -3186,7 +3187,7 @@ def _eicu_expand_rate_hours(frame, id_col, time_col, concept_name):
         channel = next((c for c in ('infusionid', 'linkorderid', 'orderid') if c in frame), None)
         return point_rates(frame, ids=[id_col], index=time_col, value=concept_name,
                            hours=pd.to_numeric(frame[time_col], errors='coerce') / 60.,
-                           channel=channel, native_scale=60.)
+                           channel=channel, native_scale=60., gap_carry_hours=6.)
     work = frame[[id_col, time_col, concept_name]].copy()
     work[time_col] = pd.to_numeric(work[time_col], errors="coerce") / 60.
     work = work.dropna(subset=[time_col]).sort_values([id_col, time_col], kind="stable")

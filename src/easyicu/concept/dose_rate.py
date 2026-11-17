@@ -81,16 +81,17 @@ def interval_rates(frame, *, ids, index, value, starts, ends, native_scale=1., c
     return _finish(out, ids, index, value, native_scale)
 
 
-def point_rates(frame, *, ids, index, value, hours, channel=None, native_scale=1.):
+def point_rates(frame, *, ids, index, value, hours, channel=None, native_scale=1., gap_carry_hours=None):
     """Carry settings to the next point within five hours, with a one-hour tail.
 
-    Terminal positive settings, including those before an episode-breaking gap,
-    retain the ricu one-hour overhang. Stops and invalid settings only close.
+    Terminal positive settings retain the ricu one-hour overhang. An explicit
+    gap carry cap preserves the source owner's coverage before a later setting
+    across a long gap (eICU: six hours). Stops and invalid settings only close.
     Keep points until source concat so unit/label changes share one sequence.
     """
     out = frame.copy()
     out[START] = np.asarray(hours, dtype=float)
-    out[END] = np.nan
+    out[END] = np.nan if gap_carry_hours is None else out[START] + gap_carry_hours
     out[POINT] = True
     channel = channel or next((c for c in ('infusionid', 'linkorderid', 'orderid') if c in out), None)
     out[CHANNEL] = _channel_keys(out, channel)
@@ -115,7 +116,10 @@ def _point_spans(frame, ids, value):
         points = points.drop_duplicates([*keys, START], keep='last')
         nxt = points.groupby(keys, dropna=False)[START].shift(-1)
         gap = nxt - points[START]
-        points[END] = nxt.where(gap.gt(0) & gap.le(5.), points[START] + 1.)
+        tail = points[START] + 1.
+        carry = points[END].notna() & nxt.notna()
+        tail = tail.where(~carry, np.minimum(nxt, points[END]))
+        points[END] = nxt.where(gap.gt(0) & gap.le(5.), tail)
     return pd.concat([frame.loc[~point], points], ignore_index=True)
 
 

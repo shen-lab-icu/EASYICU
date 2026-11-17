@@ -8,6 +8,8 @@ def cardio_max_tables(tables, ctx):
     """Use max companions for dose, and *60 solely for qualification.
 
     Both SOFA generations keep their duration, threshold and support rules.
+    A missing maximum leaves the existing qualification dose available; zero
+    and negative qualification values never become active doses.
     Direct legacy callback callers without companions keep their old interface;
     the shipped dictionaries always declare all four max dependencies.
     """
@@ -26,11 +28,10 @@ def cardio_max_tables(tables, ctx):
         index = qualified.index_column
         keys = [*ids, index]
         if maximum.data.empty:
-            frame = qualified.data[keys + [name]].copy()
-            frame[name] = float('nan')
+            continue
         else:
             dose = maximum.data.rename(columns={maximum.index_column: index})
             frame = qualified.data[keys + [name]].merge(dose[keys + [companion]], on=keys, how='left')
-            frame[name] = frame[companion].where(frame[name].gt(0))
+            frame[name] = frame[companion].where(frame[name].gt(0) & frame[companion].notna(), frame[name])
         out[name] = ICUTable(frame[keys + [name]], id_columns=ids, index_column=index, value_column=name)
     return out
