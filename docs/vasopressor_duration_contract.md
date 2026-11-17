@@ -171,6 +171,14 @@ rate above the hourly validation threshold while retaining the same hour.
 Legacy-invalid hours remain excluded. This preserves coverage without
 changing dictionary thresholds or the minute/*60 source representation.
 
+The eICU units/min owner likewise retains dev9's hourly-median bounds mask,
+including stop rows in that legacy validation calculation. It does not apply
+an instantaneous bound to settings whose legacy hour was accepted. Internal
+mask rows pass through source concatenation but add no dose or active time;
+stops and exact-clock stop-wins ties still determine the actual spans. This
+preserves valid ADH hours and their norepinephrine equivalents without
+changing dictionary bounds or introducing a second clinical input source.
+
 The nine vasopressor/inotrope concepts additionally declare opt-in/internal
 `<concept>_max` companions. They share all source declarations with their mean
 counterparts and take the maximum of the concurrent summed active dose.

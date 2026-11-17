@@ -24,7 +24,8 @@ RATE_MAX_CONCEPTS = tuple(f'{name}_max' for name in sorted(DOSE_RATE_CONCEPTS)
 START, END, POINT = '_dose_start', '_dose_end', '_dose_point'
 CHANNEL = '_dose_channel'
 HOURLY_BOUNDED = '_dose_hourly_bounds_checked'
-SPAN_COLUMNS = (START, END, POINT, CHANNEL, HOURLY_BOUNDED)
+COVERAGE_ONLY = '_dose_coverage_only'
+SPAN_COLUMNS = (START, END, POINT, CHANNEL, HOURLY_BOUNDED, COVERAGE_ONLY)
 # None: direct utility caller; False: legacy minute/*60 path; True: capture
 # spans until all sources are combined; str: the direct source concept name.
 _CAPTURE: ContextVar[bool | str | None] = ContextVar('easyicu_dose_spans', default=None)
@@ -106,6 +107,48 @@ def _point_flags(frame):
     return frame[POINT].fillna(False).astype(bool)
 
 
+def eicu_units_rates(frame, *, ids, index, value, minimum=None, maximum=None):
+    """Validate the dev9 units/min hourly median before active integration.
+
+    The old units owner pooled setting and stop rows into an hourly median.
+    Its accepted-hour mask must not become an instantaneous-setting bound.
+    Coverage-only rows carry that mask through source concatenation; they
+    never contribute dose or active time, and cannot renew a stopped setting.
+    """
+    from ..utils.callback_utils import expand_intervals
+
+    if minimum is None and maximum is None:
+        return point_rates(frame, ids=ids, index=index, value=value,
+                           hours=frame[index] / 60., native_scale=60., gap_carry_hours=6.)
+    legacy = expand_intervals(frame, keep_vars=[value], id_cols=ids)
+    valid = legacy[value].notna()
+    if minimum is not None:
+        valid &= legacy[value].ge(minimum)
+    if maximum is not None:
+        valid &= legacy[value].le(maximum)
+    from ..source_bounds import record_read_counts, scope_active
+
+    if scope_active():
+        record_read_counts(database='eicu', concept=value, table='infusiondrug', stays=legacy[ids[0]].unique(),
+                           frame=pd.DataFrame({'stay': legacy[ids[0]], 'raw': legacy[value].notna().astype('int64'),
+                                               'bounded': valid.astype('int64')}),
+                           id_column='stay', raw_column='raw', bounded_column='bounded')
+    token = _CAPTURE.set(True)
+    try:
+        points = point_rates(frame, ids=ids, index=index, value=value,
+                             hours=frame[index] / 60., native_scale=60., gap_carry_hours=6.)
+    finally:
+        _CAPTURE.reset(token)
+    points[HOURLY_BOUNDED] = True
+    points[COVERAGE_ONLY] = False
+    grid = legacy.loc[valid, [*ids, index, value]].copy()
+    grid[START] = grid[index] / 60.
+    grid[END] = grid[START] + 1.
+    grid[POINT], grid[CHANNEL] = False, ''
+    grid[HOURLY_BOUNDED], grid[COVERAGE_ONLY] = True, True
+    return _finish(pd.concat([points, grid], ignore_index=True), ids, index, value, 60.)
+
+
 def _point_spans(frame, ids, value):
     point = _point_flags(frame)
     points = frame.loc[point].copy()
@@ -153,12 +196,23 @@ def collapse_spans(frame, *, ids, index, value, native_scale=None, minimum=None,
     """
     if START not in frame:
         return frame
+    coverage = frame[COVERAGE_ONLY].eq(True) if COVERAGE_ONLY in frame else pd.Series(False, index=frame.index)
+    allowed = frame.loc[coverage, [*ids, START]].rename(columns={START: '_dose_hour'}).drop_duplicates()
+    frame = frame.loc[~coverage]
     units = [c for c in ('rateuom', 'doseunit', 'unit', 'doserateunit') if c in frame]
     columns = [*ids, index, value, *units]
     if frame.empty:
         return frame.reindex(columns=columns)
     anchor = frame.loc[frame[index].notna() & np.isfinite(frame[START])].drop_duplicates(ids).set_index(ids)
-    work = _supersede_intervals(_point_spans(frame, ids, value), ids, value)
+    work = _point_spans(frame, ids, value)
+    bounded_points = _point_flags(work) & (work[HOURLY_BOUNDED].eq(True) if HOURLY_BOUNDED in work else False)
+    if bounded_points.any():
+        bounded = work.loc[bounded_points].copy()
+        bounded[index] = bounded[START]
+        bounded = _clip_to_bounded_hours(bounded, allowed, ids=ids, index=index)
+        bounded[START] = bounded[index]
+        work = pd.concat([work.loc[~bounded_points], bounded], ignore_index=True)
+    work = _supersede_intervals(work, ids, value)
     valid = np.isfinite(work[START]) & np.isfinite(work[END]) & work[END].gt(work[START])
     valid &= pd.to_numeric(work[value], errors='coerce').gt(0)
     bounded = work[HOURLY_BOUNDED].eq(True) if HOURLY_BOUNDED in work else pd.Series(False, index=work.index)
@@ -261,7 +315,7 @@ def _hirid_hourly_bounds(frame, *, id_col, index, value, output, weights, minimu
     return legacy.loc[valid, [id_col, '_time_bin']].rename(columns={'_time_bin': '_dose_hour'})
 
 
-def _clip_hirid_to_bounded_hours(frame, allowed, *, id_col, index):
+def _clip_to_bounded_hours(frame, allowed, *, ids, index):
     """Clip exact spans to accepted hours, retaining their active rate."""
     valid = np.isfinite(frame[index]) & np.isfinite(frame[END]) & frame[END].gt(frame[index])
     frame = frame.loc[valid]
@@ -274,7 +328,7 @@ def _clip_hirid_to_bounded_hours(frame, allowed, *, id_col, index):
     out[index] = np.maximum(starts[rows], hours)
     out[END] = np.minimum(ends[rows], hours + 1.)
     out['_dose_hour'] = hours
-    out = out.merge(allowed, on=[id_col, '_dose_hour'], how='inner', validate='many_to_one')
+    out = out.merge(allowed, on=[*ids, '_dose_hour'], how='inner', validate='many_to_one')
     out[HOURLY_BOUNDED] = True
     return out.drop(columns='_dose_hour')
 
@@ -309,7 +363,7 @@ def hirid_amount_spans(frame, *, id_col, index, value, output, unit_col, per_kg=
     out[index] = start
     if allowed is not None:
         out[END] = end
-        out = _clip_hirid_to_bounded_hours(out, allowed, id_col=id_col, index=index)
+        out = _clip_to_bounded_hours(out, allowed, ids=[id_col], index=index)
         start, end = out[index], out[END]
     else:
         if minimum is not None:

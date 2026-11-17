@@ -3324,6 +3324,8 @@ def _apply_callback_body(
             val_var=val_var,
             sub_var=sub_var,
             concept_name=concept_name,
+            value_min=_get_concept_bounds(concept_name, 'min'),
+            value_max=_get_concept_bounds(concept_name, 'max'),
         )
 
     # Handle eicu_rate_mass(target_unit = "mcg/hour") - non-kg mass-rate drugs

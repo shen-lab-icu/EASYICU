@@ -3458,6 +3458,8 @@ def eicu_rate_units_callback(
         val_var: str,
         sub_var: Optional[str],
         concept_name: str,
+        value_min: Optional[float] = None,
+        value_max: Optional[float] = None,
     ) -> pd.DataFrame:
         if frame.empty:
             return frame
@@ -3495,11 +3497,12 @@ def eicu_rate_units_callback(
         # never as a guessed units/min rate.
         work.loc[~work["unit_var"].str.lower().eq("units/min"), val_var] = np.nan
 
-        from ..concept.dose_rate import enabled
+        from ..concept.dose_rate import eicu_units_rates, enabled
 
         if enabled(concept_name) and 'infusionoffset' in work:
             work[concept_name] = work[val_var]
-            expanded = _eicu_expand_rate_hours(work, 'patientunitstayid', 'infusionoffset', concept_name)
+            expanded = eicu_units_rates(work, ids=['patientunitstayid'], index='infusionoffset',
+                                        value=concept_name, minimum=value_min, maximum=value_max)
             if val_var != concept_name:
                 expanded[val_var] = expanded[concept_name]
             return expanded

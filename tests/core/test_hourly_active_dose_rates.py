@@ -494,3 +494,28 @@ def test_hirid_legacy_hourly_bounds_preserve_coverage_before_active_time_mean(tm
         assert values[clock].tolist() == [0.]
         assert values[name].tolist() == pytest.approx([ceiling * 2])
         assert not any(c.startswith('_dose_') for c in data)
+
+
+def test_eicu_units_legacy_hourly_median_bounds_do_not_erase_active_dose(tmp_path):
+    from easyicu.concept import ConceptResolver
+    from easyicu.resources import load_dictionary
+    from tests.core.test_eicu_extraction_audit2 import _eicu_source
+
+    dictionary = load_dictionary()
+    ceiling = dictionary['adh_rate'].maximum
+    frame = pd.DataFrame({'infusionoffset': [0., 30., 120., 150.],
+                          'drugrate': [2 * ceiling, 0., 4 * ceiling, 0.],
+                          'drugname': 'Vasopressin (units/min)'})
+    source = _eicu_source(tmp_path, 'eicu', infusiondrug=frame)
+    result = ConceptResolver(dictionary).load_concepts(
+        ['adh_rate', 'adh_rate_max', 'norepi_equiv'], source, merge=False, r_compatible=False,
+        interval=pd.Timedelta(hours=1), patient_ids={'patientunitstayid': [1]},
+        concept_workers=1, verbose=False)
+    # dev9's medians are ceiling and 2*ceiling: only the first hour is valid.
+    # The first hour's active dose is 2*ceiling, with no active time after stop.
+    for name in ['adh_rate', 'adh_rate_max']:
+        data = result[name].data.dropna(subset=[name])
+        assert data.charttime.tolist() == [0.]
+        assert data[name].tolist() == pytest.approx([2 * ceiling])
+        assert not any(c.startswith('_dose_') for c in data)
+    assert result['norepi_equiv'].data.norepi_equiv.tolist() == pytest.approx([2 * ceiling / .4])

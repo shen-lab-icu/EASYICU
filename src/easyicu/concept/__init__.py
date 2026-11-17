@@ -6562,9 +6562,9 @@ class ConceptResolver:
                 else pd.Series(False, index=combined.index)
             )
             if HOURLY_BOUNDED in combined:
-                # HiRID source bounds retain dev9's hourly dose mask. The
-                # active-time mean has a different denominator and must not
-                # remove an already accepted source hour.
+                # Source owners retain dev9's hourly validation mask (HiRID
+                # mass/weight and eICU units/min medians). The active-time
+                # mean must not remove an already accepted source hour.
                 _sql_bounded_rows |= combined[HOURLY_BOUNDED].eq(True)
             if concept_name in combined.columns and not signed_sum_bounds:
                 if definition.minimum is not None or definition.maximum is not None:
