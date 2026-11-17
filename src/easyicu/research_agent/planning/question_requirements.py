@@ -13,6 +13,10 @@ dropped silently.
 
 What the host can verify, it verifies:
 
+* compound methods requests are judged clause by clause against recorded plan
+  statements and defaults with provenance; a missing clause alone is reported;
+* a question-named exposure needs an analysis owner, rather than a definition.
+  A single-exposure family leaves an explicit choice for the plan review;
 * typed delivery requirements are covered by the same product-file contract
   the browser downloads read, independently of statistical plan steps. Old
   untyped records use a conservative reader for complete delivery clauses;
@@ -136,7 +140,7 @@ MAX_NAMED_QUESTION_CONCEPTS = 8
 MAX_DENOTED_COLUMNS = 8
 
 RequirementKind = Literal["benchmark", "subgroup", "estimand", "analysis", "cohort_accounting", "definition", "delivery"]
-CoverageClaim = Literal["plan", "capability_gap", "definition_only"]
+CoverageClaim = Literal["plan", "capability_gap", "definition_only", "needs_choice"]
 Disposition = Literal[
     "covered", "not_covered", "capability_gap", "attested", "definition_only"
 ]
@@ -199,6 +203,15 @@ QUESTION_REQUIREMENTS_GUIDE = (
     "separate. The host covers these outputs independently of analysis steps; never "
     "declare them infeasible because the statistical plan does not generate files. "
     "For other requirements use deliverable_kinds=[]."
+    " Split compound analysis requirements into clauses, each quoting a distinct part of "
+    "the requirement's quote; use clauses=[] for an atomic requirement. "
+    "For an analysis of multiple question-named exposures, list every exposure "
+    "in analysis_exposures and concepts, including the primary. A definition "
+    "does not replace an exposure analysis. If this family cannot carry them "
+    "together, use coverage needs_choice: the review will ask whether to analyse "
+    "both, keep the current primary with the other secondary, or keep only the "
+    "primary. Never choose a narrower question for the user. For other items "
+    "use analysis_exposures=[]."
 )
 
 
@@ -402,11 +415,23 @@ class QuestionRequirement(BaseModel):
     deliverable_kinds: list[DeliverableKind] = Field(
         default_factory=list, max_length=5, exclude_if=lambda value: not value
     )
+    clauses: list[str] = Field(
+        default_factory=list, max_length=12, exclude_if=lambda value: not value
+    )
+    analysis_exposures: list[str] = Field(
+        default_factory=list, max_length=MAX_REQUIREMENT_CONCEPTS,
+        exclude_if=lambda value: not value,
+    )
 
     @field_validator("quote")
     @classmethod
     def _collapse_quote(cls, value: str) -> str:
         return _words(value)
+
+    @field_validator("clauses")
+    @classmethod
+    def _collapse_clauses(cls, values: list[str]) -> list[str]:
+        return [_words(value) for value in values]
 
     @field_validator("note")
     @classmethod
@@ -445,6 +470,29 @@ class QuestionRequirement(BaseModel):
             raise ValueError("only a delivery requirement names distinct deliverable kinds")
         if self.kind == "delivery" and (concepts or (self.gap and self.gap.concept)):
             raise ValueError("a delivery requirement names outputs, not scientific concepts")
+        if self.clauses and (
+            self.kind != "analysis" or len(set(self.clauses)) != len(self.clauses)
+            or any(not clause.strip() or not quote_written_in(clause, "question", (self.quote,))
+                   for clause in self.clauses)
+        ):
+            raise ValueError("analysis clauses must quote distinct parts of their requirement")
+        if self.clauses:
+            remainder = self.quote
+            for clause in self.clauses:
+                remainder = re.sub(re.escape(clause), " ", remainder, flags=re.IGNORECASE)
+            remainder = _METHOD_REQUEST.sub("", remainder.strip())
+            if re.sub(r"\b(?:and|or|the|also)\b|以及|及|与|并|[\s、,，;；。.:：]+", "", remainder, flags=re.IGNORECASE):
+                raise ValueError("clauses must account for the complete requirement quote")
+        if self.analysis_exposures and (
+            self.kind != "analysis"
+            or len(set(self.analysis_exposures)) != len(self.analysis_exposures)
+            or not set(self.analysis_exposures) <= set(concepts)
+        ):
+            raise ValueError("analysis exposures must be distinct concepts of that analysis")
+        if self.coverage == "needs_choice" and (
+            self.kind != "analysis" or len(self.analysis_exposures) < 2
+        ):
+            raise ValueError("an exposure choice names at least two analysis exposures")
         if (
             self.kind in {"benchmark", "subgroup", "cohort_accounting"}
             and self.coverage == "plan"
@@ -661,6 +709,8 @@ class JudgedRequirement:
     #: on, never an owner.
     reading_step_ids: tuple[str, ...] = ()
     delivery: Optional[Mapping[str, Any]] = None
+    clauses: tuple[Mapping[str, Any], ...] = ()
+    exposure_choice: Optional[Mapping[str, Any]] = None
 
     @property
     def verified_by_host(self) -> bool:
@@ -692,6 +742,8 @@ class JudgedRequirement:
             # of every other requirement keep their recorded bytes.
             **({"effect_measure": item.effect_measure} if item.effect_measure else {}),
             **({"delivery": dict(self.delivery)} if self.delivery is not None else {}),
+            **({"clauses": list(self.clauses)} if self.clauses else {}),
+            **({"exposure_choice": dict(self.exposure_choice)} if self.exposure_choice else {}),
         }
 
 
@@ -715,6 +767,286 @@ _TEMPLATE_GAPS: Mapping[str, tuple[CapabilityGapElement, str]] = MappingProxyTyp
 )
 
 
+_METHOD_REQUEST = re.compile(
+    r"^(?:明确|说明|列明|写明|定义|交代|(?:specify|state|document|define|clarify)\b)\s*",
+    re.IGNORECASE,
+)
+_METHOD_FACETS = {
+    "window": r"时间窗|测量窗|观察窗|\bwindow\b|\btime zero\b",
+    "unit": r"单位|\bunits?\b",
+    "grading": r"分级|评分规则|\bgrading\b|\bthresholds?\b",
+    "covariates": r"协变量|调整集|\bcovariates?\b|\badjustment set\b",
+    "repeated_stays": r"重复入住|重复入院|\brepeat(?:ed)?[ -](?:icu[ -])?(?:stay|admission)s?\b",
+}
+_DEFAULT_CLAIM = re.compile(r"\b(?:host|system)(?:'s)?\s+defaults?\b|(?:宿主|系统)(?:默认|缺省)", re.IGNORECASE)
+
+
+def requirement_clauses(item: QuestionRequirement) -> tuple[str, ...]:
+    """Read explicit clause spans; conservatively support older methods lists.
+
+    Scientific conjunctions are never inferred to be methods statements. An
+    unknown member of a methods list is retained, so a familiar clause cannot
+    hide an unanswered one.
+    """
+    if item.kind != "analysis" or item.gap or item.analysis_exposures:
+        return ()
+    match = _METHOD_REQUEST.match(item.quote)
+    if not match or not any(re.search(p, item.quote, re.IGNORECASE) for p in _METHOD_FACETS.values()):
+        return tuple(item.clauses)
+    text = item.quote[match.end():]
+    return tuple(
+        clause for part in re.split(r"[、,，;；]|以及|与|及|\band\b", text, maxsplit=11)
+        if (clause := part.strip(" 。.;；"))
+    )
+
+
+def question_requirement_host_facts(
+    *, context: ResearchContext, plan: AnalysisPlan,
+    requirements: Sequence[QuestionRequirement],
+) -> tuple[dict[str, Any], ...]:
+    """Snapshot declared methods and registered defaults with their provenance.
+
+    These are plan-review facts, not permission to execute a clinical rule.
+    A later review needs no mutable context or registry: the source and the
+    exact plan on which the default was recorded travel in the planning record.
+    """
+    if not any(requirement_clauses(item) for item in requirements):
+        return ()
+    facts: list[dict[str, Any]] = []
+    digest = analysis_plan_sha256(plan)
+
+    def add(facet: str, concepts: Sequence[str], source_ref: str, statement: Any) -> None:
+        facts.append({
+            "facet": facet, "concepts": list(concepts), "source": "host_default",
+            "source_ref": source_ref, "statement": statement, "plan_sha256": digest,
+        })
+
+    for variable in context.variables:
+        source = f"research_context.json.variables[{variable.name}]"
+        if variable.unit:
+            add("unit", [variable.name], source + ".unit", variable.unit)
+        if variable.analysis_window:
+            add("window", [variable.name], source + ".analysis_window", variable.analysis_window)
+        definition = getattr(variable, "clinical_definition", None)
+        if definition and definition.source_id and definition.contract_id:
+            add("grading", [variable.name], source + ".clinical_definition", {
+                "contract_id": definition.contract_id, "version": definition.version,
+                "definition": definition.definition, "source_id": definition.source_id,
+                "validation_status": definition.validation_status,
+            })
+    preferences = context.user_preferences
+    if preferences:
+        for spec in preferences.sensitivity_specs:
+            if spec.strategy == "landmark" and spec.landmark_hours is not None:
+                add("window", [context.primary_exposure] if context.primary_exposure else [],
+                    f"research_context.json.user_preferences.sensitivity_specs[{spec.spec_id}]",
+                    {"landmark_hours": spec.landmark_hours, "strategy": spec.strategy})
+        try:
+            constraints = json.loads(preferences.data_constraints or "{}")
+        except (ValueError, TypeError):
+            constraints = {}
+        if isinstance(constraints, Mapping):
+            design = constraints.get("analysis_design")
+            grouping = constraints.get("verified_patient_grouping")
+            if (
+                isinstance(design, Mapping) and isinstance(grouping, Mapping)
+                and design.get("analysis_unit") == "icu_stay"
+                and design.get("cluster_unit") == "patient"
+                and design.get("variance_estimator") == "cluster_robust"
+                and grouping.get("authority_ref")
+                and re.fullmatch(r"[0-9a-f]{64}", str(grouping.get("mapping_sha256", "")))
+            ):
+                add("repeated_stays", [],
+                    "research_context.json.user_preferences.data_constraints.analysis_design", {
+                    "analysis_design": dict(design), "grouping": dict(grouping),
+                    "policy": "retain_each_stay_cluster_by_patient",
+                })
+    proposal = plan.adjustment_proposal
+    if proposal and proposal.source_step_id in {step.step_id for step in plan.steps}:
+        add("covariates", [], "analysis_plan.json.adjustment_proposal", proposal.model_dump(mode="json"))
+    # Read the existing clinical owner registry, never recreate score thresholds.
+    grading_concepts = {
+        concept for item in requirements
+        if re.search(_METHOD_FACETS["grading"], item.quote, re.IGNORECASE)
+        for concept in item.concepts
+    }
+    recorded_grading = {name for fact in facts if fact["facet"] == "grading" for name in fact["concepts"]}
+    if grading_concepts - recorded_grading:
+        from easyicu.clinical_contracts import load_clinical_contracts
+
+        for contract in load_clinical_contracts().values():
+            columns = [
+                variable.name for variable in context.variables
+                if variable.name in grading_concepts
+                and variable.name not in recorded_grading
+                and (variable.source_concept or variable.name) in contract.concepts
+            ]
+            if columns and contract.source_id and contract.reference_implementation:
+                add("grading", columns, f"clinical_contract:{contract.contract_id}@{contract.version}", {
+                    "definition": contract.definition, "source_id": contract.source_id,
+                    "source_table": contract.source_table,
+                    "reference_implementation": contract.reference_implementation,
+                    "validation_status": contract.validation_status,
+                    "contract_id": contract.contract_id,
+                    "depends_on_contracts": list(contract.depends_on_contracts),
+                })
+    return tuple(facts)
+
+
+def _fact_matches_clause(fact: Mapping[str, Any], clause: str, facet: str) -> bool:
+    """A generic default does not override a value or restriction the user stated."""
+    statement = json.dumps(fact["statement"], ensure_ascii=False).casefold()
+    if facet == "repeated_stays" and re.search(r"\bfirst\b|首次|首住|第一次", clause, re.IGNORECASE):
+        if not isinstance(fact["statement"], Mapping) or fact["statement"].get("policy") != "first_stay_only":
+            return False
+    values = {float(value) for value in re.findall(r"\d+(?:\.\d+)?", clause)}
+    recorded = {float(value) for value in re.findall(
+        r"\d+(?:\.\d+)?", statement + " " + " ".join(fact.get("concepts", ())),
+    )}
+    if not values <= recorded:
+        return False
+    if facet == "unit":
+        unit = r"[a-zµμ]+/[a-zµμ]+"
+        requested_units = set(re.findall(unit, clause.casefold()))
+        if not requested_units <= set(re.findall(unit, statement)):
+            return False
+    return True
+
+
+def _judge_clauses(
+    item: QuestionRequirement, *, requirements: Sequence[QuestionRequirement],
+    plan: AnalysisPlan, host_facts: Sequence[Mapping[str, Any]],
+) -> tuple[dict[str, Any], ...]:
+    clauses = requirement_clauses(item)
+    if not clauses:
+        return ()
+    rows = []
+    digest = analysis_plan_sha256(plan) if host_facts else ""
+    for index, clause in enumerate(clauses):
+        # A bare "units" inherits the previous window's subject; another
+        # variable's unit statement must not accidentally answer this clause.
+        sources = [
+            other for other in requirements if other.id != item.id and not other.gap
+            and len(other.quote) < len(item.quote)
+            and other.note and other.coverage in {"plan", "definition_only"}
+            and _words(clause).casefold() in _words(other.quote).casefold()
+            and (not index or clause.casefold() not in {"unit", "units", "单位"}
+                 or not other.concepts
+                 or _words(clauses[index - 1]).casefold() in _words(other.quote).casefold())
+        ]
+        concepts = {concept for source in sources for concept in source.concepts} or set(item.concepts)
+        facet = next((key for key, pattern in _METHOD_FACETS.items()
+                      if re.search(pattern, clause, re.IGNORECASE)), None)
+        candidates = [dict(value) for value in host_facts if (
+            facet is not None and value.get("facet") == facet
+            and isinstance(value.get("source_ref"), str) and value["source_ref"].strip()
+            and value.get("statement") and value.get("plan_sha256") == digest
+            and (not value.get("concepts") or concepts.intersection(value["concepts"]))
+            and _fact_matches_clause(value, clause, facet)
+        )]
+        if facet == "grading":
+            # Prefer a component's own rule over an aggregate that depends on
+            # that same component, without naming any particular score.
+            contract_ids = {value["statement"].get("contract_id") for value in candidates
+                            if isinstance(value["statement"], Mapping)}
+            candidates = [value for value in candidates if not (
+                isinstance(value["statement"], Mapping)
+                and contract_ids.intersection(value["statement"].get("depends_on_contracts", ()))
+            )]
+        fact = next(iter(candidates), None)
+        stated = next((source for source in sources if not _DEFAULT_CLAIM.search(source.note or "")), None)
+        evidence = fact or ({
+            "source": "plan_declared", "source_ref": f"question_requirements.json.stated[{stated.id}]",
+            "statement": stated.note,
+        } if stated else _plan_clause_statement(plan, clause))
+        rows.append({
+            "quote": clause, "disposition": "covered" if evidence else "not_covered",
+            "evidence": evidence,
+        })
+    return tuple(rows)
+
+
+def _plan_clause_statement(plan: AnalysisPlan, clause: str) -> dict[str, str] | None:
+    """Credit an actual plan statement, retaining the field it was read from."""
+    statements = [(f"analysis_plan.json.steps[{step.step_id}].intent", getattr(step, "intent", "")) for step in plan.steps]
+    if getattr(plan, "design_selection", None):
+        statements.extend(
+            (f"analysis_plan.json.design_selection.candidates[{candidate.design_id}].reviewable_plan[{index}]", text)
+            for candidate in plan.design_selection.candidates if candidate.disposition == "selected"
+            for index, text in enumerate(candidate.reviewable_plan or ())
+        )
+    for source, statement in statements:
+        if _words(clause).casefold() in _words(statement).casefold() and not _DEFAULT_CLAIM.search(statement) and not re.search(
+            r"\b(?:no|not|never|cannot|without|unsupported)\b|不(?:做|进行|支持|可)|未(?:计划|安排)",
+            statement, re.IGNORECASE,
+        ):
+            return {"source": "plan_declared", "source_ref": source, "statement": statement}
+    return None
+
+
+def question_analysis_exposures(
+    item: QuestionRequirement, requirements: Sequence[QuestionRequirement],
+    *, sealed: Sequence[str],
+) -> tuple[str, ...]:
+    """The exposures this analysis asks to study, retaining old definition demotions.
+
+    New specs name their exposure roles explicitly. The legacy reader requires
+    a joint association requirement with both sealed coordinates, plus a
+    separate definition-only demotion; it never treats every covariate as an
+    exposure merely because a model reads it.
+    """
+    if item.kind != "analysis" or item.gap:
+        return ()
+    if len(item.analysis_exposures) > 1:
+        return tuple(item.analysis_exposures)
+    if len(sealed) != 2 or not set(sealed) <= set(item.concepts):
+        return ()
+    if not re.search(r"association|relationship|against|关联|关系", item.quote, re.IGNORECASE):
+        return ()
+    defined = {concept for other in requirements if other.kind == "definition" for concept in other.concepts}
+    additional = [concept for concept in item.concepts if concept in defined and concept not in sealed]
+    return (sealed[0], *additional) if additional else ()
+
+
+def _judge_exposures(
+    item: QuestionRequirement, exposures: Sequence[str], *, plan: AnalysisPlan,
+    sealed: Sequence[str], relatives: Callable[[str], frozenset[str]],
+) -> JudgedRequirement:
+    outcome = sealed[1] if len(sealed) == 2 else (plan.endpoint.name if plan.endpoint else "")
+    owners: dict[str, tuple[str, ...]] = {}
+    for exposure in exposures:
+        columns = relatives(exposure)
+        owners[exposure] = tuple(step.step_id for step in plan.steps if (
+            step.planned_analysis_role in ANALYSIS_ROLES
+            and any(req.exposure_source in columns and req.outcome == outcome
+                    and req.analysis_role == step.planned_analysis_role
+                    and req.exposure_source in step.inputs and req.outcome in step.inputs
+                    and req.required_for_step_success
+                    for req in step.model_requirements)
+        ) or (
+            len(sealed) == 2 and exposure == sealed[0]
+            and step.planned_analysis_role == "primary" and step.runtime_outcome_contract is not None
+            and step.runtime_outcome_contract.owner_ref in step.icu_rule_refs
+            and outcome in step.runtime_outcome_contract.outcomes
+            and str(step.method or "").startswith("signed_")
+            and exposure in step.inputs
+        ))
+    if item.coverage != "needs_choice" and all(owners.values()):
+        return JudgedRequirement(item, "covered", "typed_plan_owner_present",
+                                 tuple(dict.fromkeys(owner for group in owners.values() for owner in group)),
+                                 host_judged=True)
+    primary = sealed[0] if sealed and sealed[0] in exposures else exposures[0]
+    return JudgedRequirement(
+        item, "not_covered", "question_named_exposure_choice_required", host_judged=True,
+        exposure_choice={
+            "primary_exposure": primary,
+            "additional_exposures": [name for name in exposures if name != primary],
+            "options": ["analyse_both", "primary_and_secondary", "only_primary"],
+            "question": "Analyse both, keep the current primary and the other secondary, or analyse only the current primary?",
+        },
+    )
+
+
 def judge_question_requirements(
     requirements: Iterable[QuestionRequirement],
     *,
@@ -723,13 +1055,18 @@ def judge_question_requirements(
     relatives: Callable[[str], frozenset[str]],
     check_gap: GapCheck,
     sealed_owner_concepts: Mapping[str, Collection[str]] | None = None,
+    host_facts: Sequence[Mapping[str, Any]] = (),
+    sealed: Sequence[str] = (),
 ) -> tuple[JudgedRequirement, ...]:
     """Decide how the compiled plan answers each stated requirement.
 
     ``sealed_owner_concepts`` maps a sealed owner's method to the concepts it
-    analyses through its authority, which its inputs do not name.
+    analyses through its authority, which its inputs do not name. Methods
+    clauses read recorded statements and digest-bound ``host_facts``; they
+    never grant an analysis owner to a scientific claim.
     """
 
+    requirements = tuple(requirements)
     return tuple(
         _judge(
             item,
@@ -738,6 +1075,7 @@ def judge_question_requirements(
             relatives=relatives,
             check_gap=check_gap,
             sealed_owner_concepts=sealed_owner_concepts or {},
+            requirements=requirements, host_facts=host_facts, sealed=sealed,
         )
         for item in requirements
     )
@@ -751,6 +1089,9 @@ def _judge(
     relatives: Callable[[str], frozenset[str]],
     check_gap: GapCheck,
     sealed_owner_concepts: Mapping[str, Collection[str]],
+    requirements: Sequence[QuestionRequirement],
+    host_facts: Sequence[Mapping[str, Any]],
+    sealed: Sequence[str],
 ) -> JudgedRequirement:
     delivery = requirement_delivery_coverage(item)
     if delivery is not None:
@@ -758,6 +1099,17 @@ def _judge(
             item, "covered", HOST_DELIVERY_REASON, host_judged=True,
             gap=item.gap, verification="unverified" if item.gap else None,
             fact=str(delivery["reason"]), delivery=delivery,
+        )
+    exposures = question_analysis_exposures(item, requirements, sealed=sealed)
+    if exposures:
+        return _judge_exposures(item, exposures, plan=plan, sealed=sealed, relatives=relatives)
+    clauses = _judge_clauses(item, requirements=requirements, plan=plan, host_facts=host_facts)
+    if clauses:
+        complete = all(row["disposition"] == "covered" for row in clauses)
+        return JudgedRequirement(
+            item, "covered" if complete else "not_covered",
+            "question_methods_clauses_covered" if complete else QUESTION_REQUIREMENT_APPROVAL_STOPS["not_covered"],
+            host_judged=True, clauses=clauses,
         )
     denoted = [relatives(concept) for concept in item.concepts]
     analysing = [
@@ -1166,6 +1518,19 @@ def _coverage(
         if entry.disposition not in status:
             continue
         item = entry.requirement
+        if entry.clauses:
+            for index, clause in enumerate(entry.clauses, 1):
+                evidence = clause["evidence"]
+                records.append(PlanRequirementCoverageRecord(
+                    requirement_id=f"question:{item.id}:clause:{index}",
+                    kind="question", question_kind=item.kind,
+                    concept_identity=f"{item.id}:clause:{index}",
+                    source_ref="research_context.json.research_question",
+                    status=status[clause["disposition"]],
+                    statement_ref=str(evidence["source_ref"]) if evidence else None,
+                    reason_code="question_method_clause_stated" if evidence else QUESTION_REQUIREMENT_APPROVAL_STOPS["not_covered"],
+                ))
+            continue
         delivery_kinds = entry.delivery["deliverable_kinds"] if entry.delivery else ()
         for concept in delivery_kinds or item.concepts or [item.id]:
             records.append(
@@ -1251,7 +1616,7 @@ def question_requirement_findings(
                     "reason": reason,
                     "human_review_required": True,
                     "approval_allowed": False,
-                    "requirements": [entry.row() for entry in rows],
+                    "requirements": [row for entry in rows for row in _unanswered_rows(entry)],
                 },
             )
         )
@@ -1362,6 +1727,16 @@ def question_requirement_findings(
 
 def _stated(entry: JudgedRequirement) -> str:
     item = entry.requirement
+    if entry.clauses:
+        return " ".join(
+            f"{item.id} {clause['quote']!r}: no recorded statement or host default answers this clause."
+            for clause in entry.clauses if clause["disposition"] != "covered"
+        )
+    if entry.exposure_choice:
+        choice = entry.exposure_choice
+        return (f"{item.id} {item.quote!r}: {choice['question']} "
+                f"Primary: {choice['primary_exposure']}; additional: "
+                + ", ".join(choice["additional_exposures"]) + ".")
     why = (
         entry.gap.detail
         if entry.gap is not None and entry.gap.detail
@@ -1379,6 +1754,16 @@ def _stated(entry: JudgedRequirement) -> str:
     )
     # A gap's detail is a sentence of its own: the line ends with one full stop.
     return f"{item.id} {item.quote!r} ({item.kind}): {why.rstrip(' .。')}."
+
+
+def _unanswered_rows(entry: JudgedRequirement | EffectMeasureJudgment) -> list[dict[str, Any]]:
+    row = entry.row()
+    if isinstance(entry, JudgedRequirement) and entry.clauses:
+        return [
+            {**row, "quote": clause["quote"], "parent_quote": entry.requirement.quote}
+            for clause in entry.clauses if clause["disposition"] != "covered"
+        ]
+    return [row]
 
 
 def analysis_plan_sha256(plan: AnalysisPlan) -> str:
@@ -1401,6 +1786,7 @@ def question_requirements_record(
     stated_measures: Sequence[StatedEffectMeasure] = (),
     measures: Sequence[EffectMeasureJudgment] = (),
     sealed_owner_concepts: Mapping[str, Collection[str]] | None = None,
+    host_facts: Sequence[Mapping[str, Any]] = (),
 ) -> dict[str, Any]:
     """The run's record of what the question asked and how the compiled plan answers it.
 
@@ -1428,6 +1814,7 @@ def question_requirements_record(
         # Only a run with a sealed owner carries it, so every other record
         # keeps its bytes; a record without it credits no sealed owner.
         **({"sealed_owner_concepts": owner_concepts} if owner_concepts else {}),
+        **({"host_facts": [dict(fact) for fact in host_facts]} if host_facts else {}),
         # Always present on a record this owner writes, so a plan under review
         # is judged on it; a record written before it was read lacks it.
         "question_effect_measures": [item.row() for item in stated_measures],
@@ -1493,6 +1880,9 @@ def judge_recorded_requirements(
             for concept, columns in dict(record["denoted_columns"]).items()
         }
         sealed = tuple(str(value) for value in record["sealed"])
+        host_facts = record.get("host_facts", [])
+        if not isinstance(host_facts, list) or not all(isinstance(fact, Mapping) for fact in host_facts):
+            raise ValueError("its host facts are not a list of recorded statements")
         owner_concepts = record.get("sealed_owner_concepts", {})
         if not isinstance(owner_concepts, Mapping) or not all(
             isinstance(concepts, list) for concepts in owner_concepts.values()
@@ -1548,6 +1938,7 @@ def judge_recorded_requirements(
         relatives=lambda column: denoted[column],
         check_gap=lambda gap: checks[_gap_key(gap)],
         sealed_owner_concepts=sealed_owner_concepts,
+        host_facts=host_facts, sealed=sealed,
     )
     unstated = (
         ()
@@ -1697,7 +2088,7 @@ def question_requirements_schema(
             "additionalProperties": False,
             "required": [
                 "id", "kind", "quote", "concepts", "coverage", "gap", "note",
-                "deliverable_kinds",
+                "deliverable_kinds", "clauses", "analysis_exposures",
                 *(["effect_measure"] if effect_measures else []),
             ],
             "properties": {
@@ -1716,9 +2107,11 @@ def question_requirements_schema(
                 "deliverable_kinds": {
                     "type": "array", "items": {"type": "string", "enum": list(get_args(DeliverableKind))},
                 },
+                "clauses": {"type": "array", "items": {"type": "string"}},
+                "analysis_exposures": {"type": "array", "items": concept},
                 "coverage": {
                     "type": "string",
-                    "enum": ["plan", "capability_gap", "definition_only"],
+                    "enum": list(get_args(CoverageClaim)),
                 },
                 "gap": {"anyOf": [gap, {"type": "null"}]},
                 "note": {"anyOf": [{"type": "string"}, {"type": "null"}]},
@@ -1758,7 +2151,9 @@ def question_requirements_shape(
         + json.dumps(list(concepts), ensure_ascii=False)
         + '], "deliverable_kinds": [0-5 distinct kinds from '
         + json.dumps(list(get_args(DeliverableKind)))
-        + '], "coverage": "plan"|"capability_gap"|"definition_only", "gap": null or '
+        + '], "clauses": [distinct quoted parts of this requirement, or []], '
+        '"analysis_exposures": [distinct exposure names from concepts, or []], '
+        '"coverage": "plan"|"capability_gap"|"definition_only"|"needs_choice", "gap": null or '
         '{"requirement": <one of '
         + ", ".join(get_args(CapabilityGapRequirement))
         + '>, "concept": "<the threshold variable or stated adjustment>" or null, "element": <one '
@@ -1824,6 +2219,9 @@ __all__ = [
     "outline_route_unstated",
     "question_requirement_coverage",
     "question_requirement_findings",
+    "question_requirement_host_facts",
+    "question_analysis_exposures",
+    "requirement_clauses",
     "question_effect_measures",
     "question_requirement_problems",
     "question_requirements_on_plan_under_review",

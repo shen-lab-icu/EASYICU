@@ -46,6 +46,9 @@ class PlanRequirementCoverageRecord(BaseModel):
     status: RequirementCoverageStatus
     owner_step_ids: tuple[str, ...] = ()
     delivery_kind: Optional[DeliverableKind] = Field(default=None, exclude_if=lambda value: value is None)
+    statement_ref: Optional[str] = Field(
+        default=None, min_length=3, max_length=512, exclude_if=lambda value: value is None,
+    )
     reason_code: str = Field(min_length=3, max_length=160)
 
     @model_validator(mode="after")
@@ -59,8 +62,14 @@ class PlanRequirementCoverageRecord(BaseModel):
             or self.concept_identity != self.delivery_kind
         ):
             raise ValueError("host delivery covers only its typed output, independently of steps")
-        if self.status == "covered" and not (self.owner_step_ids or self.delivery_kind):
-            raise ValueError("covered requirement must name an owner step or host delivery kind")
+        if self.statement_ref is not None and (
+            self.kind != "question" or self.question_kind != "analysis"
+            or self.status != "covered" or self.owner_step_ids or self.delivery_kind
+            or self.reason_code != "question_method_clause_stated"
+        ):
+            raise ValueError("a methods statement covers only its recorded question clause")
+        if self.status == "covered" and not (self.owner_step_ids or self.delivery_kind or self.statement_ref):
+            raise ValueError("covered requirement must name an owner step or host delivery kind or a recorded methods statement")
         if self.status != "covered" and self.owner_step_ids:
             raise ValueError("uncovered requirement cannot name an owner step")
         if (self.kind == "question") != (self.question_kind is not None):
@@ -101,7 +110,7 @@ def with_requirement_data_availability(
         record.model_copy(update={
             "status": "unsupported", "owner_step_ids": (),
             "reason_code": REQUESTED_CONCEPT_NO_DATA,
-        }) if not record.delivery_kind and context_columns_without_data(context, (record.concept_identity,)) else record
+        }) if not (record.delivery_kind or record.statement_ref) and context_columns_without_data(context, (record.concept_identity,)) else record
         for record in coverage.records
     )
     return coverage.model_copy(update={

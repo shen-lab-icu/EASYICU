@@ -38,6 +38,53 @@ _PATH = "cohort.population_spec.criteria[1].quote"
 _REASON = "progressive_population_quote_not_verbatim"
 
 
+def _two_exposure_answer(*, needs_choice=False):
+    context = _context()
+    quote = "Assess the association of injury stage and a companion marker against in-hospital death"
+    context = context.model_copy(update={"research_question": context.research_question + ". " + quote})
+    payload = _spec_payload(_request(context))
+    payload["question_requirements"] = [
+        {"id": "r1", "kind": "definition", "quote": "a companion marker",
+         "concepts": ["severity_score_24h"], "coverage": "definition_only", "gap": None,
+         "note": "Used only as a definition; injury stage remains the primary exposure."},
+        {"id": "r2", "kind": "analysis", "quote": quote,
+         "concepts": ["injury_stage", "severity_score_24h", "death"],
+         "coverage": "needs_choice" if needs_choice else "plan", "gap": None,
+         "note": "The current family has one primary exposure.",
+         **({"analysis_exposures": ["injury_stage", "severity_score_24h"]} if needs_choice else {})},
+    ]
+    return context, json.dumps(payload)
+
+
+def test_m1_a_definition_demoted_exposure_retries_then_becomes_an_explicit_choice(monkeypatch):
+    monkeypatch.setattr(progressive_planner, "_MAX_STEP_PARSE_RETRIES", 1)
+    context, bad = _two_exposure_answer()
+    _, repaired = _two_exposure_answer(needs_choice=True)
+    llm = ScriptedMockLLMClient([bad, repaired])
+    result = _run(llm, context)
+
+    assert len(llm.calls) == 2
+    feedback = llm.calls[1][0][-1].content
+    assert "progressive_question_named_exposure_demoted" in feedback
+    assert "needs_choice" in feedback
+    assert result.facts.question_requirements[-1].coverage == "needs_choice"
+    assert result.facts.question_requirements[-1].analysis_exposures == [
+        "injury_stage", "severity_score_24h",
+    ]
+
+
+def test_m1_exhausting_the_existing_retry_budget_keeps_an_exposure_choice(monkeypatch):
+    monkeypatch.setattr(progressive_planner, "_MAX_STEP_PARSE_RETRIES", 1)
+    context, bad = _two_exposure_answer()
+    llm = ScriptedMockLLMClient([bad, bad])
+    result = _run(llm, context)
+
+    assert len(llm.calls) == 2
+    assert result.facts.prompt_metrics["question_exposure_choice_fallback"] == {
+        "r2": ["injury_stage", "severity_score_24h"],
+    }
+
+
 def _run(llm, context, **kwargs):
     return progressive_planner.ProgressivePlannerAgent(llm).run_attempt(
         context,

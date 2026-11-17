@@ -196,6 +196,23 @@ def _tables(html: str) -> list[list[list[str]]]:
     return tables
 
 
+def test_m1_the_raw_reader_shows_clause_provenance_and_the_exposure_choice():
+    record = _record(judged=[])
+    record["judged"] = [
+        {"id": "r1", "kind": "analysis", "quote": "Specify units", "disposition": "covered",
+         "verified_by_host": True, "clauses": [
+             {"quote": "units", "disposition": "covered", "evidence": {"source_ref": "host:unit<source>"}},
+         ]},
+        {"id": "r2", "kind": "analysis", "quote": "Analyse both markers", "disposition": "not_covered",
+         "verified_by_host": True, "exposure_choice": {
+             "primary_exposure": "marker_a", "additional_exposures": ["marker_b"],
+         }},
+    ]
+    html = _render(QUESTION_REQUIREMENTS_REVIEW_FILENAME, record)
+    assert "host:unit&lt;source&gt;" in html and "host:unit<source>" not in html
+    assert "两者都分析" in html and "请在对话中选择" in html
+
+
 def test_each_requirement_reads_with_its_disposition_reason_and_source(
     tmp_path: Path,
 ) -> None:

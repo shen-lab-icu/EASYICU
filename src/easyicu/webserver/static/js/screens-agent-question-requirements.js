@@ -95,6 +95,23 @@
   function reasonCell(row, levels) {
     const reading = names(row.reading_step_ids);
     const gap = row.gap && typeof row.gap === 'object' ? row.gap : null;
+    if (Array.isArray(row.clauses) && row.clauses.length) {
+      return row.clauses.map(clause => {
+        const quote = clip(clause.quote, QUOTE_LIMIT);
+        const source = clause.evidence && clip(clause.evidence.source_ref, 240);
+        return source
+          ? tr(`${quote}: stated in ${source}`, `${quote}：已记录于 ${source}`)
+          : tr(`${quote}: no recorded statement or host default`, `${quote}：缺少计划声明或有来源的宿主默认规则`);
+      }).join('; ');
+    }
+    if (row.exposure_choice) {
+      const primary = clip(row.exposure_choice.primary_exposure, 128);
+      const others = names(row.exposure_choice.additional_exposures);
+      return tr(
+        `Choose in the conversation: analyse both; ${primary} primary and ${others} secondary; or only ${primary}. Approval waits for the revised plan.`,
+        `请在对话中选择：两者都分析；${primary} 为主要暴露、${others} 为次要暴露；或只分析 ${primary}。修改计划后才能批准。`,
+      );
+    }
     if (row.disposition === 'covered') {
       if (row.delivery && row.delivery.source === 'host_verified') {
         return tr('Covered by EasyICU’s article and download delivery', '由 EasyICU 的文章与下载交付覆盖');

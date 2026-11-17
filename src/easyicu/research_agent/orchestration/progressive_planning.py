@@ -52,6 +52,7 @@ from ..planning.question_requirements import (
     question_requirement_coverage,
     question_effect_measures,
     question_requirement_findings,
+    question_requirement_host_facts,
     question_requirements_record,
     write_question_requirements,
 )
@@ -562,6 +563,7 @@ def question_requirement_outcome(
         if suite is not None and suite.candidate_owner
         else {}
     )
+    host_facts = question_requirement_host_facts(context=context, plan=plan, requirements=requirements)
     judged = judge_question_requirements(
         requirements,
         plan=plan,
@@ -571,6 +573,7 @@ def question_requirement_outcome(
             gap, context=context, planning_contract_context=planning_contract_context
         ),
         sealed_owner_concepts=sealed_owner_concepts,
+        host_facts=host_facts, sealed=sealed,
     )
     unstated = (
         ()
@@ -598,6 +601,7 @@ def question_requirement_outcome(
             stated_measures=stated_measures,
             measures=measures,
             sealed_owner_concepts=sealed_owner_concepts,
+            host_facts=host_facts,
         ),
     )
     return question_requirement_findings(judged, unstated=unstated, measures=measures)

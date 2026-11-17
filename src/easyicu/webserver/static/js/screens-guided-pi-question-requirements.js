@@ -26,6 +26,15 @@
   function itemLine(item, tr) {
     const quote = clip(item.quote, QUOTE_LIMIT);
     if (item.disposition === 'not_covered') {
+      const choice = item.exposure_choice;
+      if (choice && Array.isArray(choice.additional_exposures) && choice.additional_exposures.length) {
+        const primary = clip(choice.primary_exposure, 128);
+        const others = clip(choice.additional_exposures.join(', '), 200);
+        return tr(
+          `The question asks to analyse ${primary} and ${others}. Which should the revised plan carry: analyse both; keep ${primary} primary and ${others} secondary; or analyse only ${primary}? Reply in the conversation before approval.`,
+          `题面要求分析 ${primary} 及 ${others}。修改后的计划应如何安排：两者都分析；保留 ${primary} 为主要暴露、${others} 为次要暴露；还是只分析 ${primary}？请在对话中选择后再批准。`,
+        );
+      }
       return tr(`Not answered by this plan: “${quote}”`, `这份计划没有回答：「${quote}」`);
     }
     if (item.disposition === 'capability_gap') {

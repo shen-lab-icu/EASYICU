@@ -1222,3 +1222,321 @@ def test_a_defect_in_judging_is_not_reported_as_an_unreadable_record(
         question_requirements_on_plan_under_review(
             findings, plan=plan, run_dir=tmp_path
         )
+
+
+# Methods statements need their own provenance, rather than an analysis input.
+def _clause_plan():
+    from easyicu.research_agent.schema import AnalysisPlan, AnalysisStep
+
+    return AnalysisPlan(
+        research_question="Assess marker A and marker B against the outcome.",
+        analysis_type="association_study",
+        steps=[AnalysisStep(
+            step_id="main", intent="Estimate the marker A association.",
+            planned_analysis_role="primary", inputs=["marker_a", "outcome"],
+            method="adjusted_association_models",
+            expected_outputs=["table:adjusted_association_estimates"],
+        )],
+    )
+
+
+def _methods_requirement(identifier, quote, *, note=None, concepts=()):
+    return QuestionRequirement(
+        id=identifier, kind="analysis", quote=quote, concepts=list(concepts),
+        coverage="plan", note=note,
+    )
+
+
+def _clause_judgment(requirements, **kwargs):
+    return judge_question_requirements(
+        requirements, plan=_clause_plan(), family_template=True,
+        relatives=lambda name: frozenset({name}),
+        check_gap=lambda gap: ("unverifiable", "No synthetic capability claim."),
+        **kwargs,
+    )
+
+
+def test_m1_compound_methods_are_covered_by_separate_recorded_statements():
+    requirements = [
+        _methods_requirement("r1", "the exposure window", note="Use hours 0–12."),
+        _methods_requirement("r2", "units", note="Use the recorded mmol/L scale."),
+        _methods_requirement(
+            "r3", "repeat-stay handling", note="Retain each stay and cluster by patient."
+        ),
+        _methods_requirement(
+            "r4", "Specify the exposure window, units, and repeat-stay handling",
+            concepts=["stay_key"],
+        ),
+    ]
+    row = _clause_judgment(requirements)[-1].row()
+
+    assert row["disposition"] == "covered"
+    assert [clause["quote"] for clause in row["clauses"]] == [
+        "the exposure window", "units", "repeat-stay handling",
+    ]
+    assert all(clause["evidence"]["source_ref"] for clause in row["clauses"])
+
+
+def test_m1_one_unanswered_clause_still_blocks_and_is_reported_on_its_own():
+    requirements = [
+        _methods_requirement("r1", "the exposure window", note="Use hours 0–12."),
+        _methods_requirement("r2", "units", note="Use mmol/L."),
+        _methods_requirement(
+            "r3", "Specify the exposure window, units, and external validation",
+            concepts=["unavailable_external_cohort"],
+        ),
+    ]
+    judged = _clause_judgment(requirements)
+    assert judged[-1].disposition == "not_covered"
+    stop, = [f for f in question_requirement_findings(judged) if f.severity == "error"]
+    assert [row["quote"] for row in stop.detail["requirements"]] == ["external validation"]
+    assert "the exposure window, units" not in stop.message
+
+
+@pytest.mark.parametrize("provenance", [None, "synthetic_host_policy:cluster_by_patient/1"])
+def test_m1_a_default_needs_recorded_provenance(provenance):
+    plan = _clause_plan()
+    default = {
+        "facet": "repeated_stays", "concepts": [], "source": "host_default",
+        "statement": "Retain stays and cluster by patient.",
+        "plan_sha256": analysis_plan_sha256(plan),
+        **({"source_ref": provenance} if provenance else {}),
+    }
+    requirements = [_methods_requirement(
+        "r1", "Specify repeat-stay handling", concepts=["stay_key"],
+    )]
+    row = _clause_judgment(requirements, host_facts=[default])[0].row()
+    assert row["disposition"] == ("covered" if provenance else "not_covered")
+
+
+def _joint_exposure_requirements():
+    return [
+        QuestionRequirement(
+            id="r1", kind="definition", quote="marker B", concepts=["marker_b"],
+            coverage="definition_only", note="Defines a score; marker A stays primary.",
+        ),
+        _methods_requirement(
+            "r2", "Assess marker A and marker B against the outcome",
+            concepts=["marker_a", "marker_b", "outcome"],
+        ),
+    ]
+
+
+def test_m1_a_definition_does_not_replace_a_second_exposure_analysis():
+    row = _clause_judgment(
+        _joint_exposure_requirements(), sealed=("marker_a", "outcome"),
+    )[-1].row()
+    assert row["disposition"] == "not_covered"
+    assert row["exposure_choice"]["additional_exposures"] == ["marker_b"]
+    assert row["exposure_choice"]["options"] == [
+        "analyse_both", "primary_and_secondary", "only_primary",
+    ]
+
+
+def test_m1_a_single_exposure_question_keeps_its_existing_judgment():
+    item = _methods_requirement(
+        "r1", "Assess marker A against the outcome", concepts=["marker_a", "outcome"],
+    )
+    judged, = _clause_judgment([item])
+    assert judged.disposition == "attested"
+    assert "exposure_choice" not in judged.row()
+
+
+def test_m1_a_default_bound_to_another_plan_does_not_cover_a_clause():
+    item = _methods_requirement("r1", "Specify repeat-stay handling", concepts=["stay_key"])
+    row, = _clause_judgment([item], host_facts=[{
+        "facet": "repeated_stays", "concepts": [], "source": "host_default",
+        "source_ref": "synthetic_policy:clustering/1", "statement": "Cluster by patient.",
+        "plan_sha256": "0" * 64,
+    }])
+    assert row.disposition == "not_covered"
+
+
+def test_m1_a_default_does_not_override_an_explicit_first_stay_request():
+    item = _methods_requirement(
+        "r1", "Specify repeat-stay handling: keep only the first stay", concepts=["stay_key"],
+    )
+    row, = _clause_judgment([item], host_facts=[{
+        "facet": "repeated_stays", "concepts": [], "source": "host_default",
+        "source_ref": "synthetic_policy:clustering/1", "statement": "Retain each stay and cluster.",
+        "plan_sha256": analysis_plan_sha256(_clause_plan()),
+    }])
+    assert row.disposition == "not_covered"
+
+
+@pytest.mark.parametrize("typed_analysis", [False, True])
+def test_m1_an_additional_exposure_needs_a_typed_analysis_not_an_input(typed_analysis):
+    from easyicu.research_agent.contracts.model_terms import PlannedModelRequirement
+    from easyicu.research_agent.contracts.model_tokens import ASSOCIATION_LOGIT_ESTIMATOR
+    from easyicu.research_agent.schema import AnalysisStep
+
+    def model(exposure, role):
+        return PlannedModelRequirement(
+            requirement_id=f"{exposure}_association", outcome="outcome", outcome_type="binary",
+            method_family=ASSOCIATION_LOGIT_ESTIMATOR, exposure_source=exposure,
+            analysis_role=role, analysis_set="complete_case",
+        )
+
+    plan = _clause_plan()
+    primary = plan.steps[0].model_copy(update={"model_requirements": [model("marker_a", "primary")]})
+    companion = AnalysisStep(
+        step_id="companion", intent="Prespecified companion-marker analysis.",
+        planned_analysis_role="secondary", method="adjusted_association_models",
+        inputs=["marker_b", "outcome"], expected_outputs=["table:adjusted_association_estimates"],
+        model_requirements=[model("marker_b", "secondary")] if typed_analysis else [],
+    )
+    row = judge_question_requirements(
+        _joint_exposure_requirements(), plan=plan.model_copy(update={"steps": [primary, companion]}),
+        family_template=False, relatives=lambda name: frozenset({name}),
+        check_gap=lambda gap: ("unverifiable", "No capability claim."),
+        sealed=("marker_a", "outcome"),
+    )[-1]
+    assert row.disposition == ("covered" if typed_analysis else "not_covered")
+    if typed_analysis:
+        assert row.owner_step_ids == ("main", "companion")
+
+
+def test_m1_a_compound_statement_cannot_prove_a_shorter_statement_circularly():
+    requirements = [
+        _methods_requirement("r1", "Specify the exposure window, units", concepts=["marker_a"]),
+        _methods_requirement(
+            "r2", "Specify the exposure window, units, and repeat-stay handling",
+            concepts=["marker_a"], note="No concrete window or unit has been chosen.",
+        ),
+    ]
+    assert all(row.disposition == "not_covered" for row in _clause_judgment(requirements))
+
+
+@pytest.mark.parametrize("source_ref", [None, "synthetic_export_manifest/patient_grouping"])
+def test_m1_the_host_records_a_repeat_stay_default_only_with_its_source(source_ref):
+    context = SimpleNamespace(
+        variables=[], primary_exposure="marker_a",
+        user_preferences=SimpleNamespace(sensitivity_specs=[], data_constraints=json.dumps({
+            "analysis_design": {"analysis_unit": "icu_stay", "cluster_unit": "patient",
+                                "variance_estimator": "cluster_robust"},
+            "verified_patient_grouping": {"mapping_sha256": "a" * 64,
+                                         **({"authority_ref": source_ref} if source_ref else {})},
+        })),
+    )
+    facts = question_requirements_owner.question_requirement_host_facts(
+        context=context, plan=_clause_plan(),
+        requirements=[_methods_requirement("r1", "Specify repeat-stay handling")],
+    )
+    assert bool(facts) == bool(source_ref)
+
+
+def test_m1_an_explicit_clause_cannot_borrow_a_stated_exposure_for_an_unaddressed_analysis():
+    item = _methods_requirement(
+        "r1", "Assess marker A and perform external validation",
+        concepts=["marker_a"],
+    ).model_copy(update={"clauses": ["Assess marker A", "perform external validation"]})
+    row, = _clause_judgment([item])
+    assert row.disposition == "not_covered"
+    assert [part["quote"] for part in row.clauses if part["disposition"] == "not_covered"] == item.clauses
+
+
+@pytest.mark.parametrize("quote,facet,statement", [
+    ("Specify the exposure window of 48 hours", "window", {"landmark_hours": 24.0}),
+    ("Specify units in mmol/L", "unit", "mg/dL"),
+])
+def test_m1_a_recorded_default_must_match_explicit_requested_values(quote, facet, statement):
+    item = _methods_requirement("r1", quote, concepts=["marker_a"])
+    row, = _clause_judgment([item], host_facts=[{
+        "facet": facet, "concepts": ["marker_a"], "source": "host_default",
+        "source_ref": "synthetic_policy:measurement/1", "statement": statement,
+        "plan_sha256": analysis_plan_sha256(_clause_plan()),
+    }])
+    assert row.disposition == "not_covered"
+
+
+def test_m1_a_component_grading_clause_cites_its_own_rule_before_the_aggregate(monkeypatch):
+    from easyicu import clinical_contracts
+
+    def contract(name, concepts, depends=()):
+        return SimpleNamespace(
+            contract_id=name, version="1", concepts=concepts,
+            source_id="synthetic_clinical_spec", source_table="grading rules",
+            definition=f"Registered {name} grading rule.",
+            reference_implementation=f"synthetic.{name}", validation_status="synthetic_test",
+            depends_on_contracts=depends,
+        )
+
+    monkeypatch.setattr(clinical_contracts, "load_clinical_contracts", lambda: {
+        "aggregate": contract("aggregate", ["aggregate_marker"], ["component"]),
+        "component": contract("component", ["component_marker"]),
+    })
+    context = SimpleNamespace(
+        primary_exposure="marker_a", user_preferences=None,
+        variables=[SimpleNamespace(name=name, source_concept=name, unit=None, analysis_window=None)
+                   for name in ("aggregate_marker", "component_marker")],
+    )
+    definition = QuestionRequirement(
+        id="r1", kind="definition", quote="marker grading", coverage="definition_only",
+        concepts=["aggregate_marker", "component_marker"], note="Use the registered component rule.",
+    )
+    compound = _methods_requirement("r2", "Specify marker grading, units")
+    facts = question_requirements_owner.question_requirement_host_facts(
+        context=context, plan=_clause_plan(), requirements=[definition, compound],
+    )
+    row = _clause_judgment([definition, compound], host_facts=facts)[-1]
+    assert row.clauses[0]["evidence"]["source_ref"] == "clinical_contract:component@1"
+    assert row.clauses[1]["disposition"] == "not_covered"
+
+
+@pytest.mark.parametrize("stated", [False, True])
+def test_m1_a_clause_can_be_stated_in_the_plan_but_a_negation_does_not_answer_it(stated):
+    plan = _clause_plan()
+    intent = ("Repeat-stay handling retains all stays and clusters by patient." if stated
+              else "No repeat-stay handling is planned.")
+    plan = plan.model_copy(update={"steps": [plan.steps[0].model_copy(update={"intent": intent})]})
+    item = _methods_requirement("r1", "Specify repeat-stay handling")
+    row, = judge_question_requirements(
+        [item], plan=plan, family_template=True, relatives=lambda name: frozenset({name}),
+        check_gap=lambda gap: ("unverifiable", "No capability claim."),
+    )
+    assert row.disposition == ("covered" if stated else "not_covered")
+    if stated:
+        assert row.clauses[0]["evidence"]["source_ref"] == "analysis_plan.json.steps[main].intent"
+
+
+def test_m1_a_clinical_definition_already_in_the_context_keeps_its_provenance():
+    definition = SimpleNamespace(
+        contract_id="component", version="1", source_id="synthetic_spec", definition="Registered grading rule.",
+        validation_status="synthetic_test",
+    )
+    context = SimpleNamespace(
+        variables=[SimpleNamespace(name="component_marker", unit=None, analysis_window=None,
+                                   clinical_definition=definition)],
+        primary_exposure="marker_a", user_preferences=None,
+    )
+    facts = question_requirements_owner.question_requirement_host_facts(
+        context=context, plan=_clause_plan(),
+        requirements=[_methods_requirement("r1", "Specify grading rules", concepts=["component_marker"])],
+    )
+    assert facts[0]["source_ref"] == "research_context.json.variables[component_marker].clinical_definition"
+
+
+def test_m1_a_planner_reference_to_a_host_default_is_not_the_defaults_provenance():
+    requirements = [
+        _methods_requirement("r1", "repeat-stay handling", note="Use the host default."),
+        _methods_requirement("r2", "Specify repeat-stay handling"),
+    ]
+    assert _clause_judgment(requirements)[-1].disposition == "not_covered"
+
+
+def test_m1_explicit_clauses_cannot_omit_an_unanswered_part_of_the_requirement():
+    with pytest.raises(ValidationError, match="complete requirement quote"):
+        QuestionRequirement(
+            id="r1", kind="analysis", coverage="plan",
+            quote="Specify the exposure window, units, and external validation",
+            clauses=["the exposure window", "units"],
+        )
+
+
+def test_m1_grouping_a_methods_list_into_one_clause_does_not_hide_a_missing_member():
+    quote = "Specify the exposure window, units"
+    item = QuestionRequirement(id="r2", kind="analysis", coverage="plan", quote=quote, clauses=[quote])
+    stated = _methods_requirement("r1", "the exposure window", note="Use hours 0–12.")
+    row = _clause_judgment([stated, item])[-1]
+    assert row.disposition == "not_covered"
+    assert [clause["quote"] for clause in row.clauses if clause["disposition"] == "not_covered"] == ["units"]

@@ -80,6 +80,7 @@ from ..planning.question_requirements import (
     question_requirements_schema,
     question_requirements_shape,
     requirement_delivery_coverage,
+    question_analysis_exposures,
 )
 from ..planning.literature_design_authority import (
     LITERATURE_DESIGN_DIMENSIONS,
@@ -1356,17 +1357,46 @@ def run_family_spec_attempt(
                 "progressive_capability_gap_claim_unverified",
                 "progressive_distribution_spec_invalid",
                 "progressive_distribution_missingness_authority_invalid",
+                "progressive_question_named_exposure_demoted",
             }
         )
+
+    parse_attempts = 0
 
     def parse_spec(raw: str) -> tuple[
         FamilyPlanSpec, FamilySkeletonDraft, tuple[ProgressivePrefixState, ...]
     ]:
+        nonlocal parse_attempts
+        parse_attempts += 1
         try:
             spec = parse_family_plan_spec(raw, request)
             check_question_requirement_gaps(
                 spec, context=context, planning_contract_context=planning_contract_context
             )
+            choices = {
+                item.id: list(exposures)
+                for item in spec.question_requirements
+                if item.coverage != "needs_choice" and (exposures := question_analysis_exposures(
+                    item, spec.question_requirements,
+                    sealed=(request.primary_exposure, request.outcome),
+                ))
+            }
+            if choices:
+                if parse_attempts <= max_parse_retries:
+                    raise ProgressivePlanCompileError(
+                        "progressive_question_named_exposure_demoted",
+                        f"The question asks to analyse these exposures together: {choices}. "
+                        "A definition-only mention is not an exposure analysis. This family "
+                        "binds one primary exposure. Carry a supported additional analysis, "
+                        "or retain all exposures in analysis_exposures and use coverage "
+                        "needs_choice so the plan review asks the user which to analyse. "
+                        "Preserve the question's stated priorities.",
+                        path="question_requirements",
+                    )
+                # Exhausting a parse budget must not leave an opaque dead end.
+                # Keep the original claim; the coverage owner records the
+                # explicit choice and blocks approval until the user resolves it.
+                attempt.prompt_metrics["question_exposure_choice_fallback"] = choices
             draft = project_spec(spec)
             validate_outline(draft.outline)
             return spec, draft, compile_draft_prefixes(draft)

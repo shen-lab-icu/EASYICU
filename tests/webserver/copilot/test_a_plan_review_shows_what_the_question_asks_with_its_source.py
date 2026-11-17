@@ -508,6 +508,33 @@ def _lines(html: str) -> list[str]:
     return [part.split("</li>", 1)[0] for part in html.split("<li>")[1:]]
 
 
+def test_m1_the_card_reports_only_the_unanswered_clause():
+    notes = _notes(_review(judged=[_row(
+        "r1", "not_covered", quote="Specify window, units, and external validation",
+        clauses=[
+            {"quote": "window", "disposition": "covered", "evidence": {"source_ref": "host:window"}},
+            {"quote": "units", "disposition": "covered", "evidence": {"source_ref": "host:unit"}},
+            {"quote": "external validation", "disposition": "not_covered", "evidence": None},
+        ],
+    )]))
+    assert [item["quote"] for item in notes["items"]] == ["external validation"]
+    assert _lines(_notes_html(notes)) == ["这份计划没有回答：「external validation」"]
+
+
+def test_m1_the_card_asks_one_exposure_choice_and_escapes_its_names():
+    notes = _notes(_review(judged=[_row(
+        "r1", "not_covered", exposure_choice={
+            "primary_exposure": "marker_a", "additional_exposures": ["<marker_b>"],
+            "options": ["analyse_both", "primary_and_secondary", "only_primary"],
+        },
+    )]))
+    html = _notes_html(notes)
+    assert len(_lines(html)) == 1
+    assert "两者都分析" in html and "为次要暴露" in html and "只分析 marker_a" in html
+    assert "请在对话中选择" in html
+    assert "&lt;marker_b&gt;" in html and "<marker_b>" not in html
+
+
 def test_the_card_names_each_requirement_and_its_source() -> None:
     notes = _notes(
         _review(

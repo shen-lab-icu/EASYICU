@@ -59,6 +59,12 @@ def _item(row: Mapping[str, Any]) -> Dict[str, Any]:
     if isinstance(gap, Mapping):
         item["gap_requirement"] = _text(gap.get("requirement"), 80)
         item["gap_verification"] = _text(row.get("gap_verification"), 40)
+    choice = row.get("exposure_choice")
+    if isinstance(choice, Mapping):
+        item["exposure_choice"] = {
+            "primary_exposure": _text(choice.get("primary_exposure"), 128),
+            "additional_exposures": [_text(value, 128) for value in list(choice.get("additional_exposures") or ())[:3]],
+        }
     return item
 
 
@@ -108,9 +114,18 @@ def project_question_requirement_notes(
             "unstated": [],
         }
     judged = [row for row in record.get("judged") or () if isinstance(row, Mapping)]
-    items: List[Dict[str, Any]] = [
-        _item(row) for row in judged if row.get("disposition") in _SHOWN_DISPOSITIONS
-    ]
+    items: List[Dict[str, Any]] = []
+    for row in judged:
+        if row.get("disposition") not in _SHOWN_DISPOSITIONS:
+            continue
+        clauses = row.get("clauses")
+        if row.get("disposition") == "not_covered" and isinstance(clauses, list) and clauses:
+            items.extend(
+                _item({**row, "quote": clause.get("quote")}) for clause in clauses
+                if isinstance(clause, Mapping) and clause.get("disposition") == "not_covered"
+            )
+        else:
+            items.append(_item(row))
     # The approval stops first, in the record's order, then the plan's claims.
     items.sort(key=lambda item: _SHOWN_DISPOSITIONS.index(item["disposition"]))
     unstated = [
