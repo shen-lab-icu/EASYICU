@@ -62,8 +62,7 @@ def test_no_rendered_inline_style_writes_a_static_colour_an_old_browser_drops() 
 def test_the_polyfill_runs_after_every_stylesheet_and_before_any_page_renders() -> None:
     index = (STATIC / "index.html").read_text(encoding="utf-8")
     scripts = re.findall(r'<script src="js/([^"?]+)', index)
-    # html-escape.js stays first (test_static_frontend_ownership); it renders nothing.
-    assert scripts[:2] == ["html-escape.js", "legacy-colors.js"]
+    assert scripts[:3] == ["app-boot-watchdog.js", "html-escape.js", "legacy-colors.js"]
     assert index.rindex('rel="stylesheet"') < index.index('<script src="js/legacy-colors.js?v=')
 
 

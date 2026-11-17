@@ -193,6 +193,9 @@ async def guard_request(request: Request) -> None:
     instance_reads = path in _INSTANCE_READ_ROUTES
     instance_fields = _INSTANCE_DESTINATIONS.get(path, frozenset())
     _check_coordinates(dict(request.query_params), instance_reads=instance_reads, instance_fields=instance_fields)
+    if request.method == "POST" and path == "/api/client/boot-diagnostics":
+        # This route bounds the request stream before validating its path-free schema.
+        return
     try:
         payload = await request.json()
     except (json.JSONDecodeError, UnicodeDecodeError):

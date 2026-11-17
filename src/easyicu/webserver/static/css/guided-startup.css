@@ -1,4 +1,13 @@
-/* Owner: Guided Copilot initial restoration cover only. */
+/* Owner: App and Guided Copilot startup stops and restoration cover. */
+.eu-app-boot-stop{
+  position:fixed;
+  inset:0;
+  z-index:1000;
+  display:grid;
+  place-items:center;
+  padding:16px;
+  background:var(--bg,#fafaf7);
+}
 .gd-main.gd-startup-active{
   position:relative;
   overflow:hidden;
@@ -43,7 +52,8 @@
 @media(prefers-reduced-motion:reduce){
   .gd-startup-progress>span{animation:none;width:100%;opacity:.55}
 }
-.gd-startup-shield[data-guided-startup-failed] .gd-startup-card{
+.gd-startup-shield[data-guided-startup-failed] .gd-startup-card,
+.eu-app-boot-stop .gd-startup-card{
   display:grid;
   gap:8px;
   color:var(--ink-2);

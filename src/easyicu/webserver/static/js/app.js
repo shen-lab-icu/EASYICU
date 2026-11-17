@@ -1,6 +1,7 @@
 /* Owner: App shell route controller. */
 /* App shell controller */
 (function () {
+  window.EU_BOOT?.mark('app_script');
   const app = document.getElementById('app');
   const routeAnnouncer = document.createElement('div');
   routeAnnouncer.className = 'shell-sr-only';
@@ -52,7 +53,7 @@
     return { id: fallback, fallback: true };
   }
   let route = resolveRoute(rawRouteFromHash(), { rewrite: true }).id;
-  let activeRouteTransition = null;
+  let cancelRouteTransition = null;
 
   /* Guided Copilot -> module handoff payload. The guided screen set()s the
      backend handoff object before navigating; the target screen take()s it
@@ -240,6 +241,7 @@
       window.scrollTo(scrollState.x, scrollState.y);
       if (preserveRouteFocus) focusRouteContent();
     }
+    app.firstElementChild?.setAttribute('data-eu-app-shell', '');
   }
 
   function routeMotionAllowed() {
@@ -249,12 +251,10 @@
   }
 
   function renderRoute(opts = {}) {
+    if (cancelRouteTransition) cancelRouteTransition();
     if (!routeMotionAllowed()) {
       render(opts);
       return;
-    }
-    if (activeRouteTransition && typeof activeRouteTransition.skipTransition === 'function') {
-      activeRouteTransition.skipTransition();
     }
     if (typeof document.startViewTransition !== 'function') {
       render(opts);
@@ -268,13 +268,35 @@
       return;
     }
     document.documentElement.classList.add('eu-route-transitioning');
-    const transition = document.startViewTransition(() => render(opts));
-    activeRouteTransition = transition;
+    window.EU_BOOT?.mark('view_transition_start');
+    let updatePending = true;
+    const transition = document.startViewTransition(() => {
+      if (!updatePending) return;
+      updatePending = false;
+      render(opts);
+    });
     const finish = () => {
-      if (activeRouteTransition !== transition) return;
-      activeRouteTransition = null;
+      if (cancelRouteTransition !== cancel) return;
+      clearTimeout(deadline);
+      cancelRouteTransition = null;
       document.documentElement.classList.remove('eu-route-transitioning');
+      window.EU_BOOT?.mark('view_transition_finished');
     };
+    const cancel = () => {
+      // Skipping animations still lets the browser invoke the update callback.
+      updatePending = false;
+      transition.skipTransition();
+      finish();
+    };
+    const deadline = setTimeout(() => {
+      if (!updatePending) return;
+      window.EU_BOOT?.mark('view_transition_skipped');
+      cancel();
+      render(opts);
+    }, 500);
+    cancelRouteTransition = cancel;
+    transition.ready.catch(() => {});
+    transition.updateCallbackDone.catch(() => {});
     transition.finished.then(finish, finish);
   }
 
@@ -327,5 +349,7 @@
     if (e.key === 'l' || e.key === 'L') { if (window.setLang) window.setLang(window.EU_LANG === 'zh' ? 'en' : 'zh'); }
   });
 
+  window.EU_BOOT?.mark('first_render_start');
   render({ resetScroll: true });
+  window.EU_BOOT?.mark('first_render_done');
 })();

@@ -159,9 +159,15 @@ def test_escaping_owner_loads_before_every_consumer() -> None:
     index = (STATIC / "index.html").read_text(encoding="utf-8")
     scripts = re.findall(r'<script src="js/([^"?]+)', index)
     assert scripts, "index.html should load its scripts with js/ paths"
-    assert scripts[0] == "html-escape.js", (
-        f"html-escape.js must be the first js/ script; found {scripts[0]}"
-    )
+    assert scripts[:2] == ["app-boot-watchdog.js", "html-escape.js"]
+
+
+def test_boot_watchdog_is_the_first_script_in_head() -> None:
+    index = (STATIC / "index.html").read_text(encoding="utf-8")
+    first_script = re.search(r"<script\b[^>]*>", index)
+    assert first_script
+    assert first_script.group() == '<script src="js/app-boot-watchdog.js?v=20261117-boot1">'
+    assert index.index("<head>") < first_script.start() < index.index("</head>")
 
 
 def test_copilot_product_labels_have_one_shared_owner() -> None:

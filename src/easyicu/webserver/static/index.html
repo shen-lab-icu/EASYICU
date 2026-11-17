@@ -5,6 +5,7 @@
 <meta charset="UTF-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1.0" />
 <title>EasyICU — ICU Research Workspace</title>
+<script src="js/app-boot-watchdog.js?v=20261117-boot1"></script>
 <link rel="stylesheet" href="css/tokens.css?v=20261027-old1" />
 <link rel="stylesheet" href="css/app.css?v=20261112-viz1" />
 <link rel="stylesheet" href="css/screens.css?v=20261027-old1" />
@@ -27,7 +28,7 @@
 <link rel="stylesheet" href="css/guided.css?v=20261027-old1" />
 <link rel="stylesheet" href="css/guided-projects.css?v=20261027-proj1" />
 <link rel="stylesheet" href="css/guided-panels.css?v=20260918-audit3" />
-<link rel="stylesheet" href="css/guided-startup.css?v=20261117-startup1" />
+<link rel="stylesheet" href="css/guided-startup.css?v=20261117-boot1" />
 <link rel="stylesheet" href="css/guided-pi.css?v=20261028-wait1-cfg1" />
 <link rel="stylesheet" href="css/guided-pi-clinical-card.css?v=20261025-owner-split1" />
 <link rel="stylesheet" href="css/guided-pi-research-draft.css?v=20261029-followup1" />
@@ -104,7 +105,7 @@
 </svg>
 </template>
 <div id="app"></div>
-<!-- FIRST on purpose: every screen module destructures `esc` from this owner
+<!-- First in the body: every screen module destructures `esc` from this owner
      at the top of its IIFE, so it must be defined before any of them run. -->
 <script src="js/html-escape.js?v=20260816-escape-owner"></script>
 <script src="js/legacy-colors.js?v=20261022-legacy1"></script>
@@ -119,7 +120,7 @@
 <script src="js/desktop-module-shell.js?v=20261102-ui1"></script>
 <script src="js/data-catalog.js?v=20261028-readm1"></script>
 <script src="js/hosted-session.js?v=20261021-account1"></script>
-<script src="js/api.js?v=20261112-viz1"></script>
+<script src="js/api.js?v=20261117-boot1"></script>
 <script src="js/study-context.js?v=20261023-demo-identity1"></script>
 <script src="js/screens-extraction-sepsis.js?v=20260629-sepsis-anchor-readonly"></script>
 <script src="js/screens-extraction-folder-picker.js?v=20261021-hosted1"></script>
@@ -278,7 +279,7 @@
 <script src="js/screens-guided-idea.js?v=20261111-s872"></script>
 <script src="js/screens-guided.js?v=20261117-startup1"></script>
 <script src="js/screens-guided-study-context.js?v=20260710-handoff"></script>
-<script src="js/app.js?v=20261027-dmap2"></script>
+<script src="js/app.js?v=20261117-boot1"></script>
 <script src="js/copilot-dock.js?v=20261027-old1"></script>
 <script src="js/tweaks.js"></script>
 </body>

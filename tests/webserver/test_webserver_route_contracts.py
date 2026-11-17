@@ -2,14 +2,20 @@
 
 from __future__ import annotations
 
+import json
+import logging
 from pathlib import Path
 
+import pytest
+from fastapi import Request
 from fastapi.routing import APIRoute
+from fastapi.testclient import TestClient
 from starlette.routing import Mount
 
 from easyicu.webserver import patient_drilldown
 from easyicu.webserver.app import app
 from easyicu.webserver.patient_drilldown import eligibility as patient_eligibility
+from easyicu.webserver.routes import system
 from easyicu.webserver.routes.agent import artifact_router as agent_artifact_router
 from easyicu.webserver.routes.agent import control_router as agent_control_router
 from easyicu.webserver.routes.copilot import router as copilot_router
@@ -35,6 +41,7 @@ from easyicu.webserver.routes.workspaces import router as workspaces_router
 
 EXPECTED_SYSTEM_ROUTES = [
     ("GET", "/api/health"),
+    ("POST", "/api/client/boot-diagnostics"),
     ("GET", "/favicon.ico"),
     ("GET", "/api/catalog"),
     ("GET", "/api/catalog/lineage/{concept_id}"),
@@ -55,6 +62,7 @@ EXPECTED_SYSTEM_ROUTES = [
 
 EXPECTED_SYSTEM_OPERATION_NAMES = [
     "health",
+    "post_boot_diagnostics",
     "favicon",
     "catalog",
     "catalog_lineage",
@@ -671,6 +679,105 @@ def test_system_route_operation_names_and_favicon_schema_contract() -> None:
     assert [route.name for route in routes] == EXPECTED_SYSTEM_OPERATION_NAMES
     favicon_route = next(route for route in routes if route.path == "/favicon.ico")
     assert favicon_route.include_in_schema is False
+
+
+BOOT_DIAGNOSTICS = "/api/client/boot-diagnostics"
+
+
+@pytest.fixture
+def boot_report():
+    return {
+        "code": "app_boot_stalled",
+        "readyState": "complete",
+        "marks": {"app_script": 84, "first_render_start": 86, "boot_hydrated": 304},
+        "app_child_count": 0,
+        "app_text_length": 0,
+        "presence": {
+            "SCREENS": True, "__euRender": True, "EU_API": True, "EU_CATALOG": True,
+            "EU_CAPABILITIES": True, "EU_GUIDED_STARTUP": True,
+        },
+        "route_transitioning": False,
+        "view_transition_available": True,
+        "route_hash": "#patient",
+        "viewport_width_bucket": "1181_plus",
+        "errors": [{"type": "unhandledrejection", "name": "TypeError"}],
+    }
+
+
+def test_boot_diagnostics_logs_one_valid_report(boot_report, caplog):
+    response = TestClient(app, client=("127.0.0.2", 50000)).post(
+        BOOT_DIAGNOSTICS, json=boot_report, headers={"Origin": "http://testserver"}
+    )
+
+    assert response.status_code == 204 and response.content == b""
+    prefix = "client boot stalled: "
+    records = [record for record in caplog.records if record.message.startswith(prefix)]
+    assert len(records) == 1 and records[0].levelno == logging.WARNING
+    assert json.loads(records[0].message.removeprefix(prefix)) == boot_report
+
+
+@pytest.mark.parametrize("extra", [
+    {"message": "What was the patient's baseline creatinine?"},
+    {"route_hash": "#patient/123?query=creatinine"},
+    {"marks": {"first_render_start": "100"}},
+    {"marks": {"arbitrary_mark": 100}},
+    {"app_child_count": True},
+    {"app_text_length": 2_147_483_648},
+    {"errors": [{"type": "error", "name": "ReferenceError"}] * 9},
+    {"errors": [{"type": "error", "name": "private error"}]},
+    {"errors": [{"type": "error", "name": "Error", "message": "private text"}]},
+])
+def test_boot_diagnostics_rejects_unbounded_or_untyped_reports(boot_report, extra, caplog):
+    response = TestClient(app).post(BOOT_DIAGNOSTICS, json={**boot_report, **extra})
+    assert response.status_code == 422
+    assert response.json() == {"detail": "invalid_boot_diagnostics"}
+    assert "client boot stalled" not in caplog.text
+
+
+def test_boot_diagnostics_rejects_oversized_raw_body(boot_report, caplog):
+    # The decoded document is valid, but the request bytes exceed the budget.
+    response = TestClient(app).post(
+        BOOT_DIAGNOSTICS,
+        content=json.dumps(boot_report) + " " * 4096,
+        headers={"Content-Type": "application/json"},
+    )
+    assert response.status_code == 422
+    assert "client boot stalled" not in caplog.text
+
+
+def test_hosted_boot_diagnostics_validates_its_own_bounded_stream(boot_report, monkeypatch):
+    async def reject_unbounded_json(source):
+        pytest.fail("the hosted guard buffered the boot report before its size check")
+
+    monkeypatch.setenv("EASYICU_HOSTED", "1")
+    monkeypatch.setattr(Request, "json", reject_unbounded_json)
+    client = TestClient(app, client=("127.0.0.5", 50000))
+    assert client.post(BOOT_DIAGNOSTICS, json=boot_report).status_code == 204
+    assert client.post(BOOT_DIAGNOSTICS, content=b" " * 4097).status_code == 422
+
+
+def test_boot_diagnostics_is_bounded_per_client(boot_report, caplog, monkeypatch):
+    now = [120.0]
+    monkeypatch.setattr(system, "monotonic", lambda: now[0])
+    monkeypatch.setattr(system, "_boot_diagnostic_clients", {})
+    first = TestClient(app, client=("127.0.0.3", 50000))
+    second = TestClient(app, client=("127.0.0.4", 50000))
+
+    assert [first.post(BOOT_DIAGNOSTICS, json=boot_report).status_code for _ in range(4)] == [
+        204, 204, 204, 429,
+    ]
+    assert second.post(BOOT_DIAGNOSTICS, json=boot_report).status_code == 204
+    now[0] += 60
+    assert first.post(BOOT_DIAGNOSTICS, json=boot_report).status_code == 204
+    assert caplog.text.count("client boot stalled: ") == 5
+
+
+def test_boot_diagnostics_keeps_cross_origin_write_guard(boot_report, caplog):
+    response = TestClient(app).post(
+        BOOT_DIAGNOSTICS, json=boot_report, headers={"Origin": "https://other.example"}
+    )
+    assert response.status_code == 403
+    assert "client boot stalled" not in caplog.text
 
 
 def test_guided_route_method_path_and_operation_name_snapshot() -> None:

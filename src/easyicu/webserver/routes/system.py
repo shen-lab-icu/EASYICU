@@ -2,10 +2,13 @@
 
 from __future__ import annotations
 
-from typing import Any, Dict
+from logging import getLogger
+from time import monotonic
+from typing import Annotated, Any, Dict, Literal
 
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, HTTPException, Request
 from fastapi.responses import Response
+from pydantic import BaseModel, ConfigDict, Field, ValidationError
 
 from easyicu.research_agent.method_skills import MethodSkillPackageNotFound
 from easyicu.webserver import capabilities
@@ -16,11 +19,102 @@ from easyicu.webserver.routes.request_parsing import body_int
 from easyicu.webserver.research_workflows import research_workflow_catalog
 
 router = APIRouter()
+_logger = getLogger(__name__)
+_boot_diagnostic_clients: dict[str, tuple[float, int]] = {}
+
+_BootMark = Literal[
+    "app_script", "first_render_start", "first_render_done",
+    "boot_start", "boot_hydrated", "boot_rerender",
+    "view_transition_start", "view_transition_finished", "view_transition_skipped",
+]
+_BootRoute = Literal[
+    "", "#guided", "#extraction", "#patient", "#cohort", "#crossdb",
+    "#dictionary", "#skills", "#settings", "#tutorial", "#agent", "#assistant",
+    "#entry", "#ideas", "#states", "#audit", "#sofareclass", "#icd", "#datamap", "#help", "#other",
+]
+_BootTimestamp = Annotated[int, Field(ge=0, le=3_600_000)]
+_BootCount = Annotated[int, Field(ge=0, le=2_147_483_647)]
+
+
+class _BootPresence(BaseModel):
+    model_config = ConfigDict(extra="forbid", strict=True)
+
+    SCREENS: bool
+    # Pydantic treats leading underscores as private attributes.
+    render: bool = Field(alias="__euRender")
+    EU_API: bool
+    EU_CATALOG: bool
+    EU_CAPABILITIES: bool
+    EU_GUIDED_STARTUP: bool
+
+
+class _BootError(BaseModel):
+    model_config = ConfigDict(extra="forbid", strict=True)
+
+    type: Literal["error", "unhandledrejection"]
+    name: Literal[
+        "Error", "TypeError", "ReferenceError", "SyntaxError", "RangeError", "URIError",
+        "EvalError", "AggregateError", "AbortError", "NetworkError", "SecurityError",
+        "InvalidStateError", "NotAllowedError", "UnknownError",
+    ]
+
+
+class _BootDiagnostic(BaseModel):
+    model_config = ConfigDict(extra="forbid", strict=True)
+
+    code: Literal["app_boot_stalled"]
+    readyState: Literal["loading", "interactive", "complete"]
+    marks: dict[_BootMark, _BootTimestamp] = Field(max_length=9)
+    app_child_count: _BootCount
+    app_text_length: _BootCount
+    presence: _BootPresence
+    route_transitioning: bool
+    view_transition_available: bool
+    route_hash: _BootRoute
+    viewport_width_bucket: Literal["under_768", "768_to_1180", "1181_plus"]
+    errors: list[_BootError] = Field(max_length=8)
+
+
+def _admit_boot_diagnostic(client: str) -> bool:
+    """Allow three reports per client per minute with bounded process memory."""
+    now = monotonic()
+    # Fixed windows expire in insertion order. No await occurs in this update.
+    while _boot_diagnostic_clients:
+        oldest = next(iter(_boot_diagnostic_clients))
+        if now < _boot_diagnostic_clients[oldest][0]:
+            break
+        del _boot_diagnostic_clients[oldest]
+    if client not in _boot_diagnostic_clients and len(_boot_diagnostic_clients) >= 1024:
+        return False
+    expiry, count = _boot_diagnostic_clients.get(client, (now + 60, 0))
+    if count >= 3:
+        return False
+    _boot_diagnostic_clients[client] = (expiry, count + 1)
+    return True
 
 
 @router.get("/api/health")
 def health() -> dict:
     return {"status": "ok"}
+
+
+@router.post("/api/client/boot-diagnostics", status_code=204)
+async def post_boot_diagnostics(request: Request) -> Response:
+    """Log one allowlisted boot snapshot through the normal WebApp boundary."""
+    body = bytearray()
+    async for chunk in request.stream():
+        if len(body) + len(chunk) > 4096:
+            raise HTTPException(status_code=422, detail="invalid_boot_diagnostics")
+        body.extend(chunk)
+    try:
+        report = _BootDiagnostic.model_validate_json(body)
+    except ValidationError:
+        raise HTTPException(status_code=422, detail="invalid_boot_diagnostics") from None
+    # The server supplies the peer (including trusted UDS forwarding on hosted).
+    if not _admit_boot_diagnostic(request.client.host if request.client else "local"):
+        raise HTTPException(status_code=429, detail="boot_diagnostics_rate_limited")
+    _logger.warning("client boot stalled: %s", report.model_dump_json(by_alias=True))
+    return Response(status_code=204)
 
 
 @router.get("/favicon.ico", include_in_schema=False)

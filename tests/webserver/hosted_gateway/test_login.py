@@ -60,6 +60,26 @@ def test_missing_session_html_redirects(client):
     assert reply.status_code == 302 and reply.headers["location"] == "/login"
 
 
+def test_boot_diagnostics_post_requires_the_gateway_session(client, login, gateway, monkeypatch):
+    from starlette.responses import Response
+
+    from easyicu.hosted_gateway.proxy import InstanceProxy
+
+    forwarded = []
+
+    async def forward(self, request, socket):
+        forwarded.append((request.method, request.url.path, socket))
+        return Response(status_code=204)
+
+    monkeypatch.setattr(InstanceProxy, "forward", forward)
+    path = "/api/client/boot-diagnostics"
+    assert client.post(path, json={}).status_code == 401
+    assert forwarded == []
+    assert login(client).status_code == 303
+    assert client.post(path, json={}).status_code == 204
+    assert forwarded == [("POST", path, gateway[3]["alice"]["socket"])]
+
+
 @pytest.mark.parametrize("origin", [None, "https://attacker.example", "null"])
 @pytest.mark.parametrize("path", ["/login", "/logout"])
 def test_auth_posts_require_public_origin(client, origin, path):

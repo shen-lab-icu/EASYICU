@@ -242,7 +242,7 @@ def test_reference_skin_is_route_scoped_and_loads_after_the_layout_owners() -> N
     cohort = _read("js/screens-guided-pi-cohort-eligibility.js")
 
     assert index.index("css/guided-pi-desktop.css") < index.index("css/guided-pi-skin.css")
-    assert index.index("css/guided-pi-skin.css") < index.index("<script")
+    assert index.index("css/guided-pi-skin.css") < index.index('src="js/screens-guided.js?')
     # Palette and controls are scoped to the route, never to :root globals.
     assert ".gd-main.gpi-workspace," in skin
     # One accent token (the reference's lime was declined); every tint

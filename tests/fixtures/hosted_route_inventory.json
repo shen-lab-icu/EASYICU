@@ -1677,6 +1677,15 @@
     "write_owner": "Read-only handler or in-memory response; no filesystem destination."
   },
   {
+    "method": "POST",
+    "route": "/api/client/boot-diagnostics",
+    "fields": [],
+    "reaches": "Fixed diagnostic codes, numbers and flags to the application warning logger.",
+    "protection": "no path inputs",
+    "writes": "none",
+    "write_owner": "Rate-limited system route emits a structured warning to the configured logger; no request-selected destination."
+  },
+  {
     "method": "GET",
     "route": "/api/help/runs/{run_ref}/problem-bundle",
     "fields": ["path:run_ref"],

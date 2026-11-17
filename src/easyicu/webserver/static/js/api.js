@@ -250,6 +250,7 @@
   }
 
   async function boot() {
+    window.EU_BOOT?.mark('boot_start');
     try {
       const initialLanguage = window.EU_LANG;
       await Promise.all([hydrateCatalog(), hydrateSettings(), hydrateWorkspaceRegistry()]);
@@ -258,11 +259,13 @@
       } catch (err) {
         console.warn('[EasyICU] capability fetch failed:', err);
       }
+      window.EU_BOOT?.mark('boot_hydrated');
       // Guided owns a live conversation DOM. Rebuilding the whole screen after
       // catalog hydration destroys that DOM and starts project restoration a
       // second time. A setting that changes its language still needs the
       // normal render; otherwise the already-mounted screen is current.
       if (!document.getElementById('gdPiShell') || initialLanguage !== window.EU_LANG) {
+        window.EU_BOOT?.mark('boot_rerender');
         rerender();
       }
       console.info('[EasyICU] hydrated: %d concepts, settings loaded (ai_enabled=%s)',
