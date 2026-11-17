@@ -242,14 +242,16 @@ def with_group(prepared, concept, levels):
     return rebound(prepared, frame=frame, context=prepared.context.model_copy(update={"variables": variables}))
 
 
-@pytest.mark.parametrize(("concept", "language", "levels"), [
-    ("sex", 1, ("Male", "Female")),
-    ("adm", 0, ("med", "surg")),
-    ("adm", 1, ("med", "surg")),
-    ("loop_diuretic", 1, (0, 1)),
+@pytest.mark.parametrize(("concept", "label", "levels"), [
+    ("sex", CONCEPT_DICTIONARY["sex"][0], ("Male", "Female")),
+    ("sex", CONCEPT_DICTIONARY["sex"][1], ("Male", "Female")),
+    ("adm", CONCEPT_DICTIONARY["adm"][0], ("med", "surg")),
+    ("adm", CONCEPT_DICTIONARY["adm"][1], ("med", "surg")),
+    ("loop_diuretic", CONCEPT_DICTIONARY["loop_diuretic"][0], (0, 1)),
+    ("loop_diuretic", CONCEPT_DICTIONARY["loop_diuretic"][0].lower(), (0, 1)),
+    ("loop_diuretic", CONCEPT_DICTIONARY["loop_diuretic"][1], (0, 1)),
 ])
-def test_a_registered_display_label_binds_the_prepared_group(prepared, concept, language, levels):
-    label = CONCEPT_DICTIONARY[concept][language]
+def test_a_registered_display_label_binds_the_prepared_group(prepared, concept, label, levels):
     question = f"What is the median age by {label}?"
     request = reading(question, grouping=[label], measure={"concept": "age", "statistic": "median"})
     source = with_group(prepared, concept, levels)
@@ -261,12 +263,28 @@ def test_a_registered_display_label_binds_the_prepared_group(prepared, concept, 
     assert proposal.card.plan.group_levels == levels
 
 
+def test_an_exact_group_label_takes_priority_over_a_shorter_phrase_match(prepared):
+    # The case-insensitive catalog recognizes dotted I. Its lowercase form
+    # contains a combining dot, so the phrase reader sees only "blood pressure".
+    label = CONCEPT_DICTIONARY["dbp"][0].replace("i", "İ", 1)
+    question = f"What is the median age by {label}?"
+    request = reading(question, grouping=[label], measure={"concept": "age", "statistic": "median"})
+    source = with_group(with_group(prepared, "dbp", (60, 80)), "sbp", (100, 120))
+
+    proposal = prepare_quick_answer(request, source=source, provider=None, question=question)
+    assert (proposal.status, proposal.reason) == ("approval_required", "quick_qualified")
+    assert proposal.card.plan.group_column == "dbp"
+    assert proposal.card.plan.group_levels == (60, 80)
+
+
 @pytest.mark.parametrize("label", ["local triage category", CONCEPT_DICTIONARY["o2sat"][1]])
 def test_an_unknown_or_ambiguous_group_name_stops_with_a_typed_reason(prepared, label):
-    request = reading(grouping=[label], measure={"concept": "age", "statistic": "median"})
+    question = f"What is the median age by {label}?"
+    request = reading(question, grouping=[label], measure={"concept": "age", "statistic": "median"})
+    source = with_group(with_group(prepared, "spo2", (94, 98)), "o2sat", (93, 97))
 
     assert bind_concept_names(request).grouping == (label,)
-    proposal = prepare_quick_answer(request, source=prepared, provider=None)
+    proposal = prepare_quick_answer(request, source=source, provider=None, question=question)
     assert (proposal.status, proposal.reason) == ("stopped", "quick_capability_unassessed")
     assert proposal.card is None
 

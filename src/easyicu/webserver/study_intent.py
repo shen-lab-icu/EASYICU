@@ -1147,7 +1147,9 @@ def stated_treatment_uses(question: str) -> Tuple[StatedTreatmentUse, ...]:
     return tuple(found.values())
 
 
-def _match_concept(text: str, *, study_roles: bool = False) -> List[Tuple[str, str]]:
+def _match_concept(
+    text: str, *, study_roles: bool = False, full_span_only: bool = False,
+) -> List[Tuple[str, str]]:
     """Return concept/phrase pairs in dictionary-specificity order.
 
     A phrase the sentence explicitly negates is not a reading — it is skipped,
@@ -1157,7 +1159,8 @@ def _match_concept(text: str, *, study_roles: bool = False) -> List[Tuple[str, s
     another concept's longer name is that concept (``_resolved_reading``).
     A substance both measured and given is read by what the sentence says of
     it (``_measured_or_given``); a later mention that says it decides one
-    that did not.
+    that did not. With ``full_span_only``, consider only readings that span
+    the entire text.
     """
     found: List[Tuple[str, str]] = []
     seen = set()
@@ -1168,7 +1171,8 @@ def _match_concept(text: str, *, study_roles: bool = False) -> List[Tuple[str, s
                 continue
             concept, start, end = resolved
             if (
-                _negated(text, start)
+                (full_span_only and (start != 0 or end != len(text)))
+                or _negated(text, start)
                 or _follow_up_handling(text, start, end)
                 or _population_restriction(
                     text, concept, start, end, include_patient_settings=study_roles,
@@ -1863,21 +1867,24 @@ def concept_named_by(name: str, *, include_catalog_labels: bool = False) -> Opti
     Reads ``name`` ("lactate", "heart_rate", "gender") with the same phrase
     table as a question, so a typed reader that names a measurement in words
     binds to the concept the question's own words would. When
-    ``include_catalog_labels`` is set, a label spanning the entire name is
-    also a candidate. A name that reads as no concept, or as more than one,
-    denotes none.
+    ``include_catalog_labels`` is set and a catalog label spans the entire
+    name, only full-span catalog and phrase-table readings are candidates.
+    A name that reads as no concept, or as more than one, denotes none.
     """
 
     try:
         text = _clean_question(str(name or "").replace("_", " "))
     except StudyIntentError:
         return None
-    readings = {concept for concept, _phrase in _match_concept(text.lower())}
+    catalog_readings = set()
     if include_catalog_labels:
-        readings.update(
+        catalog_readings = {
             concept for concept, start, end in _catalog_name_readings(text)
             if start == 0 and end == len(text)
-        )
+        }
+    readings = catalog_readings | {
+        concept for concept, _phrase in _match_concept(text.lower(), full_span_only=bool(catalog_readings))
+    }
     concept = next(iter(readings)) if len(readings) == 1 else None
     return concept if isinstance(concept, str) else None
 
