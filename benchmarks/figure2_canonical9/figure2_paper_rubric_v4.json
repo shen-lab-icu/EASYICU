@@ -735,6 +735,7 @@
     "src/easyicu/research_agent/learning/store.py",
     "src/easyicu/research_agent/literature.py",
     "src/easyicu/research_agent/literature_concepts.py",
+    "src/easyicu/research_agent/literature_deadline.py",
     "src/easyicu/research_agent/literature_excerpt.py",
     "src/easyicu/research_agent/mcp_policy.py",
     "src/easyicu/research_agent/mcp_server.py",
@@ -1211,6 +1212,7 @@
     "src/easyicu/table/utils.py",
     "src/easyicu/urine_weight_linkage.py",
     "src/easyicu/utils/__init__.py",
+    "src/easyicu/utils/address_fallback.py",
     "src/easyicu/utils/assertions.py",
     "src/easyicu/utils/callback_system.py",
     "src/easyicu/utils/callback_utils.py",
@@ -1539,6 +1541,7 @@
     "src/easyicu/webserver/source_identity_authority.py",
     "src/easyicu/webserver/source_partition_candidates.py",
     "src/easyicu/webserver/sources.py",
+    "src/easyicu/webserver/stack_dump.py",
     "src/easyicu/webserver/state_paths.py",
     "src/easyicu/webserver/stop_next_actions.py",
     "src/easyicu/webserver/storage_locations.py",
@@ -1567,7 +1570,7 @@
     "src/easyicu/webserver/zotero_probe.py"
   ],
   "scorer_tree_root": "benchmarks/figure2_canonical9/successor_v4",
-  "scorer_tree_sha256": "b619bac8aca058504adc1258e213a1c59138715b93f7b2358b1c927d9dc57e5f",
+  "scorer_tree_sha256": "ac9c6950426c13d0d459811005adb6c718c96693012e2fdfe515b72e4407c948",
   "suite_projection_sha256": "11c39afac69c9a0b560c6aa92be19f05725f04c66b9d2c499cfdb353c40295ab",
   "suite_ref": "easyicu_evaluation_protocol_suite/v2",
   "tasks": [
