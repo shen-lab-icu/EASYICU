@@ -77,18 +77,23 @@ def test_stay_identity_ranks_source_history_before_member_filter(tmp_path, datab
 @pytest.mark.parametrize("database,stay_key", [("miiv", "stay_id"), ("mimic", "icustay_id")])
 def test_undated_stay_hides_rank_but_leaves_other_hospital_admission_rankable(tmp_path, database, stay_key):
     stays = pd.DataFrame({
-        stay_key: [18, 40, 73, 91],
-        "subject_id": [12, 12, 12, 13],
-        "hadm_id": [51, 51, 52, 53],
-        "intime": [pd.NaT, ADMISSION, ADMISSION + pd.Timedelta(days=3), ADMISSION],
+        stay_key: [18, 40, 73, 68, 91],
+        "subject_id": [12, 12, 12, 12, 13],
+        "hadm_id": [51, 51, 52, 52, 53],
+        "intime": [pd.NaT, ADMISSION, ADMISSION + pd.Timedelta(days=3),
+                   ADMISSION + pd.Timedelta(days=5), ADMISSION],
     })
     _write(stays, tmp_path / "icustays.parquet")
     actual = load_stay_identity(
-        database=database, data_path=tmp_path, patient_ids={stay_key: [40, 73, 91]},
+        database=database, data_path=tmp_path, patient_ids={stay_key: [40, 73, 68, 91]},
     ).set_index(stay_key)
     assert actual.loc[[40, 73], ["stay_order", "is_first_icu_stay"]].isna().all(axis=None)
     assert pd.isna(actual.loc[40, "is_first_icu_stay_of_hospital_admission"])
     assert actual.loc[[73, 91], "is_first_icu_stay_of_hospital_admission"].tolist() == [True, True]
+    assert pd.isna(actual.loc[68, "stay_order"])
+    assert not actual.loc[68, "is_first_icu_stay_of_hospital_admission"]
+    assert pd.notna(actual.loc[68, "is_first_icu_stay"])
+    assert not actual.loc[68, "is_first_icu_stay"]
     assert actual.loc[91, ["stay_order", "is_first_icu_stay"]].tolist() == [1, True]
 
 
@@ -105,13 +110,31 @@ def test_aumc_uses_absolute_admission_count_and_breaks_ties(tmp_path):
     assert actual.is_first_icu_stay_of_hospital_admission.isna().all()
 
 
-@pytest.mark.parametrize("unrankable_count", [None, 0, 1, 1.5], ids=["missing", "zero", "undated-tie", "fraction"])
+def test_aumc_only_earliest_dated_count_one_can_be_first_even_after_selection(tmp_path):
+    _write(pd.DataFrame({
+        "admissionid": [27, 83, 12], "patientid": 21,
+        "admissioncount": [1, 1, 5], "admittedat": [240_000, 95_000, 840_000],
+    }), tmp_path / "admissions.parquet")
+    actual = load_stay_identity(database="aumc", data_path=tmp_path).set_index("admissionid")
+    assert actual.loc[[83, 27, 12], "stay_order"].tolist() == [1, 2, 5]
+    assert actual.loc[[83, 27, 12], "is_first_icu_stay"].tolist() == [True, False, False]
+    selected = load_stay_identity(database="aumc", data_path=tmp_path, patient_ids={"admissionid": [27]})
+    assert selected[["stay_order", "is_first_icu_stay"]].to_dict("list") == {
+        "stay_order": [2], "is_first_icu_stay": [False],
+    }
+
+
+@pytest.mark.parametrize(
+    "unrankable_count,first_timestamp",
+    [(None, None), (0, None), (1, None), (1, 120_000), (1.5, None)],
+    ids=["missing", "zero", "undated-tie", "same-recorded-admission-time", "fraction"],
+)
 def test_aumc_unresolved_admission_hides_ordinals_but_a_valid_later_count_still_excludes_first(
-    tmp_path, unrankable_count,
+    tmp_path, unrankable_count, first_timestamp,
 ):
     _write(pd.DataFrame({
         "admissionid": [14, 25, 39], "patientid": 20,
-        "admissioncount": [unrankable_count, 1, 4], "admittedat": [None, 120_000, 720_000],
+        "admissioncount": [unrankable_count, 1, 4], "admittedat": [first_timestamp, 120_000, 720_000],
         "dischargedat": 3_600_000,
     }), tmp_path / "admissions.parquet")
     actual = load_stay_identity(database="aumc", data_path=tmp_path).set_index("admissionid")
@@ -138,23 +161,61 @@ def test_eicu_resets_visit_number_at_each_hospital_admission(tmp_path):
     ]
 
 
-@pytest.mark.parametrize("missing_field", ["hospitaldischargeyear", "patienthealthsystemstayid"])
-def test_eicu_missing_encounter_coordinates_hide_person_order(tmp_path, missing_field):
+@pytest.mark.parametrize(
+    "field,value",
+    [("hospitaldischargeyear", None), ("hospitaldischargeyear", 2014), ("patienthealthsystemstayid", None)],
+    ids=["year-unrecorded", "different-years-on-one-admission", "encounter-key-unrecorded"],
+)
+def test_eicu_uncertain_encounter_coordinates_hide_person_order(tmp_path, field, value):
     stays = pd.DataFrame({
         "patientunitstayid": [36, 48, 59], "uniquepid": "person-q",
         "patienthealthsystemstayid": [14, 14, 14], "hospitaldischargeyear": 2016,
         "unitvisitnumber": [1, 1, 3], "hospitaladmitoffset": [-180, -45, -960],
     })
-    stays.loc[0, missing_field] = None
+    stays.loc[0, field] = value
     _write(stays, tmp_path / "patient.parquet")
     actual = load_stay_identity(database="eicu", data_path=tmp_path).set_index("patientunitstayid")
     assert actual.stay_order.isna().all()
     assert pd.isna(actual.loc[48, "is_first_icu_stay"])
+    assert actual.loc[48, "is_first_icu_stay_of_hospital_admission"]
     assert not actual.loc[59, "is_first_icu_stay"]
     assert not actual.loc[59, "is_first_icu_stay_of_hospital_admission"]
-    if missing_field == "hospitaldischargeyear":
+    if field == "hospitaldischargeyear":
         assert not actual.loc[36, "is_first_icu_stay"]
         assert not actual.loc[36, "is_first_icu_stay_of_hospital_admission"]
+    else:
+        assert actual.loc[36, ["is_first_icu_stay", "is_first_icu_stay_of_hospital_admission"]].isna().all()
+
+
+@pytest.mark.parametrize(
+    "offsets,rankable",
+    [
+        ((-40, -85, -140, -320), True),
+        ((-40, -85, None, -320), False),
+        ((-40, -85, -140, -math.inf), False),
+        ((-40, -85, -40, -320), False),
+    ],
+    ids=[
+        "offsets-reorder-all-siblings", "one-duplicate-visit-undated",
+        "later-sibling-offset-not-finite", "same-hospital-clock-reading",
+    ],
+)
+def test_eicu_repeated_visit_numbers_require_a_complete_hospital_clock(tmp_path, offsets, rankable):
+    _write(pd.DataFrame({
+        "patientunitstayid": [82, 27, 65, 94], "uniquepid": "person-l",
+        "patienthealthsystemstayid": 61, "hospitaldischargeyear": 2018,
+        "unitvisitnumber": [1, 3, 1, 4], "hospitaladmitoffset": list(offsets),
+    }), tmp_path / "patient.parquet")
+    actual = load_stay_identity(database="eicu", data_path=tmp_path).set_index("patientunitstayid")
+    flags = ["is_first_icu_stay", "is_first_icu_stay_of_hospital_admission"]
+    if rankable:
+        assert actual.loc[[82, 27, 65, 94], "stay_order"].tolist() == [1, 2, 3, 4]
+        assert actual.loc[82, flags].tolist() == [True, True]
+        assert actual.loc[65, flags].tolist() == [False, False]
+    else:
+        assert actual.stay_order.isna().all()
+        assert actual.loc[[82, 65], flags].isna().all(axis=None)
+    assert actual.loc[[27, 94], flags].to_numpy().tolist() == [[False, False], [False, False]]
 
 
 @pytest.mark.parametrize("later_offset", [-780, None], ids=["rank-by-offset", "missing-offset"])

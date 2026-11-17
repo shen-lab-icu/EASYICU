@@ -87,7 +87,8 @@ def _rank_identity(rows, *, database, stay, person, hospital, order):
         count = rows["admissioncount"]
         valid_count = _valid_ordinal(count)
         tied = rows.duplicated([person, "admissioncount"], keep=False)
-        valid &= valid_count & (~tied | np.isfinite(rows["admittedat"]))
+        unresolved = rows.duplicated([person, "admissioncount", "admittedat"], keep=False)
+        valid &= valid_count & ~unresolved & (~tied | np.isfinite(rows["admittedat"]))
         proven_later = valid_count & count.gt(1)
     elif database == "sic":
         offset = rows["OffsetAfterFirstAdmission"]
@@ -97,13 +98,16 @@ def _rank_identity(rows, *, database, stay, person, hospital, order):
         groups = [rows[person], rows[hospital]]
         visit = rows["unitvisitnumber"]
         valid_visit = _valid_ordinal(visit)
-        # Use one clock throughout an admission. Missing visit numbers make
-        # offsets necessary for every sibling, including numbered visits.
-        by_visit = valid_visit.groupby(groups, sort=False).transform("all").eq(True)
+        tied_visit = rows.duplicated([person, hospital, "unitvisitnumber"], keep=False)
+        # Use one clock throughout an admission. Offsets must order every
+        # sibling when visit numbers fail to establish a complete order.
+        by_visit = (valid_visit & ~tied_visit).groupby(groups, sort=False).transform("all").eq(True)
         rows["_visit_order"] = visit.where(by_visit)
         hospital_order = ["_visit_order", "hospitaladmitoffset", stay]
         sort_order = [*order[:2], *hospital_order]
-        hospital_valid = by_visit | np.isfinite(rows["hospitaladmitoffset"]).fillna(False)
+        tied_offset = rows.duplicated([person, hospital, "hospitaladmitoffset"], keep=False)
+        valid_offset = np.isfinite(rows["hospitaladmitoffset"]).fillna(False) & ~tied_offset
+        hospital_valid = by_visit | valid_offset
         first_hospital = _first_hospital_stay(
             rows, person=person, hospital=hospital, order=hospital_order, valid=hospital_valid,
         ).mask(valid_visit & visit.gt(1), False)
@@ -115,6 +119,7 @@ def _rank_identity(rows, *, database, stay, person, hospital, order):
         first_hospital = _first_hospital_stay(
             rows, person=person, hospital=hospital, order=["intime", stay], valid=rows["intime"].notna(),
         )
+        proven_later = first_hospital.eq(False).fillna(False)
 
     # A sibling with an unknown position can precede any ranked stay.
     rankable = valid.fillna(False).groupby(rows[person], sort=False).transform("all").eq(True)
@@ -123,14 +128,16 @@ def _rank_identity(rows, *, database, stay, person, hospital, order):
     positions = ranked.groupby(person, sort=False).cumcount()
     if database == "aumc":
         # Preserve the source ordinal, including gaps in a partial source.
-        # If ordinals tie, advance in source time and stay-key order.
+        # If ordinals tie, advance in source time order.
         difference = ranked["admissioncount"] - positions
         ordinal = difference.groupby(ranked[person], sort=False).cummax() + positions
     else:
         ordinal = positions + 1
     rows["stay_order"] = ordinal.astype("Int64")
-    first = rows["stay_order"].eq(1)
-    if database == "sic":
+    first = positions.eq(0).astype("boolean").reindex(rows.index)
+    if database == "aumc":
+        first &= rows["admissioncount"].eq(1)
+    elif database == "sic":
         at_first_admission = rows["OffsetAfterFirstAdmission"].eq(0).fillna(False)
         zero_count = at_first_admission.groupby(rows[person], sort=False).transform("sum")
         first = at_first_admission.astype("boolean").mask(at_first_admission & zero_count.gt(1))
@@ -162,7 +169,7 @@ def load_stay_identity(*, database, data_path, patient_ids=None):
     evidence = ",".join(f"{config['table']}.{c}" for c in (*order, stay))
     if family == "eicu":
         evidence += (
-            ";hospitaladmitoffset_descending;offset_order_when_visit_numbers_incomplete"
+            ";hospitaladmitoffset_descending;offset_order_when_visit_numbers_incomplete_or_tied"
             ";same_year_encounter_order_unverified"
         )
     if family == "hirid":
