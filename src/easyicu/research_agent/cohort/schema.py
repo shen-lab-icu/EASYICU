@@ -723,6 +723,7 @@ def _raw_typed_plan_reference_issues(
     context: Any,
     columns: tuple[str, ...],
     reserved_coordinates: tuple[str, ...] = (),
+    findings: list[dict[str, Any]] | None = None,
 ) -> list[str]:
     """Return Planner-owned raw fields absent from the sealed cohort.
 
@@ -734,6 +735,7 @@ def _raw_typed_plan_reference_issues(
     available = set(columns)
     reserved = set(reserved_coordinates)
     invalid_locations: dict[str, list[str]] = {}
+    location_owner: tuple[int, str] | None = None
     from ..planning.dependence_authority import context_dependence_authority
 
     host_dependence = (
@@ -750,9 +752,17 @@ def _raw_typed_plan_reference_issues(
         name = str(value or "").strip()
         if name and ":" not in name and name not in available:
             invalid_locations.setdefault(name, []).append(label)
+            if findings is not None:
+                findings.append({
+                    "reason_code": "reserved_navigation_field" if name in reserved else "raw_field_not_prepared",
+                    "field": name, "path": label,
+                    "step_index": location_owner[0] if location_owner else None,
+                    "step_id": location_owner[1] if location_owner else None,
+                })
 
     for step_index, step in enumerate(getattr(plan, "steps", ()) or ()):
         step_id = str(getattr(step, "step_id", "") or step_index)
+        location_owner = (step_index, step_id)
         # A verified grouping reads the sealed row identity for covariance,
         # just as a phenotype comparison reads it for row alignment. Neither
         # use promotes that navigation coordinate to a clinical model term.
@@ -791,6 +801,7 @@ def _raw_typed_plan_reference_issues(
                     if term.name in reserved:
                         require_column(f"steps[{step_id}].model_requirements[{requirement_index}].{field}", term.name)
 
+    location_owner = None
     for spec_index, spec in enumerate(getattr(plan, "robustness_specs", ()) or ()):
         spec_id = str(getattr(spec, "spec_id", "") or spec_index)
         missing = getattr(spec, "missing_override", None)
@@ -990,28 +1001,33 @@ def _primary_cohort_contrast_preservation_issues(
         predicate_sets = predicates_by_column.get(column)
         if not predicate_sets:
             continue
+        # Count levels that could survive; this is a proof of collapse only
+        # when fewer than two can remain. For a whole-stay positive event the
+        # builder can change a windowed predicate's truth using its event time.
+        # Do not mistake absence before time zero for absence over the stay.
         retained = 0
-        indeterminate = False
         for level in levels:
-            include = True
-            for predicate in predicate_sets.get("inclusion", ()):
-                accepted = predicate_accepts_closed_level(predicate, level)
-                if accepted is None:
-                    indeterminate = True
+            possible = True
+            for kind, predicates in predicate_sets.items():
+                for predicate in predicates:
+                    accepted = predicate_accepts_closed_level(predicate, level)
+                    if (
+                        level == 1
+                        and _event_time_reading(predicate) is not None
+                        and math.isfinite(float(predicate.time_window.end_offset_hours))
+                        and f"{predicate.concept_id}_time" in columns
+                    ):
+                        accepted = None
+                    if (
+                        (kind == "inclusion" and accepted is False)
+                        or (kind == "exclusion" and accepted is True)
+                    ):
+                        possible = False
+                        break
+                if not possible:
                     break
-                include = include and accepted
-            if indeterminate:
-                break
-            for predicate in predicate_sets.get("exclusion", ()):
-                excluded = predicate_accepts_closed_level(predicate, level)
-                if excluded is None:
-                    indeterminate = True
-                    break
-                include = include and not excluded
-            if indeterminate:
-                break
-            retained += int(include)
-        if not indeterminate and retained < 2:
+            retained += int(possible)
+        if retained < 2:
             issues.append(
                 "cohort: primary cohort predicates collapse a downstream closed "
                 f"comparison on sealed column {column!r} below two retained "
@@ -1019,6 +1035,14 @@ def _primary_cohort_contrast_preservation_issues(
                 "comparison/primary estimand so the plan is internally consistent."
             )
     return issues
+
+
+class PlanContextBindingError(CohortSchemaError):
+    """Prepared-field findings keep their actual step owner for bounded repair."""
+
+    def __init__(self, message: str, *, findings: list[dict[str, Any]]) -> None:
+        super().__init__(message)
+        self.binding_findings = tuple(findings)
 
 
 def validate_plan_typed_bindings_against_context(
@@ -1048,11 +1072,15 @@ def validate_plan_typed_bindings_against_context(
         return
 
     definitions: list[tuple[str, CohortDefinition]] = []
-    primary = coerce_cohort_definition(getattr(plan, "cohort", None))
+    # Compilation admits physical columns through this same sealed run scope.
+    # Revalidation must not fall back to package dictionary membership alone.
+    with cohort_concept_id_scope(sealed_cohort_concept_ids(context)):
+        primary = coerce_cohort_definition(getattr(plan, "cohort", None))
     if primary is not None and (primary.inclusion or primary.exclusion):
         definitions.append(("cohort", primary))
     for index, spec in enumerate(getattr(plan, "robustness_specs", ()) or ()):
-        override = coerce_cohort_definition(getattr(spec, "cohort_override", None))
+        with cohort_concept_id_scope(sealed_cohort_concept_ids(context)):
+            override = coerce_cohort_definition(getattr(spec, "cohort_override", None))
         if override is not None and (override.inclusion or override.exclusion):
             spec_id = str(getattr(spec, "spec_id", "") or index)
             definitions.append(
@@ -1064,11 +1092,13 @@ def validate_plan_typed_bindings_against_context(
     # navigation input; model variables must still have concept bindings.
     executable_columns = column_authority.executable_columns
     reserved_coordinates = column_authority.reserved_navigation_coordinates
+    raw_findings: list[dict[str, Any]] = []
     raw_issues = _raw_typed_plan_reference_issues(
         plan=plan,
         context=context,
         columns=executable_columns,
         reserved_coordinates=reserved_coordinates,
+        findings=raw_findings,
     )
     issues = list(raw_issues)
     unreadable_codes: set[str] = set()
@@ -1173,14 +1203,15 @@ def validate_plan_typed_bindings_against_context(
             f"columns={producer_columns!r} and source concepts={typed_sources!r}."
         )
     correction = " ".join(text for text in (correction, *corrections) if text)
-    raise CohortSchemaError(
+    raise PlanContextBindingError(
         "typed plan references are not executable against this sealed input. "
         f"Invalid references: {detail}. {correction} Additional binding context: "
         "declared "
         f"typed source concepts={typed_sources!r}; declared columns="
         f"{producer_columns!r}; executable cohort columns="
         f"{sorted(executable_columns)!r}; reserved navigation coordinates="
-        f"{list(reserved_coordinates)!r}."
+        f"{list(reserved_coordinates)!r}.",
+        findings=raw_findings,
     )
 
 

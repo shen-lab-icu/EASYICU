@@ -340,3 +340,37 @@ process.stdout.write(JSON.stringify({zh,en,unknown:window.AGENT_READER_VOCAB.cat
     rows = json.loads(result.stdout)
     assert all(rows["zh"]) and all(rows["en"])
     assert rows["unknown"] == ""
+
+
+@pytest.mark.parametrize(("question", "population_concept"), [
+    ("在合成数据库的 Sepsis-3 ICU 患者中，利用入科后前12小时生命体征识别临床亚型，比较死亡情况。", "sep3"),
+    ("在合成数据库的 Sepsis-3 ICU患者中，利用首日生命体征识别临床亚型，比较死亡情况。", "sep3"),
+    ("Among synthetic AKI ICU patients, identify subphenotypes from first-12-hour vitals and compare mortality.", "aki"),
+])
+def test_a_patient_qualifier_is_population_and_never_an_exposure_receipt(question, population_concept):
+    from easyicu.webserver.study_intent import _match_concept, deterministic_intent
+
+    assert population_concept in {concept for concept, _phrase in _match_concept(question)}
+
+    slots = deterministic_intent(question)["slots"]
+    assert slots["population"]["value"]
+    assert slots["exposure"]["value"] is None
+    assert slots["outcome"]["value"] == "death"
+    result = research_launch_scientific._metadata_only_planning_coordinates(
+        question=question, database="miiv",
+    )
+    assert result["primary_exposure"] is None
+    assert result["target_outcome"] == "death"
+    assert not any(row["role"] == "exposure" for row in result["coordinate_readings"])
+
+
+def test_a_condition_explicitly_studied_as_an_exposure_stays_an_exposure():
+    from easyicu.webserver.study_intent import deterministic_intent
+
+    question = "Study the association of AKI stage with hospital mortality in a synthetic ICU cohort."
+    assert deterministic_intent(question)["slots"]["exposure"]["value"] == "aki_stage"
+    result = research_launch_scientific._metadata_only_planning_coordinates(
+        question=question, database="miiv",
+    )
+    assert result["primary_exposure"] == "aki_stage"
+    assert any(row["role"] == "exposure" for row in result["coordinate_readings"])

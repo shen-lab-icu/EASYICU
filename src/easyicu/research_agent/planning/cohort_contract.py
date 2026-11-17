@@ -527,8 +527,8 @@ def sealed_cohort_concept_ids(
         values.extend(
             str(value).strip()
             for value in (
-                variable.source_concept,
-                *variable.derived_from_concepts,
+                getattr(variable, "source_concept", None),
+                *(getattr(variable, "derived_from_concepts", ()) or ()),
             )
             if str(value or "").strip()
         )

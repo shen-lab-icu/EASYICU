@@ -219,3 +219,27 @@ def test_run_record_projects_every_bound_run_without_paths():
         assert "project_dir" not in row and "gate_checks" not in row
     assert project_run_history([]) == []
     assert len(project_run_history([dict(candidate, run_id=f"run_{i}") for i in range(30)])) == 10
+
+
+@pytest.mark.parametrize("binding_code", [
+    "progressive_context_bindings_invalid", "progressive_unknown_variable",
+    "progressive_product_reference_mismatch", "progressive_product_dependency_mismatch",
+])
+@pytest.mark.parametrize("gate_code", [
+    "research_pipeline_progressive_compile_failed", "research_pipeline_plan_contract_exhausted",
+])
+def test_an_exhausted_prepared_binding_repair_offers_planning_instead_of_preparation(binding_code, gate_code):
+    study, candidate, failed, review = case()
+    failed.update(
+        gate_reason=gate_code,
+        gate_detail={"reason_code": binding_code,
+                     "step_id": "opaque_primary", "path": "context_bindings"},
+        development_planner_checkpoint_available=False,
+    )
+    before = deepcopy((study, candidate, failed, review))
+    result = snapshot(study, candidate, failed, review)
+    assert result.latest_attempt_failure.reason == "plan_bindings_invalid"
+    assert result.latest_attempt_failure.checkpoint_resume_available is False
+    assert result.next_action_code == "failed_pipeline_requires_fresh_plan"
+    assert result.plan_execution_ready is False
+    assert (study, candidate, failed, review) == before
