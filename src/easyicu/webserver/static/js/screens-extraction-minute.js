@@ -1,55 +1,41 @@
 /* Owner: explicit minute-resolution choices and results in Data Extraction. */
 (function () {
   function create({ t, escHtml, hosted, repaint, backgroundRepaint }) {
-    const selected = new Set();
-    let database = '';
-    let group = null;
-    let failed = false;
-    let request = 0;
-    let hydratedSource = '';
+    let state = null;
 
-    function reset() {
-      database = '';
-      group = null;
-      failed = false;
-      selected.clear();
-      ++request;
+    function render({ path, database, ready }) {
+      if (!state || state.path !== path || state.database !== database || state.ready !== ready) {
+        state = { path, database, ready, group: null, failed: false, pending: false, selected: new Set() };
+      }
+      if (path && database && ready && !state.group && !state.failed && !state.pending && window.EU_API?.getJSON) {
+        load(state);
+      }
     }
 
-    function hydrate(source, { sameSetup, ready }) {
-      const coordinate = JSON.stringify([source?.path || '', source?.database || '']);
-      if (!sameSetup || !ready || coordinate !== hydratedSource) reset();
-      hydratedSource = coordinate;
-    }
-
-    function load(key) {
-      reset();
-      database = key;
-      const current = request;
-      window.EU_API.getJSON('/api/extraction/module-options?database=' + encodeURIComponent(key))
+    function load(current) {
+      current.failed = false;
+      current.pending = true;
+      window.EU_API.getJSON('/api/extraction/module-options?database=' + encodeURIComponent(current.database))
+        .catch(() => null)
         .then(payload => {
-          if (current !== request) return;
+          // A new connection to the same folder has its own state object.
+          if (current !== state) return;
           const options = payload?.minute_resolution;
-          if (!Array.isArray(options?.modules)) throw new Error('Invalid minute module options');
-          group = options;
-          backgroundRepaint();
-        })
-        .catch(() => {
-          if (current !== request) return;
-          group = null;
-          failed = true;
+          current.group = Array.isArray(options?.modules) ? options : null;
+          current.failed = !current.group;
+          current.pending = false;
           backgroundRepaint();
         });
     }
 
     function choices(wanted) {
+      const { group, selected } = state || {};
       if (hosted() || !group || group.unavailable_reason) return [];
       return group.modules.filter(row => selected.has(row.id) && (!wanted || wanted.has(row.id)));
     }
 
-    function render(key) {
-      if (!key || !window.EU_API?.getJSON) reset();
-      else if (key !== database) load(key);
+    function markup() {
+      const { database, group, failed, pending, selected } = state;
       const hostedReason = hosted() || group?.unavailable_reason === 'subhour_unavailable_when_hosted';
       let note = '';
       if (hostedReason) {
@@ -57,14 +43,14 @@
       } else if (failed) {
         note = t('Could not load coverage.', '无法加载覆盖范围。') +
           ` <button type="button" class="linkbtn" data-ex-minute-retry>${t('Retry', '重试')}</button>`;
-      } else if (!database) {
-        note = t('Database coverage is unavailable.', '数据库覆盖范围暂不可用。');
-      } else if (!group) {
+      } else if (pending) {
         note = t('Checking database coverage…', '正在查询数据库覆盖范围…');
+      } else if (!group) {
+        note = t('Database coverage is unavailable.', '数据库覆盖范围暂不可用。');
       } else if (selected.size) {
         note = t('Minute exports can be larger and take longer.', '分钟级导出可能占用更多空间、耗时更长。');
       }
-      const source = window.EU_DATABASE_NAMES?.name(key) || key;
+      const source = window.EU_DATABASE_NAMES?.name(database) || database;
       return `
         <section class="ex-minute-group" aria-labelledby="exMinuteHeading">
           <h3 id="exMinuteHeading">${t('Minute resolution', '分钟级分辨率')}</h3>
@@ -86,16 +72,18 @@
     }
 
     function bind(root, markStale) {
+      const current = state;
       root.querySelector('[data-ex-minute-retry]')?.addEventListener('click', () => {
-        if (!failed || !database || !window.EU_API?.getJSON) return;
-        load(database);
+        if (current !== state || !current?.failed || !window.EU_API?.getJSON) return;
+        load(current);
         repaint();
       });
       root.querySelectorAll('[data-ex-minute-module]').forEach(input => {
         input.addEventListener('change', () => {
+          if (current !== state || !current?.group) return;
           const id = input.dataset.exMinuteModule;
-          if (input.checked) selected.add(id);
-          else selected.delete(id);
+          if (input.checked) current.selected.add(id);
+          else current.selected.delete(id);
           markStale();
           repaint();
           const inputs = root.querySelectorAll('[data-ex-minute-module]');
@@ -114,8 +102,8 @@
     }
 
     return {
-      render, bind, resultDetail, reset, hydrate,
-      clear: () => selected.clear(),
+      render, markup, bind, resultDetail,
+      clear: () => state?.selected.clear(),
       keys: () => choices().map(row => row.id),
       count: () => choices().reduce((count, row) => count + row.signals.length, 0),
       payload: wanted => Object.fromEntries(choices(wanted).map(row => [row.id, row.signals])),

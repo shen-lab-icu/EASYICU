@@ -69,7 +69,7 @@
     const setup = project(context, expectedDatabase);
     const adapter = window.EU_EXTRACTION_CONTEXT;
     if (!adapter || typeof adapter.applyStudySetup !== 'function') return setup;
-    // The form projection stays path-free. The source is only for coverage invalidation.
+    // The form stays path-free. The source can supersede a previous local binding.
     return adapter.applyStudySetup(setup, context?.data_source);
   }
 

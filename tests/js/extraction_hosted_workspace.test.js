@@ -20,6 +20,7 @@ const html = file(process.argv[4], 'html-escape.js');
 const names = fs.readFileSync(path.join(process.argv[2] ? path.dirname(path.resolve(process.argv[2])) : root, 'database-names.js'), 'utf8');
 const minuteSource = file(null, 'screens-extraction-minute.js');
 const studyContext = file(null, 'screens-extraction-study-context.js');
+const jobContinuity = file(null, 'screens-extraction-job-continuity.js');
 
 function section(begin, end) {
   const a = source.indexOf(begin), b = source.indexOf(end, a + begin.length);
@@ -196,9 +197,9 @@ test('minute chooser sends only explicit, database-covered modules and renders t
     hosted: () => hosted, repaint() {}, backgroundRepaint() {},
   });
   const render = async key => {
-    owner.render(key);
+    owner.render({ path: '/fixture/' + key, database: key, ready: true });
     await new Promise(resolve => setImmediate(resolve));
-    return owner.render(key);
+    return owner.markup();
   };
   const initial = await render('hirid');
   assert.match(initial, /Minute resolution/);
@@ -217,8 +218,8 @@ test('minute chooser sends only explicit, database-covered modules and renders t
   assert.deepEqual(Array.from(owner.keys()), ['vent_native']);
   assert.deepEqual(Object.keys(owner.payload(new Set(['vitals']))), []);
   assert.deepEqual(Array.from(owner.payload(new Set(['vent_native'])).vent_native), ['peep_total']);
-  assert.match(owner.render('hirid'), /hirid<\/b> · peep_total/);
-  assert.match(owner.render('hirid'), /larger and take longer/);
+  assert.match(owner.markup(), /hirid<\/b> · peep_total/);
+  assert.match(owner.markup(), /larger and take longer/);
   assert.equal(owner.resultDetail({
     time_resolution: { interval_minutes: 1, signals: { peep_total: { rows: 10 } } },
   }), '1-minute grid · peep_total');
@@ -229,8 +230,8 @@ test('minute chooser sends only explicit, database-covered modules and renders t
   assert.doesNotMatch(switched, /data-ex-minute-module="vent_native"/);
   assert.deepEqual(Array.from(owner.keys()), []);
   hosted = true;
-  assert.match(owner.render('sic'), /Patient-level minute exports are unavailable on hosted instances/);
-  assert.doesNotMatch(owner.render('sic'), /data-ex-minute-module/);
+  assert.match(owner.markup(), /Patient-level minute exports are unavailable on hosted instances/);
+  assert.doesNotMatch(owner.markup(), /data-ex-minute-module/);
 });
 
 const coverage = { minute_resolution: { modules: [
@@ -243,12 +244,15 @@ const settle = () => new Promise(resolve => setImmediate(resolve));
 function minuteScreen(getOptions = async () => coverage) {
   const posted = [];
   const requests = [];
+  let events;
+  function EventSource() { events = this; this.close = () => {}; }
   const c = vm.createContext({
-    t: en => en, icon: () => '', location: { hash: '#extraction' }, setTimeout() {},
+    t: en => en, icon: () => '', location: { hash: '#extraction' }, setTimeout() {}, EventSource,
+    localStorage: { getItem: () => null, setItem() {}, removeItem() {} },
     window: {
       EU_SETTINGS: { export_dir: '/fixture/output' },
       EU_CATALOG: { groupConcepts: { vitals: ['sbp'] } },
-      EventSource() {},
+      EventSource,
       EU_API: {
         async scanPath() {
           return { ok: true, db_key: 'sic', db: 'SICdb', source: 'prepared', ready: true };
@@ -259,18 +263,14 @@ function minuteScreen(getOptions = async () => coverage) {
           return { job_id: 'fixture-job' };
         },
       },
-      EU_EXTRACTION_JOB_CONTINUITY: {
-        prepare: record => record, abandon() {}, isPending: () => false,
-        attach(record, jobId) {
-          c.window.EU_EXTRACTION_JOB_HOST.begin({ ...record, job_id: jobId });
-          return true;
-        },
-      },
     },
   });
-  for (const script of [names, html, hostedCopy, studyContext, minuteSource, source]) vm.runInContext(script, c);
+  for (const script of [names, html, hostedCopy, studyContext, minuteSource, source, jobContinuity]) vm.runInContext(script, c);
   const screen = c.window.SCREENS.extraction;
   const render = () => screen.render();
+  let markup;
+  let paints = 0;
+  c.window.__euRender = () => { markup = render(); paints++; };
 
   // Bind each interaction to a control actually rendered by the page.
   function interact(attribute, value, event = 'click', properties = {}) {
@@ -299,7 +299,6 @@ function minuteScreen(getOptions = async () => coverage) {
     await settle();
     interact('data-ex-usedata');
     await settle();
-    render();
     await settle();
   }
 
@@ -313,7 +312,12 @@ function minuteScreen(getOptions = async () => coverage) {
     return posted[0].body;
   }
 
-  return { c, render, interact, connect, submit, requests };
+  return {
+    c, render, interact, connect, submit, requests,
+    get markup() { return markup; },
+    get paints() { return paints; },
+    jobEvent(message) { events.onmessage({ data: JSON.stringify(message) }); },
+  };
 }
 
 test('an explicitly checked minute module survives the real extraction form submission', async () => {
@@ -363,28 +367,24 @@ test('an empty coverage reply offers Retry and can recover', async () => {
   assert.deepEqual(screen.requests, Array(2).fill('/api/extraction/module-options?database=sic'));
 });
 
-test('a new extraction and a fresh scan can reload coverage for the same database', async () => {
+test('returning to setup preserves the failed lookup until a fresh scan', async () => {
   let attempts = 0;
   const screen = minuteScreen(async () => {
-    if (++attempts < 3) throw new Error('Coverage endpoint temporarily unavailable');
+    if (++attempts === 1) throw new Error('Coverage endpoint temporarily unavailable');
     return coverage;
   });
   await screen.connect();
   assert.match(screen.render(), /Could not load coverage/);
   screen.interact('data-ex-selectall');
   await screen.submit();
-  screen.c.window.EU_EXTRACTION_JOB_HOST.applyEvent({ kind: 'extract', job_id: 'fixture-job' }, {
-    type: 'end', status: 'error', error: 'Export destination unavailable',
-  });
+  screen.jobEvent({ type: 'end', status: 'error', error: 'Export destination unavailable' });
   screen.interact('data-ex-reset');
-  screen.render();
-  assert.equal(attempts, 2, 'Back to setup must retry coverage for the same database');
-  await settle();
-  assert.match(screen.render(), /Could not load coverage/);
+  assert.match(screen.markup, /Could not load coverage/);
+  assert.equal(attempts, 1, 'Back to setup keeps coverage for the connected folder');
   screen.c.window.__euExtractReset();
   await screen.connect('/fixture/second-sic-folder');
-  assert.match(screen.render(), /Arterial line readings/);
-  assert.equal(attempts, 3);
+  assert.match(screen.markup, /Arterial line readings/);
+  assert.equal(attempts, 2);
 });
 
 function minuteOwner(getJSON) {
@@ -398,9 +398,10 @@ function minuteOwner(getJSON) {
 
 test('rendering without a source drops a checked minute module', async () => {
   const owner = minuteOwner(async () => coverage);
-  owner.render('sic');
+  const connected = { path: '/fixture/sic', database: 'sic', ready: true };
+  owner.render(connected);
   await settle();
-  assert.match(owner.render('sic'), /data-ex-minute-module="haemo_native"/);
+  assert.match(owner.markup(), /data-ex-minute-module="haemo_native"/);
   let select;
   const input = {
     dataset: { exMinuteModule: 'haemo_native' }, checked: true, focus() {},
@@ -409,25 +410,65 @@ test('rendering without a source drops a checked minute module', async () => {
   owner.bind({ querySelector: () => null, querySelectorAll: () => [input] }, () => {});
   select();
   assert.equal(owner.count(), 1);
-  assert.doesNotMatch(owner.render(''), /data-ex-minute-module/);
+  owner.render({ path: '', database: '', ready: false });
+  assert.doesNotMatch(owner.markup(), /data-ex-minute-module/);
   assert.equal(owner.count(), 0);
-  owner.render('sic');
+  owner.render(connected);
   await settle();
-  assert.match(owner.render('sic'), /data-ex-minute-module="haemo_native"/);
+  assert.match(owner.markup(), /data-ex-minute-module="haemo_native"/);
   assert.equal(owner.count(), 0, 'Reconnecting must leave the module unchecked');
 });
 
 test('removing the source also drops Retry for the failed lookup', async () => {
   const owner = minuteOwner(async () => { throw new Error('Coverage service is offline'); });
-  owner.render('sic');
+  owner.render({ path: '/fixture/unreachable-sic', database: 'sic', ready: true });
   await settle();
-  assert.match(owner.render('sic'), /data-ex-minute-retry/);
-  const empty = owner.render('');
+  assert.match(owner.markup(), /data-ex-minute-retry/);
+  owner.render({ path: '', database: '', ready: false });
+  const empty = owner.markup();
   assert.match(empty, /Database coverage is unavailable/);
   assert.doesNotMatch(empty, /data-ex-minute-retry/);
 });
 
-test('removing a source from the same study discards its pending minute coverage reply', async () => {
+for (const pending of [true, false]) {
+  test(`saving a validated monitor folder preserves ${pending ? 'pending coverage' : 'checked minute signals'}`, async () => {
+    let finish;
+    const screen = minuteScreen(() => pending ? new Promise(resolve => { finish = resolve; }) : Promise.resolve(coverage));
+    const { EU_EXTRACTION_STUDY_CONTEXT: bridge, EU_EXTRACTION_NATIVE_OWNER: owner } = screen.c.window;
+    const path = '/fixture/bedside-collection/winter';
+    const study = {
+      id: 'bedside-collection', revision: 1,
+      data_source: pending ? null : { path: '/fixture/bedside-collection/autumn', database: 'sic' },
+    };
+    bridge.hydrate(study, 'sic');
+    await screen.connect(path);
+    if (pending) assert.match(screen.markup, /Checking database coverage/);
+    else screen.interact('data-ex-minute-module', 'haemo_native', 'change', { checked: true });
+    let patch;
+    screen.c.window.EU_STUDY_CONTEXT = {
+      update(value) { patch = value; },
+      async persist() {
+        const saved = { ...study, ...patch, revision: 2 };
+        assert.ok(bridge.hydrate(saved, 'sic'));
+        return saved;
+      },
+    };
+
+    assert.equal((await owner.bindSourceToCopilot()).study_revision, 2);
+    assert.equal(patch.data_source.path, path);
+    if (pending) {
+      finish(coverage);
+      await settle();
+    } else {
+      assert.ok(screen.c.window.EU_EXTRACTION_CONTEXT.snapshot().modules.includes('haemo_native'));
+      assert.match(screen.markup, /data-ex-minute-module="haemo_native" checked/);
+    }
+    assert.match(screen.markup, /Arterial line readings/);
+    assert.equal(screen.requests.length, 1);
+  });
+}
+
+test('removing the calibration source disconnects the screen and drops its pending coverage', async () => {
   let finishPending;
   const screen = minuteScreen(() => new Promise(resolve => { finishPending = resolve; }));
   const study = {
@@ -437,17 +478,45 @@ test('removing a source from the same study discards its pending minute coverage
   const bridge = screen.c.window.EU_EXTRACTION_STUDY_CONTEXT;
   bridge.hydrate(study, 'sic');
   await screen.connect(study.data_source.path);
-  assert.match(screen.render(), /Checking database coverage/);
-  let repaints = 0;
-  screen.c.window.__euRender = () => { repaints++; };
+  assert.match(screen.markup, /Checking database coverage/);
 
   bridge.hydrate({ ...study, revision: 2, data_source: null }, 'sic');
+  const disconnected = screen.markup;
+  const paints = screen.paints;
   finishPending(coverage);
   await settle();
-  assert.equal(repaints, 0, 'Coverage from the removed study source must not repaint the workspace');
+  const rendered = screen.render();
+  assert.equal(screen.requests.length, 1, 'Rendering after unbinding must not repeat the old lookup');
+  assert.match(disconnected, /id="exPathInput"/);
+  assert.doesNotMatch(rendered, /Checking database coverage|data-ex-minute-module/);
+  assert.equal(screen.paints, paints, 'An unbound calibration lookup must never repaint the workspace');
 });
 
-test('hydrating while a folder needs conversion ignores its earlier coverage reply', async () => {
+test('a running bedside export defers a source-only correction until the job ends', async () => {
+  const screen = minuteScreen();
+  const bridge = screen.c.window.EU_EXTRACTION_STUDY_CONTEXT;
+  const study = {
+    id: 'bedside-export', revision: 3, modules: ['vitals'],
+    data_source: { path: '/fixture/bedside-export/working-copy', database: 'sic' },
+  };
+  bridge.hydrate(study);
+  await screen.connect(study.data_source.path);
+  await screen.submit();
+  const revision = {
+    ...study, revision: 4, data_source: { ...study.data_source, path: '/fixture/bedside-export/reconciled' },
+  };
+  assert.match(screen.markup, /Extracting/);
+  assert.equal(bridge.hydrate(revision), null);
+  assert.ok(bridge.hydrate(study), 'Reopening the active export with its original binding is safe');
+  assert.equal(screen.c.window.EU_EXTRACTION_CONTEXT.snapshot().data_source.path, study.data_source.path);
+  screen.jobEvent({ type: 'end', status: 'error', error: 'Destination quota reached' });
+  assert.match(screen.markup, /Destination quota reached/);
+  assert.ok(bridge.hydrate(revision));
+  assert.match(screen.markup, /id="exPathInput"/);
+  assert.equal(screen.requests.length, 1);
+});
+
+test('reattaching an active archive conversion drops coverage from before conversion', async () => {
   let finishPending;
   const screen = minuteScreen(() => new Promise(resolve => { finishPending = resolve; }));
   const study = {
@@ -457,22 +526,22 @@ test('hydrating while a folder needs conversion ignores its earlier coverage rep
   const bridge = screen.c.window.EU_EXTRACTION_STUDY_CONTEXT;
   bridge.hydrate(study);
   await screen.connect(study.data_source.path);
-  assert.match(screen.render(), /Checking database coverage/);
-  const job = screen.c.window.EU_EXTRACTION_JOB_HOST;
-  const conversion = { kind: 'convert', job_id: 'archive-convert', source: study.data_source };
-  job.begin(conversion);
-  job.applyEvent(conversion, { type: 'end', status: 'error', error: 'Archive directory needs repair' });
-  assert.doesNotMatch(screen.render(), /exMinuteHeading/);
-  let repaints = 0;
-  screen.c.window.__euRender = () => { repaints++; };
+  assert.match(screen.markup, /Checking database coverage/);
+  const jobs = screen.c.window.EU_EXTRACTION_JOB_CONTINUITY;
+  const conversion = jobs.prepare({ kind: 'convert', source: study.data_source });
+  jobs.attach(conversion, 'archive-convert');
+  assert.doesNotMatch(screen.markup, /exMinuteHeading/);
+  const paints = screen.paints;
 
-  bridge.hydrate({ ...study, revision: 2 });
+  const deferred = bridge.hydrate({ ...study, revision: 2, data_source: null }, 'sic');
   finishPending(coverage);
   await settle();
-  assert.equal(repaints, 0, 'A folder waiting for conversion must discard the earlier response');
+  assert.equal(screen.paints, paints, 'A running conversion must discard the earlier coverage response');
+  assert.equal(deferred, null);
+  assert.equal(screen.requests.length, 1);
 });
 
-test('a replacement study folder retries failed coverage for the same database', async () => {
+test('a replacement observations folder removes stale Retry and waits for a new scan', async () => {
   let attempts = 0;
   const screen = minuteScreen(async () => {
     if (++attempts === 1) throw new Error('Coverage lookup interrupted');
@@ -485,26 +554,29 @@ test('a replacement study folder retries failed coverage for the same database',
   const bridge = screen.c.window.EU_EXTRACTION_STUDY_CONTEXT;
   bridge.hydrate(study);
   await screen.connect(study.data_source.path);
-  assert.match(screen.render(), /data-ex-minute-retry/);
+  assert.match(screen.markup, /data-ex-minute-retry/);
   bridge.hydrate({ ...study, revision: 5 });
-  assert.match(screen.render(), /data-ex-minute-retry/);
+  assert.match(screen.markup, /data-ex-minute-retry/);
   assert.equal(attempts, 1);
 
-  bridge.hydrate({ ...study, revision: 6, data_source: { ...study.data_source, path: '/fixture/observations/corrected' } });
-  assert.match(screen.render(), /Checking database coverage/);
-  await settle();
-  assert.match(screen.render(), /data-ex-minute-module="haemo_native"/);
+  const corrected = '/fixture/observations/reconciled';
+  bridge.hydrate({ ...study, revision: 6, data_source: { ...study.data_source, path: corrected } });
+  assert.match(screen.markup, /id="exPathInput"/);
+  assert.doesNotMatch(screen.markup, /data-ex-minute-retry|Checking database coverage/);
+  assert.equal(attempts, 1);
+  await screen.connect(corrected);
+  assert.match(screen.markup, /data-ex-minute-module="haemo_native"/);
   assert.equal(attempts, 2);
 });
 
 test('starting source binding discards an in-flight coverage response', async () => {
   let finishPending;
-  let repaints = 0;
   const screen = minuteScreen(() => new Promise(resolve => { finishPending = resolve; }));
   await screen.connect();
-  screen.c.window.__euRender = () => { repaints++; };
   screen.c.window.EU_EXTRACTION_NATIVE_OWNER.beginSourceBinding();
+  assert.match(screen.render(), /id="exPathInput"/);
+  const paints = screen.paints;
   finishPending(coverage);
   await settle();
-  assert.equal(repaints, 0, 'a disconnected lookup must not publish coverage');
+  assert.equal(screen.paints, paints, 'A disconnected lookup must not publish coverage');
 });

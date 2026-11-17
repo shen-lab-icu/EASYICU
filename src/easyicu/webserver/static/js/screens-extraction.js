@@ -53,6 +53,7 @@
   let exExpectedDatabase = ''; // path-free Copilot requirement; scan must match it
   let exDatabaseMismatch = null;
   let exHydratedStudyCoordinate = '';
+  let exHydratedStudySource = '';
   let exHydratedStudyId = '';
   let exStudyCohortFields = null;
   let exStudyFormatSpecified = false;
@@ -326,29 +327,39 @@
     // A server revision alone does not replace the currently displayed run.
     // Local pending changes still differ even before the server allocates one.
     const coordinate = setup.study_context_id ? JSON.stringify({ ...setup, revision: 0 }) : '';
-    const sameSetup = coordinate !== '' && coordinate === exHydratedStudyCoordinate;
+    const sourcePath = String(studySource?.path || '').trim();
+    const sourceDatabase = String(studySource?.database || '').trim();
+    const source = sourcePath ? JSON.stringify([sourcePath, sourceDatabase]) : '';
+    const sourceChanged = source !== exHydratedStudySource;
+    const sameForm = coordinate && coordinate === exHydratedStudyCoordinate;
+    if (sameForm && !sourceChanged) return setup;
     // A job's form values and study association describe that exact run.
     // Even a same-study revision (or the first study on a native run) must
     // wait: replacing those values would relabel the old terminal result.
-    if (extractionTaskRunning()) return sameSetup ? setup : null;
-    minuteModules?.hydrate(studySource, { sameSetup, ready: exReal === 'ready' });
-    if (sameSetup) return setup;
+    if (extractionTaskRunning()) return null;
     const nextStudyId = String(setup.study_context_id || '');
     const changingStudy = exHydratedStudyId && nextStudyId !== exHydratedStudyId;
-    if (changingStudy) {
-      abandonExtractionContinuity();
-      exView = 'home'; exReal = 'connect'; exPath = ''; exSource = null;
-      exScanResult = null; exScanError = null;
-      exportJobId = null; exportProg = null; exportResult = null; exportErr = null;
-      exportCancelled = null; exportCohortReport = null; exportResourcePlan = null;
-      convJobId = null; convProg = null; convResult = null; convErr = null;
-    } else if (exportJobId || exportResult || exportErr || exportCancelled) {
-      // A settled result describes its original configuration too. Keep the
-      // verified input folder, but require a new job for changed study setup.
+    // Saving the scanned folder or its completed export preserves the local connection.
+    const keepsConnection = sourcePath && (sourcePath === exPath.trim() || sourcePath === exportResult?.out_dir)
+      && sourceDatabase === exScanResult?.db_key;
+    const disconnect = changingStudy || (sourceChanged && (exReal !== 'connect' || exportJobId) && !keepsConnection);
+    exHydratedStudySource = source;
+    if (disconnect || (!sameForm && (exportJobId || exportResult || exportErr || exportCancelled))) {
+      // A settled result describes its original source and configuration.
       abandonExtractionContinuity();
       exView = 'home';
       exportJobId = null; exportProg = null; exportResult = null; exportErr = null;
       exportCancelled = null; exportCohortReport = null; exportResourcePlan = null;
+      exportRunMode = 'custom'; exportRunModules = null;
+    }
+    if (disconnect) {
+      exReal = 'connect'; exPath = ''; exSource = null; exSetupStep = 'modules';
+      exScanResult = null; exScanError = null; exDatabaseMismatch = null;
+      convJobId = null; convProg = null; convResult = null; convErr = null;
+    }
+    if (sameForm) {
+      if (disconnect) backgroundRepaint();
+      return setup;
     }
     exHydratedStudyCoordinate = coordinate;
     exHydratedStudyId = nextStudyId;
@@ -407,6 +418,7 @@
     exAdvCohort = true;
     exCustomOpen = true;
     window.EU_STALE = true;
+    if (disconnect) backgroundRepaint();
     return setup;
   }
   function noteStudyConfigurationEdit(...cohortFields) {
@@ -453,7 +465,6 @@
      screen never shows a stale "Extraction complete" for the new source. */
   window.__euExtractReset = function () {
     abandonExtractionContinuity();
-    minuteModules?.reset();
     exView = 'home';
     exReal = 'connect';
   };
@@ -853,7 +864,6 @@
 
   function startScan(src) {
     abandonExtractionContinuity();
-    minuteModules?.reset();
     if (!String(exPath || '').trim()) {
       exSource = src || null;
       exScanResult = null;
@@ -1045,7 +1055,6 @@
     begin(record) {
       const source = record.source || {};
       const config = record.config || {};
-      if (exPath !== source.path || exScanResult?.db_key !== source.database) minuteModules?.reset();
       exPath = source.path || '';
       exScanResult = Object.assign({}, exScanResult || {}, { ok: true, db_key: source.database || '' });
       if (record.kind === 'extract') {
@@ -1375,7 +1384,7 @@
           ${MODS.map(modCard).join('')}
         </div>
         ${exExpandedMod && String(exExpandedMod).startsWith('sepsis3_') ? sepsisDefinitionPanel() : ''}
-        ${minuteModules && minuteModules.render(exScanResult?.db_key || '') || ''}
+        ${minuteModules?.markup() || ''}
       </div>
     </div>`;
   }
@@ -1836,6 +1845,7 @@
     render() {
       if (window.__euExtractFocusICD) { exSetupStep = 'cohort'; exAdvCohort = true; exCustomOpen = true; exCohortPreset = 'icd'; }
       if (window.EU_GUIDED_HANDOFF && window.EU_GUIDED_HANDOFF.take) applyGuidedPrefill(window.EU_GUIDED_HANDOFF.take('extraction'));
+      if (minuteModules) minuteModules.render({ path: exPath, database: exScanResult?.db_key || '', ready: exReal === 'ready' });
       const guidedNote = window.EU_GUIDED_HANDOFF && window.EU_GUIDED_HANDOFF.noteHtml ? window.EU_GUIDED_HANDOFF.noteHtml('extraction') : '';
       let body;
       if (exView === 'running') body = runningState();
@@ -1929,7 +1939,7 @@
         });
       });
       const startConvBtn = root.querySelector('[data-ex-startconv]'); if (startConvBtn) startConvBtn.addEventListener('click', () => { startConvert(); });
-      root.querySelectorAll('[data-ex-rescan]').forEach(b => b.addEventListener('click', () => { abandonExtractionContinuity(); minuteModules?.reset(); exReal = 'connect'; exSource = null; exScanResult = null; exScanError = null; convProg = null; convResult = null; convErr = null; repaint(); }));
+      root.querySelectorAll('[data-ex-rescan]').forEach(b => b.addEventListener('click', () => { abandonExtractionContinuity(); exReal = 'connect'; exSource = null; exScanResult = null; exScanError = null; convProg = null; convResult = null; convErr = null; repaint(); }));
       const convDoneBtn = root.querySelector('[data-ex-convdone]'); if (convDoneBtn) convDoneBtn.addEventListener('click', () => { abandonExtractionContinuity(); exReal = 'ready'; repaint(); });
       // run
       root.querySelectorAll('[data-ex-run]').forEach(b => b.addEventListener('click', () => runExtract(b.dataset.exRun || 'custom')));
@@ -1940,7 +1950,7 @@
       root.querySelectorAll('[data-ex-cancel]').forEach(b => b.addEventListener('click', cancelExportJob));
       root.querySelectorAll('[data-ex-open-output]').forEach(b => b.addEventListener('click', () => openExtractionOutput(b.dataset.exOpenOutput || '', b)));
       root.querySelectorAll('[data-ex-sync-guided]').forEach(b => b.addEventListener('click', () => continueInGuidedCopilot(b)));
-      root.querySelectorAll('[data-ex-reset]').forEach(b => b.addEventListener('click', () => { abandonExtractionContinuity(); minuteModules?.reset(); exView = 'home'; exSetupStep = 'modules'; exExpandedMod = null; exportProg = null; exportResult = null; exportErr = null; exportCancelled = null; exportCohortReport = null; exportResourcePlan = null; exportJobId = null; exportCancelRequested = false; exportRunModules = null; exOutputNotice = ''; exOutputError = ''; exSyncNotice = ''; exSyncError = ''; repaint(); }));
+      root.querySelectorAll('[data-ex-reset]').forEach(b => b.addEventListener('click', () => { abandonExtractionContinuity(); exView = 'home'; exSetupStep = 'modules'; exExpandedMod = null; exportProg = null; exportResult = null; exportErr = null; exportCancelled = null; exportCohortReport = null; exportResourcePlan = null; exportJobId = null; exportCancelRequested = false; exportRunModules = null; exOutputNotice = ''; exOutputError = ''; exSyncNotice = ''; exSyncError = ''; repaint(); }));
       root.querySelectorAll('[data-ex-step-next], [data-ex-step-back], [data-ex-step-target]').forEach(button => button.addEventListener('click', () => {
         moveToSetupStep(button.dataset.exStepNext || button.dataset.exStepBack || button.dataset.exStepTarget || 'modules');
       }));
@@ -2076,7 +2086,6 @@
     beginSourceBinding() {
       if (extractionTaskRunning()) return false;
       abandonExtractionContinuity();
-      minuteModules?.reset();
       exView = 'home';
       exSetupStep = 'modules';
       exReal = 'connect';
