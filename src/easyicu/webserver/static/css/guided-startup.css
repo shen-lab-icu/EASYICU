@@ -43,3 +43,18 @@
 @media(prefers-reduced-motion:reduce){
   .gd-startup-progress>span{animation:none;width:100%;opacity:.55}
 }
+.gd-startup-shield[data-guided-startup-failed] .gd-startup-card{
+  display:grid;
+  gap:8px;
+  color:var(--ink-2);
+}
+.gd-startup-reload{
+  justify-self:start;
+  padding:4px 10px;
+  border:1px solid var(--hair);
+  border-radius:6px;
+  background:var(--surface-2);
+  color:var(--ink);
+  font:inherit;
+  cursor:pointer;
+}

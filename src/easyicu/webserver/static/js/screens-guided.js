@@ -4035,6 +4035,15 @@ models.export(auc, cal, ledger=<span class="ln-s">"manifest.json"</span>)` },
     },
   };
 
+  // A throw in the first render's synchronous startup becomes a typed,
+  // readable stop instead of an endless cover (screens-guided-startup.js).
+  const guidedAfterRender = S.guided.afterRender;
+  S.guided.afterRender = function (root) {
+    return STARTUP && STARTUP.guard
+      ? STARTUP.guard(() => guidedAfterRender.call(this, root))
+      : guidedAfterRender.call(this, root);
+  };
+
   /* handle free text (from composer or hint chips) */
   function handleText(v) {
     if (busy) return;

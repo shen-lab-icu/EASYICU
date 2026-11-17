@@ -142,7 +142,7 @@ def test_pi_shell_assets_are_explicitly_wired_before_guided_owner() -> None:
     assert "js/screens-guided-pi-childjob.js?v=20261026-recovered1" in index
     assert "js/screens-guided-pi-error-text.js?v=20261111-s872" in index
     assert "js/screens-guided-pi.js?v=20261102-ui1" in index
-    assert "js/screens-guided.js?v=20261111-s872" in index
+    assert "js/screens-guided.js?v=20261117-startup1" in index
     assert (
         "js/screens-guided-project-continuity.js?v=20260813-project-continuity1"
         in index
@@ -479,8 +479,8 @@ def test_refresh_hides_intermediate_provider_project_and_activation_panels() -> 
     assert "data-guided-startup-shield" in startup
     assert ".gd-main.gd-startup-active" in startup_css
     assert ".gd-startup-shield" in startup_css
-    assert "css/guided-startup.css?v=20260918-structure2" in index
-    assert "js/screens-guided-startup.js?v=20260918-structure2" in index
+    assert "css/guided-startup.css?v=20261117-startup1" in index
+    assert "js/screens-guided-startup.js?v=20261117-startup1" in index
     assert index.index("js/screens-guided-startup.js") < index.index("js/screens-guided.js")
     assert "gd-startup" not in _read("css/guided-projects.css")
 
