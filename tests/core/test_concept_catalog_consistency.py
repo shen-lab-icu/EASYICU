@@ -514,10 +514,12 @@ def test_miiv_integer_itemids_exist_in_packaged_source_catalog() -> None:
 
 
 def test_mimic_demo_sources_mirror_mimic_sources() -> None:
+    from easyicu.concept.catalog import C565_RENAL_HISTORY_CONCEPTS
+
     missing: list[tuple[str, str]] = []
     different: list[tuple[str, str]] = []
     # The sealed CareVue view is outside the MIMIC-III demo source contract.
-    allowed_missing = {"samp", "fio2_set"}
+    allowed_missing = {"samp", "fio2_set", *C565_RENAL_HISTORY_CONCEPTS}
     allowed_different = {"samp"}
 
     for filename in ("concept-dict.json", "sofa2-dict.json"):

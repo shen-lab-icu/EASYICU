@@ -92,7 +92,7 @@ def test_eicu_all_sibling_units_contribute_codes_and_past_history(tmp_path):
 @pytest.mark.parametrize("database,reason", [
     ("aumc", "no_icd_diagnosis_source"),
     ("hirid", "no_icd_diagnosis_source"),
-    ("sic", "single_principal_diagnosis_only"),
+    ("sic", "no prior-history diagnosis source"),
 ])
 def test_absent_diagnosis_history_has_typed_reason(tmp_path, database, reason):
     table, stay_column = {
@@ -104,17 +104,110 @@ def test_absent_diagnosis_history_has_typed_reason(tmp_path, database, reason):
     _assert_absent(tmp_path, database, reason)
 
 
-@pytest.mark.parametrize("present", [(), ("admissions",), ("diagnoses_icd",), ("admissions", "diagnoses_icd")])
-def test_carevue_renal_history_requires_a_view_contract(tmp_path, present):
-    root = tmp_path / "mimic_cv_dir_r13"
-    root.mkdir()
-    _write(root, "icustays", [(1, "carevue")], ["ICUSTAY_ID", "DBSOURCE"])
+@pytest.fixture
+def carevue_view(tmp_path):
+    root = tmp_path / "mimicview" / "raw"
+    root.mkdir(parents=True)
+    return root
+
+
+def _carevue_history(root, stays, diagnoses, *, dbsource=True):
+    start = pd.Timestamp("2007-05-01")
+    _write(root, "icustays", stays, ["ICUSTAY_ID", "SUBJECT_ID", "HADM_ID"] + (["DBSOURCE"] if dbsource else []))
+    _write(root, "admissions", [
+        (10, 100, start), (11, 100, start - pd.Timedelta(hours=1)),
+        (12, 100, start), (13, 100, start + pd.Timedelta(seconds=1)),
+        (14, 100, start - pd.Timedelta(hours=2)), (15, 100, start - pd.Timedelta(hours=3)),
+        (20, 200, start),
+    ], ["HADM_ID", "SUBJECT_ID", "ADMITTIME"])
+    _write(root, "diagnoses_icd", diagnoses, ["HADM_ID", "ICD9_CODE"])
+
+
+@pytest.mark.parametrize("r_compatible", [False, True])
+def test_carevue_era_and_admittime_window(carevue_view, r_compatible):
+    _carevue_history(carevue_view, [
+        (1, 100, 10, "carevue"), (11, 100, 11, "carevue"),
+        (12, 100, 12, "carevue"), (13, 100, 13, "carevue"),
+        (14, 100, 14, "carevue"), (140, 100, 14, "metavision"),
+        (2, 200, 20, "CAREVue"),
+    ], [
+        (11, "585.6"), (12, "v42.0"), (13, "99681"), (14, "99681"),
+        (15, "99681"), (20, "N186"), (20, "T8610"),
+    ])
+    availability = {}
+    result = load_concepts(
+        list(FIELDS), database="mimic", data_path=carevue_view, patient_ids=[1, 2, 11, 14, 140],
+        r_compatible=r_compatible, concept_workers=1, parallel_workers=1, availability_sink=availability,
+    ).set_index("icustay_id")
+    assert set(result.index) == {1, 2, 11}
+    assert result.loc[[1, 2, 11], list(FIELDS)].values.tolist() == [
+        [True, True, False, False, True],    # Equal-admittime transplant is included.
+        [False, False, False, False, False],  # ICD-10 codes do not count.
+        [True, False, False, False, True],   # Before the equal-admittime transplant.
+    ]
+    assert result["prior_window"].tolist() == ["view_admissions_only"] * 3
+    assert str(result["prior_window"].dtype) == "string"
+    assert result["prior_window_note"].isna().all()
+    for field in FIELDS:
+        assert availability[field].prior_window == "view_admissions_only"
+        assert availability[field].note == "EXTENSION beyond frozen C565."
+
+    # The equally timed admission is the only eligible transplant source.
+    _write(carevue_view, "diagnoses_icd", [
+        (11, "585.6"), (13, "99681"), (14, "99681"), (15, "99681"),
+    ], ["HADM_ID", "ICD9_CODE"])
+    clear_global_loader()
+    assert _load(carevue_view, "mimic", [1])["kidney_tx"].tolist() == [False]
+
+
+@pytest.mark.parametrize("dbsource", [True, False])
+def test_carevue_reports_when_era_cannot_be_guaranteed(carevue_view, dbsource):
+    stays = [(1, 100, 10), (11, 100, 11)]
+    if dbsource:
+        stays = [(*stay, "carevue") for stay in stays]
+    _carevue_history(carevue_view, stays, [(11, "V45.12")], dbsource=dbsource)
+    availability = {}
+    result = _load(carevue_view, "mimic", [1], availability_sink=availability)
+    assert result["esrd_dialysis"].tolist() == [True]
+    assert result["prior_window"].tolist() == ["view_admissions_only"]
+    assert result["prior_window_note"].tolist() == ["prior_window CareVue-era not guaranteed"]
+    assert availability["esrd_dialysis"].prior_window_note == result["prior_window_note"].iloc[0]
+
+
+@pytest.mark.parametrize("present", [(), ("admissions",), ("diagnoses_icd",)])
+def test_carevue_renal_history_requires_both_history_tables(carevue_view, present):
+    _write(carevue_view, "icustays", [(1, "carevue")], ["ICUSTAY_ID", "DBSOURCE"])
     required = ("admissions", "diagnoses_icd")
     for table in present:
-        _write(root, table, [(101,)], ["HADM_ID"])
+        _write(carevue_view, table, [(101,)], ["HADM_ID"])
     missing = tuple(table for table in required if table not in present)
-    reason = "required_source_table_missing" if missing else "carevue_diagnosis_history_not_guaranteed"
-    _assert_absent(root, "mimic", reason, missing)
+    _assert_absent(carevue_view, "mimic", "required_source_table_missing", missing)
+
+
+def test_carevue_refuses_history_outside_view(tmp_path):
+    root = tmp_path / "unrestricted_mimic"
+    root.mkdir()
+    _carevue_history(root, [(1, 100, 10, "carevue")], [(10, "585.6")])
+    _assert_absent(root, "mimic", "carevue_view_required")
+
+
+def test_carevue_window_limitation_survives_native_partition(carevue_view, tmp_path):
+    from easyicu.api.extraction import extract_database
+
+    _carevue_history(carevue_view, [
+        (1, 100, 10, "carevue"), (2, 200, 20, "carevue"), (11, 100, 11, "carevue"),
+    ], [(11, "V45.12")])
+    output = tmp_path / "output"
+    module = "c565_renal_history"
+    extract_database(
+        database="mimic", data_path=carevue_view, output_dir=output, modules=[module],
+        patient_ids=[1, 2], batch_size=1, resource_budget_mb=2048,
+        native_export_v2=True, verbose=False,
+    )
+    frame = pd.read_parquet(output / f"{module}.parquet").set_index("stay_id")
+    assert frame["renal_excl"].tolist() == [True, False]
+    assert frame["prior_window"].tolist() == ["view_admissions_only"] * 2
+    assert frame["prior_window_note"].tolist() == ["prior_window CareVue-era not guaranteed"] * 2
 
 
 def test_missing_miiv_diagnosis_table_is_not_a_negative(tmp_path):

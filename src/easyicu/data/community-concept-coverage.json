@@ -3466,7 +3466,7 @@
           "status": "unavailable"
         }
       },
-      "description": "C565 V2 ESRD or dialysis diagnosis or status code in the eligible admission history."
+      "description": "C565 V2 ESRD or dialysis diagnosis or status code in the eligible admission history. CareVue ICD-9 in view admissions is an EXTENSION beyond frozen C565."
     },
     "etco2": {
       "category": "ventilator",
@@ -5217,7 +5217,7 @@
           "status": "unavailable"
         }
       },
-      "description": "C565 kidney-transplant diagnosis or status code in the eligible admission history."
+      "description": "C565 kidney-transplant diagnosis or status code in the eligible admission history. CareVue ICD-9 in view admissions is an EXTENSION beyond frozen C565."
     },
     "labetalol": {
       "category": "medications",
@@ -7852,7 +7852,7 @@
           "status": "unavailable"
         }
       },
-      "description": "C565 eICU past-history path for hemodialysis or peritoneal dialysis. False in the MIIV diagnosis-only method."
+      "description": "C565 eICU past-history path for hemodialysis or peritoneal dialysis. False in the MIIV and CareVue diagnosis-only methods. The CareVue path is an EXTENSION beyond frozen C565."
     },
     "ph_kidney_tx": {
       "category": "renal",
@@ -7874,7 +7874,7 @@
           "status": "unavailable"
         }
       },
-      "description": "C565 eICU past-history path for renal transplant. False in the MIIV diagnosis-only method."
+      "description": "C565 eICU past-history path for renal transplant. False in the MIIV and CareVue diagnosis-only methods. The CareVue path is an EXTENSION beyond frozen C565."
     },
     "ph_mixed_venous": {
       "category": "blood gas",
@@ -8932,7 +8932,7 @@
           "status": "unavailable"
         }
       },
-      "description": "C565 V2 renal-history exclusion. True when any of the ESRD or dialysis, kidney transplant, or two past-history flags is true."
+      "description": "C565 V2 renal-history exclusion. True when any of the ESRD or dialysis, kidney transplant, or two past-history flags is true. CareVue ICD-9 in view admissions is an EXTENSION beyond frozen C565."
     },
     "renal_resistive_index": {
       "category": "renal",

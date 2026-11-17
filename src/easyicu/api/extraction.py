@@ -5662,6 +5662,7 @@ _NATIVE_EXPORT_EVENT_TIME_COMPANIONS = {DEATH_STATUS: DEATH_TIME_COMPANION}
 
 def _native_export_physical_value_columns(
     requested_concepts: Sequence[str],
+    available_columns: Sequence[str] = (),
 ) -> List[str]:
     """Return public values plus owner-issued physical receipt companions.
 
@@ -5673,6 +5674,7 @@ def _native_export_physical_value_columns(
     values accompany their pooled measurement without becoming public concepts.
     """
 
+    from ..concept.c565_renal_history import CAREVUE_HISTORY_RECEIPT_COLUMNS, FIELDS
     from ..concept_output_sources import SOURCE_ITEM_OUTPUT_COLUMNS, SPECIMEN_STATUS_OUTPUT_COLUMNS
     from ..scores.urine_output import urine_availability_columns
 
@@ -5692,15 +5694,20 @@ def _native_export_physical_value_columns(
             )
     if {"sofa2", *SOFA2_COMPONENT_NAMES}.issubset(requested_concepts):
         columns.append(SOFA2_ALL_COMPONENTS_MISSING)
+    if set(FIELDS).intersection(requested_concepts):
+        columns.extend(column for column in CAREVUE_HISTORY_RECEIPT_COLUMNS if column in available_columns)
     return list(dict.fromkeys(columns))
 
 
 def _native_export_storage_kind(concept_id: str, dictionary) -> str:
     """Return the deterministic physical type family for one public concept."""
+    from ..concept.c565_renal_history import CAREVUE_HISTORY_RECEIPT_COLUMNS
     from ..concept.catalog import CONCEPT_DICTIONARY
     from ..concept_output_sources import SPECIMEN_STATUS_OUTPUT_COLUMNS
 
-    if any(concept_id in columns for columns in SPECIMEN_STATUS_OUTPUT_COLUMNS.values()):
+    if concept_id in CAREVUE_HISTORY_RECEIPT_COLUMNS or any(
+        concept_id in columns for columns in SPECIMEN_STATUS_OUTPUT_COLUMNS.values()
+    ):
         return "string"
     if concept_id == "stay_order":
         return "int64"
@@ -5790,7 +5797,7 @@ def _canonicalise_native_export_frame(
             )
 
     normalized_database = str(database or "").strip().lower()
-    for concept in _native_export_physical_value_columns(requested_concepts):
+    for concept in _native_export_physical_value_columns(requested_concepts, frame.columns):
         kind = _native_export_storage_kind(concept, dictionary)
         if (
             concept == "death_time"
@@ -5875,7 +5882,7 @@ def _restore_native_export_storage_dtypes(
         frame["charttime"] = pd.to_numeric(frame["charttime"], errors="coerce").astype(
             "float64"
         )
-    for concept in _native_export_physical_value_columns(requested_concepts):
+    for concept in _native_export_physical_value_columns(requested_concepts, frame.columns):
         kind = _native_export_storage_kind(concept, dictionary)
         if kind == "boolean":
             frame[concept] = frame[concept].astype("boolean")
@@ -6334,7 +6341,7 @@ def _consolidate_native_export_row_grain(
                 "charttime": group["charttime"].iloc[0],
                 "_row_order": int(group.index.min()),
             }
-            for concept in _native_export_physical_value_columns(requested_concepts):
+            for concept in _native_export_physical_value_columns(requested_concepts, working.columns):
                 kind = _native_export_storage_kind(concept, dictionary)
                 values = group[concept].dropna()
                 if values.empty:
@@ -6383,7 +6390,7 @@ def _consolidate_native_export_row_grain(
         requested_concepts=requested_concepts,
         database=database,
     )
-    physical_values = _native_export_physical_value_columns(requested_concepts)
+    physical_values = _native_export_physical_value_columns(requested_concepts, consolidated.columns)
     consolidated = consolidated[["stay_id", "charttime", *physical_values]].reset_index(
         drop=True
     )
@@ -6440,6 +6447,7 @@ def _native_export_empty_schema_frame(
     module: str,
     requested_concepts: List[str],
     dictionary,
+    available_columns: Sequence[str] = (),
 ):
     """Return the zero-row pandas representation of the native-v2 schema.
 
@@ -6453,7 +6461,7 @@ def _native_export_empty_schema_frame(
     columns = {"stay_id": pd.Series([], dtype="int64")}
     if module != "demographics" and module not in STAY_LEVEL_SUPPORT_MODULES:
         columns["charttime"] = pd.Series([], dtype="float64")
-    for concept in _native_export_physical_value_columns(requested_concepts):
+    for concept in _native_export_physical_value_columns(requested_concepts, available_columns):
         kind = _native_export_storage_kind(concept, dictionary)
         if kind == "boolean":
             columns[concept] = pd.Series([], dtype="boolean")
@@ -6743,7 +6751,7 @@ def _native_export_duckdb_consolidate_row_grain(
                 f"native_export_v2 refuses stale consolidation file: {candidate}"
             )
 
-    physical_values = _native_export_physical_value_columns(requested_concepts)
+    physical_values = _native_export_physical_value_columns(requested_concepts, target_schema.names)
     string_concepts = [
         concept
         for concept in physical_values
@@ -7322,6 +7330,7 @@ def _try_publish_native_export_arrow_fast_path(
         module=module,
         requested_concepts=requested_concepts,
         dictionary=dictionary,
+        available_columns=source_schema.names,
     )
     target_schema = _native_export_arrow_schema(schema_frame)
     if module == "sofa1_score":
@@ -7337,7 +7346,7 @@ def _try_publish_native_export_arrow_fast_path(
                 *(
                     concept
                     for concept in _native_export_physical_value_columns(
-                        requested_concepts
+                        requested_concepts, source_schema.names,
                     )
                     if concept in source_schema.names
                 ),

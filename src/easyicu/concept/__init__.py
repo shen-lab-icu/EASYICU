@@ -43,7 +43,11 @@ from .availability_signal import (
     table_availability,
 )
 from .c565_renal_history import FIELDS as _C565_RENAL_HISTORY_FIELDS
-from .c565_renal_history import load_renal_history_field, renal_history_absence
+from .c565_renal_history import (
+    add_carevue_history_window,
+    load_renal_history_field,
+    renal_history_absence,
+)
 from .data_source_contract import ConceptDataSourceStorage
 from .fio2_set import load_fio2_set
 from .merge_time_index import (
@@ -2684,6 +2688,10 @@ class ConceptResolver:
                     _MISSING_SOURCE_WARNED.add(warn_key)
                 self._last_availability = dict(availability_sink)
 
+            renal_receipt = next((
+                table_availability(table, name) for name, table in tables.items()
+                if db_name == "mimic" and name in _C565_RENAL_HISTORY_FIELDS
+            ), None)
             if not merge:
                 # 如果是r_compatible模式且只有一个概念，返回ricu.R格式的DataFrame
                 if r_compatible and len(tables) == 1:
@@ -2696,7 +2704,14 @@ class ConceptResolver:
                             interval_hours = interval.total_seconds() / 3600.0
                         elif isinstance(interval, (int, float)):
                             interval_hours = float(interval)
-                    return self._to_r_format(tables[concept_name], concept_name, interval_hours=interval_hours)
+                    frame = self._to_r_format(tables[concept_name], concept_name, interval_hours=interval_hours)
+                    return add_carevue_history_window(frame, renal_receipt)
+                if renal_receipt is not None and renal_receipt.prior_window is not None:
+                    for name in _C565_RENAL_HISTORY_FIELDS:
+                        if name in tables:
+                            table = tables[name].copy()
+                            add_carevue_history_window(table.data, renal_receipt)
+                            tables[name] = table
                 return tables
 
             # A merged output publishes ett_gcs on the ricu hourly grid, the
@@ -2796,13 +2811,14 @@ class ConceptResolver:
                         if merged_partial is not None:
                             if verbose:
                                 logger.info("🚀 Using the partial wide-table batch result and merging only the remaining concepts")
-                            return self._ensure_requested_concept_columns(
+                            frame = self._ensure_requested_concept_columns(
                                 merged_partial,
                                 names,
                                 materialize_missing=not defer_empty_columns_to_arrow,
                                 value_dtypes=value_dtypes,
                                 logical_names=self._declared_logical_names(names, data_source),
                             )
+                            return add_carevue_history_window(frame, renal_receipt)
                         # Partial merge failed (e.g. non-charttime time column) — fall through to full merge
                     elif _all_covered:
                         if verbose:
@@ -2820,7 +2836,7 @@ class ConceptResolver:
                             logical_names=self._declared_logical_names(names, data_source),
                         )
                 _materialize_covered_wide_tables_for_fallback()
-                return self._to_r_format_merged_enhanced(
+                frame = self._to_r_format_merged_enhanced(
                     tables,
                     names,
                     interval,
@@ -2828,6 +2844,7 @@ class ConceptResolver:
                     materialize_missing_concepts=not defer_empty_columns_to_arrow,
                     consume_sources=True,
                 )
+                return add_carevue_history_window(frame, renal_receipt)
 
             if wide_table_merged_df is not None:
                 _materialize_covered_wide_tables_for_fallback()
@@ -2846,11 +2863,12 @@ class ConceptResolver:
                 or name.endswith(("_rate", "_dur"))
                 for name in names
             ):
-                return self._to_r_format_merged_enhanced(
+                frame = self._to_r_format_merged_enhanced(
                     tables, names, interval, data_source=data_source,
                     materialize_missing_concepts=not defer_empty_columns_to_arrow,
                     consume_sources=True,
                 )
+                return add_carevue_history_window(frame, renal_receipt)
             merged = self._ensure_requested_concept_columns(
                 self._merge_tables(
                     tables, relative_axis=bool(align_to_admission and interval is not None)
@@ -2860,7 +2878,7 @@ class ConceptResolver:
                 value_dtypes=value_dtypes,
                 logical_names=self._declared_logical_names(names, data_source),
             )
-            return merged
+            return add_carevue_history_window(merged, renal_receipt)
         finally:
             with self._cache_lock:
                 if depth_entered:
@@ -10579,6 +10597,8 @@ class ConceptResolver:
                         
                         # 聚合到每个患者一行
                         agg_df = df.groupby(id_cols, as_index=False).agg({value_col: agg_func})
+                        if concept_name in _C565_RENAL_HISTORY_FIELDS:
+                            agg_df.attrs.update(df.attrs)
                         
                         if verbose:
                             logger.info("   📊 Aggregated id_tbl concept '%s': %d rows -> %d rows (agg=%s)", 

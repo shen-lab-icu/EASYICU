@@ -28,8 +28,8 @@ ConceptEvaluationReason = Literal[
     "component_time_index_missing",
     "producer_returned_no_physical_output",
     "no_icd_diagnosis_source",
+    "no prior-history diagnosis source",
     "single_principal_diagnosis_only",
-    "carevue_diagnosis_history_not_guaranteed",
     "carevue_view_required",
 ]
 
@@ -56,6 +56,8 @@ class ConceptAvailabilityRecord:
     note: Optional[str] = None
     evaluation_status: Optional[ConceptEvaluationStatus] = None
     reason_code: Optional[ConceptEvaluationReason] = None
+    prior_window: Optional[Literal["view_admissions_only"]] = None
+    prior_window_note: Optional[Literal["prior_window CareVue-era not guaranteed"]] = None
 
     def __post_init__(self) -> None:
         object.__setattr__(self, "status", _REASON_TO_STATUS[self.reason])

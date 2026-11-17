@@ -25,6 +25,11 @@ _CAREVUE_VIEW = re.compile(r"mimic_cv_(?:flat_r13|dir(?:_r13)?|bkt_s[0-9a-f]{9})
 _HOUR = pd.Timedelta(hours=1)
 
 
+def is_carevue_extraction_root(path):
+    """Recognize the existing flat, directory and bucket CareVue views."""
+    return path is not None and _CAREVUE_VIEW.fullmatch(Path(path).name) is not None
+
+
 def _hourly_result(frame, stay_column):
     return ICUTable(
         data=frame, id_columns=[stay_column], index_column="charttime",
@@ -71,8 +76,7 @@ def load_fio2_set(definition, source, data_source, patient_ids):
     stay_filters = [] if selected is None else [FilterSpec(stay_column, FilterOp.IN, selected)]
 
     if database in {"mimic", "mimic_demo"}:
-        root = data_source.base_path
-        if database != "mimic" or root is None or not _CAREVUE_VIEW.fullmatch(Path(root).name):
+        if database != "mimic" or not is_carevue_extraction_root(data_source.base_path):
             return _carevue_absence(database, stay_column, source.table)
 
     origins = None
