@@ -958,7 +958,7 @@ def repair_named_manuscript_sections(
             + "Do not copy `{audit_value:...}` diagnostic markers into the section."
             + "\nTOKENS TO KEEP VERBATIM (retain at least these occurrence counts in this section):\n"
             + "\n".join(f"- {token}: {count} occurrence(s)" for token, count in protected_tokens.items())
-            + "\nAn adjustment-set correction changes the covariate prose; keep the "
+            + "\nA correction changes only the rejected prose; keep the "
             + "existing evidence/claim tokens and other subsections verbatim."
         )
         repaired = _ensure_section_heading(

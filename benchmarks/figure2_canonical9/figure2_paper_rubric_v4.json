@@ -1019,6 +1019,7 @@
     "src/easyicu/research_agent/reporting/manuscript_audit_repair.py",
     "src/easyicu/research_agent/reporting/manuscript_baseline.py",
     "src/easyicu/research_agent/reporting/manuscript_bibliographic_years.py",
+    "src/easyicu/research_agent/reporting/manuscript_definition_numerics.py",
     "src/easyicu/research_agent/reporting/manuscript_figures.py",
     "src/easyicu/research_agent/reporting/manuscript_gate_state.py",
     "src/easyicu/research_agent/reporting/manuscript_labels.py",
@@ -1580,7 +1581,7 @@
     "src/easyicu/webserver/zotero_probe.py"
   ],
   "scorer_tree_root": "benchmarks/figure2_canonical9/successor_v4",
-  "scorer_tree_sha256": "9e3fe9cd284e688d0bd4f9b32d5a44a1b61a9be20732754c59c005c8d7859883",
+  "scorer_tree_sha256": "be2d6f3d088664dc5f10abbef54a4d3aaa21c29bb1412e948d13e27d0c505fc3",
   "suite_projection_sha256": "11c39afac69c9a0b560c6aa92be19f05725f04c66b9d2c499cfdb353c40295ab",
   "suite_ref": "easyicu_evaluation_protocol_suite/v2",
   "tasks": [
