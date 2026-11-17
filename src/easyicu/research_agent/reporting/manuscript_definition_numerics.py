@@ -177,7 +177,10 @@ def _grouped_quantities(context, labels):
     rows = context.cohort.provenance.get(EXPOSURE_GROUP_LABELS_KEY)
     if not isinstance(rows, list):
         return
-    names = [row.get("concept") for row in rows if isinstance(row, dict)]
+    names = [
+        row["concept"].casefold() for row in rows
+        if isinstance(row, dict) and isinstance(row.get("concept"), str)
+    ]
     for index, row in enumerate(rows):
         if not isinstance(row, dict) or not isinstance(row.get("parameters"), dict):
             continue
@@ -195,7 +198,7 @@ def _grouped_quantities(context, labels):
         names_for_group = {variable}
         # A shared unqualified concept is insufficient to identify one of
         # several groupings formed from that measure.
-        if names.count(rules.concept) == 1:
+        if names.count(rules.concept.casefold()) == 1:
             names_for_group.update(_variable_names(rules.concept, concept_reader_name(rules.concept)))
         aliases = _variable_aliases(names_for_group, context=context, labels=labels)
         field = f"cohort.provenance.{EXPOSURE_GROUP_LABELS_KEY}[{index}]"
@@ -207,7 +210,7 @@ def _grouped_quantities(context, labels):
                 continue
             column = rules.source_columns[rule["summary"]]
             unit = rule.get("unit") or _variable_unit(column, context)
-            quantities.append(_Quantity(f"{field}.parameters.groups[{pos}].rule.value", column,
+            quantities.append(_Quantity(f"{field}.parameters.groups[{pos}].rule.value", rules.concept,
                                         rule["value"], rule["op"], unit))
         # An otherwise level can name the other side of the same boundary.
         # Use the owner's interval algebra, and retain the original value field.
@@ -344,7 +347,7 @@ def _unit_end(text, start, unit):
     return match.end() if match else start
 
 
-def _attached_quantity_end(text, end, quantity, kind, before, *, continued):
+def _attached_quantity_end(text, end, quantity, kind, before, *, marked_boundary):
     suffix = text[end:]
     if quantity.kind == "level":
         if kind in {"level", "code"} and not before and not _MEASURE.match(suffix):
@@ -369,7 +372,7 @@ def _attached_quantity_end(text, end, quantity, kind, before, *, continued):
     if after:
         operator = ">=" if after["above"] else "<="
         return after.end() if operator == quantity.operator else None
-    if kind == "cutoff" or (unit_end != end and (continued or kind == "at" or _CUTOFF_NOUN.match(text, unit_end))):
+    if kind == "cutoff" or (unit_end != end and (marked_boundary or _CUTOFF_NOUN.match(text, unit_end))):
         return unit_end
     return None
 
@@ -378,22 +381,27 @@ def _quantity_key(quantity):
     # The written comparator has already narrowed the candidates. When the
     # prose names a cutoff without a comparator, either side can own its value.
     unit = quantity.unit.casefold() if quantity.unit else None
-    return quantity.variable, quantity.kind, quantity.value, unit
+    return quantity.variable.casefold(), quantity.kind, quantity.value, unit
 
 
-def _read_quantity(text, start, kind, definitions, parse_literal, *, anchor, previous):
+def _read_quantity(text, start, kind, definitions, parse_literal, *, anchor, previous, marked_boundary):
     before = _PREFIX_OPERATOR.match(text, start)
     number = _NUMBER.match(text, before.end() if before else start)
     if number is None:
         return None
     start, end = number.span("value")
     continued = previous is not None
-    exact = False
+    literal_forms = ()
     if not continued:
         phrase = text[anchor:end]
         literal_forms = (phrase, phrase[:1].swapcase() + phrase[1:])
-        exact = any(quantity.literal in literal_forms for _, quantities, _ in definitions for quantity in quantities)
-    active = [(record, quantities) for record, quantities, cited in definitions if cited or exact]
+    exact = False
+    active = []
+    for record, quantities, cited in definitions:
+        literals = [quantity for quantity in quantities if quantity.literal in literal_forms]
+        exact = exact or bool(literals)
+        if cited or literals:
+            active.append((record, quantities if cited else literals))
     if not active and not continued:
         return None
 
@@ -402,18 +410,23 @@ def _read_quantity(text, start, kind, definitions, parse_literal, *, anchor, pre
     if parsed is None or parsed[1] or _STATISTIC_AFTER.match(suffix) or _COUNT_AFTER.match(suffix):
         return (start, end, None, end) if continued or exact else None
 
-    # Resolve agreement between typed definitions before looking at the written
-    # value. A grouping can declare several levels or bounds in one definition.
-    # Separate definitions which apply to the same prose must agree on the set.
+    # Each threshold is a separate bound. Multiple declarations of the same
+    # outcome window or set of level codes still need to agree as definitions.
     definitions_seen = set()
     matches = {}
+    attached = False
     for record, quantities in active:
         applicable = set()
         for quantity in quantities:
-            if continued and (quantity.variable, quantity.kind) != (previous.variable, previous.kind):
+            if continued and (quantity.variable.casefold(), quantity.kind) != (
+                previous.variable.casefold(), previous.kind
+            ):
                 continue
-            cursor = _attached_quantity_end(text, end, quantity, kind, before, continued=continued)
+            cursor = _attached_quantity_end(text, end, quantity, kind, before, marked_boundary=marked_boundary)
             if cursor is None:
+                continue
+            attached = True
+            if quantity.kind == "threshold" and parsed[0] != quantity.value:
                 continue
             key = _quantity_key(quantity)
             applicable.add(key)
@@ -424,17 +437,24 @@ def _read_quantity(text, start, kind, definitions, parse_literal, *, anchor, pre
     if len(definitions_seen) == 1 and len(matches) == 1:
         record, quantity, cursor = next(iter(matches.values()))
         return start, end, (record, quantity), cursor
-    if continued or exact or before or kind or definitions_seen or _SUFFIX_OPERATOR.match(text, end):
+    if continued or exact or before or kind or attached or _SUFFIX_OPERATOR.match(text, end):
         return start, end, None, end
     return None
 
 
-def _quantity_spans(text, anchors, sources, parse_literal):
+def _quantity_spans(text, anchors, sources, parse_literal, *, allow_plan_fallback):
     for anchor in anchors:
         name = anchor[0].casefold()
-        definitions = [(record, quantities, cited) for record, aliases, quantities, cited in sources if name in aliases]
+        definitions = [
+            (record, quantities, cited) for record, aliases, quantities, cited in sources
+            if name in aliases and quantities
+        ]
         if not definitions:
             continue
+        # A context citation can stand in for the plan for anchors with no
+        # cited grouping of their own.
+        if allow_plan_fallback and not any(cited for _, _, cited in definitions):
+            definitions = [(record, quantities, True) for record, quantities, _ in definitions]
         prefix = text[:anchor.start()]
         # Generated rule rows have their own exact line and section contract.
         if prefix.rsplit("\n", 1)[-1].lstrip().startswith(
@@ -448,10 +468,12 @@ def _quantity_spans(text, anchors, sources, parse_literal):
         kind = (attached["kind"] or "").strip().casefold()
         if kind and kind not in {"level", "code", "within", "through", "by", "at"}:
             kind = "cutoff"
+        marked_boundary = kind in {"cutoff", "at"}
         position = attached.end()
         previous = reference = None
         while occurrence := _read_quantity(
             text, position, kind, definitions, parse_literal, anchor=anchor.start(), previous=previous,
+            marked_boundary=marked_boundary,
         ):
             left, right, source, cursor = occurrence
             if reference and not _LEVEL_NOUN.match(text, cursor):
@@ -480,9 +502,11 @@ def _cites(record, tokens, evidence):
 
 def _registered_context(evidence, records):
     record = next((row for row in records if row.evidence_id == "research_context"), None)
-    if record is None or (record.kind, record.producer, record.generation_mode,
-                          record.produced_by_step) != ("log", "pipeline", "system", None):
+    if record is None:
         return None, None
+    if (record.kind, record.producer, record.generation_mode,
+        record.produced_by_step) != ("log", "pipeline", "system", None):
+        return record, None
     path = verified_run_evidence_path(evidence.root, record)
     if path is None:
         return record, None
@@ -526,7 +550,7 @@ def registered_definition_spans(text, evidence, *, sentence_bounds, parse_litera
     labels = plan.get("display_labels") or {}
     grouped = list(_grouped_quantities(context, labels)) if context else []
     # A registered context supplies the units and variable names even when
-    # only the plan is cited. Drift in that context disables typed plan binds.
+    # only the plan is cited. An unverified context disables typed plan binds.
     planned = list(_plan_quantities(plan, prefix, context)) if registered and (context or not context_record) else []
     known_names = {alias for aliases, quantities in (*grouped, *planned) if quantities for alias in aliases}
     if not known_names:
@@ -553,7 +577,7 @@ def registered_definition_spans(text, evidence, *, sentence_bounds, parse_litera
         cites_context = context_record is not None and _cites(context_record, cited, evidence)
         sources = [(context_record, aliases, quantities, True) for aliases, quantities in grouped if cites_context]
         if planned:
-            cites_plan = cites_context or _cites(plan_record, cited, evidence)
+            cites_plan = _cites(plan_record, cited, evidence)
             sources.extend((plan_record, aliases, quantities, cites_plan) for aliases, quantities in planned)
         if not sources:
             continue
@@ -561,7 +585,9 @@ def registered_definition_spans(text, evidence, *, sentence_bounds, parse_litera
         # serve as the variable name anchoring a threshold.
         prose = _CITATION.sub(lambda match: " " * len(match[0]), sentence)
         anchors = tuple(anchor_pattern.finditer(prose))
-        for left, right, source in _quantity_spans(prose, anchors, sources, parse_literal):
+        for left, right, source in _quantity_spans(
+            prose, anchors, sources, parse_literal, allow_plan_fallback=cites_context,
+        ):
             occurrence = start + left, start + right
             if source is None:
                 extra_occurrences.add(occurrence)

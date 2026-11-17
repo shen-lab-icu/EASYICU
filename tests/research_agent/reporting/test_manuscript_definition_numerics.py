@@ -186,11 +186,11 @@ def _grouping(concept, threshold, unit):
     }
 
 
-def _register_context(store, context):
+def _register_context(store, context, *, producer="pipeline"):
     return store.register_json(
         kind="log", description="Frozen synthetic research context",
         payload=context.model_dump(mode="json"), filename="research_context.json",
-        evidence_id="research_context", producer="pipeline", generation_mode="system",
+        evidence_id="research_context", producer=producer, generation_mode="system",
         aliases=["RUN_CONTEXT"],
     )
 
@@ -229,6 +229,7 @@ PARAPHRASED = "SOFA score was represented by two ordered categories: under 8.0 p
     ("We grouped creatinine by a cutoff of 2.0 mg/dL", ["2.0"], ["groups[0].rule.value"]),
     ("We used SOFA level 2 as the comparison group", ["2"], ["levels[1].code"]),
     ("Creatinine was dichotomized at 2 mg/dL", ["2"], ["groups[0].rule.value"]),
+    ("Creatinine was split at 2 mg/dL versus 2.0 mg/dL", ["2", "2.0"], ["groups[0].rule.value"]),
     ("We compared SOFA code 2 and code 1", ["2", "1"], ["levels[1].code", "levels[0].code"]),
     ("The creatinine cutoff was 2.0 mg/dL versus below 2 mg/dL", ["2.0", "2"], ["groups[0].rule.value"]),
     ("The creatinine cutoff was below 2.0 mg/dL or 2 mg/dL", ["2.0", "2"], ["groups[0].rule.value"]),
@@ -289,6 +290,7 @@ def test_coordinated_numbers_need_their_own_definition_attachment(typed_definiti
     "We recorded creatinine and excluded glucose below 2.0 mg/dL {evidence:research_context}.",
     "We used creatinine below 2.0 mmol/L {evidence:research_context}.",
     "Creatinine was above 2.0 mg/dL {evidence:research_context}.",
+    "The SOFA 6 points threshold defined the strata {evidence:research_context}.",
     "The discrimination threshold was 0.60 {evidence:research_context}.",
 ])
 def test_a_matching_literal_without_definition_authority_is_removed(typed_definition_store, text):
@@ -448,6 +450,35 @@ def test_an_uncited_literal_predicate_also_needs_the_right_unit_and_variable(coh
         assert [row["untraced"] for row in removed] == [["2.5"]]
 
 
+@pytest.mark.parametrize("sentence", [
+    "Eligibility required urine creatinine < 2.5.",
+    "Urine creatinine below 2.5 qualified at entry {evidence:analysis_plan}.",
+])
+def test_an_unverified_context_cannot_enable_unguarded_plan_binding(tmp_path, sentence):
+    store = EvidenceStore(tmp_path, enforcement_mode="strict")
+    question = "Describe the synthetic screening cohort"
+    _register_context(store, ResearchContext.model_validate({
+        "research_question": question,
+        "cohort": {"cohort_name": "synthetic", "database": "eicu", "n_stays": 100},
+        "variables": [
+            {"name": "crea", "dtype": "float64", "unit": "mg/dL"},
+            {"name": "urine_creatinine", "dtype": "float64", "unit": "mg/dL"},
+        ],
+    }), producer="importer")
+    _register_cohort_plan(store, {
+        "research_question": question,
+        "cohort": {"name": "synthetic", "inclusion": [_predicate("crea", "<", 2.5)]},
+        "display_labels": {"crea": "Creatinine"},
+        "steps": [],
+    }, "analysis_plan")
+
+    with pytest.raises(EvidenceEnforcementError) as error:
+        bind_numeric_values(sentence, evidence=store, per_step_records=[])
+    assert [row["value"] for row in error.value.detail["untraced_occurrences"]] == ["2.5"]
+    _, removed, _, _, _ = _chain(store, [], sentence)
+    assert [row["untraced"] for row in removed] == [["2.5"]]
+
+
 @pytest.mark.parametrize("second_horizon", [37, 42])
 def test_repeated_outcome_windows_bind_only_when_the_requirements_agree(cohort_plan_store, second_horizon):
     store, plan = cohort_plan_store
@@ -467,6 +498,7 @@ def test_repeated_outcome_windows_bind_only_when_the_requirements_agree(cohort_p
             assert [row["untraced"] for row in removed] == [[str(horizon)]]
 
 
+@pytest.mark.parametrize("concept", ["plt", "PLT"])
 @pytest.mark.parametrize("cites, evidence_id, field", [
     ("{evidence:research_context}", "research_context",
      "cohort.provenance.exposure_group_labels[0].parameters.groups[1].rule.value"),
@@ -474,12 +506,14 @@ def test_repeated_outcome_windows_bind_only_when_the_requirements_agree(cohort_p
     ("{evidence:analysis_plan} {evidence:research_context}", "research_context",
      "cohort.provenance.exposure_group_labels[0].parameters.groups[1].rule.value"),
 ])
-def test_shared_cohort_and_exposure_boundaries_bind_to_a_cited_source(tmp_path, cites, evidence_id, field):
+def test_shared_cohort_and_exposure_boundaries_bind_to_a_cited_source(tmp_path, concept, cites, evidence_id, field):
     store = EvidenceStore(tmp_path, enforcement_mode="strict")
+    grouping = _grouping(concept, 117, "cells/µL")
+    grouping["parameters"]["source_columns"] = {"value": "plt_first"}
     _register_context(store, ResearchContext.model_validate({
         "research_question": "Group platelet counts by a synthetic boundary",
         "cohort": {"cohort_name": "synthetic", "database": "eicu", "n_stays": 100,
-                   "provenance": {"exposure_group_labels": [_grouping("plt", 117, "cells/µL")]}},
+                   "provenance": {"exposure_group_labels": [grouping]}},
         "variables": [{"name": "plt", "dtype": "int64", "description": "Platelet count", "unit": "cells/µL"}],
     }))
     _register_cohort_plan(store, {
@@ -489,10 +523,87 @@ def test_shared_cohort_and_exposure_boundaries_bind_to_a_cited_source(tmp_path, 
         ]},
         "steps": [],
     }, "analysis_plan")
-    _, removed, _, bindings, _ = _chain(store, [], f"Platelet count of 117 cells/µL or higher defined the boundary {cites}.")
+    _, removed, _, bindings, _ = _chain(store, [], f"PLT at admission was no less than 117 cells/µL {cites}.")
     assert not removed and len(bindings) == 1
     claim = next(iter(bindings.values()))
     assert (claim.evidence_id, claim.source_field) == (evidence_id, field)
+
+
+def test_adult_inclusion_does_not_mask_an_age_group_boundary(tmp_path):
+    store = EvidenceStore(tmp_path, enforcement_mode="strict")
+    question = "Compare older and younger adult strata"
+    _register_context(store, ResearchContext.model_validate({
+        "research_question": question,
+        "cohort": {"cohort_name": "synthetic", "database": "eicu", "n_stays": 100,
+                   "provenance": {"exposure_group_labels": [_grouping("age", 80, "years")]}},
+        "variables": [{"name": "age", "dtype": "float64", "unit": "years"}],
+    }))
+    _register_cohort_plan(store, {
+        "research_question": question,
+        "cohort": {"name": "synthetic", "inclusion": [_predicate("age", ">=", 18)]},
+        "steps": [],
+    }, "analysis_plan")
+
+    text = (
+        "Age was stratified as under 80 {evidence:research_context}.\n\n"
+        "Age of 80 or older defined the second stratum {evidence:research_context}."
+    )
+    _, removed, final, bindings, untraced = _chain(store, [], text)
+    assert removed == [] and untraced == []
+    assert final.count("authority=definition") == 2
+    assert [(claim.evidence_id, claim.source_field) for claim in bindings.values()] == [
+        ("research_context", f"cohort.provenance.exposure_group_labels[0].parameters.groups[{pos}].rule.value")
+        for pos in range(2)
+    ]
+    _, removed, _, _, _ = _chain(store, [], "Age was grouped at 18 years {evidence:research_context}.")
+    assert [row["untraced"] for row in removed] == [["18"]]
+
+
+def test_uncited_age_literal_activates_only_its_matching_predicate(cohort_plan_store):
+    store, plan = cohort_plan_store
+    plan["cohort"]["inclusion"][0] = _predicate("age", ">=", 18)
+    plan["cohort"]["exclusion"] = [_predicate("age", ">=", 90)]
+    _register_cohort_plan(store, plan, "analysis_plan")
+
+    text = "The screening protocol required age >= 18."
+    _, removed, _, bindings, untraced = _chain(store, [], text)
+    assert removed == [] and untraced == []
+    assert [(claim.value, claim.source_field) for claim in bindings.values()] == [
+        ("18", "cohort.inclusion[0].value"),
+    ]
+
+
+def test_two_cohort_cutoffs_bind_to_their_own_values(cohort_plan_store):
+    store, plan = cohort_plan_store
+    plan["cohort"]["inclusion"] = [_predicate("age", ">=", 18), _predicate("age", "<=", 85)]
+    _register_cohort_plan(store, plan, "analysis_plan")
+
+    text = "For screening, the age cutoff was 18 years and 85 years {evidence:analysis_plan}."
+    _, removed, _, bindings, untraced = _chain(store, [], text)
+    assert removed == [] and untraced == []
+    assert [(claim.value, claim.source_field) for claim in bindings.values()] == [
+        ("18", "cohort.inclusion[0].value"), ("85", "cohort.inclusion[1].value"),
+    ]
+
+
+@pytest.mark.parametrize("sentence, value", [
+    ("We screened for age above 73 years, and 73 years was the recorded median {evidence:research_context}.", "73"),
+    ("We screened on creatinine below 2.5 mg/dL, and 2.5 mg/dL was the observed median {evidence:analysis_plan}.",
+     "2.5"),
+])
+def test_an_unmarked_threshold_cannot_release_a_coordinated_result(cohort_plan_store, sentence, value):
+    store, plan = cohort_plan_store
+    plan["cohort"]["inclusion"][0] = _predicate("age", ">", 73)
+    _register_cohort_plan(store, plan, "analysis_plan")
+
+    with pytest.raises(EvidenceEnforcementError) as error:
+        bind_numeric_values(sentence, evidence=store, per_step_records=[])
+    start = sentence.rindex(value)
+    assert error.value.detail["untraced_occurrences"] == [
+        {"start": start, "end": start + len(value), "value": value},
+    ]
+    _, removed, _, _, _ = _chain(store, [], sentence)
+    assert [row["untraced"] for row in removed] == [[value]]
 
 
 def test_over_can_state_a_strict_boundary_or_a_duration(cohort_plan_store):
