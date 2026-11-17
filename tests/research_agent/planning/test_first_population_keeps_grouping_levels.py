@@ -205,6 +205,10 @@ def test_a_real_empty_level_refusal_can_be_repaired_in_the_same_family_attempt()
     assert "declared_exposure_level_empty" in feedback
     assert "g1" in feedback and "code=1" in feedback and "Lower" in feedback
     assert "Observed level counts: unavailable" in feedback
+    # The feedback names the one move that resolves it: the host's own
+    # reconciliation, triggered by a reading that requests the grouping.
+    assert "list both 'entry_measure' and 'entry_band'" in feedback
+    assert "restate the restriction in another form" in feedback
 
 
 @pytest.mark.parametrize("concepts", [["entry_band", "death"], ["entry_measure", "death"]])

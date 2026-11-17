@@ -215,11 +215,19 @@ def exposure_level_conflict_feedback(
         messages.append(conflict.message() + (
             f" Declared code={level['code']!r}, label={level.get('label')!r}." if level else ""
         ))
+    pairs = dict.fromkeys((conflict.predicate.concept_id, conflict.grouping) for conflict in conflicts)
+    resolve = "; ".join(
+        f"list both {concept!r} and {grouping!r} in the concepts of the estimand or subgroup "
+        "question requirement that asks it (coverage \"plan\")"
+        for concept, grouping in pairs
+    )
     return " ".join(messages) + (
         " Observed level counts: unavailable in this planning context; this is a "
-        "typed-rule contradiction, not an observed count. Repair the population "
-        "or declared contrast to preserve the question and all required levels; "
-        "do not invent counts or silently discard a requested level."
+        "typed-rule contradiction, not an observed count. The declared grouping is the "
+        "study's stated contrast and stays. If the question needs the whole population "
+        "(for example what share of stays a level is, or a comparison between levels), "
+        f"{resolve}; the host then removes the contradicting restriction and records why. "
+        "Do not restate the restriction in another form, invent counts, or discard a level."
     )
 
 
