@@ -3468,7 +3468,9 @@ def _callback_sofa_resp(
     # missing (missing_fio2 provenance); ricu's pafi() has no row there, so
     # only a ventilation hour may score 0 without a ratio.
     pafi_df['pafi'] = pd.to_numeric(pafi_df['pafi'], errors='coerce')
-    pafi_df = pafi_df[pafi_df['pafi'].notna()]
+    preserve_grid = ctx.kwargs.get('_preserve_sofa_score_grid', False)
+    if not preserve_grid:
+        pafi_df = pafi_df[pafi_df['pafi'].notna()]
 
     # Expand vent_ind WinTbl to hourly points WITHIN windows only (vectorized)
     if isinstance(vent_tbl, WinTbl):
@@ -3523,6 +3525,10 @@ def _callback_sofa_resp(
     score = score.where(~lt(pafi_vals, 300).fillna(False), 2)
     score = score.where(~lt(pafi_vals, 200).fillna(False), 3)
     score = score.where(~lt(pafi_vals, 100).fillna(False), 4)
+    if preserve_grid:
+        # Keep unmatched P/F keys only as full-score grid anchors. B1 still
+        # forbids a respiratory score without either P/F or ventilation.
+        score = score.where(result['pafi'].notna() | result['vent_ind'])
     result['sofa_resp'] = score
     
     # Select output columns

@@ -530,3 +530,38 @@ def test_constant_active_rate_at_ceiling_survives_fractional_hour_roundoff(minut
     out = collapse_spans(frame, ids=['stay_id'], index='charttime', value='propofol_rate', minimum=0, maximum=200)
     assert out.propofol_rate.between(0., 200.).all()
     assert out.propofol_rate.tolist() == pytest.approx([200.])
+
+
+def test_sofa_keeps_cardio_window_grid_without_scoring_unmatched_pf(monkeypatch):
+    from types import SimpleNamespace
+    from easyicu.concept import ConceptResolver
+    from easyicu.concept.callbacks import ConceptCallbackContext, _callback_sofa_resp
+    from easyicu.resources import load_dictionary
+    from easyicu.table import ICUTable
+
+    def table(name, hours, values):
+        return ICUTable(pd.DataFrame({'stay_id': 1, 'charttime': hours, name: values}),
+                        id_columns=['stay_id'], index_column='charttime', value_column=name)
+
+    pafi = table('pafi', [2., 26.], [float('nan'), float('nan')])
+    vent = table('vent_ind', [], [])
+    resolver = ConceptResolver(load_dictionary())
+    source = SimpleNamespace(config=SimpleNamespace(name='miiv', class_prefix=['miiv']))
+
+    def children(*args, **kwargs):
+        ctx = ConceptCallbackContext(concept_name='sofa_resp', target=None, interval=pd.Timedelta(hours=1),
+                                     resolver=resolver, data_source=source, patient_ids=None, kwargs=kwargs)
+        respiratory = _callback_sofa_resp({'pafi': pafi, 'vent_ind': vent}, ctx)
+        # The full SOFA grid may use these keys, but they carry no respiratory score.
+        assert respiratory.data.charttime.tolist() == [2., 26.]
+        assert respiratory.data.sofa_resp.isna().all()
+        return {'sofa_resp': respiratory, 'sofa_cardio': table('sofa_cardio', [0.], [3.])}
+
+    monkeypatch.setattr(resolver, 'load_concepts', children)
+    result = resolver._load_recursive_concept(
+        'sofa', load_dictionary()['sofa'], source, aggregator=None, patient_ids=None,
+        interval=pd.Timedelta(hours=1), verbose=False, keep_components=True).data
+    assert result.charttime.tolist() == list(range(27))
+    assert result.loc[result.charttime == 2., 'sofa_cardio'].item() == 3.
+    assert result.loc[result.charttime == 24., 'sofa_cardio'].isna().all()
+    assert result.sofa_resp.isna().all()

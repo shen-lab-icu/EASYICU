@@ -1455,7 +1455,12 @@ class ConceptResolver:
     @classmethod
     def _raw_cache_scope(cls, kwargs: Optional[Mapping[str, object]]) -> object:
         hours = cls._pre_admission_hours_from_kwargs(kwargs)
-        return None if hours is None else ("pre_admission_hours", hours)
+        scope = None if hours is None else ("pre_admission_hours", hours)
+        if kwargs and kwargs.get('_preserve_sofa_score_grid', False):
+            # A full-score respiratory table includes null time anchors that
+            # must not be reused by a standalone respiratory request (or vice versa).
+            return (scope, 'preserve_sofa_score_grid')
+        return scope
 
     # The grid each raw-cache entry was loaded on is a field of the entry,
     # kept beside the cache in ``_raw_concept_grid``: key -> (weak reference to
@@ -8392,6 +8397,10 @@ class ConceptResolver:
 
         # Prepare kwargs for sub-concepts, allowing them to be optional
         sub_kwargs = {**kwargs, '_allow_missing_concept': True}
+        if definition.callback == "sofa_score":
+            # Unknown respiratory assessments bound the full score's domain,
+            # without contributing a respiratory score or truncating other organs.
+            sub_kwargs['_preserve_sofa_score_grid'] = True
         contract_lookback = definition.pre_admission_lookback_hours
         if contract_lookback is not None:
             inherited_lookback = self._pre_admission_hours_from_kwargs(sub_kwargs)
