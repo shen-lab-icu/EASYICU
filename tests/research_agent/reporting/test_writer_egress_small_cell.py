@@ -266,3 +266,22 @@ def test_selection_counts_above_the_threshold_reach_the_request_as_written():
         line = _counts_line(prompt)
         assert "suppressed" not in line
         assert "120 excluded (14 of them" in line and "the analysis input held 800" in line
+
+
+def test_section_repair_does_not_echo_private_numbers_from_its_prior_scaffold(tmp_path):
+    digest = _digest(tmp_path, _SMALL)
+    draft = _manuscript().replace(
+        "## Results\n\n", "## Results\n\nThe outcome count was 3 of 120; the complement was 117 and the rate was 0.025 {evidence:summary}.\n\n",
+    )
+    llm = _client()
+    with contextlib.suppress(ManuscriptReaderQualityContractError):
+        WriterAgent(llm).repair_sections(
+            draft, section_errors={"results": ("MANUSCRIPT_SECTION_TRUNCATED: the count was 3 of 120; rate=0.025.",)},
+            context=_context(), analysis_plan=_plan(), evidence_ids=["summary"],
+            evidence_digest=digest,
+        )
+    prompts = _texts(llm)
+    assert prompts
+    for prompt in prompts:
+        for leak in _LEAKS:
+            assert not re.search(leak, prompt), leak

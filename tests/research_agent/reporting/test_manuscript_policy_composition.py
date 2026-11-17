@@ -200,3 +200,45 @@ def test_role_guidance_omits_roles_absent_from_the_plan():
 
     assert "### Secondary analyses" not in instruction
     assert "### Sensitivity and subgroup analyses" not in instruction
+
+
+def test_secondary_writer_fallback_survives_the_same_strict_findings_grammar():
+    from easyicu.research_agent.agents.reporting import WriterAgent
+    from easyicu.research_agent.providers.mocks import ScriptedMockLLMClient
+    from easyicu.research_agent.reporting.manuscript_quality import audit_manuscript_quality
+    from easyicu.research_agent.reporting.manuscript_result_structure import result_section_instruction
+    from easyicu.research_agent.schema import AnalysisPlan, AnalysisStep, ResearchContext
+
+    context = ResearchContext.model_validate({
+        "research_question": "Assess potassium-based renal readmission prediction.",
+        "cohort": {"cohort_name": "synthetic", "database": "miiv", "n_stays": 120},
+        "primary_exposure": "potassium", "target_outcome": "readmission",
+        "variables": [{"name": "potassium", "dtype": "float64", "description": "Serum potassium"},
+                      {"name": "readmission", "dtype": "bool", "description": "Renal readmission"}],
+    })
+    plan = AnalysisPlan(research_question=context.research_question, analysis_type="prediction_model", steps=[
+        AnalysisStep(step_id="renal_model", intent="Assess discrimination", method="descriptive",
+                     expected_outputs=["table:performance"], planned_analysis_role="primary"),
+        AnalysisStep(step_id="renal_calibration", intent="Assess calibration", method="descriptive",
+                     expected_outputs=["table:calibration"], planned_analysis_role="secondary"),
+    ])
+    # The old Writer guidance explicitly requested this unsupported substitute.
+    receipt_sentence = "The prespecified secondary analysis was executed and its registered results are bound to the named evidence id {evidence:result}."
+    assert _filter("## Results\n\n### Secondary analyses\n" + receipt_sentence).unsupported_scientific_claim_sentences
+    instruction = result_section_instruction(plan)
+    assert "write one sentence stating only that the prespecified secondary" not in instruction
+    prose = (
+        "## Results\n\n### Cohort characteristics\nThe analysis cohort comprised 120 ICU stays {evidence:result}.\n\n"
+        "### Model performance\nThe AUROC was 0.74 {evidence:result}.\n\n"
+        "### Secondary analyses\nThe calibration slope was 0.91 {evidence:result}."
+    )
+    client = ScriptedMockLLMClient([prose])
+    written = WriterAgent(client)._call_section(
+        section_name="Results", instruction=instruction, context=context,
+        analysis_plan=plan, evidence_ids=("result",),
+        evidence_digest="Cohort 120; AUROC 0.74; calibration slope 0.91; cite={evidence:result}",
+    )
+    filtered = _filter(written)
+    assert not filtered.filtered_sentences
+    assert not [finding for finding in audit_manuscript_quality(filtered.scaffold, analysis_plan=plan).findings
+                if finding.section == "Results"]

@@ -75,10 +75,10 @@ def test_results_contract_requires_complete_non_ph_survival_reporting() -> None:
     assert "Do not report an unauthorized constant hazard ratio" in results.instruction
     assert [spec.max_tokens for spec in MANUSCRIPT_SECTION_SPECS] == [
         256,
-        1024,
+        2048,
         4096,
-        2048,
-        2048,
+        4096,
+        4096,
         4096,
         1024,
         512,
@@ -740,3 +740,52 @@ def test_verified_administrative_authority_is_rendered_exactly() -> None:
     assert "Verified ethics statement." in rendered
     assert "Verified disclosure statement." in rendered
     assert "Verified artifact inventory statement." in rendered
+
+
+@pytest.mark.parametrize("key, minimum", [("abstract", 2048), ("methods", 4096), ("results", 4096)])
+def test_section_budget_funds_complete_prose_and_long_evidence_citations(key, minimum):
+    spec = next(spec for spec in MANUSCRIPT_SECTION_SPECS if spec.key == key)
+    assert spec.max_tokens >= minimum
+
+
+def test_truncated_results_structural_retry_has_room_to_finish_with_scripted_writer():
+    from easyicu.research_agent.agents.reporting import WriterAgent
+    from easyicu.research_agent.providers.mocks import ScriptedMockLLMClient
+    from easyicu.research_agent.schema import ResearchContext
+
+    context = ResearchContext.model_validate({
+        "research_question": "Describe potassium and renal readmission in ICU stays.",
+        "cohort": {"cohort_name": "synthetic", "database": "miiv", "n_stays": 120},
+        "primary_exposure": "potassium", "target_outcome": "readmission",
+        "variables": [{"name": "potassium", "dtype": "float64", "description": "Serum potassium"},
+                      {"name": "readmission", "dtype": "bool", "description": "Renal readmission"}],
+    })
+    responses = []
+    for spec in MANUSCRIPT_SECTION_SPECS:
+        if spec.key == "results":
+            responses.append("## Results\n\n### Cohort characteristics\nThe cohort is described.\n\n### Primary outcome\nThe renal")
+        responses.append(_minimal_valid_section(spec.section_name))
+    client = ScriptedMockLLMClient(responses)
+    manuscript = WriterAgent(client).run(context=context, evidence_ids=("renal_summary",))
+    assert "### Sensitivity and subgroup analyses" in manuscript
+    results_calls = [kwargs for messages, kwargs in client.calls
+                     if "**Results**" in messages[1].content]
+    assert len(results_calls) == 2
+    assert results_calls[1]["max_tokens"] > results_calls[0]["max_tokens"]
+
+
+def test_retained_numbers_never_rewrite_audit_tokens_or_echo_comment_counts():
+    from easyicu.research_agent.reporting.manuscript_sections import _masked_section_values
+
+    raw = (
+        "{claim:03_renal.primary} {evidence:04_renal_summary} [@2024_method]\n"
+        "A value was 7. <!-- count=3 -->"
+    )
+    masked, retained = _masked_section_values(raw)
+    for token in ("{claim:03_renal.primary}", "{evidence:04_renal_summary}", "[@2024_method]"):
+        assert token in masked
+    assert "value was 7" not in masked and "count=3" not in masked
+    restored = masked
+    for marker, value in retained.items():
+        restored = restored.replace(marker, value)
+    assert restored == raw

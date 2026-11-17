@@ -149,7 +149,7 @@ MANUSCRIPT_SECTION_SPECS = (
             "identifiers, internal reason codes, or host/runtime terminology.\n"
             "Target: 200-300 words total."
         ),
-        max_tokens=1024,
+        max_tokens=2048,
     ),
     ManuscriptSectionSpec(
         key="introduction",
@@ -200,7 +200,11 @@ MANUSCRIPT_SECTION_SPECS = (
             "EXECUTED METHOD BOUNDARY, not only model adjustment covariates. "
             "Use its exact executed representation and the supplied reader label; "
             "mentioning a variable only in Introduction or Table 1 is insufficient. "
-            "A missingness or availability count alone does not describe its representation.\n"
+            "A missingness or availability count alone does not describe its representation. "
+            "Name each accepted baseline in a separate, number-free sentence with "
+            "its executed representation and owning evidence citation. The host places "
+            "numeric source definitions and windows separately. Do not replace the "
+            "accepted names with generic lists such as vital signs or laboratory tests.\n"
             "  Attach an exact allowed {evidence:<id>} token to each current-study "
             "method sentence, including variable introductions and analysis choices; "
             "a citation on a later sentence does not authorize an earlier one.\n"
@@ -237,7 +241,7 @@ MANUSCRIPT_SECTION_SPECS = (
             "clinical labels; never expose raw variable names, snake_case ids, "
             "reason codes, or host/runtime terminology."
         ),
-        max_tokens=2048,
+        max_tokens=4096,
         required_subsections=(
             "Study design and cohort",
             "Variables",
@@ -323,7 +327,7 @@ MANUSCRIPT_SECTION_SPECS = (
             "percentages, and at most three decimals for effects and confidence "
             "limits."
         ),
-        max_tokens=2048,
+        max_tokens=4096,
         required_subsections=(
             "Cohort characteristics",
             "Primary outcome",
@@ -421,7 +425,7 @@ MANUSCRIPT_SECTION_SPECS = (
 )
 
 
-MANUSCRIPT_WRITER_CONTRACT_VERSION = "37"
+MANUSCRIPT_WRITER_CONTRACT_VERSION = "38"
 
 
 def manuscript_section_specs(analysis_plan: AnalysisPlan | None = None):
@@ -809,7 +813,7 @@ def repair_existing_manuscript_sections(
                     section_name=spec.section_name,
                     instruction=spec.instruction,
                     repair_feedback=repair_instruction,
-                    max_tokens=spec.max_tokens,
+                    max_tokens=min(8192, 2 * spec.max_tokens),
                     **common,
                 ),
             )
@@ -857,6 +861,41 @@ def repair_existing_manuscript_sections(
     return candidate, tuple(repaired_keys)
 
 
+_NUMBER_OUTSIDE_TOKEN = re.compile(r"(?<![\w.])[+−-]?(?:\d[\d,]*(?:\.\d+)?|\.\d+)(?:[eE][+-]?\d+)?(?!\w)")
+_PRESERVED_VALUE = re.compile(r"\{(?:manuscript|audit)_value:[^{}]*\}")
+
+
+def _masked_section_values(text: str, *, prefix: str = "manuscript") -> tuple[str, dict[str, str]]:
+    """Keep prior numeric literals local while a Writer revises their prose.
+
+    The current section may contain host-projected small cells that the outbound
+    digest intentionally suppresses. Send position-only opaque markers instead;
+    restore the exact literals before any section, numeric or evidence checks.
+    Audit tokens keep their exact identities and are never parsed as values.
+    """
+    from ..contracts.manuscript_sentence_context import (
+        CLAIM_MARKER_PATTERN, EVIDENCE_LINK_PATTERN, EVIDENCE_TOKEN_PATTERN,
+    )
+
+    tokens = re.compile("|".join((
+        EVIDENCE_TOKEN_PATTERN, EVIDENCE_LINK_PATTERN, CLAIM_MARKER_PATTERN,
+        r"\{claim:[^{}\s]+\}", r"\[@[^\]\n]+\]",
+    )))
+    values: dict[str, str] = {}
+    def mask(match: re.Match[str]) -> str:
+        ordinal = format(len(values), "x").translate(str.maketrans("0123456789abcdef", "abcdefghijklmnop"))
+        marker = "{" + prefix + "_value:v" + ordinal + "}"
+        values[marker] = match[0]
+        return marker
+
+    output, position = [], 0
+    for token in tokens.finditer(text):
+        output.extend((_NUMBER_OUTSIDE_TOKEN.sub(mask, text[position:token.start()]), token[0]))
+        position = token.end()
+    output.append(_NUMBER_OUTSIDE_TOKEN.sub(mask, text[position:]))
+    return "".join(output), values
+
+
 def repair_named_manuscript_sections(
     manuscript: str,
     *,
@@ -885,7 +924,10 @@ def repair_named_manuscript_sections(
         errors = tuple(section_errors.get(spec.key) or ())
         if not errors:
             continue
-        detail = "\n".join(f"- {item}" for item in errors[:12])
+        detail, _feedback_values = _masked_section_values(
+            "\n".join(f"- {item}" for item in errors[:12]), prefix="audit",
+        )
+        current_section, preserved_values = _masked_section_values(sections.get(spec.key, ""))
         instruction = (
             "EVIDENCE-AUTHORITY CONTRACT REPAIR:\n"
             + "The adjacent deterministic claim policy rejected these sentences "
@@ -898,18 +940,29 @@ def repair_named_manuscript_sections(
             + "require an exact allowed `{evidence:<id>}` token. Do not paraphrase "
             + "a supplied result claim or append its token to prose. Omit a sentence when no such "
             + "authority exists. Preserve required headings and do not mention "
-            + "this repair."
+            + "this repair. Preserve every existing numeric literal and its exact "
+            + "evidence or claim token; do not substitute another registered value. "
+            + "Add missing prose only from the same registered evidence. Finish "
+            + "every required subsection and end in complete sentences. "
+            + "The CURRENT SECTION uses opaque `{manuscript_value:...}` markers "
+            + "for its existing numbers. Keep each marker exactly once, in its "
+            + "original subsection; the host restores the literal before validation. "
+            + "Do not copy `{audit_value:...}` diagnostic markers into the section."
         )
         repaired = _ensure_section_heading(
             spec,
             call_section(
                 section_name=spec.section_name,
-                instruction=spec.instruction,
+                instruction=spec.instruction + "\n\nCURRENT SECTION (retain its bound facts):\n" + current_section,
                 repair_feedback=instruction,
-                max_tokens=spec.max_tokens,
+                max_tokens=min(8192, 2 * spec.max_tokens),
                 **common,
             ),
         )
+        for marker, literal in preserved_values.items():
+            repaired = repaired.replace(marker, literal)
+        if _PRESERVED_VALUE.search(repaired):
+            raise ValueError("MANUSCRIPT_REPAIR_AUTHORITY_CHANGED: unknown preserved-number marker")
         missing = _missing_required_subsections(spec, repaired)
         if missing:
             raise ManuscriptSectionContractError(
@@ -1020,7 +1073,7 @@ def render_manuscript_sections(
                 call_section(
                     section_name=spec.section_name,
                     instruction=retry_instruction,
-                    max_tokens=spec.max_tokens,
+                    max_tokens=min(8192, 2 * spec.max_tokens),
                     **common,
                 ),
             )
@@ -1091,7 +1144,7 @@ def render_manuscript_sections(
                     section_name=spec.section_name,
                     instruction=spec.instruction,
                     repair_feedback=repair_instruction,
-                    max_tokens=spec.max_tokens,
+                    max_tokens=min(8192, 2 * spec.max_tokens),
                     **common,
                 ),
             )

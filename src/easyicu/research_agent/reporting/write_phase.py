@@ -3731,15 +3731,17 @@ def _draft_bind_and_repair_manuscript(
     writer_probe_mode: bool, writer_probe_failed_steps: Sequence[str],
     emit_progress: Callable[..., None],
 ) -> tuple[_DraftStageResult, _BindingStageResult]:
-    """Run the existing gates again after one targeted final-quality repair."""
+    """Feed final audit feedback to the existing bounded section repair owner."""
+    from .manuscript_audit_repair import run_manuscript_audit_repair
     from .manuscript_sections import quality_repair_section_errors
 
-    # One feedback-driven revision of the affected sections. Each candidate
-    # traverses the same drafting, evidence, numeric and reader-quality gates;
-    # no analysis step is rerun and unchanged failures do not start a loop.
-    section_repair = None
-    for writer_attempt in range(2):
-        draft = _draft_manuscript(
+    def draft_candidate(section_repair):
+        if section_repair is not None:
+            emit_progress(
+                "writer", "Repairing sections rejected by final manuscript checks.",
+                run_id=run_id, section_keys=list(section_repair[1]),
+            )
+        return _draft_manuscript(
             pipeline,
             context=context,
             agent_context=agent_context,
@@ -3758,7 +3760,9 @@ def _draft_bind_and_repair_manuscript(
             emit_progress=emit_progress,
             section_repair=section_repair,
         )
-        binding = _bind_and_review_manuscript(
+
+    def bind_candidate(draft):
+        return _bind_and_review_manuscript(
             pipeline,
             critic=critic,
             evidence=evidence,
@@ -3777,9 +3781,9 @@ def _draft_bind_and_repair_manuscript(
             plan=execute_result.plan,
             reader_tables=draft.reader_tables,
         )
-        if writer_attempt or writer_probe_mode or draft.writer_error_message:
-            break
-        section_errors = quality_repair_section_errors(
+
+    def section_errors(draft, binding):
+        errors = quality_repair_section_errors(
             binding.bound,
             analysis_plan=execute_result.plan,
             expected_primary_result_facts=binding.primary_result_facts,
@@ -3789,14 +3793,12 @@ def _draft_bind_and_repair_manuscript(
             reader_display_labels=dict(execute_result.plan.display_labels or {}),
             expected_baseline_mentions=baseline_reporting_mentions(context, execute_result.plan.display_labels),
         )
-        section_errors = with_absent_target_repairs(section_errors, draft.absent_owner_claim_targets)
-        if not section_errors:
-            break
-        section_repair = (draft.scaffold, section_errors)
-        emit_progress(
-            "writer", "Repairing sections rejected by final manuscript checks.",
-            run_id=run_id, section_keys=list(section_errors),
-        )
+        return with_absent_target_repairs(errors, draft.absent_owner_claim_targets)
+
+    draft, binding = run_manuscript_audit_repair(
+        draft=draft_candidate, bind=bind_candidate, section_errors=section_errors,
+        findings=findings, run_dir=run_dir, evidence=evidence, skip_repair=writer_probe_mode,
+    )
     _report_absent_owner_claim_targets(draft.absent_owner_claim_targets, findings)
     return draft, binding
 

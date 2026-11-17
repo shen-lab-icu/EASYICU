@@ -578,3 +578,31 @@ def test_writer_neutral_count_examples_use_the_same_closed_claim_grammar():
     assert filter_evidence_bound_scaffold(
         tampered, resolve_claim=lambda _: None, resolve_evidence=lambda ref: True,
     ).filtered_sentences
+
+
+@pytest.mark.parametrize("population, expected", [
+    ("the bound typed cohort", "the analysis cohort"),
+    ("rows with observed exposure in the bound typed cohort", "rows with observed exposure in the analysis cohort"),
+])
+def test_descriptive_reader_population_cannot_reintroduce_runtime_terms(population, expected):
+    from easyicu.research_agent.reporting.manuscript_quality import audit_manuscript_quality
+
+    claim = _claim().model_copy(update={
+        "schema_version": "easyicu.scientific_claim/3",
+        "claim_type": "descriptive_risk_difference", "direction": "descriptive_only",
+        "adjusted_for": [], "point_estimate": 3.0, "interval_lower": 1.0,
+        "interval_upper": 5.0, "confidence_level": 0.95,
+        "interval_method": "linear_probability_wald", "effect_scale": "percentage_points",
+        "exposure": "high_potassium=1 versus high_potassium=0",
+        "outcome": "renal_readmission", "population": population,
+    })
+    original = claim.model_dump_json()
+    draft = "\n\n".join(
+        f"## {section}\n\n" + claim.placeholder
+        for section in ("Abstract", "Discussion", "Conclusion")
+    )
+    reader = expand_scientific_claim_tokens(draft, resolve_claim=lambda _: claim).scaffold
+    assert expected in reader
+    assert not [finding for finding in audit_manuscript_quality(reader).findings
+                if finding.code == "MANUSCRIPT_INTERNAL_TERM_EXPOSED"]
+    assert claim.model_dump_json() == original

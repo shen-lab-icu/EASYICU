@@ -155,6 +155,10 @@ def _unambiguous_labels(
 # reader recognises.  Its projection is the plain analysis set, the wording the
 # manuscript quality audit prescribes for the same phrase.
 _READER_ANALYSIS_SET_POPULATIONS = {
+    "the bound typed cohort": "the analysis cohort",
+    "rows with observed exposure in the bound typed cohort": (
+        "rows with observed exposure in the analysis cohort"
+    ),
     "the source aware analysis set": "the analysis set",
     "the primary model complete-case records": (
         "the primary model's complete-case records"

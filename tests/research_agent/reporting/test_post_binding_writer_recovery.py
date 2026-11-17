@@ -1,13 +1,23 @@
 """Final binding failures feed only affected sections back through the gates."""
 
+import json
 from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
 
-from easyicu.research_agent.authority.evidence_store import EvidenceStore, sha256_of_file
+from easyicu.research_agent.agents.reporting import WriterAgent
+from easyicu.research_agent.authority.evidence_store import (
+    EvidenceEnforcementError, EvidenceEnforcementMode, EvidenceStore, sha256_of_file,
+)
+from easyicu.research_agent.authority.manuscript_claim_policy import filter_evidence_bound_scaffold
+from easyicu.research_agent.providers.mocks import ScriptedMockLLMClient
+from easyicu.research_agent.reporting.administrative_authority import render_manuscript_administrative_sections
+from easyicu.research_agent.reporting.manuscript_post import bind_numeric_values
+from easyicu.research_agent.reporting.manuscript_quality import audit_manuscript_quality
+from easyicu.research_agent.reporting.manuscript_sections import completed_section_repair_candidate
 from easyicu.research_agent.reporting import write_phase
-from easyicu.research_agent.schema import AnalysisPlan, AnalysisStep, CritiqueReport, ValidationFinding
+from easyicu.research_agent.schema import AnalysisPlan, AnalysisStep, CritiqueReport, ResearchContext, ValidationFinding
 
 from .test_manuscript_quality import _valid_manuscript
 
@@ -127,3 +137,299 @@ def test_drafting_reviewer_sees_current_errors_and_preserves_recovered_history(t
     assert latest_id != first_json.evidence_id
     assert evidence.get(latest_id).sha256 == sha256_of_file(tmp_path / "reviewer_report.json")
     assert sha256_of_file(tmp_path / first_json.relative_path) == first_json.sha256
+
+
+GOOD = """# Potassium and renal readmission in a retrospective ICU cohort
+
+**Keywords:** potassium, kidney, readmission, cohort, prediction
+
+## Abstract
+
+**Background:** Renal readmission is a clinically relevant endpoint.
+
+**Methods:** We assessed the supplied potassium representation.
+
+**Results:** The cohort comprised 120 ICU stays {evidence:renal_summary}.
+
+**Conclusions:** These estimates describe predictive discrimination within the study population.
+
+## Introduction
+
+Potassium measurements can inform the design of prognostic research.
+
+## Methods
+
+### Study design and cohort
+We studied the supplied ICU cohort {evidence:renal_summary}.
+
+### Variables
+Serum potassium was represented by its supplied maximum value {evidence:renal_summary}.
+
+### Statistical analysis
+The executed analysis assessed discrimination {evidence:renal_summary}.
+
+### Software and reproducibility
+Analyses used registered software artifacts {evidence:renal_summary}.
+
+## Results
+
+### Cohort characteristics
+The cohort comprised 120 ICU stays {evidence:renal_summary}.
+
+### Model performance
+The AUROC was 0.74 {evidence:renal_summary}.
+
+### Secondary analyses
+The outcome count was 15 {evidence:renal_summary}.
+
+## Discussion
+
+Interpretation is limited to the studied population.
+
+## Limitations
+
+Independent validation will require a separate cohort.
+
+## Conclusion
+
+The evaluation addresses discrimination for renal readmission within the study population.
+""" + "\n\n" + render_manuscript_administrative_sections(None)
+
+
+def _section(text, name):
+    return text.split(f"## {name}\n", 1)[1].split("\n## ", 1)[0].strip()
+
+
+def _exercise(tmp_path, monkeypatch, bad, responses, *, changed_bindings=False, initial_findings=(), baseline_mentions=None):
+    context = ResearchContext.model_validate({
+        "research_question": "Assess potassium-based renal readmission prediction.",
+        "cohort": {"cohort_name": "synthetic", "database": "miiv", "n_stays": 120},
+        "primary_exposure": "potassium", "target_outcome": "readmission",
+        "variables": [{"name": "potassium", "dtype": "float64", "description": "Serum potassium"},
+                      {"name": "readmission", "dtype": "bool", "description": "Renal readmission"}],
+    })
+    plan = AnalysisPlan(research_question=context.research_question, analysis_type="prediction_model", steps=[
+        AnalysisStep(step_id="renal_model", intent="Assess discrimination", method="descriptive", expected_outputs=["table:performance"], planned_analysis_role="primary"),
+        AnalysisStep(step_id="renal_events", intent="Describe endpoint", method="descriptive", expected_outputs=["table:events"], planned_analysis_role="secondary"),
+    ])
+    if baseline_mentions is not None:
+        monkeypatch.setattr(write_phase, "baseline_reporting_mentions", lambda *_args: baseline_mentions)
+    store = EvidenceStore(tmp_path, enforcement_mode=EvidenceEnforcementMode.STRICT)
+    summary = {"cohort_n": 120, "another_count": 121, "auroc": 0.74, "events": 15}
+    store.register_json(kind="statistic", description="Synthetic summary", payload=summary,
+                        filename="summary.json", evidence_id="renal_summary", produced_by_step="renal_model")
+    store.register_json(kind="statistic", description="Different synthetic owner", payload=summary,
+                        filename="other.json", evidence_id="other_summary", produced_by_step="other_model")
+    for step_id, evidence_id in (("renal_model", "renal_summary"), ("other_model", "other_summary")):
+        store.register_step_summary_numerics(step_id=step_id, evidence_id=evidence_id, summary=summary)
+    records = [{"step_id": "renal_model", "status": "ok", "step_summary": summary,
+                "step_summary_evidence_id": "renal_summary", "evidence_ids": ["renal_summary"]},
+               {"step_id": "other_model", "status": "ok", "step_summary": summary,
+                "step_summary_evidence_id": "other_summary", "evidence_ids": ["other_summary"]}]
+    client = ScriptedMockLLMClient(responses, repeat_last=True)
+    writer = WriterAgent(client)
+    drafts, bindings, findings = [], [], []
+
+    def draft(*_args, section_repair, **_kwargs):
+        drafts.append(section_repair)
+        if section_repair is None:
+            text = bad
+            findings.extend(initial_findings)
+        else:
+            try:
+                text, _ = writer.repair_sections(section_repair[0], section_errors=section_repair[1],
+                    context=context, analysis_plan=plan, evidence_ids=("renal_summary", "other_summary"),
+                    evidence_digest="Registered synthetic cohort and discrimination summaries.")
+            except Exception as exc:
+                candidate = completed_section_repair_candidate(exc, expected_section_keys=tuple(section_repair[1]))
+                if candidate is None:
+                    raise
+                text = candidate[0]
+        return write_phase._DraftStageResult((), ("renal_summary",), None, None, text)
+
+    def bind(*_args, scaffold, **_kwargs):
+        bindings.append(scaffold)
+        # Keep the real sentence-level evidence grammar and STRICT value binder.
+        filtered = filter_evidence_bound_scaffold(scaffold, resolve_claim=lambda _: None,
+                    resolve_evidence=lambda ref: store.get(ref) is not None)
+        # Some nonnumeric interpretation prose is intentionally outside this
+        # harness's authority. It is not used to construct numeric evidence.
+        assert "The cohort comprised" in filtered.scaffold
+        bound = store.bind_manuscript(scaffold, per_step_records=records)
+        bound, values, unknown = bind_numeric_values(bound, evidence=store, per_step_records=records,
+                                                     enforcement_mode=EvidenceEnforcementMode.STRICT)
+        if changed_bindings and len(bindings) > 1:
+            for claim in values.values():
+                if claim.source_field == "cohort_n":
+                    claim.source_field = "another_count"
+        audit = audit_manuscript_quality(bound, analysis_plan=plan, expected_baseline_mentions=baseline_mentions)
+        return write_phase._BindingStageResult(bound, tmp_path / "bound.md",
+                    CritiqueReport(status="pass" if audit.status == "pass" else "blocked", reviewer="scripted"),
+                    numeric_binding_map=values, untraced_numerics=tuple(unknown))
+
+    monkeypatch.setattr(write_phase, "_draft_manuscript", draft)
+    monkeypatch.setattr(write_phase, "_bind_and_review_manuscript", bind)
+    result = write_phase._draft_bind_and_repair_manuscript(
+        None, context=context, agent_context=context, evidence=store, findings=findings, literature=None,
+        per_step_records=records, plan_result=SimpleNamespace(resume_state=None),
+        execute_result=SimpleNamespace(plan=plan), critic=None, role_resolver=None,
+        prompt_version="test", runtime_state=None, run_dir=tmp_path, run_id="synthetic",
+        run_language="en", writer_probe_mode=False, writer_probe_failed_steps=(),
+        emit_progress=lambda *_args, **_kwargs: None,
+    )
+    return result, client, drafts, bindings, findings
+
+
+def test_final_audit_repairs_only_the_failing_section_and_records_attempt(tmp_path, monkeypatch):
+    bad = GOOD.replace("### Model performance\nThe AUROC was 0.74 {evidence:renal_summary}.",
+                       "### Model performance\nSee Figure 1 {evidence:renal_summary}.")
+    result, client, drafts, bindings, _ = _exercise(tmp_path, monkeypatch, bad, ["## Results\n\n" + _section(GOOD, "Results")])
+    assert result[1].manuscript_critique.status == "pass"
+    assert len(drafts) == len(bindings) == 2 and len(client.calls) == 1
+    assert tuple(drafts[1][1]) == ("results",)
+    assert _section(result[0].scaffold, "Methods") == _section(GOOD, "Methods")
+    feedback = client.calls[0][0][-1].content
+    assert "MANUSCRIPT_RESULT_SUBSECTION_CALLOUT_ONLY" in feedback
+    assert "The cohort comprised {manuscript_value:" in client.calls[0][0][1].content
+    receipt = json.loads((tmp_path / "manuscript_audit_repair.json").read_text())
+    assert receipt["status"] == "pass"
+    assert receipt["max_attempts"] == 1 and len(receipt["attempts"]) == 1
+    assert receipt["attempts"][0]["numeric_checks"] == "pass"
+    assert receipt["attempts"][0]["evidence_checks"] == "pass"
+
+
+def test_final_audit_repair_is_bounded_and_retains_typed_codes(tmp_path, monkeypatch):
+    bad = GOOD.replace("### Model performance\nThe AUROC was 0.74 {evidence:renal_summary}.",
+                       "### Model performance\nSee Figure 1 {evidence:renal_summary}.")
+    _, client, drafts, _, _ = _exercise(tmp_path, monkeypatch, bad, ["## Results\n\n" + _section(bad, "Results")])
+    assert len(client.calls) == 1 and len(drafts) == 2
+    receipt = json.loads((tmp_path / "manuscript_audit_repair.json").read_text())
+    assert receipt["status"] == "exhausted"
+    assert "MANUSCRIPT_RESULT_SUBSECTION_CALLOUT_ONLY" in receipt["remaining_codes"]
+
+
+@pytest.mark.parametrize("change", ["number", "display", "evidence", "binding"])
+def test_section_repair_cannot_change_an_existing_bound_fact(tmp_path, monkeypatch, change):
+    bad = GOOD.replace("The AUROC was 0.74 {evidence:renal_summary}.", "See Figure 1 {evidence:renal_summary}.")
+    replacement = "## Results\n\n" + _section(GOOD, "Results")
+    if change == "number":
+        replacement = replacement.replace("120", "121")  # Both numbers exist in the evidence.
+    if change == "display":
+        replacement = replacement.replace("120", "120.0")
+    if change == "evidence":
+        replacement = replacement.replace("120 ICU stays {evidence:renal_summary}", "120 ICU stays {evidence:other_summary}")
+    with pytest.raises(EvidenceEnforcementError, match="MANUSCRIPT_REPAIR_AUTHORITY_CHANGED"):
+        _exercise(tmp_path, monkeypatch, bad, [replacement], changed_bindings=change == "binding")
+    receipt = json.loads((tmp_path / "manuscript_audit_repair.json").read_text())
+    assert receipt["status"] == "rejected"
+    assert len(receipt["attempts"]) == 1
+
+
+def test_an_unregistered_number_fails_closed_before_any_section_repair(tmp_path, monkeypatch):
+    bad = GOOD.replace("120 ICU stays", "98765 ICU stays")
+    with pytest.raises(EvidenceEnforcementError):
+        _exercise(tmp_path, monkeypatch, bad, ["## Results\n\n" + _section(GOOD, "Results")])
+
+
+def test_numeric_failure_never_enters_editorial_repair(tmp_path, monkeypatch):
+    bad = GOOD.replace("The AUROC was 0.74 {evidence:renal_summary}.", "See Figure 1 {evidence:renal_summary}.")
+    finding = ValidationFinding(validator="manuscript_numeric_auditor", severity="error",
+                                message="A numeric claim is fabricated.", detail={"code": "FABRICATED_NUMBER"})
+    with pytest.raises(EvidenceEnforcementError, match="MANUSCRIPT_AUDIT_NON_REPAIRABLE"):
+        _exercise(tmp_path, monkeypatch, bad, ["unused"], initial_findings=(finding,))
+
+
+@pytest.mark.parametrize("owner, before, after, code, baseline", [
+    ("Abstract", "**Results:** The cohort comprised 120 ICU stays {evidence:renal_summary}.",
+     "**Results:**", "MANUSCRIPT_ABSTRACT_LABEL_MISSING_OR_EMPTY", None),
+    ("Abstract", "**Conclusions:** These estimates describe predictive discrimination within the study population.",
+     "**Conclusions:** Independent validation is required.", "MANUSCRIPT_CONCLUSION_WITHOUT_INTERPRETATION", None),
+    ("Conclusion", "The evaluation addresses discrimination for renal readmission within the study population.",
+     "Independent validation is required.", "MANUSCRIPT_CONCLUSION_WITHOUT_INTERPRETATION", None),
+    ("Methods", "Serum potassium was represented by its supplied maximum value",
+     "The predictor was represented by its supplied maximum value", "MANUSCRIPT_BASELINE_METHODS_INCOMPLETE",
+     {"potassium": ("Serum potassium",)}),
+    ("Results", "The outcome count was 15 {evidence:renal_summary}.",
+     "", "MANUSCRIPT_SUBSECTION_MISSING_OR_EMPTY", None),
+    ("Results", "The outcome count was 15 {evidence:renal_summary}.",
+     "The outcome count was", "MANUSCRIPT_SECTION_TRUNCATED", None),
+])
+def test_each_final_structural_finding_returns_to_its_writer_owner(
+    tmp_path, monkeypatch, owner, before, after, code, baseline,
+):
+    bad = GOOD.replace(before, after)
+    result, client, drafts, _, _ = _exercise(
+        tmp_path, monkeypatch, bad, [f"## {owner}\n\n" + _section(GOOD, owner)],
+        baseline_mentions=baseline,
+    )
+    assert result[1].manuscript_critique.status == "pass"
+    assert len(client.calls) == 1 and list(drafts[1][1]) == [owner.lower()]
+    assert code in client.calls[0][0][-1].content
+
+
+@pytest.mark.parametrize("validator", ["manuscript_numeric_auditor", "evidence_bound_writer"])
+def test_non_repairable_binding_error_does_not_spend_a_model_attempt(tmp_path, monkeypatch, validator):
+    from easyicu.research_agent.reporting.manuscript_audit_repair import run_manuscript_audit_repair
+
+    calls = []
+    findings = []
+    def draft(repair):
+        calls.append(repair)
+        findings.append(ValidationFinding(validator=validator, severity="error", message="Binding failed."))
+        return SimpleNamespace(scaffold=GOOD, writer_error_message=None)
+    with pytest.raises(EvidenceEnforcementError, match="MANUSCRIPT_AUDIT_NON_REPAIRABLE"):
+        run_manuscript_audit_repair(
+            draft=draft, bind=lambda _: SimpleNamespace(bound=GOOD), findings=findings,
+            section_errors=lambda *_: {"results": ("MANUSCRIPT_SECTION_TRUNCATED",)},
+            run_dir=None, evidence=None,
+        )
+    assert calls == [None]
+
+
+@pytest.mark.parametrize("validator, detail", [
+    ("manuscript_numeric_auditor", {"removed_sentences": [{"sentence": "Fabricated number."}]}),
+    ("evidence_bound_writer", {"missing_evidence_ids": ["foreign_source"]}),
+])
+def test_filtering_a_binding_failure_cannot_make_it_editorially_repairable(tmp_path, validator, detail):
+    from easyicu.research_agent.reporting.manuscript_audit_repair import run_manuscript_audit_repair
+
+    calls, findings = [], []
+    def draft(repair):
+        calls.append(repair)
+        findings.append(ValidationFinding(validator=validator, severity="warning", message="Filtered.", detail=detail))
+        return SimpleNamespace(scaffold=GOOD, writer_error_message=None)
+    with pytest.raises(EvidenceEnforcementError, match="MANUSCRIPT_AUDIT_NON_REPAIRABLE"):
+        run_manuscript_audit_repair(
+            draft=draft, bind=lambda _: SimpleNamespace(bound=GOOD), findings=findings,
+            section_errors=lambda *_: {"results": ("MANUSCRIPT_SECTION_TRUNCATED",)},
+            run_dir=None, evidence=None,
+        )
+    assert calls == [None]
+
+
+
+def test_incomplete_repair_stops_with_typed_codes_and_a_receipt(tmp_path, monkeypatch):
+    bad = GOOD.replace("The AUROC was 0.74 {evidence:renal_summary}.", "See Figure 1 {evidence:renal_summary}.")
+    with pytest.raises(EvidenceEnforcementError, match="MANUSCRIPT_SUBSECTION_MISSING_OR_EMPTY"):
+        _exercise(tmp_path, monkeypatch, bad, ["## Results\nIncomplete response."])
+    receipt = json.loads((tmp_path / "manuscript_audit_repair.json").read_text())
+    assert receipt["status"] == "rejected" and len(receipt["attempts"]) == 1
+    assert "MANUSCRIPT_RESULT_SUBSECTION_CALLOUT_ONLY" in receipt["remaining_codes"]
+    assert "MANUSCRIPT_SUBSECTION_MISSING_OR_EMPTY" in receipt["remaining_codes"]
+
+
+
+def test_repair_model_can_keep_opaque_values_without_receiving_or_changing_them(tmp_path, monkeypatch):
+    from easyicu.research_agent.reporting.manuscript_sections import _masked_section_values
+
+    bad = GOOD.replace("The AUROC was 0.74 {evidence:renal_summary}.", "See Figure 1 {evidence:renal_summary}.")
+    masked, _ = _masked_section_values("## Results\n\n" + _section(bad, "Results"))
+    # A model receives the existing values as markers; it can repair the text
+    # and add the missing metric from its independently authorized digest.
+    response = masked.replace("### Model performance\n", "### Model performance\nThe AUROC was 0.74 {evidence:renal_summary}.\n")
+    result, client, _, _, _ = _exercise(tmp_path, monkeypatch, bad, [response])
+    assert result[1].manuscript_critique.status == "pass"
+    assert "120 ICU stays" in result[0].scaffold and "15 {evidence:renal_summary}" in result[0].scaffold
+    assert "{manuscript_value:" not in result[0].scaffold
+    current = client.calls[0][0][1].content.split("CURRENT SECTION", 1)[1].split("CITATION RULE", 1)[0]
+    assert "120" not in current and "15 " not in current

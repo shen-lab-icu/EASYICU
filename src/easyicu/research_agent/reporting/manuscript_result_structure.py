@@ -67,9 +67,11 @@ def result_section_instruction(plan: AnalysisPlan) -> str:
             "`reportable_secondary_results` blocks: the overall outcome count and "
             "risk, the question-relevant exposure-source or exposure-level groups, "
             "and their supplied uncertainty. When an executed step supplies neither "
-            "block, write one sentence stating only that the prespecified secondary "
-            "analysis was executed and its registered results are bound to the named "
-            "evidence id; never leave this subsection empty and never invent numbers."
+            "block, report an exact named scalar result from that step's registered "
+            "digest with its owning evidence id, or use its complete host-authorized "
+            "rule-outcome claim token. An execution or artifact-registration statement "
+            "is not a result sentence. When registered result authority is available, "
+            "never leave this subsection empty; never invent a metric or number."
         )
     if "sensitivity" in roles and "Sensitivity and subgroup analyses" in headings:
         role_guidance.append(
@@ -85,8 +87,14 @@ def result_section_instruction(plan: AnalysisPlan) -> str:
         + "\n".join(f"### {heading}" for heading in headings)
         + "\n"
         + ("\n".join(role_guidance) + "\n" if role_guidance else "")
-        + "In Cohort characteristics report the analysis unit, cohort count and "
-        "relevant baseline summaries. Cite Table 1 when registered. In the primary "
+        + "Every required subsection must contain at least one supported result "
+        "sentence or a complete host claim token, beyond any display callout. "
+        "Preserve all required headings, including Secondary analyses when listed.\n"
+        "In Cohort characteristics report the analysis unit, cohort count and "
+        "relevant baseline summaries in a neutral numeric sentence, for example "
+        "`The analysis cohort comprised <N> <analysis unit> {evidence:<owner>}.` "
+        "Copy the exact source count and analysis unit; never infer them or replace "
+        "the sentence with a table callout. Cite Table 1 when registered. In the primary "
         "results subsection answer the original question using every supplied "
         "primary metric, endpoint and comparison level. A figure callout alone "
         "does not report a result. Cite Figure 1 where its evidence supports the "
