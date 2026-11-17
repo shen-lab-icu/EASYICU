@@ -46,6 +46,7 @@ from ...contracts.manuscript_tables import (
 from ...contracts.manuscript_result_structure import PRIMARY_RESULT_HEADINGS_BY_FAMILY
 from ...gates.publication_disclosure import SMALL_CELL_BELOW
 from ...schema import AnalysisPlan, AnalysisStep
+from ...methods.patient_cluster_survival import bind_groups, cox_fit_arguments, group_structure, groups_for
 from .plausibility_receipt import render_standard_plausibility_receipt_code
 from .typed_input_binding import sole_typed_cohort_input
 
@@ -220,12 +221,14 @@ def _adjusted_cox_fit(
     from lifelines import CoxPHFitter
     from lifelines.exceptions import ConvergenceWarning
 
+    fit_frame, kwargs = cox_fit_arguments(model_frame)
     with warnings.catch_warnings(record=True) as caught:
         warnings.simplefilter("always", ConvergenceWarning)
         fitter = CoxPHFitter().fit(
-            model_frame,
+            fit_frame,
             duration_col=sealed.derived_time_column,
             event_col=sealed.derived_event_column,
+            **kwargs,
         )
     nonconvergence = [
         str(item.message).split(". ", 1)[0]
@@ -245,6 +248,8 @@ def _proportional_hazards_decision(
     """
 
     from ...methods.ph_schoenfeld import ph_test
+    if groups_for(model_frame) is not None:
+        from ...methods.patient_cluster_survival import clustered_ph_test as ph_test
 
     table = ph_test(
         model_frame,
@@ -451,6 +456,7 @@ def _measurement_audit_table(
         sealed.event_column: "event",
         sealed.followup_time_column: "followup_time",
         **{column: "adjustment" for column in sealed.adjustment_columns},
+        **({sealed.dependence.group_source: "patient_grouping"} if sealed.dependence is not None else {}),
     }
     return pd.DataFrame(
         [
@@ -1526,6 +1532,8 @@ def run_landmark_survival_suite(
             )
         pieces.append(encoded)
     model_frame = pd.concat(pieces, axis=1).dropna().astype(float)
+    bind_groups(model_frame, analysis, sealed.dependence)
+    bind_groups(analysis, analysis, sealed.dependence)
     if (
         len(model_frame) < _MINIMUM_MODEL_ROWS
         or int(model_frame[sealed.derived_event_column].sum()) < _MINIMUM_MODEL_EVENTS
@@ -1625,6 +1633,9 @@ def run_landmark_survival_suite(
                 }
             ]
         )
+        if sealed.dependence is not None:
+            from .survival_patient_intervals import clustered_rmst_table
+            rmst_table = clustered_rmst_table(analysis, sealed=sealed, table=rmst_table, tau=tau)
 
     # The interval estimates are the result when the PH test rejects the
     # constant one.  Otherwise they are a prespecified secondary model, which
@@ -1894,6 +1905,7 @@ def run_landmark_survival_suite(
         "input_evidence_id": input_evidence_id,
         "input_sha256": input_sha256,
         "analysis_frame_sha256": _canonical_frame_sha256(model_frame),
+        "repeated_stay_structure": group_structure(model_frame),
         "landmark_hours": sealed.landmark_hours,
         "endpoint_horizon_days": sealed.endpoint_horizon_days,
         "prevalent_exposure_action": sealed.prevalent_exposure_action,

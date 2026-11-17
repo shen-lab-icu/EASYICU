@@ -1227,6 +1227,13 @@ def build_family_spec_request(
     progressive transport offers; without them no population is offered.
     """
 
+    if "trajectory_clustering" in analysis_types:
+        from ..trajectory_design_support import unsupported_trajectory_design
+        refusal = unsupported_trajectory_design(
+            context.research_question, getattr(context.user_preferences, "preferred_methods", "") or "",
+        )
+        if refusal:
+            raise FamilySpecError("trajectory_design_unsupported", refusal)
     request = _family_spec_request(
         context,
         analysis_types=analysis_types,

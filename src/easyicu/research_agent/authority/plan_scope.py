@@ -278,6 +278,7 @@ _ANALYSIS_STEP_STRUCTURED_SCIENTIFIC_AUTHORITY_FIELDS = frozenset(
         "sensitivity_spec_ids",
         "descriptive_claim",
         "runtime_outcome_contract",
+        "runtime_dependence_contract",
         "figure_panels",
         "model_requirements",
         "family_primary_result_requirement",

@@ -232,9 +232,7 @@ def test_the_landmark_must_end_the_window_the_plan_was_made_on() -> None:
 
 
 def test_a_declared_design_is_not_replaced_and_other_runtime_gaps_are_not_absorbed() -> None:
-    declared = _study(analysis_design={
-        "analysis_family": "survival", "analysis_unit": "icu_stay", "variance_estimator": "model_based",
-    })
+    declared = {**_study(), **_compile().patch}
     with pytest.raises(PlanDecisionError) as raised:
         _compile(study=declared)
     assert raised.value.code == "agent_plan_survival_design_already_declared"
@@ -273,7 +271,7 @@ def test_a_patient_clustered_commitment_is_refused_not_downgraded(commitment) ->
             codes=(_OWNER, _TIMING, "REPEATED_STAY_IDENTITY_UNAVAILABLE"),
         )
 
-    assert raised.value.code == "agent_plan_survival_clustering_unexecutable"
+    assert raised.value.code == "agent_plan_patient_grouping_unavailable"
 
 
 def test_a_study_without_a_clustering_commitment_still_compiles() -> None:

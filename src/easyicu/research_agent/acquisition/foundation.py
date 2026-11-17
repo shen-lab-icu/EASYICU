@@ -612,11 +612,6 @@ def acquire_universe_for_question(
             selection_model=sel_model,
         )
 
-    if patient_grouping is not None and emit_trajectory:
-        raise MaterializedMetadataError(
-            "patient-grouped materialization cannot silently drop identity from "
-            "a requested longitudinal trajectory"
-        )
     identity_kwargs = (
         patient_grouping.materializer_kwargs()
         if patient_grouping is not None

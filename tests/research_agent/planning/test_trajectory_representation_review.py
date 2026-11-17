@@ -121,9 +121,9 @@ def test_other_coordinates_keep_the_plan_and_state_the_limitation() -> None:
 
     [finding] = findings
     assert finding.code == "TRAJECTORY_REPRESENTATION_NOT_LONGITUDINAL"
-    assert finding.severity == "major"
-    assert remediation_route_for_finding(finding) == "agent_plan_revision"
-    assert finding.code not in plan_revision_blocker_codes(review.findings)
+    assert finding.severity == "blocker"
+    assert remediation_route_for_finding(finding) == "study_authority_change"
+    assert finding.code in plan_revision_blocker_codes(review.findings)
     # The Agent learns which components this study offers, and is told not
     # to swap another score version in for the one the question names.
     assert "this study provides sofa2_cardio, sofa2_resp" in finding.message
@@ -133,6 +133,7 @@ def test_other_coordinates_keep_the_plan_and_state_the_limitation() -> None:
     # Only time-varying SOFA-2 variables are offered; the availability
     # receipt shares the prefix but is not a measurement.
     assert facts["study_eligibility_coordinates"] == ["sofa2_cardio", "sofa2_resp"]
+
 
 
 def test_a_question_about_recorded_measurements_is_handed_to_the_host_on_them() -> None:
@@ -160,12 +161,13 @@ def test_a_derived_score_without_sofa2_states_the_limitation() -> None:
 
     [finding] = findings
     assert finding.code == "TRAJECTORY_REPRESENTATION_NOT_LONGITUDINAL"
-    assert finding.severity == "major"
+    assert finding.severity == "blocker"
     assert "this study's variables include none" in finding.message
     assert "sofa_resp is not directly measured" in finding.message
     facts = review.facts["trajectory_representation"]
     assert facts["executable"] is False
     assert facts["unrecorded_coordinates"] == ["sofa_resp"]
+
 
 
 @pytest.mark.parametrize(
@@ -206,8 +208,9 @@ def test_an_outcome_input_beside_coordinates_the_owner_cannot_model_states_the_l
 
     [finding] = findings
     assert finding.code == "TRAJECTORY_REPRESENTATION_NOT_LONGITUDINAL"
-    assert finding.severity == "major"
+    assert finding.severity == "blocker"
     assert review.facts["trajectory_representation"]["coordinates_executable"] is False
+
 
 
 def _cross_sectional_step(inputs: tuple[str, ...]) -> AnalysisStep:
@@ -266,8 +269,9 @@ def test_a_trajectory_question_on_other_measurements_states_the_limitation() -> 
 
     [finding] = findings
     assert finding.code == "TRAJECTORY_REPRESENTATION_NOT_LONGITUDINAL"
-    assert finding.severity == "major"
+    assert finding.severity == "blocker"
     assert review.facts["trajectory_representation"]["executable"] is False
+
 
 
 class _BoundTrajectory(BaseModel):

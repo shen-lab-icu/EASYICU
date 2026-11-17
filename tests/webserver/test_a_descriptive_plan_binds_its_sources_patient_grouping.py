@@ -37,7 +37,6 @@ def grouping(monkeypatch):
         },
     )
     monkeypatch.setattr(run_patient_grouping, "verified_patient_grouping", lambda _: binding)
-    monkeypatch.setattr(run_patient_grouping, "declared_longitudinal_design", lambda _: None)
     return binding
 
 
@@ -243,11 +242,12 @@ def test_a_non_stay_descriptive_design_needs_no_new_binding(grouping):
     assert run_patient_grouping.runtime_patient_dependence(grouping, study["analysis_design"]) is None
 
 
-def test_descriptive_grouping_still_cannot_replace_a_long_trajectory(grouping, monkeypatch):
-    monkeypatch.setattr(run_patient_grouping, "declared_longitudinal_design", lambda _: "trajectory")
-    bound, status = run_patient_grouping.planning_patient_grouping(_study(), bound=None)
-    assert bound is None
-    assert status == ("not_carried_by_trajectory", None)
+def test_descriptive_grouping_can_share_identity_with_a_long_trajectory(grouping):
+    bound, status = run_patient_grouping.planning_patient_grouping(
+        {**_study(), "trajectory_design": {"coordinate_concepts": ["lact"]}}, bound=None,
+    )
+    assert bound is grouping
+    assert status == ("bound", None)
 
 
 @pytest.mark.parametrize("invalid", [False, True])

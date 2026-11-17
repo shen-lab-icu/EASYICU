@@ -16,6 +16,8 @@ dictionary lacks, are resolved through ``easyicu.concept_output_sources``.
 from __future__ import annotations
 
 import re
+from contextlib import contextmanager
+from contextvars import ContextVar
 from functools import lru_cache
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Dict, Iterable, List, Literal, Mapping, Optional, Sequence
@@ -589,6 +591,34 @@ def real_data_concept_feasibility(
     return out
 
 
+_AVAILABILITY_SOURCES: ContextVar[dict | None] = ContextVar(
+    "easyicu_availability_sources", default=None,
+)
+
+
+@contextmanager
+def availability_source_snapshot(database: str):
+    """Reuse packaged metadata during one capability-menu projection.
+
+    Dependency recursion reads the same dictionary and registry. The snapshot
+    is local to this call context and is released even if projection fails;
+    it never caches patient data or changes the existing availability rules.
+    """
+    from easyicu.resources import load_data_sources, load_dictionary
+
+    db = normalize_database_name(database)
+    sources = dict(_AVAILABILITY_SOURCES.get() or {})
+    if db not in sources:
+        sources[db] = (
+            load_dictionary(include_sofa2=True, source_name=db), load_data_sources(),
+        )
+    token = _AVAILABILITY_SOURCES.set(sources)
+    try:
+        yield
+    finally:
+        _AVAILABILITY_SOURCES.reset(token)
+
+
 @lru_cache(maxsize=4096)
 def _explain_concept_availability_cached(
     concept: str,
@@ -611,8 +641,12 @@ def _explain_concept_availability_cached(
             reason=(unavailable.reason_code if unavailable else "derived_outcome_supported"),
             structural_unavailable=unavailable is not None,
         )
-    dictionary = load_dictionary(include_sofa2=True, source_name=db)
-    registry = load_data_sources()
+    sources = _AVAILABILITY_SOURCES.get() or {}
+    if db in sources:
+        dictionary, registry = sources[db]
+    else:
+        dictionary = load_dictionary(include_sofa2=True, source_name=db)
+        registry = load_data_sources()
     definition = dictionary.get(canonical)
     if definition is None:
         composite = _composite_output_availability(

@@ -462,6 +462,7 @@ def build_database_capability_catalog(database: str) -> AvailableCatalog:
     from easyicu.concept.catalog import PLANNER_HIDDEN_CONCEPTS
 
     from ..concept_availability import (
+        availability_source_snapshot,
         explain_concept_availability,
         normalize_database_name,
     )
@@ -472,13 +473,15 @@ def build_database_capability_catalog(database: str) -> AvailableCatalog:
     meta = _concept_dict_meta()
     _, enrichment_degraded = _concept_dict_meta_with_status()
     concepts: List[CatalogConcept] = []
-    for concept_id in dictionary_catalog.available_concepts:
-        if concept_id in PLANNER_HIDDEN_CONCEPTS:
-            continue
-        availability = explain_concept_availability(
-            concept=concept_id,
-            database=normalized_database,
-        )
+    with availability_source_snapshot(normalized_database):
+        availability_by_concept = {
+            concept_id: explain_concept_availability(
+                concept=concept_id, database=normalized_database,
+            )
+            for concept_id in dictionary_catalog.available_concepts
+            if concept_id not in PLANNER_HIDDEN_CONCEPTS
+        }
+    for concept_id, availability in availability_by_concept.items():
         if not availability.available:
             continue
         row = meta.get(concept_id, {})

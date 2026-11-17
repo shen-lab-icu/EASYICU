@@ -1530,6 +1530,12 @@ def family_spec_fallback_reason(
     if stop_after_outline:
         return "design_canary_uses_progressive_v2"
     sealed_result_families_for_planning(context, FAMILY_SPEC_STRATEGY, planning_contract_context)
+    from ..planning.trajectory_design_support import unsupported_trajectory_design
+    if "trajectory_clustering" in analysis_types and unsupported_trajectory_design(
+        context.research_question, getattr(context.user_preferences, "preferred_methods", "") or "",
+    ):
+        # The request owner returns a typed refusal before Provider use.
+        return None
     family_id = family_template_id_for_context(
         context, analysis_types=analysis_types,
         planning_contract_context=planning_contract_context,

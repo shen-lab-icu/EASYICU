@@ -13,6 +13,8 @@ import json
 from typing import Any, Literal, Mapping, Optional
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
+from ..contracts.dependence import PlannedDependenceRequirement
+from ..contracts.runtime_dependence import RuntimeDependenceContract
 
 from ..contracts.figure_plan import DeterministicFigurePanelTemplate
 from ..contracts.trajectory_design import trajectory_population_issues
@@ -213,6 +215,7 @@ class TrajectoryScientificRuntimeAuthority(BaseModel):
         "easyicu.trajectory_scientific_runtime_authority/2",
     ]
     protocol_content_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
+    dependence: PlannedDependenceRequirement | None = Field(default=None, exclude_if=lambda value: value is None)
     coordinate_concepts: tuple[str, ...]
     descriptive_only_concepts: tuple[str, ...]
     window_start_hours: int
@@ -273,6 +276,11 @@ class TrajectoryScientificRuntimeAuthority(BaseModel):
 
     @model_validator(mode="after")
     def _closed_contract(self) -> "TrajectoryScientificRuntimeAuthority":
+        if self.dependence is not None and (
+            self.dependence.group_derivation != "prefix_before_delimiter"
+            or self.dependence.delimiter != ":s"
+        ):
+            raise ValueError("signed trajectory patient sampling requires the verified opaque patient/stay identity")
         if not self.coordinate_concepts or len(
             set(self.coordinate_concepts)
         ) != len(self.coordinate_concepts):
@@ -456,6 +464,10 @@ class TrajectoryScientificRuntimeAuthority(BaseModel):
                             "table:trajectory_candidate_selection",
                         ],
                         "method": self.candidate_plan_method,
+                        "runtime_dependence_contract": (
+                            RuntimeDependenceContract(owner_ref=self.plan_rule_ref, dependence=self.dependence)
+                            if self.dependence is not None else None
+                        ),
                         "icu_rule_refs": [self.plan_rule_ref],
                     },
                     {
@@ -600,6 +612,12 @@ class TrajectoryScientificRuntimeAuthority(BaseModel):
             )
         representation = owners["representation"][0]
         candidate = owners["candidate_selection"][0]
+        expected_dependence = (
+            RuntimeDependenceContract(owner_ref=self.plan_rule_ref, dependence=self.dependence)
+            if self.dependence is not None else None
+        )
+        if candidate.runtime_dependence_contract != expected_dependence:
+            raise TrajectoryScientificAuthorityError("trajectory patient dependence drifted from signed authority")
         stability = owners["stability_freeze"][0]
         order = {step.step_id: index for index, step in enumerate(plan.steps)}
         if not (

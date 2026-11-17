@@ -72,6 +72,7 @@ from .contracts.model_tokens import (
 from .contracts.post_analysis import EValueConversionSpec, SubgroupAnalysisSpec
 from .contracts.product_identity import is_canonical_typed_product_token
 from .contracts.runtime_outcomes import RuntimeOutcomeContract
+from .contracts.runtime_dependence import RuntimeDependencePlanFields
 from .contracts.survival import (
     SURVIVAL_ANALYSIS_RECEIPT_PRODUCT,
     SurvivalAnalysisReceipt,
@@ -1676,7 +1677,7 @@ class RobustnessReplaySpec(BaseModel):
         return None
 
 
-class AnalysisStep(BaseModel):
+class AnalysisStep(RuntimeDependencePlanFields):
     """One step in a planner-emitted analysis plan."""
 
     model_config = ConfigDict(extra="forbid")

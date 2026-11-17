@@ -56,6 +56,7 @@ _AGENT_COMPILED_RUNTIME_FINDINGS = frozenset(
         "POST_BASELINE_EXPOSURE_TIMING_NOT_CLOSED",
         "REPEATED_STAY_IDENTITY_UNAVAILABLE",
         "REPEATED_STAY_METHOD_NOT_DECLARED",
+        "REPEATED_STAY_DEDUP_UNDECLARED",
         "SURVIVAL_LANDMARK_OWNER_NOT_SEALED",
         "TRAJECTORY_LONGITUDINAL_OWNER_NOT_SEALED",
     }
@@ -841,10 +842,9 @@ _PATIENT_CLUSTERED_DESIGN = {
 def _declared_family_executes_patient_clustering(study: Mapping[str, Any]) -> bool:
     """Ask a declared sealed family's owner whether it runs clustered inference.
 
-    The fixed-landmark survival suite and the trajectory owners fit one
-    model-based row per ICU stay; compiling patient clustering onto either
-    would only move their refusal to launch.  Other families have no such
-    owner restriction here.
+    The signed survival and fixed-window owners carry the patient grouping
+    into inference and stability resampling. Other families keep their own
+    inference contracts.
     """
 
     from easyicu.webserver.landmark_survival_runtime_projection import (
@@ -894,6 +894,7 @@ def repeated_stays_planning_default(
         or cohort.get("exclude_readmissions") is True
         or _first_stay_restriction_bound(study)
         or str(design.get("analysis_unit") or "icu_stay") != "icu_stay"
+        or design.get("variance_estimator") in {"bootstrap", "none_counts_only"}
         or not _declared_family_executes_patient_clustering(study)
     ):
         return None
@@ -964,6 +965,7 @@ def _trajectory_design_configuration(
     *,
     codes: tuple[str, ...],
     review_facts: Mapping[str, Any] | None,
+    patient_cluster_available: bool,
 ) -> CompiledAgentPlanConfiguration:
     """Declare the reviewed coordinates as the study's trajectory design.
 
@@ -978,16 +980,13 @@ def _trajectory_design_configuration(
 
     from easyicu.webserver.trajectory_runtime_projection import (
         WebScientificRuntimeProjectionError,
-        trajectory_inference_supported,
         validate_trajectory_design_declaration,
     )
 
-    remaining = set(codes) - {_TRAJECTORY_OWNER_FINDING}
-    if not trajectory_inference_supported(_PATIENT_CLUSTERED_DESIGN):
-        # The trajectory owners fit one model-based row per ICU stay, so the
-        # reviewer's remedy is to keep every stay and disclose the dependence
-        # limitation, which stays with the review.
-        remaining.discard("REPEATED_STAY_IDENTITY_UNAVAILABLE")
+    remaining = set(codes) - {_TRAJECTORY_OWNER_FINDING, "REPEATED_STAY_METHOD_NOT_DECLARED", "REPEATED_STAY_DEDUP_UNDECLARED"}
+    # Without source grouping this remains a disclosed limitation; it does
+    # not prevent compiling the other coordinates.
+    remaining.discard("REPEATED_STAY_IDENTITY_UNAVAILABLE")
     if remaining:
         raise PlanDecisionError(
             "agent_plan_runtime_finding_unsupported",
@@ -1076,6 +1075,7 @@ def _trajectory_design_configuration(
             agent_plan_configuration_compiled=True,
         ),
     }
+    patch = _suite_repeated_stays(study, patch, patient_cluster_available=patient_cluster_available, codes=codes)
     try:
         validate_trajectory_design_declaration({**dict(study), **patch})
     except WebScientificRuntimeProjectionError as exc:
@@ -1085,7 +1085,10 @@ def _trajectory_design_configuration(
             details={"design_error_code": exc.code},
         ) from exc
     return CompiledAgentPlanConfiguration(
-        patch=patch, runtime_finding_codes=(_TRAJECTORY_OWNER_FINDING,),
+        patch=patch, runtime_finding_codes=tuple(code for code in codes if (
+            code == _TRAJECTORY_OWNER_FINDING or patient_cluster_available
+            or _first_stay_restriction_bound(study)
+        )),
     )
 
 
@@ -1096,6 +1099,7 @@ def _survival_design_configuration(
     review_facts: Mapping[str, Any] | None,
     first_stay_restricted: bool,
     saved_study_roster: bool = False,
+    patient_cluster_available: bool = False,
 ) -> CompiledAgentPlanConfiguration:
     """Declare the reviewed coordinates as the study's landmark survival design.
 
@@ -1113,58 +1117,32 @@ def _survival_design_configuration(
     from easyicu.outcome_availability import fixed_horizon_mortality_endpoint
     from easyicu.webserver.landmark_survival_runtime_projection import (
         survival_family_declared,
-        survival_inference_supported,
         validate_landmark_survival_declaration,
     )
     from easyicu.webserver.scientific_runtime_projection import (
         WebScientificRuntimeProjectionError,
     )
 
-    remaining = set(codes) - {_SURVIVAL_OWNER_FINDING, _TIMING_FINDING}
-    if not survival_inference_supported(_PATIENT_CLUSTERED_DESIGN):
-        # The suite fits one model-based row per ICU stay; the reviewer's
-        # dependence limitation stays with the review.
-        remaining.discard("REPEATED_STAY_IDENTITY_UNAVAILABLE")
+    remaining = set(codes) - {_SURVIVAL_OWNER_FINDING, _TIMING_FINDING, "REPEATED_STAY_METHOD_NOT_DECLARED", "REPEATED_STAY_DEDUP_UNDECLARED"}
+    remaining.discard("REPEATED_STAY_IDENTITY_UNAVAILABLE")
     if remaining:
         raise PlanDecisionError(
             "agent_plan_runtime_finding_unsupported",
             "A survival design cannot be compiled together with other runtime coordinates.",
             details={"finding_codes": sorted(remaining)},
         )
-    if survival_family_declared(study) and not saved_study_roster:
-        raise PlanDecisionError(
-            "agent_plan_survival_design_already_declared",
-            "The study already declares a survival design; a plan that does not use it needs a fresh plan, not a second design.",
-        )
-    current_design = study.get("analysis_design")
-    confirmations = study.get("confirmations")
-    clustered_commitment = (
-        isinstance(current_design, Mapping)
-        and str(current_design.get("variance_estimator") or "") == "cluster_robust"
-    ) or (
-        isinstance(confirmations, Mapping)
-        and confirmations.get("plan_repeated_stays_clustered") is True
-    )
-    if (
-        clustered_commitment
-        and not first_stay_restricted
-        and not survival_inference_supported(_PATIENT_CLUSTERED_DESIGN)
-    ):
-        # The suite fits one model-based row per ICU stay.  Declaring it would
-        # overwrite the study's patient-clustered dependence model while its
-        # confirmation stays behind; keeping each patient's first ICU stay, or
-        # giving up the clustering, is the researcher's decision.
-        raise PlanDecisionError(
-            "agent_plan_survival_clustering_unexecutable",
-            "The study models repeated ICU stays with patient-clustered inference, but the landmark survival suite fits one model-based row per ICU stay; keeping each patient's first ICU stay needs the researcher's decision.",
-            details={
-                "variance_estimator": (
-                    current_design.get("variance_estimator")
-                    if isinstance(current_design, Mapping)
-                    else None
-                ),
-            },
-        )
+    configuration = ScientificConfiguration.inspect(study)
+    timing_specs = [spec for spec in configuration.sensitivity_specs() if spec.axis == "timing"]
+    if survival_family_declared(study) and timing_specs and not saved_study_roster:
+        try:
+            closed = validate_landmark_survival_declaration(study) is not None
+        except WebScientificRuntimeProjectionError:
+            closed = False
+        if closed:
+            raise PlanDecisionError(
+                "agent_plan_survival_design_already_declared",
+                "The study already declares a survival design; a plan that does not use it needs a fresh plan, not a second design.",
+            )
     facts = (
         review_facts.get("landmark_survival_suite")
         if isinstance(review_facts, Mapping)
@@ -1242,6 +1220,16 @@ def _survival_design_configuration(
         "observation_duration_variable": endpoint.followup_concept,
         "observation_duration_unit": endpoint.followup_unit,
     }
+    if timing_specs and not saved_study_roster:
+        if len(timing_specs) != 1 or any(
+            timing_specs[0].model_dump(mode="json").get(key) != value
+            for key, value in landmark.items() if key != "spec_id"
+        ):
+            raise PlanDecisionError(
+                "agent_plan_survival_timing_conflict",
+                "The reviewed landmark conflicts with the study's recorded timing rule; retain that rule and revise the plan.",
+            )
+        landmark = timing_specs[0].model_dump(mode="json")
     confirmations = configuration.merge_confirmations(
         feature_time_window=True,
         extraction_completed=True,
@@ -1282,6 +1270,7 @@ def _survival_design_configuration(
     }
     if planned_window is not None:
         patch["time_window"] = planned_window
+    patch = _suite_repeated_stays(study, patch, patient_cluster_available=patient_cluster_available, codes=codes)
     if saved_study_roster:
         for key in (
             "covariate_authority", "covariate_rationales", "covariate_temporal_roles",
@@ -1307,8 +1296,37 @@ def _survival_design_configuration(
         patch=patch,
         runtime_finding_codes=tuple(
             code for code in codes if code in {_SURVIVAL_OWNER_FINDING, _TIMING_FINDING}
+            or patient_cluster_available or first_stay_restricted
         ),
     )
+
+
+def _suite_repeated_stays(
+    study: Mapping[str, Any], patch: Dict[str, Any], *,
+    patient_cluster_available: bool, codes: Sequence[str],
+) -> Dict[str, Any]:
+    """Apply the existing default owner; a recorded researcher choice wins."""
+    current = dict(study.get("analysis_design") or {})
+    if current.get("analysis_unit", "icu_stay") != "icu_stay":
+        raise PlanDecisionError("agent_plan_suite_analysis_unit_unsupported", "The signed landmark and fixed-window suites support ICU-stay analysis. Retain the declared analysis unit and revise the study explicitly before using either suite.")
+    if not _first_stay_restriction_bound(study):
+        patch["analysis_design"].update({
+            key: current[key] for key in ("variance_estimator", "cluster_unit") if key in current
+        })
+        if (study.get("confirmations") or {}).get("plan_repeated_stays_clustered") is True:
+            patch["analysis_design"].update(_PATIENT_CLUSTERED_DESIGN)
+    candidate = {**dict(study), **patch}
+    default = repeated_stays_planning_default(candidate, source_groups_stays=patient_cluster_available)
+    if default is not None:
+        patch.update(default)
+    if not _first_stay_restriction_bound(study):
+        required = bool(set(codes) & {"REPEATED_STAY_METHOD_NOT_DECLARED", "REPEATED_STAY_DEDUP_UNDECLARED"})
+        clustered = patch["analysis_design"].get("variance_estimator") == "cluster_robust"
+        if (required or clustered) and not patient_cluster_available:
+            raise PlanDecisionError("agent_plan_patient_grouping_unavailable", "The recorded repeated-stay rule requires verified patient grouping, which this source cannot supply.")
+        if required and not clustered:
+            raise PlanDecisionError("agent_plan_repeated_stays_choice_unexecutable", "The recorded repeated-stay rule cannot execute on this suite. Supported alternatives are retaining each stay with patient clustering, or a researcher-declared first-stay population.")
+    return patch
 
 
 def compile_agent_plan_configuration(
@@ -1376,7 +1394,8 @@ def compile_agent_plan_configuration(
         )
     if _TRAJECTORY_OWNER_FINDING in codes:
         return _trajectory_design_configuration(
-            study, codes=codes, review_facts=review_facts
+            study, codes=codes, review_facts=review_facts,
+            patient_cluster_available=patient_cluster_available,
         )
     if _SURVIVAL_OWNER_FINDING in codes:
         return _survival_design_configuration(
@@ -1384,6 +1403,16 @@ def compile_agent_plan_configuration(
             codes=codes,
             review_facts=review_facts,
             first_stay_restricted=first_stay_restricted,
+            patient_cluster_available=patient_cluster_available,
+        )
+    family = str((study.get("analysis_design") or {}).get("analysis_family") or "")
+    if family in {"survival", "trajectory_clustering"} and set(codes) & {
+        "REPEATED_STAY_IDENTITY_UNAVAILABLE", "REPEATED_STAY_METHOD_NOT_DECLARED", "REPEATED_STAY_DEDUP_UNDECLARED",
+    }:
+        raise PlanDecisionError(
+            "agent_plan_family_clustering_unsupported",
+            "Retain the declared family and compile its reviewed coordinates through the signed landmark survival or fixed-window trajectory owner; the generic association compiler cannot replace that family.",
+            details={"analysis_family": family},
         )
     clustering_refusal: PlanDecisionError | None = None
     if (
@@ -1666,7 +1695,7 @@ def agent_plan_configuration_available(
             patient_cluster_available=True,
             first_stay_coordinate_available=(
                 True
-                if _ONE_STAY_POPULATION_FINDING in {str(code) for code in runtime_finding_codes}
+                if _first_stay_restriction_bound(study) or _ONE_STAY_POPULATION_FINDING in {str(code) for code in runtime_finding_codes}
                 else None
             ),
         )

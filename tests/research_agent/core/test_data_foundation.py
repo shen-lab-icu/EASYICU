@@ -684,8 +684,9 @@ def test_acquisition_requires_caller_owned_outcome_and_has_no_static_science_def
     assert parameters["static_concepts"].default == ()
 
 
+@pytest.mark.parametrize("emit_trajectory", [False, True])
 def test_acquisition_forwards_verified_patient_grouping_to_materializer(
-    monkeypatch, tmp_path
+    monkeypatch, tmp_path, emit_trajectory,
 ):
     mapping = tmp_path / "mapping.parquet"
     mapping.write_bytes(b"mapping")
@@ -726,7 +727,7 @@ def test_acquisition_forwards_verified_patient_grouping_to_materializer(
         target_outcome="death",
         outcome_concepts=["death"],
         static_concepts=["age"],
-        emit_trajectory=False,
+        emit_trajectory=emit_trajectory,
         patient_grouping=grouping,
     )
 
@@ -734,32 +735,4 @@ def test_acquisition_forwards_verified_patient_grouping_to_materializer(
     assert captured["replacement_identity_path"] == mapping
     assert captured["replacement_identity_sha256"] == "a" * 64
     assert captured["output_identity_column"] == "patient_stay_id"
-
-
-def test_acquisition_does_not_silently_ungroup_requested_trajectory(
-    monkeypatch, tmp_path
-):
-    monkeypatch.setattr(
-        df_mod,
-        "build_available_catalog",
-        lambda _d: _catalog("death", "age"),
-    )
-    grouping = PatientGroupingBinding(
-        mapping_path=tmp_path / "mapping.parquet",
-        mapping_sha256="a" * 64,
-        mapping_stay_column="stay_id",
-        mapping_patient_column="patient_key",
-    )
-
-    with pytest.raises(MaterializedMetadataError, match="longitudinal trajectory"):
-        acquire_universe_for_question(
-            export_dir=tmp_path,
-            question="q",
-            llm=_stub('{"selected_concepts": ["death", "age"]}'),
-            output_dir=tmp_path,
-            target_outcome="death",
-            outcome_concepts=["death"],
-            static_concepts=["age"],
-            emit_trajectory=True,
-            patient_grouping=grouping,
-        )
+    assert captured["emit_trajectory"] is emit_trajectory

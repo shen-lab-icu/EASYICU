@@ -103,8 +103,8 @@ def survival_inference_supported(design: Mapping[str, Any]) -> bool:
 
     return (
         str(design.get("analysis_unit") or "") == _SUPPORTED_ANALYSIS_UNIT
-        and str(design.get("variance_estimator") or "")
-        == _SUPPORTED_VARIANCE_ESTIMATOR
+        and (str(design.get("variance_estimator") or "") == _SUPPORTED_VARIANCE_ESTIMATOR
+             or (design.get("variance_estimator") == "cluster_robust" and design.get("cluster_unit") == "patient"))
     )
 
 
@@ -269,14 +269,16 @@ def _declared_landmark_hours(
     if not survival_inference_supported(design):
         raise WebScientificRuntimeProjectionError(
             "web_landmark_survival_design_unsupported",
-            "The sealed survival suite fits one model-based Cox model per ICU "
-            "stay; the declared analysis unit or variance estimator has no "
-            "executable owner.",
+            "The signed survival suite supports ICU-stay analysis with model-based "
+            "or patient-clustered uncertainty. The declared analysis unit or "
+            "variance estimator is unsupported.",
             details={
                 "analysis_unit": str(design.get("analysis_unit") or ""),
                 "variance_estimator": str(design.get("variance_estimator") or ""),
                 "supported_analysis_unit": _SUPPORTED_ANALYSIS_UNIT,
                 "supported_variance_estimator": _SUPPORTED_VARIANCE_ESTIMATOR,
+                "supported_variance_estimators": ["model_based", "cluster_robust"],
+                "supported_cluster_unit": "patient",
                 "field": "analysis_design",
             },
         )
@@ -392,6 +394,12 @@ def compile_landmark_survival_runtime_projection(
     if missing_fields:
         _incomplete(missing_fields)
     landmark_hours = _declared_landmark_hours(study, landmark, endpoint)
+    if (study.get("analysis_design") or {}).get("variance_estimator") == "cluster_robust" and dependence is None:
+        raise WebScientificRuntimeProjectionError(
+            "web_survival_patient_grouping_required",
+            "Patient-clustered survival requires the source's verified patient grouping.",
+            details={"field": "analysis_design.cluster_unit"},
+        )
 
     exposure_kind, _levels = primary_exposure_kind(
         universe_path=universe_path,
@@ -404,6 +412,12 @@ def compile_landmark_survival_runtime_projection(
         else _ANALYSIS_UNIT_LABELS[_SUPPORTED_ANALYSIS_UNIT]
     )
     if exposure_kind == VariableKind.CONTINUOUS:
+        if dependence is not None:
+            raise WebScientificRuntimeProjectionError(
+                "web_continuous_survival_clustering_unsupported",
+                "Patient-clustered continuous-exposure survival is not supported. Supported alternatives are binary-exposure landmark survival with patient clustering, or a user-declared first-stay continuous-exposure landmark analysis.",
+                details={"supported_alternatives": ["binary_landmark_patient_clustered", "continuous_landmark_first_stay"]},
+            )
         if any(spec.strategy == "restricted_mean_survival" for spec in sensitivity_specs):
             raise WebScientificRuntimeProjectionError(
                 "web_rmst_study_binding_mismatch",
@@ -462,6 +476,7 @@ def compile_landmark_survival_runtime_projection(
         endpoint.event_concept,
         endpoint.followup_concept,
         *covariates,
+        *((dependence.group_source,) if dependence is not None else ()),
     ]
     if len(required_columns) != len(set(required_columns)):
         raise WebScientificRuntimeProjectionError(
@@ -516,6 +531,7 @@ def compile_landmark_survival_runtime_projection(
         "figure:landmark_survival_suite",
     ]
     authority_body: dict[str, Any] = {
+        **({"dependence": dependence.model_dump(mode="json")} if dependence is not None else {}),
         "schema_version": "easyicu.landmark_survival_runtime_authority/1",
         "authority_kind": "landmark_survival_suite",
         "protocol_content_sha256": scientific_configuration_sha256,

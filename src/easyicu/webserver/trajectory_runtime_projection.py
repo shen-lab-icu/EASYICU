@@ -124,8 +124,8 @@ def trajectory_inference_supported(design: Mapping[str, Any]) -> bool:
 
     return (
         str(design.get("analysis_unit") or "").strip() == _SUPPORTED_ANALYSIS_UNIT
-        and str(design.get("variance_estimator") or "").strip()
-        == _SUPPORTED_VARIANCE_ESTIMATOR
+        and (str(design.get("variance_estimator") or "").strip() == _SUPPORTED_VARIANCE_ESTIMATOR
+             or (design.get("variance_estimator") == "cluster_robust" and design.get("cluster_unit") == "patient"))
     )
 
 
@@ -137,17 +137,17 @@ def _require_supported_inference(study: Mapping[str, Any]) -> None:
         _fail(
             "web_trajectory_design_unsupported",
             (
-                "The signed trajectory owners cluster one row per ICU stay from "
-                "a stay-anchored longitudinal panel. A patient-clustered "
-                "materialization cannot carry that panel without dropping the "
-                "identity the panel is keyed by, so a cluster-robust or "
-                "counts-only ceiling is refused here rather than silently "
-                "clustering a different row space."
+                "The signed fixed-window trajectory owners retain each ICU stay. "
+                "Supported alternatives are stay-level stability or whole-patient "
+                "subsampling with verified grouping. The declared analysis unit "
+                "or uncertainty design is unsupported."
             ),
             analysis_unit=analysis_unit or None,
             variance_estimator=variance_estimator or None,
             supported_analysis_unit=_SUPPORTED_ANALYSIS_UNIT,
             supported_variance_estimator=_SUPPORTED_VARIANCE_ESTIMATOR,
+            supported_variance_estimators=["model_based", "cluster_robust"],
+            supported_cluster_unit="patient",
         )
 
 
@@ -399,6 +399,7 @@ def compile_web_trajectory_runtime_projection(
     universe_path: Path,
     scientific_configuration_sha256: str,
     planning_catalog: bool = False,
+    dependence: Any = None,
 ) -> WebScientificRuntimeProjection | None:
     """Seal the reviewed trajectory design, or refuse it by name.
 
@@ -418,12 +419,17 @@ def compile_web_trajectory_runtime_projection(
         _require_materialized_window(design, provenance)
         _require_materialized_concepts(design, provenance)
 
-    authority = build_trajectory_scientific_runtime_authority(
-        sealed_trajectory_authority_body(
+    if _analysis_design(study).get("variance_estimator") == "cluster_robust" and dependence is None:
+        _fail("web_trajectory_patient_grouping_required", "Patient-clustered stability requires verified patient grouping.")
+    if dependence is not None and dependence.group_source not in pq.read_schema(universe_path).names:
+        _fail("web_trajectory_patient_grouping_required", "The source schema does not carry the signed patient grouping.", field=dependence.group_source)
+    authority = build_trajectory_scientific_runtime_authority({
+        **sealed_trajectory_authority_body(
             design,
             protocol_content_sha256=scientific_configuration_sha256,
-        )
-    )
+        ),
+        **({"dependence": dependence.model_dump(mode="json")} if dependence is not None else {}),
+    })
     return signed_projection(
         authority.model_dump(mode="json"),
         scientific_configuration_sha256=scientific_configuration_sha256,

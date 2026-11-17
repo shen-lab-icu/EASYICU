@@ -7,10 +7,9 @@ patient groups bound no grouping at execution, so such a step reached its
 executor without the authority and failed there, after approval and spend,
 with an untyped error.
 
-A package-bound run now binds the source's verified grouping when the
-accepted candidate plan has such a step.  A grouped materialization emits no
-long trajectory, so a study that declares a design read from it stops before
-anything is materialized instead.  At approval, a plan whose steps need
+A package-bound run binds the source's verified grouping when the
+accepted candidate plan has such a step. Grouped cohorts and long panels
+retain the same verified opaque stay identities. At approval, a plan whose steps need
 patient groups that its planned data does not hold stops before any step
 runs, whether the source has no grouping or this run did not bind it.
 
@@ -40,7 +39,6 @@ from easyicu.research_agent.planning.dependence_authority import (
 from easyicu.research_agent.research_context.typed import parse_research_context_json
 from easyicu.research_agent.schema import ResearchContext
 from easyicu.webserver.research_launch_scientific import (
-    declared_longitudinal_design,
     verified_patient_grouping,
 )
 from easyicu.webserver import study_contexts as study_context_owner
@@ -62,9 +60,8 @@ def execution_patient_grouping(
     ``None`` when no accepted step needs patient groups, or when the source
     has no verified grouping: the materialized rows may still carry a direct
     patient identifier, and the approval check stops a plan whose planned
-    data holds neither.  A study that also declares a design read from the
-    long trajectory, which a grouped materialization omits, stops before
-    anything is materialized.
+    data holds neither. Materialization carries the grouping into both the
+    wide cohort and any requested long panel.
     """
 
     steps = list(dict.fromkeys(str(value) for value in step_ids if str(value)))
@@ -73,17 +70,6 @@ def execution_patient_grouping(
     grouping = verified_patient_grouping(study)
     if grouping is None:
         return None
-    longitudinal = declared_longitudinal_design(study)
-    if longitudinal is not None:
-        raise ResearchPipelineRunError(
-            PATIENT_GROUPING_TRAJECTORY_CONFLICT,
-            (
-                "A step of the accepted plan needs patient groups, and the study "
-                "declares a design read from each stay's long trajectory, which a "
-                "patient-grouped materialization does not emit."
-            ),
-            details={"step_ids": steps, "longitudinal_design": longitudinal},
-        )
     return grouping
 
 
@@ -102,8 +88,7 @@ def planning_patient_grouping(
 ) -> tuple[Optional[PatientGroupingBinding], tuple[PatientGroupingStatus, Optional[str]]]:
     """Carry stay-level identity from the same source authority as execution.
 
-    A verified first-stay restriction needs no new binding. Long trajectories
-    still cannot carry it. Invalid authority remains a typed planning ceiling;
+    A verified first-stay restriction needs no new binding. Invalid authority remains a typed planning ceiling;
     execution refuses with that same code if an accepted step needs groups.
     Binding identity alone does not select a variance estimator.
     """
@@ -116,8 +101,6 @@ def planning_patient_grouping(
         return None, ("authority_invalid", exc.code)
     if grouping is None:
         return None, ("source_has_none", None)
-    if declared_longitudinal_design(study) is not None:
-        return None, ("not_carried_by_trajectory", None)
     design = study.get("analysis_design")
     if (
         isinstance(design, Mapping)

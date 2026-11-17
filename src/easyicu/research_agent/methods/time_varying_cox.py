@@ -250,6 +250,16 @@ def fit_piecewise_time_varying_cox(
             "time-varying Cox produced non-finite estimates",
             reason="non_finite_estimate",
         )
+    from .patient_cluster_survival import clustered_interval_table, has_repeated_patients
+    if has_repeated_patients(frame):
+        def coefficients(subset):
+            subset = subset.copy()
+            subset.attrs.clear()
+            return fit_piecewise_time_varying_cox(
+                subset, duration_col=duration_col, event_col=event_col,
+                covariates=covariates, interval_cutpoints=interval_cutpoints, exposure_col=exposure_col,
+            )["coefficient"].to_numpy()
+        result = clustered_interval_table(frame, result, coefficients)
     return result
 
 

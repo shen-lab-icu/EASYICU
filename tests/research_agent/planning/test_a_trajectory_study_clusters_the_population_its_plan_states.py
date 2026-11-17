@@ -370,8 +370,8 @@ def test_a_population_the_owner_cannot_apply_is_a_stated_limitation_not_dropped(
     review, finding = _review({"name": "primary", "inclusion": [_ADULT, late]})
 
     assert finding.code == "TRAJECTORY_REPRESENTATION_NOT_LONGITUDINAL"
-    assert finding.severity == "major"
-    assert remediation_route_for_finding(finding) == "agent_plan_revision"
+    assert finding.severity == "blocker"
+    assert remediation_route_for_finding(finding) == "study_authority_change"
     assert (
         "the inclusion predicate sep3 == 1 (any over 0–72 h from ICU admission) is "
         "settled after the 24-hour trajectory window ends"
@@ -386,6 +386,7 @@ def test_a_population_the_owner_cannot_apply_is_a_stated_limitation_not_dropped(
         study=dict(_STUDY), agent_plan={"steps": []},
         runtime_finding_codes=(_OWNER,), review_facts=review.facts,
     )
+
 
 
 def test_the_population_is_judged_against_the_window_the_question_states() -> None:

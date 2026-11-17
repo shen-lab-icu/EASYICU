@@ -3014,11 +3014,9 @@ def materialize_to_parquet(
         )
     identity_column = ID_COL
     identity_binding: Optional[dict[str, object]] = None
+    trajectory_identity_map = None
     if replacement_identity_path is not None:
-        if emit_trajectory:
-            raise MaterializedMetadataError(
-                "replacement patient identity is not supported with stay trajectories"
-            )
+        original_ids = cohort[ID_COL].copy()
         cohort, identity_binding = _replace_row_identity_from_mapping(
             cohort,
             mapping_path=Path(replacement_identity_path).expanduser(),
@@ -3029,6 +3027,7 @@ def materialize_to_parquet(
             authority_coordinates=identity_authority_coordinates,
         )
         identity_column = str(output_identity_column)
+        trajectory_identity_map = dict(zip(original_ids, cohort[identity_column], strict=True))
         provenance["columns"] = list(cohort.columns)
         provenance["cohort_sha256"] = _hash_df(cohort.reset_index(drop=True))
         provenance["replacement_row_identity"] = identity_binding
@@ -3110,6 +3109,12 @@ def materialize_to_parquet(
                 materialize_args=materialize_args,
                 window=trajectory_window,
             )
+        if trajectory_identity_map is not None:
+            long_frame, long_provenance = built
+            long_frame = long_frame.loc[long_frame[ID_COL].isin(trajectory_identity_map)].copy()
+            long_frame[ID_COL] = long_frame[ID_COL].map(trajectory_identity_map)
+            long_provenance = {**long_provenance, "replacement_row_identity": identity_binding}
+            built = long_frame, long_provenance
         _trajectory_long_once.append(built)
         return built
 
@@ -3144,7 +3149,7 @@ def materialize_to_parquet(
             id_column=ID_COL,
             time_column=TIME_COL,
             concepts=trajectory_concepts_resolved,
-            ids=cohort[ID_COL].tolist(),
+            ids=cohort[identity_column].tolist(),
         )
         collisions = sorted(set(panel.columns) & set(cohort.columns))
         if collisions:
@@ -3154,7 +3159,8 @@ def materialize_to_parquet(
                 f"feature: {collisions}"
             )
         cohort = cohort.merge(
-            panel.reset_index(), on=ID_COL, how="left", validate="one_to_one"
+            panel.reset_index().rename(columns={ID_COL: identity_column}),
+            on=identity_column, how="left", validate="one_to_one"
         )
         # A sealed cohort column with no typed metadata is refused outright, and
         # rightly so -- an undescribed column is one a reader cannot bind. Each
@@ -3243,7 +3249,7 @@ def materialize_to_parquet(
         # A trajectory bound to this universe may contain only identities the
         # universe owns.  This matters when the materializer applied a host-
         # declared cohort definition after reading the raw concept streams.
-        universe_ids = set(cohort[ID_COL].tolist())
+        universe_ids = set(cohort[identity_column].tolist())
         long_df = long_df.loc[long_df[ID_COL].isin(universe_ids)].reset_index(drop=True)
         requested_trajectory_concepts = list(dict.fromkeys(concepts))
         source_available_concepts = {

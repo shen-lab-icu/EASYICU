@@ -202,7 +202,7 @@ def test_a_study_without_a_trajectory_declaration_is_not_a_trajectory_study(tmp_
                     "analysis_family": "trajectory_clustering",
                     "analysis_unit": "icu_stay",
                     "variance_estimator": "cluster_robust",
-                    "cluster_unit": "patient",
+                    "cluster_unit": "site",
                 },
                 "trajectory_design": study_context_owner.normalize_trajectory_design(
                     _design()
