@@ -38,6 +38,9 @@ ALLOWED_SITES = {
     # Publication and export metadata keyed by the database identity.
     "easyicu/api/extraction.py::_publish_native_export_v2": _REGISTRY_SAME,
     "easyicu/concept/export_metadata.py::_export_identity_and_time_coordinates": _REGISTRY_SAME,
+    "easyicu/concept/minute_resolution.py::subhour_module_coverage": (
+        "metadata-only database-key lookup for the packaged minute module whitelist"
+    ),
     "easyicu/research_agent/cohort/materializer.py::_normalize_legacy_export_categorical": _REGISTRY_SAME,
     "easyicu/research_agent/cohort/materializer.py::_missing_outside_declared_source_factor": _REGISTRY_SAME,
     "easyicu/research_agent/cohort/materializer.py::_materialize_cohort_from_resolved_source": _REGISTRY_SAME,
