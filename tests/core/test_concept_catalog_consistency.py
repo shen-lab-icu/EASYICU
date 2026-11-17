@@ -285,7 +285,15 @@ def test_extract_database_modules_use_the_shared_catalog() -> None:
        'vis_inputs': list(VIS_INPUT_CONCEPTS),
        'gas_specimen': list(GAS_SPECIMEN_CONCEPTS),
        "subhour_signals": list(SUBHOUR_SIGNAL_CONCEPTS), "vent_native": list(VENT_NATIVE_CONCEPTS),
-       "haemo_native": list(HAEMO_NATIVE_CONCEPTS)}
+       "haemo_native": list(HAEMO_NATIVE_CONCEPTS),
+       "stay_identity": [
+           "person_id", "hospital_admission_id", "person_linkage_available", "stay_order",
+           "is_first_icu_stay", "is_first_icu_stay_of_hospital_admission", "order_evidence",
+       ],
+       "imv_first_episode": [
+           "imv_start_hours", "imv_end_hours", "imv_duration_hours", "episode_status", "episode_evidence",
+       ],
+       "pao2_arterial_hourly_min": ["po2"]}
     # The SIC case module is explicitly selected, not part of the six-source
     # default extraction order.
     assert set(EXTRACT_MODULE_ORDER) == set(CONCEPT_GROUPS_INTERNAL)

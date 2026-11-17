@@ -41,6 +41,7 @@ def metadata_definition_for_concept(concept_id: str, module: str, dictionary: An
         CONCEPT_DESCRIPTIONS,
         CONCEPT_DICTIONARY,
         CONCEPT_GROUPS_INTERNAL,
+        STAY_LEVEL_SUPPORT_MODULES,
     )
     from easyicu.concept.schema import ConceptDefinition
 
@@ -48,6 +49,9 @@ def metadata_definition_for_concept(concept_id: str, module: str, dictionary: An
         concept_id, (concept_id, concept_id, "")
     )
     description, _description_zh = CONCEPT_DESCRIPTIONS.get(concept_id, ("", ""))
+    support_field = STAY_LEVEL_SUPPORT_MODULES.get(module, {}).get(concept_id)
+    if support_field:
+        description, unit = support_field
     if not module:
         module = next(
             (

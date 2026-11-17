@@ -33,6 +33,7 @@ from ..concept.catalog import (
     OPT_IN_MODULE_CONCEPTS,
     PAO2_ARTERIAL_HOURLY_MIN,
     STAY_LEVEL_SUPPORT_MODULES,
+    STAY_LEVEL_SUPPORT_UNITS,
 )
 from ..concept.minute_resolution import (
     SUBHOUR_MODULE_INTERVALS,
@@ -5719,7 +5720,9 @@ def _native_export_storage_kind(concept_id: str, dictionary) -> str:
         class_names = set()
     else:
         class_names = {str(raw_class_name).strip()}
-    catalog_unit = CONCEPT_DICTIONARY.get(concept_id, ("", "", ""))[2]
+    catalog_unit = STAY_LEVEL_SUPPORT_UNITS.get(
+        concept_id, CONCEPT_DICTIONARY.get(concept_id, ("", "", ""))[2]
+    )
     if "lgl_cncpt" in class_names or str(catalog_unit).strip().lower() == "boolean":
         return "boolean"
     if (
