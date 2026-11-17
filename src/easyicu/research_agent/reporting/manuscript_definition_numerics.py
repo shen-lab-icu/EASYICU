@@ -7,7 +7,7 @@ stay outside the result claim registry.
 """
 
 from collections import defaultdict
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 import hashlib
 import json
 import math
@@ -145,6 +145,7 @@ class _Quantity:
     unit: str | None = None
     kind: str = "threshold"
     literal: str | None = None
+    source_column: str | None = None
 
 
 def _typed_number(value):
@@ -198,20 +199,24 @@ def _grouped_quantities(context, labels):
         names_for_group = {variable}
         # A shared unqualified concept is insufficient to identify one of
         # several groupings formed from that measure.
-        if names.count(rules.concept.casefold()) == 1:
-            names_for_group.update(_variable_names(rules.concept, concept_reader_name(rules.concept)))
+        concept = rules.concept.casefold()
+        if names.count(concept) == 1:
+            names_for_group.update(_variable_names(rules.concept, concept, concept_reader_name(concept)))
         aliases = _variable_aliases(names_for_group, context=context, labels=labels)
         field = f"cohort.provenance.{EXPOSURE_GROUP_LABELS_KEY}[{index}]"
         quantities = [_Quantity(f"{field}.levels[{pos}].code", variable, level["code"], kind="level")
                       for pos, level in enumerate(levels)]
+        multiple_columns = len(rules.read_columns) > 1
         for pos, group in enumerate(parameters["groups"]):
             rule = group["rule"]
             if rule == "otherwise":
                 continue
             column = rules.source_columns[rule["summary"]]
             unit = rule.get("unit") or _variable_unit(column, context)
-            quantities.append(_Quantity(f"{field}.parameters.groups[{pos}].rule.value", rules.concept,
-                                        rule["value"], rule["op"], unit))
+            quantities.append(_Quantity(
+                f"{field}.parameters.groups[{pos}].rule.value", concept, rule["value"], rule["op"], unit,
+                source_column=column if multiple_columns else None,
+            ))
         # An otherwise level can name the other side of the same boundary.
         # Use the owner's interval algebra, and retain the original value field.
         if parameters["groups"][-1]["rule"] == "otherwise":
@@ -228,9 +233,7 @@ def _grouped_quantities(context, labels):
                     if quantity.value == other.upper and quantity.operator in {">", ">="}:
                         complement = "<=" if other.upper_inclusive else "<"
                     if complement:
-                        quantities.append(_Quantity(
-                            quantity.field, quantity.variable, quantity.value, complement, quantity.unit,
-                        ))
+                        quantities.append(replace(quantity, operator=complement))
         yield aliases, quantities
 
 
@@ -372,8 +375,14 @@ def _attached_quantity_end(text, end, quantity, kind, before, *, marked_boundary
     if after:
         operator = ">=" if after["above"] else "<="
         return after.end() if operator == quantity.operator else None
-    if kind == "cutoff" or (unit_end != end and (marked_boundary or _CUTOFF_NOUN.match(text, unit_end))):
+    if unit_end != end and _CUTOFF_NOUN.match(text, unit_end):
         return unit_end
+    if kind == "cutoff" or (unit_end != end and marked_boundary):
+        # A bare cutoff must end here or have a recognized list continuation.
+        # A predicate after the value can turn it into a statistic.
+        if (text[unit_end:].strip() in {"", ".", "!", "?"}
+            or _COORDINATOR.match(text, unit_end) or _REFERENCE.match(text, unit_end)):
+            return unit_end
     return None
 
 
@@ -381,10 +390,10 @@ def _quantity_key(quantity):
     # The written comparator has already narrowed the candidates. When the
     # prose names a cutoff without a comparator, either side can own its value.
     unit = quantity.unit.casefold() if quantity.unit else None
-    return quantity.variable.casefold(), quantity.kind, quantity.value, unit
+    return quantity.variable.casefold(), quantity.kind, quantity.value, unit, quantity.source_column
 
 
-def _read_quantity(text, start, kind, definitions, parse_literal, *, anchor, previous, marked_boundary):
+def _read_quantity(text, start, kind, definitions, parse_literal, *, anchor, previous, marked_boundary, cites_context):
     before = _PREFIX_OPERATOR.match(text, start)
     number = _NUMBER.match(text, before.end() if before else start)
     if number is None:
@@ -402,7 +411,9 @@ def _read_quantity(text, start, kind, definitions, parse_literal, *, anchor, pre
         exact = exact or bool(literals)
         if cited or literals:
             active.append((record, quantities if cited else literals))
-    if not active and not continued:
+    # A context citation can leave an anchored cutoff unbound. Keep its
+    # occurrence visible even when the general prose matcher skips it.
+    if not (active or continued or cites_context):
         return None
 
     parsed = parse_literal(number["value"])
@@ -442,7 +453,7 @@ def _read_quantity(text, start, kind, definitions, parse_literal, *, anchor, pre
     return None
 
 
-def _quantity_spans(text, anchors, sources, parse_literal, *, allow_plan_fallback):
+def _quantity_spans(text, anchors, sources, parse_literal, *, cites_context, grouped_variables):
     for anchor in anchors:
         name = anchor[0].casefold()
         definitions = [
@@ -451,10 +462,13 @@ def _quantity_spans(text, anchors, sources, parse_literal, *, allow_plan_fallbac
         ]
         if not definitions:
             continue
-        # A context citation can stand in for the plan for anchors with no
-        # cited grouping of their own.
-        if allow_plan_fallback and not any(cited for _, _, cited in definitions):
-            definitions = [(record, quantities, True) for record, quantities, _ in definitions]
+        # A context citation can stand in for a plan definition on an
+        # ungrouped variable. Groupings can omit shared aliases.
+        if cites_context and not any(cited for _, _, cited in definitions):
+            definitions = [
+                (record, quantities, all(q.variable.casefold() not in grouped_variables for q in quantities))
+                for record, quantities, _ in definitions
+            ]
         prefix = text[:anchor.start()]
         # Generated rule rows have their own exact line and section contract.
         if prefix.rsplit("\n", 1)[-1].lstrip().startswith(
@@ -473,7 +487,7 @@ def _quantity_spans(text, anchors, sources, parse_literal, *, allow_plan_fallbac
         previous = reference = None
         while occurrence := _read_quantity(
             text, position, kind, definitions, parse_literal, anchor=anchor.start(), previous=previous,
-            marked_boundary=marked_boundary,
+            marked_boundary=marked_boundary, cites_context=cites_context,
         ):
             left, right, source, cursor = occurrence
             if reference and not _LEVEL_NOUN.match(text, cursor):
@@ -487,6 +501,8 @@ def _quantity_spans(text, anchors, sources, parse_literal, *, allow_plan_fallbac
             continuation = connector or reference
             if continuation is None:
                 break
+            if continuation[0].lstrip().startswith(","):
+                marked_boundary = False
             position = continuation.end()
             marker = _LEVEL_PREFIX.match(text, position)
             kind = marker[0].strip().casefold() if marker else ""
@@ -549,6 +565,7 @@ def registered_definition_spans(text, evidence, *, sentence_bounds, parse_litera
     context_record, context = _registered_context(evidence, records)
     labels = plan.get("display_labels") or {}
     grouped = list(_grouped_quantities(context, labels)) if context else []
+    grouped_variables = {quantity.variable.casefold() for _, quantities in grouped for quantity in quantities}
     # A registered context supplies the units and variable names even when
     # only the plan is cited. An unverified context disables typed plan binds.
     planned = list(_plan_quantities(plan, prefix, context)) if registered and (context or not context_record) else []
@@ -586,7 +603,7 @@ def registered_definition_spans(text, evidence, *, sentence_bounds, parse_litera
         prose = _CITATION.sub(lambda match: " " * len(match[0]), sentence)
         anchors = tuple(anchor_pattern.finditer(prose))
         for left, right, source in _quantity_spans(
-            prose, anchors, sources, parse_literal, allow_plan_fallback=cites_context,
+            prose, anchors, sources, parse_literal, cites_context=cites_context, grouped_variables=grouped_variables,
         ):
             occurrence = start + left, start + right
             if source is None:
