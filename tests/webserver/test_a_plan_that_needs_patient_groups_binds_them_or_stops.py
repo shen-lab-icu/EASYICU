@@ -160,7 +160,7 @@ def _forbidden(*_args: Any, **_kwargs: Any) -> Any:
     ("grouping", "longitudinal", "expected"),
     [
         (_GROUPING, None, "available_unbound"),
-        (_GROUPING, "trajectory", "not_carried_by_trajectory"),
+        (_GROUPING, "trajectory", "available_unbound"),
         (None, None, "source_has_none"),
     ],
 )
@@ -173,13 +173,8 @@ def test_planning_states_what_the_source_can_provide(
     monkeypatch.setattr(
         run_patient_grouping, "verified_patient_grouping", lambda _study: grouping
     )
-    monkeypatch.setattr(
-        run_patient_grouping,
-        "declared_longitudinal_design",
-        lambda _study: longitudinal if grouping is not None else _forbidden(),
-    )
-
-    assert run_patient_grouping.planning_patient_grouping_status({}, bound=None) == (
+    study = {"trajectory_design": longitudinal} if longitudinal else {}
+    assert run_patient_grouping.planning_patient_grouping_status(study, bound=None) == (
         expected,
         None,
     )
@@ -334,9 +329,6 @@ def test_a_step_that_needs_groups_binds_the_sources_verified_grouping(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     monkeypatch.setattr(
-        run_patient_grouping, "declared_longitudinal_design", lambda _study: None
-    )
-    monkeypatch.setattr(
         run_patient_grouping, "verified_patient_grouping", lambda _study: _GROUPING
     )
 
@@ -352,10 +344,6 @@ def test_a_source_without_grouping_binds_nothing_and_leaves_it_to_approval(
 ) -> None:
     # The materialized rows may still carry a direct patient identifier; the
     # approval check stops a plan whose planned data holds no grouping.
-    def forbidden(_study: Any) -> Any:
-        raise AssertionError("a conflict without a grouping to bind")
-
-    monkeypatch.setattr(run_patient_grouping, "declared_longitudinal_design", forbidden)
     monkeypatch.setattr(
         run_patient_grouping, "verified_patient_grouping", lambda _study: None
     )
@@ -369,27 +357,16 @@ def test_a_source_without_grouping_binds_nothing_and_leaves_it_to_approval(
 
 
 @pytest.mark.parametrize("design", ["trajectory_design", "landmark"])
-def test_a_declared_trajectory_design_stops_before_materialization(
+def test_a_declared_trajectory_design_keeps_patient_grouping(
     design: str, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    monkeypatch.setattr(
-        run_patient_grouping, "declared_longitudinal_design", lambda _study: design
-    )
     monkeypatch.setattr(
         run_patient_grouping, "verified_patient_grouping", lambda _study: _GROUPING
     )
 
-    error = _refused(
-        lambda: run_patient_grouping.execution_patient_grouping(
-            {}, step_ids=("primary_performance",)
-        )
-    )
-
-    assert error.code == "research_pipeline_patient_grouping_trajectory_conflict"
-    assert error.details == {
-        "step_ids": ["primary_performance"],
-        "longitudinal_design": design,
-    }
+    assert run_patient_grouping.execution_patient_grouping(
+        {"trajectory_design": design}, step_ids=("primary_performance",),
+    ) is _GROUPING
 
 
 @pytest.mark.parametrize(
@@ -610,24 +587,38 @@ def test_a_run_states_patient_dependence_only_for_a_design_that_reads_the_groupi
 
 
 def test_the_launch_hands_its_runtime_projection_the_owners_dependence() -> None:
-    # The package-bound launch compiles one runtime projection.  Its dependence
-    # is the owner's, so a patient bootstrap resamples patients and a grouping
-    # bound only for a split states none.
+    # Both projections share the owner's dependence, so a patient bootstrap
+    # resamples patients and a grouping bound only for a split states none.
     tree = ast.parse(Path(agent_pipeline_runs.__file__).read_text(encoding="utf-8"))
-    calls = [
+    assignments = [
         node
         for node in ast.walk(tree)
-        if isinstance(node, ast.Call)
-        and getattr(node.func, "id", getattr(node.func, "attr", None))
-        == "compile_web_scientific_runtime_projection"
+        if isinstance(node, ast.Assign)
+        and isinstance(node.value, ast.Call)
+        and ast.unparse(node.value.func)
+        == "run_patient_grouping.runtime_patient_dependence"
     ]
-
-    assert len(calls) == 1
-    (dependence,) = [kw.value for kw in calls[0].keywords if kw.arg == "dependence"]
-    assert ast.unparse(dependence) == (
+    assert len(assignments) == 1
+    (assignment,) = assignments
+    (target,) = assignment.targets
+    assert isinstance(target, ast.Name)
+    assert ast.unparse(assignment.value) == (
         "run_patient_grouping.runtime_patient_dependence("
         "patient_grouping, validated_analysis_design, study=candidate_planning_study)"
     )
+    for projection in (
+        "compile_web_scientific_runtime_projection",
+        "compile_web_trajectory_runtime_projection",
+    ):
+        calls = [
+            node
+            for node in ast.walk(tree)
+            if isinstance(node, ast.Call) and ast.unparse(node.func) == projection
+        ]
+        assert len(calls) == 1
+        (dependence,) = [kw.value for kw in calls[0].keywords if kw.arg == "dependence"]
+        assert isinstance(dependence, ast.Name)
+        assert dependence.id == target.id
 
 
 # --- the accepted candidate carries the steps -------------------------------------

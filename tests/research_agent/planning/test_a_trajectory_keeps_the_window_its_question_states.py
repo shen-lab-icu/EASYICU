@@ -264,8 +264,8 @@ def test_a_window_from_another_event_is_a_stated_limitation_not_the_default() ->
     )
 
     assert finding.code == "TRAJECTORY_REPRESENTATION_NOT_LONGITUDINAL"
-    assert finding.severity == "major"
-    assert remediation_route_for_finding(finding) == "agent_plan_revision"
+    assert finding.severity == "blocker"
+    assert remediation_route_for_finding(finding) == "study_authority_change"
     assert "counts its trajectory window from intubation" in finding.message
     assert "Keep the window the question states" in finding.remediation
     facts = review.facts["trajectory_representation"]
@@ -275,6 +275,7 @@ def test_a_window_from_another_event_is_a_stated_limitation_not_the_default() ->
         study=dict(_STUDY), agent_plan={"steps": []},
         runtime_finding_codes=(_OWNER,), review_facts=review.facts,
     )
+
 
 
 def _facts(window=None) -> dict:

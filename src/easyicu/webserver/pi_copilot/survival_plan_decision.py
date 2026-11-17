@@ -74,6 +74,11 @@ def propose_survival_landmark(
             if bound is None:
                 return None
             study = bound
+        # This pre-plan card has no verified grouping input. Reviewed clustered
+        # designs close through the host compiler without another method choice.
+        design = study.get("analysis_design")
+        if isinstance(design, Mapping) and design.get("variance_estimator") == "cluster_robust":
+            return None
         configuration = ScientificConfiguration.inspect(study)
         if (not survival_family_declared(study)
                 or not survival_inference_supported(study["analysis_design"])

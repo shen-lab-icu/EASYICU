@@ -343,7 +343,7 @@ def _repeated_stay_plan() -> dict:
 
 
 @pytest.mark.parametrize("family", ["survival", "trajectory_clustering"])
-def test_a_family_that_fits_one_model_per_stay_never_compiles_patient_clustering(
+def test_the_generic_association_compiler_does_not_replace_a_signed_family(
     family: str,
 ) -> None:
     study = _aki_study()

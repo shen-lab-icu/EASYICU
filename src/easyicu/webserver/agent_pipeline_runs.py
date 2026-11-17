@@ -8061,6 +8061,9 @@ def make_research_pipeline_run_runner(
                 and decision.evidence_role == "direct_comparator"
             )
             try:
+                runtime_dependence = run_patient_grouping.runtime_patient_dependence(
+                    patient_grouping, validated_analysis_design, study=candidate_planning_study,
+                )
                 runtime_projection = compile_web_scientific_runtime_projection(
                     exposure_groupings=bound_exposure_groupings,
                     study=candidate_planning_study,
@@ -8083,9 +8086,7 @@ def make_research_pipeline_run_runner(
                         )
                     ),
                     # The owner states dependence for designs and descriptive intervals.
-                    dependence=run_patient_grouping.runtime_patient_dependence(
-                        patient_grouping, validated_analysis_design, study=candidate_planning_study
-                    ),
+                    dependence=runtime_dependence,
                     universe_path=Path(acquisition.universe_path),
                     scientific_configuration_sha256=(
                         study_context_owner.scientific_configuration_sha256(study)
@@ -8118,6 +8119,7 @@ def make_research_pipeline_run_runner(
 
             try:
                 trajectory_projection = compile_web_trajectory_runtime_projection(
+                    dependence=runtime_dependence,
                     study=candidate_planning_study,
                     universe_path=Path(acquisition.universe_path),
                     scientific_configuration_sha256=(

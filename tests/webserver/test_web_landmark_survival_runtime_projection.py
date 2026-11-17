@@ -302,7 +302,7 @@ def test_survival_family_without_landmark_keeps_other_routes(tmp_path):
                         "analysis_family": "survival",
                         "analysis_unit": "icu_stay",
                         "variance_estimator": "cluster_robust",
-                        "cluster_unit": "patient",
+                        "cluster_unit": "site",
                     }
                 )
             },

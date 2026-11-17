@@ -99,14 +99,17 @@ def test_the_signed_authority_binding_seals_the_suite_and_closes_the_timing():
     )
 
 
-def test_a_proposal_whose_coordinates_do_not_close_is_a_plan_revision():
+def test_a_proposal_whose_coordinates_do_not_close_has_one_coordinate_question():
     context = survival_context()
     plan = _proposal(context).model_copy(update={"adjustment_proposal": None})
 
     facts = landmark_survival_suite_facts(context, plan)
     assert facts["sealed"] is False and facts["executable"] is False
-    blockers = _blockers(build_plan_scientific_review(context=context, plan=plan))
-    assert blockers["SURVIVAL_LANDMARK_OWNER_NOT_SEALED"] == "agent_plan_revision"
+    review = build_plan_scientific_review(context=context, plan=plan)
+    blockers = _blockers(review)
+    assert blockers["SURVIVAL_LANDMARK_OWNER_NOT_SEALED"] == "study_authority_change"
+    questions = [finding for finding in review.findings if finding.requires_user_authorization]
+    assert [finding.code for finding in questions] == ["SURVIVAL_LANDMARK_OWNER_NOT_SEALED"]
     # Nothing will seal the suite, so it is not credited with the endpoint.
     assert "REQUESTED_OUTCOME_COVERAGE_INCOMPLETE" in blockers
     assert "OUTCOME_DEFINITION_UNRESOLVED" in blockers

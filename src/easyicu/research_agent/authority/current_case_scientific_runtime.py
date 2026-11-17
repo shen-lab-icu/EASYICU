@@ -47,6 +47,7 @@ from ..contracts.figure_plan import (
     typed_measurement_process_products,
 )
 from ..contracts.dependence import PlannedDependenceRequirement
+from ..contracts.runtime_dependence import RuntimeDependenceContract
 from ..contracts.model_terms import AdjustmentProposal, ModelTermSpec
 from ..contracts.functional_form import (
     FunctionalFormSpec, RCS_LINEAR_SENSITIVITY_METHODS, functional_form_products,
@@ -2340,6 +2341,7 @@ class LandmarkSurvivalRuntimeAuthority(_AuthorityBase):
 
     schema_version: Literal["easyicu.landmark_survival_runtime_authority/1"]
     authority_kind: Literal["landmark_survival_suite"]
+    dependence: PlannedDependenceRequirement | None = Field(default=None, exclude_if=lambda value: value is None)
     plan_method: Literal["signed_landmark_survival_suite"]
     plan_intent: str = Field(min_length=1)
     plan_outputs: tuple[str, ...]
@@ -2557,6 +2559,7 @@ class LandmarkSurvivalRuntimeAuthority(_AuthorityBase):
                     self.event_column,
                     self.followup_time_column,
                     *self.adjustment_columns,
+                    *((self.dependence.group_source,) if self.dependence is not None else ()),
                 )
             )
         )
@@ -2608,6 +2611,10 @@ class LandmarkSurvivalRuntimeAuthority(_AuthorityBase):
                 "runtime_outcome_contract": RuntimeOutcomeContract(
                     owner_ref=self.plan_rule_ref,
                     outcomes=(self.event_column,),
+                ),
+                "runtime_dependence_contract": (
+                    RuntimeDependenceContract(owner_ref=self.plan_rule_ref, dependence=self.dependence)
+                    if self.dependence is not None else None
                 ),
             }
         )
@@ -2840,6 +2847,12 @@ class LandmarkSurvivalRuntimeAuthority(_AuthorityBase):
             issues.append("nested_model_contract")
         if step.table_one_spec is not None:
             issues.append("nested_table_one_contract")
+        expected_dependence = (
+            RuntimeDependenceContract(owner_ref=self.plan_rule_ref, dependence=self.dependence)
+            if self.dependence is not None else None
+        )
+        if step.runtime_dependence_contract != expected_dependence:
+            issues.append("runtime_dependence_contract")
         if issues:
             raise CurrentCaseScientificAuthorityError(
                 "landmark survival plan drifted from signed authority: "

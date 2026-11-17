@@ -1439,7 +1439,8 @@ def build_scientific_maturity_audit(
                 ),
             )
         )
-    if post_baseline and not _timing_design_closed(plan):
+    from ..planning.scientific_review import temporal_inference_required
+    if post_baseline and (association_study or temporal_inference_required(plan)) and not _timing_design_closed(plan):
         findings.append(
             ScientificMaturityFinding(
                 code="POST_BASELINE_EXPOSURE_TIMING_NOT_CLOSED",
@@ -1458,12 +1459,6 @@ def build_scientific_maturity_audit(
                     "Pre-specify a non-overlapping follow-up strategy and early "
                     "death/discharge accounting, or explicitly retain the estimate "
                     "as descriptive and non-article-grade."
-                ),
-                requires_user_authorization=True,
-                authorization_question=(
-                    "The exposure is classified after ICU time zero. Should a new "
-                    "study version use a prespecified landmark/follow-up design, or "
-                    "should this run remain descriptive only?"
                 ),
             )
         )
@@ -1500,11 +1495,6 @@ def build_scientific_maturity_audit(
                     "manifest.json.current_plan_authority",
                 ],
                 remediation="Declare one-stay selection or clustered/mixed estimation.",
-                requires_user_authorization=True,
-                authorization_question=(
-                    "Should a new study version use one ICU stay per patient or "
-                    "retain repeated stays with clustered/mixed estimation?"
-                ),
             )
         )
     if association_study and covariates:

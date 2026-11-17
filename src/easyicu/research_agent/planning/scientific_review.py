@@ -801,6 +801,8 @@ def _repeated_stay_step_declared(step: Any, context: Any) -> bool:
         return True
     if context is None:
         return False
+    if _signed_patient_group_dependence(step, context):
+        return True
     patient_group = context_patient_group_authority(context)
     if patient_group is not None and static_prediction_execution_verdict(step).claimed:
         # The host static prediction owner splits development and validation
@@ -847,6 +849,18 @@ def _signed_patient_group_dependence(
     step: AnalysisStep, context: ResearchContext
 ) -> bool:
     patient_group = context_patient_group_authority(context)
+    contract = step.runtime_dependence_contract
+    if contract is not None:
+        return bool(
+            _method_head(step) in {
+                "signed_landmark_survival_suite",
+                "observed_data_diagonal_gaussian_mixture_candidate_selection",
+                "observed_data_mixed_mode_latent_class_candidate_selection",
+            }
+            and
+            patient_group is not None and contract.dependence == patient_group
+            and contract.owner_ref in step.icu_rule_refs
+        )
     return bool(
         _method_head(step) in _PATIENT_GROUP_RUNTIME_METHODS
         and patient_group is not None
@@ -2496,6 +2510,7 @@ def landmark_survival_suite_facts(
         and 0 < landmark < endpoint.horizon_days * 24.0
         and {exposure, endpoint.event_concept, endpoint.followup_concept}.issubset(primary.inputs)
         and proposal is not None
+        and covariates
         and set(covariates).issubset(primary.inputs)
         and set(rationales) == set(covariates)
         and set(roles) == set(covariates)
@@ -2572,7 +2587,9 @@ def landmark_survival_suite_findings(
                 "Revise the plan so its primary step is an estimator this study can "
                 "execute, or declare the survival design the suite needs."
             ),
-            remediation_route="agent_plan_revision",
+            remediation_route="study_authority_change",
+            requires_user_authorization=True,
+            authorization_question="Which fixed-horizon mortality endpoint with paired follow-up, landmark window and adjustment roster should this study use?",
         )
     ]
 
@@ -2684,7 +2701,6 @@ def trajectory_representation_findings(
     if facts["longitudinal_owner"] is not None:
         return _sealed_trajectory_population_findings(facts)
     coordinates = list(facts["proposed_coordinates"])
-    prefix = str(facts["eligibility_coordinate_prefix"])
     window = facts.get("trajectory_window") or {}
     window_executable = window.get("executable", True) is not False
     population = facts.get("trajectory_population") or {}
@@ -2801,25 +2817,24 @@ def trajectory_representation_findings(
     return [
         PlanScientificFinding(
             code="TRAJECTORY_REPRESENTATION_NOT_LONGITUDINAL",
-            severity="major",
+            severity="blocker",
             dimension="statistical_design",
             message=(
                 "The trajectory plan clusters one value per ICU stay, so its "
                 "classes summarize stays rather than describe trajectories, and "
                 "the signed fixed-window owner cannot take it over: "
                 + "; ".join(reasons)
-                + "."
+                + ". Supported alternatives are fixed-window trajectory phenotyping "
+                "on recorded coordinates and a supported time grid, or per-stay "
+                "phenotyping of recorded summaries."
             ),
             evidence_refs=refs,
             remediation=(
-                "Where the question's own coordinates allow it, revise the "
-                "primary step to cluster time-varying variables of this study "
-                "that include a SOFA-2 component (a variable whose name starts "
-                f"with {prefix!r}) or are all directly measured, on which the "
-                "signed owner counts each stay's eligible windows, and no outcome "
-                "or one-per-stay variable. Do not substitute another variable or score version "
-                "for the one the question names; otherwise state that the "
-                "classes summarize per-stay values."
+                "This design cannot execute on the signed fixed-window owner. "
+                "Use a named supported alternative only in an explicit study "
+                "revision. Do not substitute another variable or score version "
+                "for the one the question names, or relabel per-stay summaries "
+                "as trajectories."
                 + (
                     ""
                     if window_executable
@@ -2833,7 +2848,7 @@ def trajectory_representation_findings(
                     "predicate or move its window to fit the owner."
                 )
             ),
-            remediation_route="agent_plan_revision",
+            remediation_route="study_authority_change",
         )
     ]
 
@@ -3749,7 +3764,19 @@ def build_plan_scientific_review(
                 remediation_route="agent_plan_revision",
             ))
     trajectory_representation = trajectory_representation_facts(context, plan)
-    findings.extend(trajectory_representation_findings(trajectory_representation))
+    from .trajectory_design_support import unsupported_trajectory_design
+    trajectory_refusal = unsupported_trajectory_design(
+        context.research_question, getattr(context.user_preferences, "preferred_methods", "") or "",
+    ) if canonical_analysis_family(plan.analysis_type) == "trajectory_clustering" else None
+    if trajectory_refusal:
+        findings.append(PlanScientificFinding(
+            code="TRAJECTORY_DESIGN_UNSUPPORTED", severity="blocker", dimension="statistical_design",
+            message=trajectory_refusal, evidence_refs=["research_context.json.research_question"],
+            remediation="Revise the study to one of the named supported alternatives before planning.",
+            remediation_route="study_authority_change",
+        ))
+    else:
+        findings.extend(trajectory_representation_findings(trajectory_representation))
     survival_suite = landmark_survival_suite_facts(context, plan)
     findings.extend(landmark_survival_suite_findings(survival_suite))
     findings.extend(
@@ -4166,6 +4193,10 @@ def build_plan_scientific_review(
     ):
         # A fail-closed feasibility scope analyses no outcome: the reviewed
         # protocol declared the contrast non-identifiable before any endpoint.
+        suite_question = bool(
+            survival_suite and not survival_suite.get("sealed")
+            and survival_suite.get("executable") is not True
+        )
         findings.append(
             PlanScientificFinding(
                 code="OUTCOME_DEFINITION_UNRESOLVED",
@@ -4174,8 +4205,9 @@ def build_plan_scientific_review(
                 message="The primary outcome lacks a complete owner-issued endpoint definition.",
                 evidence_refs=["research_context.json"],
                 remediation="Bind the physical outcome to its clinical meaning and horizon before execution.",
-                requires_user_authorization=True,
-                authorization_question="Please confirm the intended clinical endpoint and time horizon in a new study version.",
+                remediation_route="study_authority_change",
+                requires_user_authorization=not suite_question,
+                authorization_question=(None if suite_question else "Please confirm the intended clinical endpoint and time horizon in a new study version."),
             )
         )
     endpoint_result_required = plan_reports_endpoint_result(plan, context)
@@ -4571,6 +4603,22 @@ def build_plan_scientific_review(
                 remediation_route="runtime_capability",
             )
         )
+    elif repeats and (
+        (survival_suite or {}).get("executable")
+        or (trajectory_representation or {}).get("executable")
+    ) and (
+        not repeated_unit_design_closed(context, plan)
+        or not _repeated_stay_rule_declared(plan, context, sensitivity.get("executable", ()))
+    ):
+        findings.append(PlanScientificFinding(
+            code=("REPEATED_STAY_DEDUP_UNDECLARED" if repeated_unit_design_closed(context, plan)
+                  else "REPEATED_STAY_METHOD_NOT_DECLARED"),
+            severity="blocker", dimension="icu_clinical_design",
+            message="The proposed signed suite has not bound the study's repeated-stay rule.",
+            evidence_refs=["research_context.json", "analysis_plan.json"],
+            remediation="Compile the signed suite with the host default: keep each ICU stay and cluster by the verified patient group. Preserve any recorded researcher choice and report the repeat structure.",
+            remediation_route="runtime_capability",
+        ))
     elif repeats and not repeated_unit_design_closed(context, plan):
         if repeated_unit_estimator_present(context, plan):
             findings.append(

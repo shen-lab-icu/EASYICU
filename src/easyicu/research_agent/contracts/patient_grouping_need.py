@@ -16,9 +16,8 @@ descriptive stay intervals; what the source can provide is stated as one of
 * ``bound``: the planning context binds the source's verified grouping;
 * ``available_unbound``: the source has a verified grouping that planning did
   not bind; execution binds it for the accepted steps that need it;
-* ``not_carried_by_trajectory``: the source has one, but the study declares a
-  design read from each stay's long trajectory, which a grouped
-  materialization does not emit;
+* ``not_carried_by_trajectory``: a legacy planning ceiling from before grouped
+  materialization preserved the same opaque stay identities in both row spaces;
 * ``source_has_none``: the host knows no verified grouping for the source;
 * ``authority_invalid``: the source names a grouping authority that fails its
   checks; its typed code is stated beside it, under
@@ -83,6 +82,7 @@ def steps_needing_patient_groups(plan: Any) -> tuple[str, ...]:
             step.step_id
             for step in _steps(plan)
             if static_prediction_execution_verdict(step).claimed
+            or step.runtime_dependence_contract is not None
             or (
                 step.exposure_outcome_distribution_spec is not None
                 and step.exposure_outcome_distribution_spec.dependence is not None

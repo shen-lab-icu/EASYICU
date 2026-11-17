@@ -60,11 +60,14 @@ def _study_cohort_ids(cohort_path: Path) -> pd.Series:
     not the panel, decides who is counted.
     """
 
-    if _IDENTITY_COLUMN not in pq.read_schema(cohort_path).names:
+    from ...intake.materialized_metadata import load_verified_materialized_cohort_authority
+    verified = load_verified_materialized_cohort_authority(cohort_path)
+    identity = verified.authority.identity_column if verified is not None else _IDENTITY_COLUMN
+    if identity not in pq.read_schema(cohort_path).names:
         raise ValueError(
             f"study cohort lacks the trajectory identity column {_IDENTITY_COLUMN}"
         )
-    ids = pd.read_parquet(cohort_path, columns=[_IDENTITY_COLUMN])[_IDENTITY_COLUMN]
+    ids = pd.read_parquet(cohort_path, columns=[identity])[identity]
     if ids.empty or bool(ids.isna().any()) or bool(ids.duplicated().any()):
         raise ValueError("study cohort stay identities must be present and unique")
     return ids.reset_index(drop=True)

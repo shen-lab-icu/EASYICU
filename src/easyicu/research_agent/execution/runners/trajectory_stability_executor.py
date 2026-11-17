@@ -1538,17 +1538,25 @@ def run_trajectory_stability(
         ]
         _empty_outputs(out_dir, id_column=id_column)
         n_rows = len(representation)
+        patient_groups = patient_sample_units = None
+        n_units = n_rows
+        if sealed_authority is not None and sealed_authority.dependence is not None:
+            from ...methods.patient_subsamples import patient_units
+            patient_groups, patient_sample_units = patient_units(
+                representation[id_column], sealed_authority.dependence,
+            )
+            n_units = len(patient_sample_units)
         sample_n = (
             int(spec.sample_size)
             if spec.sample_size is not None
-            else int(math.floor(n_rows * float(spec.sample_fraction)))
+            else int(math.floor(n_units * float(spec.sample_fraction)))
         )
-        if sample_n <= selected_n_clusters or sample_n >= n_rows:
+        if sample_n <= selected_n_clusters or sample_n >= n_units:
             raise ValueError(
                 "agent-owned sample size must exceed selected_n_clusters and be "
                 "strictly smaller than the frozen population"
             )
-        if math.comb(n_rows, sample_n) < spec.n_resamples:
+        if math.comb(n_units, sample_n) < spec.n_resamples:
             raise ValueError(
                 "the planner-owned distinct-membership design requests more "
                 "resamples than the number of possible subsamples"
@@ -1576,6 +1584,7 @@ def run_trajectory_stability(
             "trajectory_stability_spec_sha256": spec_digest,
             "executor_code_sha256": executor_code_sha256,
             "bound_sample_n": sample_n,
+            "sampling_unit": "patient" if patient_sample_units is not None else "stay",
             "derived_seeds": seeds,
             "selected_n_clusters": selected_n_clusters,
             "model_family": solution_schema.get("model_family"),
@@ -1614,7 +1623,13 @@ def run_trajectory_stability(
         for index, seed in enumerate(seeds, start=1):
             resample_id = f"stability_resample_{index:03d}"
             rng = np.random.default_rng(seed)
-            positions = np.sort(rng.choice(n_rows, size=sample_n, replace=False))
+            if patient_sample_units is not None:
+                from ...methods.patient_subsamples import patient_subsample_positions
+                positions = patient_subsample_positions(
+                    patient_groups, patient_sample_units, sample_n=sample_n, rng=rng,
+                )
+            else:
+                positions = np.sort(rng.choice(n_rows, size=sample_n, replace=False))
             sampled_ids = ids.iloc[positions]
             sample_id_hash = _sample_hash(sampled_ids)
             refit_model_id = (
@@ -1649,13 +1664,13 @@ def run_trajectory_stability(
                 seen_hashes.add(sample_id_hash)
                 success_row = {
                     "resample_id": resample_id,
-                    "n_overlap": sample_n,
+                    "n_overlap": len(positions),
                     "adjusted_rand_index": ari,
                     "clustering_method": solution_schema["model_family"],
                     "refit_model_id": refit_model_id,
                     "seed": seed,
                     "sampling_method": spec.resampling_method,
-                    "sample_n": sample_n,
+                    "sample_n": len(positions),
                     "sample_id_hash": sample_id_hash,
                     "selected_n_clusters": selected_n_clusters,
                     **fit_trace,
@@ -1698,7 +1713,7 @@ def run_trajectory_stability(
                     "resample_id": resample_id,
                     "refit_model_id": refit_model_id,
                     "seed": seed,
-                    "sample_n": sample_n,
+                    "sample_n": len(positions),
                     "sample_id_hash": sample_id_hash,
                     "error": f"{type(exc).__name__}: {exc}",
                     "solution_not_realized": isinstance(exc, ClassModelFitNotRealized),

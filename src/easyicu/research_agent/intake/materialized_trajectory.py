@@ -38,6 +38,7 @@ from .materialized_metadata import (
     canonical_parameters_sha256,
     load_verified_materialized_cohort_authority,
     read_verified_materialized_cohort_table,
+    verified_cohort_replacement_row_identity,
 )
 
 MATERIALIZED_TRAJECTORY_AUTHORITY_SCHEMA = "easyicu.materialized_trajectory_authority/1"
@@ -866,7 +867,14 @@ def _read_json_bytes(raw: bytes, *, label: str) -> Mapping[str, object]:
     return parsed
 
 
-def _canonical_frame(frame: pd.DataFrame) -> pa.Table:
+def _trajectory_schema_for_universe(verified, cohort_path):
+    identity = verified_cohort_replacement_row_identity(verified, cohort_path=cohort_path)
+    if identity is not None:
+        return TRAJECTORY_SCHEMA.set(0, pa.field("stay_id", pa.string(), nullable=False))
+    return TRAJECTORY_SCHEMA
+
+
+def _canonical_frame(frame: pd.DataFrame, *, schema=TRAJECTORY_SCHEMA) -> pa.Table:
     if tuple(frame.columns) != TRAJECTORY_COLUMNS:
         raise MaterializedTrajectoryError(
             "trajectory frame must have the exact canonical column order"
@@ -874,13 +882,18 @@ def _canonical_frame(frame: pd.DataFrame) -> pa.Table:
     data = frame.copy()
     if data["stay_id"].isna().any():
         raise MaterializedTrajectoryError("trajectory stay_id contains null values")
-    try:
-        stay_numeric = pd.to_numeric(data["stay_id"], errors="raise")
-    except (TypeError, ValueError) as exc:
-        raise MaterializedTrajectoryError("trajectory stay_id must be integer") from exc
-    if any(float(value) != int(value) for value in stay_numeric.tolist()):
-        raise MaterializedTrajectoryError("trajectory stay_id must be integer")
-    data["stay_id"] = stay_numeric.astype("int64")
+    if pa.types.is_string(schema.field("stay_id").type):
+        if not all(isinstance(value, str) and value.strip() == value and value for value in data["stay_id"]):
+            raise MaterializedTrajectoryError("grouped trajectory identity must be a nonblank string")
+        data["stay_id"] = data["stay_id"].astype("string")
+    else:
+        try:
+            stay_numeric = pd.to_numeric(data["stay_id"], errors="raise")
+        except (TypeError, ValueError) as exc:
+            raise MaterializedTrajectoryError("trajectory stay_id must be integer") from exc
+        if any(float(value) != int(value) for value in stay_numeric.tolist()):
+            raise MaterializedTrajectoryError("trajectory stay_id must be integer")
+        data["stay_id"] = stay_numeric.astype("int64")
     try:
         data["charttime"] = pd.to_numeric(data["charttime"], errors="raise").astype(
             "float64"
@@ -947,7 +960,7 @@ def _canonical_frame(frame: pd.DataFrame) -> pa.Table:
     ).reset_index(drop=True)
     try:
         return pa.Table.from_pandas(
-            data, schema=TRAJECTORY_SCHEMA, preserve_index=False, safe=True
+            data, schema=schema, preserve_index=False, safe=True
         )
     except (pa.ArrowException, ValueError, TypeError) as exc:
         raise MaterializedTrajectoryError(
@@ -1097,7 +1110,7 @@ def _validate_table_contract(
     bound_universe: VerifiedMaterializedCohortAuthority,
     bound_universe_path: Path,
 ) -> None:
-    if table.schema != TRAJECTORY_SCHEMA:
+    if table.schema != _trajectory_schema_for_universe(bound_universe, bound_universe_path):
         raise MaterializedTrajectoryError("trajectory parquet schema mismatch")
     if table.num_rows != authority.trajectory_rows:
         raise MaterializedTrajectoryError("trajectory row count mismatch")
@@ -1346,7 +1359,7 @@ def publish_materialized_trajectory_authority(
         trajectory_origin = SIC_CARE_UNIT_ORIGIN
     else:
         trajectory_origin = "icu_admission"
-    table = _canonical_frame(frame)
+    table = _canonical_frame(frame, schema=_trajectory_schema_for_universe(selected_universe, bound_universe_path))
     requested = _canonical_strings(
         tuple(requested_concepts), label="requested trajectory concept"
     )
