@@ -202,10 +202,71 @@ class ProgressiveDesignCanaryReceipt(BaseModel):
     cost_summary: dict[str, Any] = Field(default_factory=dict)
 
 
+def _foundation_label_transition_valid(
+    previous: ProgressivePlannerCheckpoint, current: ProgressivePlannerCheckpoint,
+) -> bool:
+    """A late label amendment must identify its exact keys and retained steps."""
+    if previous.foundation is None:
+        return True
+    prior_repairs = previous.prompt_metrics.get("foundation_label_repairs", [])
+    repairs = current.prompt_metrics.get("foundation_label_repairs", [])
+    if not isinstance(prior_repairs, list) or not isinstance(repairs, list):
+        return False
+    if previous.foundation == current.foundation:
+        return repairs == prior_repairs
+    if (current.foundation is None or not isinstance(repairs, list)
+            or repairs[:len(prior_repairs)] != prior_repairs
+            or len(repairs) <= len(prior_repairs)):
+        return False
+    old = previous.foundation.foundation
+    new = current.foundation.foundation
+    if (previous.outline != current.outline
+            or previous.request_authority_sha256 != current.request_authority_sha256
+            or (current.revision_offset is None
+                and current.materializations[:-1] != previous.materializations)
+            or old.model_dump(exclude={"display_labels"}) != new.model_dump(exclude={"display_labels"})):
+        return False
+    allowed_keys: set[str] = set()
+    digest = canonical_sha256(previous.foundation.model_dump(mode="json"))
+    retained = current.materializations[:-1]
+    for repair in repairs[len(prior_repairs):]:
+        if not isinstance(repair, Mapping):
+            return False
+        keys = repair.get("required_display_label_keys", [])
+        if (not keys or not all(isinstance(key, str) for key in keys)
+                or repair.get("reason_code") not in {
+                    "progressive_required_binary_display_labels_missing",
+                    "progressive_required_reader_display_labels_missing",
+                }
+                or repair.get("previous_foundation_sha256") != digest
+                or repair.get("retained_step_count") != len(retained)
+                or repair.get("retained_materializations_sha256") != canonical_sha256(
+                    [item.model_dump(mode="json") for item in retained]
+                )):
+            return False
+        allowed_keys.update(keys)
+        digest = repair.get("foundation_sha256")
+    old_labels = {item.key: item.value for item in old.display_labels}
+    new_labels = {item.key: item.value for item in new.display_labels}
+    return (
+        digest == canonical_sha256(current.foundation.model_dump(mode="json"))
+        and old_labels.keys() <= new_labels.keys()
+        and all(new_labels.get(key) == value for key, value in old_labels.items()
+                if key not in allowed_keys)
+        and new_labels.keys() - old_labels.keys() <= allowed_keys
+    )
+
+
 def _validate_revised_checkpoint_transition(
     previous: ProgressivePlannerCheckpoint, current: ProgressivePlannerCheckpoint,
 ) -> None:
     """A suffix revision appends evidence while preserving its retained prefix."""
+    foundation_valid = _foundation_label_transition_valid(previous, current)
+    if not foundation_valid:
+        raise ProgressivePlanningArtifactError(
+            "progressive_checkpoint_foundation_drift",
+            "foundation changes require an exact label-only repair receipt",
+        )
     if current.revision_offset is None:
         if previous.revision_offset is not None:
             raise ProgressivePlanningArtifactError(
@@ -214,7 +275,7 @@ def _validate_revised_checkpoint_transition(
         return
     valid = (
         current.outline == previous.outline
-        and current.foundation == previous.foundation
+        and foundation_valid
         and current.request_authority_sha256 == previous.request_authority_sha256
         and current.sequence == previous.sequence + 1
         and current.previous_checkpoint_sha256 == previous.checkpoint_sha256

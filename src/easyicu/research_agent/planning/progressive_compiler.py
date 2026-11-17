@@ -842,7 +842,11 @@ def validate_progressive_foundation(
                 f"for {key!r}; copy the exact variable key and derive a concise "
                 "clinical label only from sealed concept metadata",
                 path="display_labels",
-                detail={"required_key": key},
+                detail={
+                    "required_key": key,
+                    "required_display_label_keys": [key],
+                    "repair_scope": "foundation_display_labels_only",
+                },
             )
     for raw_scope in dict.fromkeys(required_binary_display_label_scopes):
         scope = str(raw_scope or "").strip()
@@ -850,18 +854,27 @@ def validate_progressive_foundation(
             continue
         reference = labels.get(f"{scope}=0", "")
         comparison = labels.get(f"{scope}=1", "")
-        if (
-            not reference
-            or not comparison
-            or reference.casefold() == comparison.casefold()
-        ):
+        invalid_keys = [
+            key for key in (f"{scope}=0", f"{scope}=1")
+            if not labels.get(key) or (
+                _is_mechanical_identifier_label(key, labels[key])
+                and not _sealed_description(context, key, labels[key])
+            )
+        ]
+        if reference.casefold() == comparison.casefold():
+            invalid_keys = [f"{scope}=0", f"{scope}=1"]
+        if invalid_keys:
             raise _fail(
                 "progressive_required_binary_display_labels_missing",
                 "a primary binary figure requires distinct Planner-authored "
                 f"reader labels for {scope!r}; declare exactly {scope}=0 and "
                 f"{scope}=1 from the sealed concept metadata",
                 path="display_labels",
-                detail={"required_scope": scope},
+                detail={
+                    "required_scope": scope,
+                    "required_display_label_keys": invalid_keys,
+                    "repair_scope": "foundation_display_labels_only",
+                },
             )
     if robustness_replay_required and not foundation.robustness_intents:
         raise _fail(
