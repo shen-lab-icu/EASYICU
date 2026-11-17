@@ -1,5 +1,6 @@
 """Study definition authority stays scoped to the occurrences it owns."""
 
+from copy import deepcopy
 from pathlib import Path
 import re
 
@@ -228,6 +229,9 @@ PARAPHRASED = "SOFA score was represented by two ordered categories: under 8.0 p
     ("We grouped creatinine by a cutoff of 2.0 mg/dL", ["2.0"], ["groups[0].rule.value"]),
     ("We used SOFA level 2 as the comparison group", ["2"], ["levels[1].code"]),
     ("Creatinine was dichotomized at 2 mg/dL", ["2"], ["groups[0].rule.value"]),
+    ("We compared SOFA code 2 and code 1", ["2", "1"], ["levels[1].code", "levels[0].code"]),
+    ("The creatinine cutoff was 2.0 mg/dL versus below 2 mg/dL", ["2.0", "2"], ["groups[0].rule.value"]),
+    ("The creatinine cutoff was below 2.0 mg/dL or 2 mg/dL", ["2.0", "2"], ["groups[0].rule.value"]),
 ])
 def test_a_cited_typed_definition_binds_each_paraphrased_occurrence(typed_definition_store, text, values, fields):
     store, records = typed_definition_store
@@ -242,6 +246,26 @@ def test_a_cited_typed_definition_binds_each_paraphrased_occurrence(typed_defini
     assert f"sha256={store.get('research_context').sha256}; authority=definition" in final
     assert audit_manuscript_numeric_claims(final, per_step_records=records) == []
     assert [claim.to_dict() for claim in store.numeric_claims()] == registry_before
+
+
+@pytest.mark.parametrize("sentence, number", [
+    ("We grouped creatinine by a cutoff of 2.0 mg/dL, and 2 sensitivity models were run", "2"),
+    ("We used SOFA level 2, and 1 secondary endpoint was analyzed", "1"),
+    ("The creatinine threshold was 2 mg/dL and 2 alternate fits converged", "2"),
+    ("We compared SOFA code 1, and 2 validation folds completed", "2"),
+    ("We compared SOFA code 1 or 2", "2"),
+    ("We used SOFA level 1 and level 9", "9"),
+])
+def test_coordinated_numbers_need_their_own_definition_attachment(typed_definition_store, sentence, number):
+    store, records = typed_definition_store
+    text = sentence + " {evidence:research_context}."
+    with pytest.raises(EvidenceEnforcementError) as error:
+        bind_numeric_values(text, evidence=store, per_step_records=records)
+    assert error.value.detail["untraced_occurrences"] == [
+        {"start": sentence.rindex(number), "end": sentence.rindex(number) + len(number), "value": number},
+    ]
+    _, removed, _, _, _ = _chain(store, records, text)
+    assert [row["untraced"] for row in removed] == [[number]]
 
 
 @pytest.mark.parametrize("text", [
@@ -306,22 +330,25 @@ def test_cited_threshold_and_equal_valued_result_retain_separate_sources(typed_d
     assert repair_miscited_numeric_citations(definition, evidence=store) == (definition, [])
 
 
-def test_cohort_threshold_and_outcome_window_use_the_typed_plan_fields(tmp_path):
+@pytest.fixture
+def cohort_plan_store(tmp_path):
     store = EvidenceStore(tmp_path, enforcement_mode="strict")
     _register_context(store, ResearchContext.model_validate({
-        "research_question": "Study ventilator-free days by creatinine",
+        "research_question": "Study respiratory-support-free days by creatinine",
         "cohort": {"cohort_name": "synthetic", "database": "eicu", "n_stays": 100},
         "variables": [
             {"name": "age", "dtype": "float64", "unit": "years"},
-            {"name": "free_days", "dtype": "int64", "description": "Ventilator-free days"},
+            {"name": "free_days", "dtype": "int64", "description": "Respiratory-support-free days"},
+            {"name": "crea", "dtype": "float64", "unit": "mg/dL"},
+            {"name": "urine_creatinine", "dtype": "float64", "unit": "mg/dL"},
         ],
     }))
-    plan = AnalysisPlan.model_validate({
-        "research_question": "Study ventilator-free days by creatinine",
-        "cohort": {"name": "synthetic", "inclusion": [{
-            "concept_id": "age", "op": ">=", "value": 65, "aggregation": "first",
-            "time_window": {"anchor": "icu_admit", "start_offset_hours": 0, "end_offset_hours": 1},
-        }]},
+    plan = {
+        "research_question": "Study respiratory-support-free days by creatinine",
+        "cohort": {"name": "synthetic", "inclusion": [
+            _predicate("age", ">=", 54), _predicate("crea", "<", 2.5),
+        ]},
+        "display_labels": {"crea": "Creatinine"},
         "steps": [{
             "step_id": "model", "intent": "Estimate an association", "method": "adjusted_association_models",
             "expected_outputs": ["table:adjusted_association_estimates"],
@@ -335,23 +362,149 @@ def test_cohort_threshold_and_outcome_window_use_the_typed_plan_fields(tmp_path)
                 },
             }],
         }],
-    })
+    }
+    return store, plan
+
+
+def _predicate(name, operator, value):
+    return {
+        "concept_id": name, "op": operator, "value": value, "aggregation": "first",
+        "time_window": {"anchor": "icu_admit", "start_offset_hours": 0, "end_offset_hours": 1},
+    }
+
+
+def _register_cohort_plan(store, plan, evidence_id):
+    plan = AnalysisPlan.model_validate(plan)
+    if evidence_id == "approved_executable_plan_revision_1":
+        from easyicu.research_agent.authority.plan_lifecycle import (
+            ApprovedExecutablePlan, NormalizedPlan, ProposedPlan, persist_approved_executable_plan,
+        )
+        from easyicu.research_agent.authority.plan_review import PlanReviewAuthority
+
+        normalized = NormalizedPlan.create(proposed=ProposedPlan.create(plan=plan, source="planner_llm"),
+                                           transformation_receipts=(), plan=plan)
+        approved = ApprovedExecutablePlan.create(
+            normalized=normalized, plan_review_authority=PlanReviewAuthority.create(plan=plan),
+            decision_set_sha256="a" * 64,
+        )
+        persist_approved_executable_plan(run_dir=store.root, evidence=store, approved=approved)
+        return "plan_payload."
     store.register_json(kind="log", description="Registered synthetic plan",
                         payload=plan.model_dump(mode="json"), filename="plan.json",
                         evidence_id="analysis_plan", producer="planner", generation_mode="system")
-    text = (
-        "We included patients with age at ICU admission of 65.0 years or older {evidence:research_context}.\n\n"
-        "Ventilator-free days were assessed within 37 days {evidence:research_context}."
-    )
-    _, removed, final, bindings, untraced = _chain(store, [], text)
+    return ""
+
+
+@pytest.mark.parametrize("citation, owner", [
+    ("research_context", "analysis_plan"),
+    ("analysis_plan", "analysis_plan"),
+    ("approved_executable_plan_revision_1", "approved_executable_plan_revision_1"),
+])
+def test_cohort_threshold_and_outcome_window_use_the_typed_plan_fields(cohort_plan_store, citation, owner):
+    store, plan = cohort_plan_store
+    prefix = _register_cohort_plan(store, plan, owner)
+    cite = "{evidence:" + citation + "}."
+    sentences = [
+        "Age at hospital entry was 54.0 years or older " + cite,
+        "Respiratory-support-free days were assessed within 37 days " + cite,
+    ]
+    for sentence in sentences:
+        assert repair_miscited_numeric_citations(sentence, evidence=store) == (sentence, [])
+    _, removed, final, bindings, untraced = _chain(store, [], "\n\n".join(sentences))
     assert removed == [] and untraced == []
     assert [claim.source_field for claim in bindings.values()] == [
-        "cohort.inclusion[0].value",
-        "steps[0].model_requirements[0].outcome_definition.free_days.horizon_days",
+        prefix + "cohort.inclusion[0].value",
+        prefix + "steps[0].model_requirements[0].outcome_definition.free_days.horizon_days",
     ]
-    assert {claim.evidence_id for claim in bindings.values()} == {"analysis_plan"}
+    assert {claim.evidence_id for claim in bindings.values()} == {owner}
     assert final.count("authority=definition") == 2
 
-    result = "Ventilator-free days were 37.0 days {evidence:research_context}."
+    result = "Respiratory-support-free days were 37.0 days " + cite
     _, removed, _, _, _ = _chain(store, [], result)
     assert [row["untraced"] for row in removed] == [["37.0"]]
+
+
+@pytest.mark.parametrize("predicate, number", [
+    ("Creatinine was below 2.5 mmol/L at screening", "2.5"),
+    ("Urine creatinine was below 2.5 mg/dL", "2.5"),
+    ("We used creatinine < 2.5 mmol/L", "2.5"),
+    ("We screened on urine creatinine < 2.5 mg/dL", "2.5"),
+])
+@pytest.mark.parametrize("owner", ["analysis_plan", "approved_executable_plan_revision_1"])
+def test_a_plan_citation_preserves_unit_and_compound_variable_guards(cohort_plan_store, predicate, number, owner):
+    store, plan = cohort_plan_store
+    _register_cohort_plan(store, plan, owner)
+    _, removed, _, _, _ = _chain(store, [], predicate + " {evidence:" + owner + "}.")
+    assert [row["untraced"] for row in removed] == [[number]]
+
+
+def test_an_uncited_literal_predicate_also_needs_the_right_unit_and_variable(cohort_plan_store):
+    store, plan = cohort_plan_store
+    _register_cohort_plan(store, plan, "analysis_plan")
+    _, removed, _, bindings, _ = _chain(store, [], "We screened on creatinine < 2.5.")
+    assert not removed and next(iter(bindings.values())).source_field == "cohort.inclusion[1].value"
+    for sentence in ("We screened on creatinine < 2.5 mmol/L.", "We screened on urine creatinine < 2.5 mg/dL."):
+        _, removed, _, _, _ = _chain(store, [], sentence)
+        assert [row["untraced"] for row in removed] == [["2.5"]]
+
+
+@pytest.mark.parametrize("second_horizon", [37, 42])
+def test_repeated_outcome_windows_bind_only_when_the_requirements_agree(cohort_plan_store, second_horizon):
+    store, plan = cohort_plan_store
+    requirements = plan["steps"][0]["model_requirements"]
+    alternative = deepcopy(requirements[0])
+    alternative.update(requirement_id="alternative", analysis_role="sensitivity")
+    alternative["outcome_definition"]["free_days"]["horizon_days"] = second_horizon
+    requirements.append(alternative)
+    _register_cohort_plan(store, plan, "analysis_plan")
+    for horizon in dict.fromkeys((37, second_horizon)):
+        sentence = "Respiratory-support-free days were evaluated through " + str(horizon)
+        _, removed, final, bindings, _ = _chain(store, [], sentence + " days {evidence:research_context}.")
+        if second_horizon == 37:
+            assert not removed and final.count("authority=definition") == 1
+            assert next(iter(bindings.values())).source_field.endswith("model_requirements[0].outcome_definition.free_days.horizon_days")
+        else:
+            assert [row["untraced"] for row in removed] == [[str(horizon)]]
+
+
+@pytest.mark.parametrize("cites, evidence_id, field", [
+    ("{evidence:research_context}", "research_context",
+     "cohort.provenance.exposure_group_labels[0].parameters.groups[1].rule.value"),
+    ("{evidence:analysis_plan}", "analysis_plan", "cohort.inclusion[0].value"),
+    ("{evidence:analysis_plan} {evidence:research_context}", "research_context",
+     "cohort.provenance.exposure_group_labels[0].parameters.groups[1].rule.value"),
+])
+def test_shared_cohort_and_exposure_boundaries_bind_to_a_cited_source(tmp_path, cites, evidence_id, field):
+    store = EvidenceStore(tmp_path, enforcement_mode="strict")
+    _register_context(store, ResearchContext.model_validate({
+        "research_question": "Group platelet counts by a synthetic boundary",
+        "cohort": {"cohort_name": "synthetic", "database": "eicu", "n_stays": 100,
+                   "provenance": {"exposure_group_labels": [_grouping("plt", 117, "cells/µL")]}},
+        "variables": [{"name": "plt", "dtype": "int64", "description": "Platelet count", "unit": "cells/µL"}],
+    }))
+    _register_cohort_plan(store, {
+        "research_question": "Group platelet counts by a synthetic boundary",
+        "cohort": {"name": "synthetic", "inclusion": [
+            _predicate("plt", ">=", 117), _predicate("plt", ">=", 117),
+        ]},
+        "steps": [],
+    }, "analysis_plan")
+    _, removed, _, bindings, _ = _chain(store, [], f"Platelet count of 117 cells/µL or higher defined the boundary {cites}.")
+    assert not removed and len(bindings) == 1
+    claim = next(iter(bindings.values()))
+    assert (claim.evidence_id, claim.source_field) == (evidence_id, field)
+
+
+def test_over_can_state_a_strict_boundary_or_a_duration(cohort_plan_store):
+    store, plan = cohort_plan_store
+    plan["cohort"]["inclusion"][0] = _predicate("age", ">", 73)
+    _register_cohort_plan(store, plan, "analysis_plan")
+    text = (
+        "Age over 73 years qualified for screening {evidence:research_context}.\n\n"
+        "Respiratory-support-free days were evaluated over 37 days {evidence:research_context}."
+    )
+    _, removed, final, bindings, _ = _chain(store, [], text)
+    assert not removed and final.count("authority=definition") == 2
+    assert [claim.value for claim in bindings.values()] == ["73", "37"]
+    _, removed, _, _, _ = _chain(store, [], "Age of 73 or older qualified {evidence:research_context}.")
+    assert [row["untraced"] for row in removed] == [["73"]]

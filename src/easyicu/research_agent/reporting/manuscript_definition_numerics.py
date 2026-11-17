@@ -38,8 +38,8 @@ class DefinitionSpan:
     occurrence: bool = False
 
 
-# Include small level codes and thresholds even when the ordinary prose
-# recognizer treats them as labels. Only definitions can add these matches.
+# Check small level codes and thresholds even when the ordinary prose
+# recognizer treats them as labels.
 _NUMBER = re.compile(
     r"(?<![\w.])(?P<value>[+-]?(?:"
     r"(?:\d+(?:\.\d+)?|\.\d+)\s*[×x]\s*10[⁺⁻]?[⁰¹²³⁴⁵⁶⁷⁸⁹]+"
@@ -86,22 +86,12 @@ def _registered_plan(evidence, records):
 
 
 def _plan_definitions(plan):
-    labels = plan.get("display_labels") or {}
-    for key, label in labels.items():
+    for key, label in (plan.get("display_labels") or {}).items():
         yield f"display_labels.{key}", label
     for index, step in enumerate(plan.get("steps") or []):
         spec = step.get("cohort_definition_spec") or {}
         for position, criterion in enumerate(spec.get("eligibility_criteria") or []):
             yield f"steps[{index}].cohort_definition_spec.eligibility_criteria[{position}].description", criterion["description"]
-    # Typed predicates have no prose field. Their literal expression is the
-    # exact reproducible definition; arbitrary paraphrases gain no authority.
-    cohort = plan.get("cohort") or {}
-    for side in ("inclusion", "exclusion"):
-        for index, predicate in enumerate(cohort.get(side) or []):
-            value = predicate.get("value")
-            if isinstance(value, (int, float)) and not isinstance(value, bool):
-                name = labels.get(predicate["concept_id"], predicate["concept_id"])
-                yield f"cohort.{side}[{index}].value", f"{name} {predicate['op']} {value}"
 
 
 def _exact_plan_spans(text, registered):
@@ -119,15 +109,17 @@ def _exact_plan_spans(text, registered):
                                  prefix + field, record.sha256)
 
 
-def definition_number_matches(text, spans):
+def definition_number_matches(text, spans, *, extra_occurrences=()):
     """Use the same ordered numeric occurrences for the filter and binder."""
     matches = {match.span("value"): match for match in _NUMERIC_IN_PROSE_RE.finditer(text)}
-    for span in spans:
-        for match in _NUMBER.finditer(text, span.start, span.end):
+    regions = [(span.start, span.end, span.occurrence) for span in spans]
+    regions.extend((start, end, True) for start, end in extra_occurrences)
+    for left, right, occurrence in regions:
+        for match in _NUMBER.finditer(text, left, right):
             # In a paraphrase "under-8", the hyphen belongs to "under".
             # The generic decimal recognizer may include it as a minus sign.
             start, end = match.span("value")
-            if span.occurrence and text[start - 1:start] == "-":
+            if occurrence and text[start - 1:start] == "-":
                 matches.pop((start - 1, end), None)
             # The prose recognizer owns whole scientific literals. Do not
             # create additional bindings for their coefficient or exponent.
@@ -147,10 +139,12 @@ def definition_claim(spans, *, start, end, value, canonical):
 @dataclass(frozen=True)
 class _Quantity:
     field: str
+    variable: str
     value: float
     operator: str | None = None
     unit: str | None = None
     kind: str = "threshold"
+    literal: str | None = None
 
 
 def _typed_number(value):
@@ -205,14 +199,15 @@ def _grouped_quantities(context, labels):
             names_for_group.update(_variable_names(rules.concept, concept_reader_name(rules.concept)))
         aliases = _variable_aliases(names_for_group, context=context, labels=labels)
         field = f"cohort.provenance.{EXPOSURE_GROUP_LABELS_KEY}[{index}]"
-        quantities = [_Quantity(f"{field}.levels[{pos}].code", level["code"], kind="level")
+        quantities = [_Quantity(f"{field}.levels[{pos}].code", variable, level["code"], kind="level")
                       for pos, level in enumerate(levels)]
         for pos, group in enumerate(parameters["groups"]):
             rule = group["rule"]
             if rule == "otherwise":
                 continue
-            unit = rule.get("unit") or _variable_unit(rules.source_columns[rule["summary"]], context)
-            quantities.append(_Quantity(f"{field}.parameters.groups[{pos}].rule.value",
+            column = rules.source_columns[rule["summary"]]
+            unit = rule.get("unit") or _variable_unit(column, context)
+            quantities.append(_Quantity(f"{field}.parameters.groups[{pos}].rule.value", column,
                                         rule["value"], rule["op"], unit))
         # An otherwise level can name the other side of the same boundary.
         # Use the owner's interval algebra, and retain the original value field.
@@ -230,7 +225,9 @@ def _grouped_quantities(context, labels):
                     if quantity.value == other.upper and quantity.operator in {">", ">="}:
                         complement = "<=" if other.upper_inclusive else "<"
                     if complement:
-                        quantities.append(_Quantity(quantity.field, quantity.value, complement, quantity.unit))
+                        quantities.append(_Quantity(
+                            quantity.field, quantity.variable, quantity.value, complement, quantity.unit,
+                        ))
         yield aliases, quantities
 
 
@@ -244,9 +241,11 @@ def _plan_quantities(plan, prefix, context):
             field = f"{prefix}cohort.{side}[{index}].value"
             quantities = []
             if _typed_number(value) and operator in _COMPARISONS:
-                quantities.append(_Quantity(field, value, operator, _variable_unit(name, context)))
+                literal = f"{labels.get(name, name)} {operator} {value}"
+                quantities.append(_Quantity(field, name, value, operator, _variable_unit(name, context),
+                                            literal=literal))
             if operator in {"in", "not_in"} and isinstance(value, list):
-                quantities.extend(_Quantity(f"{field}[{pos}]", code, kind="level")
+                quantities.extend(_Quantity(f"{field}[{pos}]", name, code, kind="level")
                                   for pos, code in enumerate(value) if _typed_number(code))
             if quantities:
                 yield aliases, quantities
@@ -254,16 +253,17 @@ def _plan_quantities(plan, prefix, context):
     if endpoint.get("name"):
         name = endpoint["name"]
         aliases = _variable_aliases({name}, context=context, labels=labels)
-        yield aliases, [_Quantity(f"{prefix}endpoint.levels[{pos}]", code, kind="level")
+        yield aliases, [_Quantity(f"{prefix}endpoint.levels[{pos}]", name, code, kind="level")
                         for pos, code in enumerate(endpoint.get("levels") or []) if _typed_number(code)]
     for index, step in enumerate(plan.get("steps") or []):
         for position, requirement in enumerate(step.get("model_requirements") or []):
             free_days = (requirement.get("outcome_definition") or {}).get("free_days") or {}
             horizon = free_days.get("horizon_days")
             if _typed_number(horizon):
-                names = _variable_aliases({requirement["outcome"]}, context=context, labels=labels)
+                name = requirement["outcome"]
+                aliases = _variable_aliases({name}, context=context, labels=labels)
                 field = f"{prefix}steps[{index}].model_requirements[{position}].outcome_definition.free_days.horizon_days"
-                yield names, [_Quantity(field, horizon, unit="days", kind="window")]
+                yield aliases, [_Quantity(field, name, horizon, unit="days", kind="window")]
 
 
 _NON_PROSE = re.compile(r"<!--.*?-->|`+[^`\n]*`+", re.S)
@@ -285,6 +285,8 @@ _STATISTIC_AFTER = re.compile(
 
 # The gap after a variable can state how it was grouped or how its threshold
 # was declared. Keep this grammar closed so it cannot bridge another variable.
+_LEVEL_MARKER = r"(?:level|code)\s+"
+_LEVEL_PREFIX = re.compile(_LEVEL_MARKER, re.I)
 _ATTACHMENT = re.compile(
     r"(?:\s+(?:at|on)\s+(?:(?:ICU|hospital)\s+)?(?:admission|entry))?"
     r"\s*(?:(?:is|are|was|were)\s+)?"
@@ -294,7 +296,7 @@ _ATTACHMENT = re.compile(
     r"(?:categories|levels|groups|strata)\s*:\s*)?"
     r"(?:(?:of|with)\s+)?"
     r"(?P<kind>(?:by\s+)?(?:(?:a|the)\s+)?(?:cut[- ]?off|cut point|threshold|boundary)\s*(?:of|at|was|=|:)\s*"
-    r"|(?:level|code)\s+|(?:within|through|over|by|at)\s+)?", re.I,
+    r"|" + _LEVEL_MARKER + r"|(?:within|through|by|at)\s+)?", re.I,
 )
 _COMPARISONS = {
     "<=": r"<=|≤|at most|no more than|less than or equal to",
@@ -342,55 +344,96 @@ def _unit_end(text, start, unit):
     return match.end() if match else start
 
 
-def _read_quantity(text, start, quantities, kind, parse_literal):
+def _attached_quantity_end(text, end, quantity, kind, before, *, continued):
+    suffix = text[end:]
+    if quantity.kind == "level":
+        if kind in {"level", "code"} and not before and not _MEASURE.match(suffix):
+            return end
+        return None
+    if kind in {"level", "code"}:
+        return None
+    unit_end = _unit_end(text, end, quantity.unit)
+    if unit_end == end and _MEASURE.match(suffix):
+        return None
+    after = _SUFFIX_OPERATOR.match(text, unit_end)
+    if (before and after) or _STATISTIC_AFTER.match(text[unit_end:]):
+        return None
+    if quantity.kind == "window":
+        over = before and before[0].strip().casefold() == "over"
+        if unit_end != end and not after and (over or (not before and kind in {"within", "through", "by", "at"})):
+            return unit_end
+        return None
+    if before:
+        operator = tuple(_COMPARISONS)[int(before.lastgroup[2:])]
+        return unit_end if operator == quantity.operator else None
+    if after:
+        operator = ">=" if after["above"] else "<="
+        return after.end() if operator == quantity.operator else None
+    if kind == "cutoff" or (unit_end != end and (continued or kind == "at" or _CUTOFF_NOUN.match(text, unit_end))):
+        return unit_end
+    return None
+
+
+def _quantity_key(quantity):
+    # The written comparator has already narrowed the candidates. When the
+    # prose names a cutoff without a comparator, either side can own its value.
+    unit = quantity.unit.casefold() if quantity.unit else None
+    return quantity.variable, quantity.kind, quantity.value, unit
+
+
+def _read_quantity(text, start, kind, definitions, parse_literal, *, anchor, previous):
     before = _PREFIX_OPERATOR.match(text, start)
     number = _NUMBER.match(text, before.end() if before else start)
     if number is None:
-        return None, start
+        return None
     start, end = number.span("value")
+    continued = previous is not None
+    exact = False
+    if not continued:
+        phrase = text[anchor:end]
+        literal_forms = (phrase, phrase[:1].swapcase() + phrase[1:])
+        exact = any(quantity.literal in literal_forms for _, quantities, _ in definitions for quantity in quantities)
+    active = [(record, quantities) for record, quantities, cited in definitions if cited or exact]
+    if not active and not continued:
+        return None
+
     parsed = parse_literal(number["value"])
     suffix = text[end:]
     if parsed is None or parsed[1] or _STATISTIC_AFTER.match(suffix) or _COUNT_AFTER.match(suffix):
-        return None, end
-    for quantity in quantities:
-        if parsed[0] != quantity.value:
-            continue
-        if quantity.kind == "level":
-            if kind in {"level", "code"} and not before and not _MEASURE.match(suffix):
-                return (start, end, quantity.field), end
-            continue
-        unit_end = _unit_end(text, end, quantity.unit)
-        if unit_end == end and quantity.unit and _MEASURE.match(suffix):
-            continue
-        after = _SUFFIX_OPERATOR.match(text, unit_end)
-        if before and after:
-            continue
-        if _STATISTIC_AFTER.match(text[unit_end:]):
-            continue
-        operator = None
-        if before:
-            operator = tuple(_COMPARISONS)[int(before.lastgroup[2:])]
-        elif after:
-            operator = ">=" if after["above"] else "<="
-        if quantity.kind == "window":
-            # The endpoint's unit identifies a duration; a level or a bare
-            # number attached to its name does not.
-            if kind in {"within", "through", "over", "by", "at"} and unit_end != end and operator is None:
-                return (start, end, quantity.field), unit_end
-        elif (operator is not None and operator == quantity.operator
-              or operator is None and (
-                  kind == "cutoff" or unit_end != end
-                  and (kind == "at" or _CUTOFF_NOUN.match(text, unit_end))
-              )):
-            return (start, end, quantity.field), after.end() if after else unit_end
-    return None, end
+        return (start, end, None, end) if continued or exact else None
+
+    # Resolve agreement between typed definitions before looking at the written
+    # value. A grouping can declare several levels or bounds in one definition.
+    # Separate definitions which apply to the same prose must agree on the set.
+    definitions_seen = set()
+    matches = {}
+    for record, quantities in active:
+        applicable = set()
+        for quantity in quantities:
+            if continued and (quantity.variable, quantity.kind) != (previous.variable, previous.kind):
+                continue
+            cursor = _attached_quantity_end(text, end, quantity, kind, before, continued=continued)
+            if cursor is None:
+                continue
+            key = _quantity_key(quantity)
+            applicable.add(key)
+            if parsed[0] == quantity.value:
+                matches.setdefault(key, (record, quantity, cursor))
+        if applicable:
+            definitions_seen.add(frozenset(applicable))
+    if len(definitions_seen) == 1 and len(matches) == 1:
+        record, quantity, cursor = next(iter(matches.values()))
+        return start, end, (record, quantity), cursor
+    if continued or exact or before or kind or definitions_seen or _SUFFIX_OPERATOR.match(text, end):
+        return start, end, None, end
+    return None
 
 
-def _quantity_spans(text, anchors, aliases, quantities, parse_literal):
-    if not quantities:
-        return
+def _quantity_spans(text, anchors, sources, parse_literal):
     for anchor in anchors:
-        if anchor[0].casefold() not in aliases:
+        name = anchor[0].casefold()
+        definitions = [(record, quantities, cited) for record, aliases, quantities, cited in sources if name in aliases]
+        if not definitions:
             continue
         prefix = text[:anchor.start()]
         # Generated rule rows have their own exact line and section contract.
@@ -403,19 +446,30 @@ def _quantity_spans(text, anchors, aliases, quantities, parse_literal):
             continue
         attached = _ATTACHMENT.match(text, anchor.end())
         kind = (attached["kind"] or "").strip().casefold()
-        if kind and kind not in {"level", "code", "within", "through", "over", "by", "at"}:
+        if kind and kind not in {"level", "code", "within", "through", "by", "at"}:
             kind = "cutoff"
-        span, cursor = _read_quantity(text, attached.end(), quantities, kind, parse_literal)
-        while span:
-            yield span
+        position = attached.end()
+        previous = reference = None
+        while occurrence := _read_quantity(
+            text, position, kind, definitions, parse_literal, anchor=anchor.start(), previous=previous,
+        ):
+            left, right, source, cursor = occurrence
+            if reference and not _LEVEL_NOUN.match(text, cursor):
+                break
+            yield left, right, source
+            if source is None:
+                break
+            _, previous = source
             connector = _COORDINATOR.match(text, cursor)
             reference = _REFERENCE.match(text, cursor)
             continuation = connector or reference
             if continuation is None:
                 break
-            span, cursor = _read_quantity(text, continuation.end(), quantities, kind, parse_literal)
-            if reference and not _LEVEL_NOUN.match(text, cursor):
-                break
+            position = continuation.end()
+            marker = _LEVEL_PREFIX.match(text, position)
+            kind = marker[0].strip().casefold() if marker else ""
+            if marker:
+                position = marker.end()
 
 
 def _cites(record, tokens, evidence):
@@ -424,23 +478,21 @@ def _cites(record, tokens, evidence):
                for token in tokens)
 
 
-def _registered_context(text, evidence, records):
+def _registered_context(evidence, records):
     record = next((row for row in records if row.evidence_id == "research_context"), None)
     if record is None or (record.kind, record.producer, record.generation_mode,
                           record.produced_by_step) != ("log", "pipeline", "system", None):
-        return None
-    if not _cites(record, _CITATION.finditer(text), evidence):
-        return None
+        return None, None
     path = verified_run_evidence_path(evidence.root, record)
     if path is None:
-        return None
+        return record, None
     try:
         payload = path.read_bytes()
         if hashlib.sha256(payload).hexdigest() == record.sha256:
             return record, parse_research_context_json(payload)
     except (OSError, ValueError):
-        return None
-    return None
+        pass
+    return record, None
 
 
 def _sentence_citations(text, start, end):
@@ -458,26 +510,27 @@ def _sentence_citations(text, start, end):
 
 
 def registered_definition_spans(text, evidence, *, sentence_bounds, parse_literal, skip_spans):
-    """Bind exact definitions and individual occurrences in cited paraphrases."""
+    """Return definition authority and unresolved occurrences for numeric tracing."""
     # Lineage-only record views used by citation repair carry no sealed
     # definition payload. Definition authority requires full evidence records.
     records = [record for record in evidence.records() if isinstance(record, EvidenceRecord)]
     if not records:
-        return ()
+        return (), ()
     registered = _registered_plan(evidence, records)
     exact = tuple(_exact_plan_spans(text, registered)) if registered else ()
     sentence_text = _NON_PROSE.sub(
         lambda match: re.sub(r"[^\r\n]", " ", match[0]), text,
     )
-    context_source = _registered_context(sentence_text, evidence, records)
     plan_record, plan, prefix = registered or (None, {}, "")
-    context_record, context = context_source or (None, None)
+    context_record, context = _registered_context(evidence, records)
     labels = plan.get("display_labels") or {}
     grouped = list(_grouped_quantities(context, labels)) if context else []
-    planned = list(_plan_quantities(plan, prefix, context)) if registered else []
+    # A registered context supplies the units and variable names even when
+    # only the plan is cited. Drift in that context disables typed plan binds.
+    planned = list(_plan_quantities(plan, prefix, context)) if registered and (context or not context_record) else []
     known_names = {alias for aliases, quantities in (*grouped, *planned) if quantities for alias in aliases}
     if not known_names:
-        return exact
+        return exact, ()
     if context:
         known_names.update(_variable_aliases({var.name for var in context.variables}, context=context, labels=labels))
     # Consume the longest registered name first. A bare alias inside a
@@ -488,6 +541,7 @@ def registered_definition_spans(text, evidence, *, sentence_bounds, parse_litera
     boundary_text = _COMPARISON_PERIOD.sub(" ", sentence_text)
     seen = set()
     spans = defaultdict(set)
+    extra_occurrences = set()
     for number in _NUMBER.finditer(boundary_text):
         if any(left <= number.start() < right for left, right in skip_spans):
             continue
@@ -497,21 +551,29 @@ def registered_definition_spans(text, evidence, *, sentence_bounds, parse_litera
         seen.add((start, end))
         sentence, cited = _sentence_citations(sentence_text, start, end)
         cites_context = context_record is not None and _cites(context_record, cited, evidence)
-        sources = []
-        if cites_context and grouped:
-            sources.append((context_record, grouped))
-        if planned and (cites_context or _cites(plan_record, cited, evidence)):
-            sources.append((plan_record, planned))
+        sources = [(context_record, aliases, quantities, True) for aliases, quantities in grouped if cites_context]
+        if planned:
+            cites_plan = cites_context or _cites(plan_record, cited, evidence)
+            sources.extend((plan_record, aliases, quantities, cites_plan) for aliases, quantities in planned)
         if not sources:
             continue
         # Blank markup while preserving offsets. An evidence label can never
         # serve as the variable name anchoring a threshold.
         prose = _CITATION.sub(lambda match: " " * len(match[0]), sentence)
         anchors = tuple(anchor_pattern.finditer(prose))
-        for record, definitions in sources:
-            for aliases, quantities in definitions:
-                for left, right, field in _quantity_spans(prose, anchors, aliases, quantities, parse_literal):
-                    spans[start + left, start + right].add(
-                        DefinitionSpan(start + left, start + right, record.evidence_id, field, record.sha256, occurrence=True)
-                    )
-    return (*exact, *(next(iter(matches)) for matches in spans.values() if len(matches) == 1))
+        for left, right, source in _quantity_spans(prose, anchors, sources, parse_literal):
+            occurrence = start + left, start + right
+            if source is None:
+                extra_occurrences.add(occurrence)
+                continue
+            record, quantity = source
+            spans[occurrence].add(DefinitionSpan(
+                *occurrence, record.evidence_id, quantity.field, record.sha256, occurrence=True,
+            ))
+    resolved = []
+    for occurrence, matches in spans.items():
+        if len(matches) == 1 and occurrence not in extra_occurrences:
+            resolved.append(next(iter(matches)))
+        else:
+            extra_occurrences.add(occurrence)
+    return (*exact, *resolved), tuple(sorted(extra_occurrences))

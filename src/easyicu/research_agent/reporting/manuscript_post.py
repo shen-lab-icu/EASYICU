@@ -2044,13 +2044,13 @@ def repair_miscited_numeric_citations(
         return scaffold, []
     resolvable = set(evidence.resolvable_names())
     skip_spans = _spans_to_skip(scaffold)
-    definitions = registered_definition_spans(
+    definitions, extra_occurrences = registered_definition_spans(
         scaffold, evidence, sentence_bounds=_numeric_sentence_bounds,
         parse_literal=_parsed_numeric_literal, skip_spans=skip_spans,
     )
     repairs: List[Dict[str, str]] = []
     insertions: List[tuple[int, str]] = []
-    for match in definition_number_matches(scaffold, definitions):
+    for match in definition_number_matches(scaffold, definitions, extra_occurrences=extra_occurrences):
         start, end = match.start("value"), match.end("value")
         if _position_is_inside(start, skip_spans) or any(
             span.start <= start and end <= span.end for span in definitions
@@ -2261,13 +2261,14 @@ def bind_numeric_values(
     )
     skip_spans = sorted(_spans_to_skip(manuscript) + bibliographic_year_spans(manuscript, literature))
     released = released_fact_lines(manuscript, method_facts, bind_fact)
-    definitions = (*registered_definition_spans(
+    definitions, extra_occurrences = registered_definition_spans(
         manuscript, evidence, sentence_bounds=_numeric_sentence_bounds,
         parse_literal=_parsed_numeric_literal, skip_spans=skip_spans,
-    ), *(
+    )
+    definitions += tuple(
         DefinitionSpan(start, end, fact.evidence_id, fact.source_field, fact.source_sha256)
         for start, end, fact in released if fact.source_field.endswith(".description")
-    ))
+    )
     fact_sources: Dict[str, str] = {}
     binding_map: Dict[str, NumericClaim] = {}
     untraced: List[str] = []
@@ -2299,7 +2300,7 @@ def bind_numeric_values(
 
     out_parts: List[str] = []
     cursor = 0
-    for match in definition_number_matches(manuscript, definitions):
+    for match in definition_number_matches(manuscript, definitions, extra_occurrences=extra_occurrences):
         start, end = match.start("value"), match.end("value")
         if _position_is_inside(start, skip_spans):
             continue
