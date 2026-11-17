@@ -125,3 +125,24 @@ def test_unsafe_values_still_withhold_a_prepared_projection(prepared_projection,
 def test_prose_exception_does_not_hide_an_unsafe_value_in_the_same_string(unsafe):
     text = f"Group on patient_stay_id, describe the design. {unsafe}"
     assert scan_browser_projection({"application": text})["passed"] is False
+
+
+def test_encoded_image_bytes_are_not_scanned_as_text():
+    """Anonymized pilot2 M2 shape: PNG base64 happened to contain '+/tMp/'.
+
+    The image bytes are not a host path; the result page must not be withheld.
+    """
+    image = "data:image/png;base64," + "iVBORw0KGgo" + "99M+/tMp/ubq9aODtA9x" + "A" * 40 + "=="
+    scan = scan_browser_projection({"figure_gallery.json": {"figures": [{"data_url": image}]}})
+    assert scan["passed"] is True
+
+
+@pytest.mark.parametrize("value", [
+    "data:text/plain,/tmp/synthetic/source.csv",
+    "data:application/json;base64,eyJwYXRoIjoiL3RtcC94In0=/tmp/x",
+    "data:image/png;base64,iVBORw0KGgo= /home/synthetic/source.csv",
+    "data:image/svg+xml;base64,PHN2Zz48L3N2Zz4=/tmp/x",
+])
+def test_text_or_mixed_data_urls_remain_scanned(value):
+    scan = scan_browser_projection({"figure_gallery.json": {"figures": [{"data_url": value}]}})
+    assert scan["passed"] is False

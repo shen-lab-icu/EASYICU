@@ -43,6 +43,10 @@ _UNSAFE_PROJECTION_PATTERNS = (
     ),
 )
 
+# Only image bytes are exempt: a base64 JSON, PDF or text payload can carry
+# decoded text, so it stays subject to the text patterns.
+_BASE64_DATA_URL = re.compile(r"data:image/(?:png|jpeg|gif|webp);base64,[A-Za-z0-9+/]+={0,2}")
+
 
 def project_artifact_governance(
     review: Mapping[str, Any],
@@ -354,6 +358,10 @@ def scan_browser_projection(payloads: Mapping[str, Any]) -> Dict[str, Any]:
         elif isinstance(value, Path):
             hits.append({"path": path, "reason": "path_object"})
         elif isinstance(value, str):
+            if _BASE64_DATA_URL.fullmatch(value):
+                # Encoded image bytes are not text: '/tMp/' inside a PNG's
+                # base64 is not a host path. A text payload is still scanned.
+                return
             for index, pattern in enumerate(_UNSAFE_PROJECTION_PATTERNS):
                 if pattern.search(value):
                     hits.append({"path": path, "reason": f"pattern_{index + 1}"})
