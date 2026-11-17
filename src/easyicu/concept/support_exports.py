@@ -49,6 +49,22 @@ def _selected_stays(rows, patient_ids):
     return rows.loc[rows[key].isin(members)]
 
 
+def _sort_stays(rows, order):
+    return rows.sort_values(order, ascending=[c != "hospitaladmitoffset" for c in order], kind="stable")
+
+
+def _valid_ordinal(values):
+    return (np.isfinite(values) & values.ge(1) & values.mod(1).eq(0)).fillna(False)
+
+
+def _first_hospital_stay(rows, *, person, hospital, order, valid):
+    groups = [rows[person], rows[hospital]]
+    rankable = valid.groupby(groups, sort=False).transform("all").eq(True)
+    ranked = _sort_stays(rows.loc[rankable], order)
+    first = ranked.groupby([person, hospital], sort=False).cumcount().eq(0)
+    return first.astype("boolean").reindex(rows.index)
+
+
 def _rank_identity(rows, *, database, stay, person, hospital, order):
     rows = rows.copy()
     if "intime" in order:
@@ -57,23 +73,53 @@ def _rank_identity(rows, *, database, stay, person, hospital, order):
         if column != "intime":
             rows[column] = pd.to_numeric(rows[column], errors="coerce")
 
-    ascending = [column != "hospitaladmitoffset" for column in (*order, stay)]
-    rows = rows.sort_values([*order, stay], ascending=ascending, kind="stable")
+    first_hospital = pd.Series(pd.NA, index=rows.index, dtype="boolean")
     if database == "hirid":
         rows["stay_order"] = pd.Series(1, index=rows.index, dtype="Int64")
         rows["is_first_icu_stay"] = pd.Series(True, index=rows.index, dtype="boolean")
-        return rows
+        rows["is_first_icu_stay_of_hospital_admission"] = first_hospital
+        return _sort_stays(rows, [stay])
 
+    sort_order = [*order, stay]
     valid = rows[person].notna() & rows[order[0]].notna()
+    proven_later = pd.Series(False, index=rows.index)
     if database == "aumc":
         count = rows["admissioncount"]
-        valid &= count.ge(1) & count.mod(1).eq(0)
+        valid_count = _valid_ordinal(count)
+        tied = rows.duplicated([person, "admissioncount"], keep=False)
+        valid &= valid_count & (~tied | np.isfinite(rows["admittedat"]))
+        proven_later = valid_count & count.gt(1)
     elif database == "sic":
-        valid &= rows["OffsetAfterFirstAdmission"].ge(0)
+        offset = rows["OffsetAfterFirstAdmission"]
+        valid &= np.isfinite(offset) & offset.ge(0)
+        proven_later = np.isfinite(offset) & offset.gt(0)
     elif database == "eicu":
-        valid &= rows[hospital].notna() & rows[list(order[2:])].notna().any(axis=1)
+        groups = [rows[person], rows[hospital]]
+        visit = rows["unitvisitnumber"]
+        valid_visit = _valid_ordinal(visit)
+        # Use one clock throughout an admission. Missing visit numbers make
+        # offsets necessary for every sibling, including numbered visits.
+        by_visit = valid_visit.groupby(groups, sort=False).transform("all").eq(True)
+        rows["_visit_order"] = visit.where(by_visit)
+        hospital_order = ["_visit_order", "hospitaladmitoffset", stay]
+        sort_order = [*order[:2], *hospital_order]
+        hospital_valid = by_visit | np.isfinite(rows["hospitaladmitoffset"]).fillna(False)
+        first_hospital = _first_hospital_stay(
+            rows, person=person, hospital=hospital, order=hospital_order, valid=hospital_valid,
+        ).mask(valid_visit & visit.gt(1), False)
+        proven_later = first_hospital.eq(False).fillna(False)
+        year = rows["hospitaldischargeyear"]
+        same_year = year.groupby(groups, sort=False).transform("nunique").eq(1)
+        valid &= rows[hospital].notna() & hospital_valid & np.isfinite(year) & same_year
+    elif hospital:
+        first_hospital = _first_hospital_stay(
+            rows, person=person, hospital=hospital, order=["intime", stay], valid=rows["intime"].notna(),
+        )
 
-    ranked = rows.loc[valid]
+    # A sibling with an unknown position can precede any ranked stay.
+    rankable = valid.fillna(False).groupby(rows[person], sort=False).transform("all").eq(True)
+    rows = _sort_stays(rows, sort_order)
+    ranked = rows.loc[rankable]
     positions = ranked.groupby(person, sort=False).cumcount()
     if database == "aumc":
         # Preserve the source ordinal, including gaps in a partial source.
@@ -85,19 +131,18 @@ def _rank_identity(rows, *, database, stay, person, hospital, order):
     rows["stay_order"] = ordinal.astype("Int64")
     first = rows["stay_order"].eq(1)
     if database == "sic":
-        at_first_admission = rows["OffsetAfterFirstAdmission"].eq(0)
+        at_first_admission = rows["OffsetAfterFirstAdmission"].eq(0).fillna(False)
         zero_count = at_first_admission.groupby(rows[person], sort=False).transform("sum")
         first = at_first_admission.astype("boolean").mask(at_first_admission & zero_count.gt(1))
     elif database == "eicu":
         # The encounter key orders otherwise indistinguishable admissions in
-        # the same discharge year. It cannot establish the first encounter.
-        first &= rows["unitvisitnumber"].le(1) | rows["unitvisitnumber"].isna()
+        # the same discharge year. Only their hospital firsts are candidates.
         admissions = ranked.groupby([person, order[0]], sort=False)[hospital].transform("nunique")
         earliest = ranked.groupby(person, sort=False)[order[0]].transform("min")
-        ambiguous = ranked.loc[admissions.gt(1) & ranked[order[0]].eq(earliest)]
-        candidates = ambiguous.groupby([person, hospital], sort=False).head(1)
-        first.loc[candidates.index] = pd.NA
-    rows["is_first_icu_stay"] = first.astype("boolean").where(valid)
+        candidates = admissions.gt(1) & ranked[order[0]].eq(earliest) & first_hospital.loc[ranked.index]
+        first.loc[candidates.index[candidates]] = pd.NA
+    rows["is_first_icu_stay"] = first.where(rankable).mask(proven_later.fillna(False), False)
+    rows["is_first_icu_stay_of_hospital_admission"] = first_hospital
     return rows
 
 
@@ -114,23 +159,12 @@ def load_stay_identity(*, database, data_path, patient_ids=None):
     rows = _rank_identity(
         all_rows, database=family, stay=stay, person=person, hospital=hospital, order=order,
     )
-    first_hospital = pd.Series(pd.NA, index=rows.index, dtype="boolean")
-    if hospital:
-        # The eICU visit number is local to one hospitalisation and gives
-        # direct evidence even when that hospitalisation spans a year change.
-        hospital_order = [*order, stay] if family != "eicu" else [*order[2:], stay]
-        grouped = rows.loc[rows[hospital].notna() & rows[person].notna()].sort_values(
-            hospital_order, ascending=[c != "hospitaladmitoffset" for c in hospital_order], kind="stable",
-        )
-        first = grouped.groupby([person, hospital], sort=False).cumcount().eq(0)
-        valid = grouped[hospital_order[0]].notna()
-        if family == "eicu":
-            first &= grouped.unitvisitnumber.le(1) | grouped.unitvisitnumber.isna()
-            valid |= grouped.hospitaladmitoffset.notna()
-        first_hospital.loc[grouped.index] = first.where(valid)
     evidence = ",".join(f"{config['table']}.{c}" for c in (*order, stay))
     if family == "eicu":
-        evidence += ";hospitaladmitoffset_descending;same_year_encounter_order_unverified"
+        evidence += (
+            ";hospitaladmitoffset_descending;offset_order_when_visit_numbers_incomplete"
+            ";same_year_encounter_order_unverified"
+        )
     if family == "hirid":
         evidence += ";stay_key_only"
     rows = rows.assign(
@@ -140,7 +174,6 @@ def load_stay_identity(*, database, data_path, patient_ids=None):
             else pd.Series(pd.NA, index=rows.index, dtype="string")
         ),
         person_linkage_available=rows[person].notna() & (family != "hirid"),
-        is_first_icu_stay_of_hospital_admission=first_hospital,
         order_evidence=pd.Series(evidence, index=rows.index, dtype="string"),
     )
     rows = _selected_stays(rows, patient_ids)
@@ -199,10 +232,12 @@ def _episode_evidence(first, loaded, *, database, stay):
         if concept not in loaded:
             continue
         points = _positive_concept_rows(loaded[concept], concept, stay, value=True)
+        if points.empty:
+            continue
         matches = first[list(dict.fromkeys([stay, "imv_start_hours", column]))]
         matches = matches.merge(points[[stay, "time"]], on=stay)
         if concept == "vent_end" and database.startswith(("miiv", "mimic")):
-            valid_stop = matches.time.gt(matches.imv_start_hours) & ~gt(matches.time - matches[column], 0)
+            valid_stop = gt(matches.time - matches.imv_start_hours, 0.0) & ~gt(matches.time - matches[column], 0)
             stop = matches.loc[valid_stop].groupby(stay).time.min()
             next_end = first[stay].map(stop)
             first[column] = np.minimum(first[column], next_end.fillna(first[column]))
@@ -213,11 +248,12 @@ def _episode_evidence(first, loaded, *, database, stay):
 
     if database == "sic":
         rules = _positive_concept_rows(loaded["mech_vent_rule"], "mech_vent_rule", stay, value=None)
-        rules = rules.merge(first, on=stay)
-        rules = rules.loc[rules.time.lt(rules.imv_end_hours) & (rules.time + 1).gt(rules.imv_start_hours)]
-        labels = rules.groupby(stay).mech_vent_rule.agg(lambda values: "|".join(sorted(set(values))))
-        labels = first[stay].map(labels)
-        evidence.loc[labels.notna()] += "|" + labels.dropna()
+        if not rules.empty:
+            rules = rules.merge(first, on=stay)
+            rules = rules.loc[rules.time.lt(rules.imv_end_hours) & (rules.time + 1).gt(rules.imv_start_hours)]
+            labels = rules.groupby(stay).mech_vent_rule.agg(lambda values: "|".join(sorted(set(values))))
+            labels = first[stay].map(labels)
+            evidence.loc[labels.notna()] += "|" + labels.dropna()
     return evidence
 
 
