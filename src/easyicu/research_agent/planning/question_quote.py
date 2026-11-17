@@ -5,6 +5,7 @@ from __future__ import annotations
 import re
 import unicodedata
 from dataclasses import dataclass
+from string import ascii_letters, digits
 from typing import Iterator
 
 
@@ -13,7 +14,8 @@ QUESTION_QUOTE_RULE = (
     "Copy one contiguous span from the research question. Matching folds Unicode "
     "NFKC (including width), case, typographic quote marks and the ideographic full "
     "stop. Whitespace runs collapse and spaces next to CJK text or comparison "
-    "operators are optional. Keep the wording, order and punctuation."
+    "operators are optional. Keep ASCII letter and digit runs and combining marks "
+    "intact. Keep the wording, order and punctuation."
 )
 _PUNCTUATION = str.maketrans({
     **dict.fromkeys("“”「」『』", '"'),
@@ -46,6 +48,22 @@ def _quote_parts(text: str) -> Iterator[tuple[str, int, int]]:
 def normalize_question_quote(text: str) -> str:
     """Apply the comparison in QUESTION_QUOTE_RULE without dropping punctuation."""
     return "".join(part for part, _, _ in _quote_parts(unicodedata.normalize("NFKC", text)))
+
+
+def _is_source_boundary(text: str, offset: int) -> bool:
+    """Keep combining marks with their bases and match whole ASCII runs."""
+    if offset == len(text):
+        return True
+    after = text[offset]
+    if unicodedata.category(after).startswith("M"):
+        return False
+    if offset == 0:
+        return True
+    before = text[offset - 1]
+    return not (
+        (before in ascii_letters and after in ascii_letters)
+        or (before in digits and after in digits)
+    )
 
 
 def _decomposed_offsets(text: str) -> Iterator[int]:
@@ -83,7 +101,10 @@ class QuestionQuoteMatcher:
         self.starts: dict[int, int] = {}
         self.ends: dict[int, int] = {}
         folded = unicodedata.normalize("NFKC", question)
-        original = {offset: index for index, offset in enumerate(_decomposed_offsets(question))}
+        original = {
+            offset: index for index, offset in enumerate(_decomposed_offsets(question))
+            if _is_source_boundary(question, index)
+        }
         offsets = [original.get(offset) for offset in _decomposed_offsets(folded)]
         parts = []
         cursor = 0

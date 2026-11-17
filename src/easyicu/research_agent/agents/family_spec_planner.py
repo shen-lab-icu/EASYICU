@@ -1028,7 +1028,12 @@ def _question_requirement_schema_feedback(
     )["items"]["properties"]
     for record in extras:
         parent = record["loc"][2:-1]
-        keys = properties["gap"]["anyOf"][0]["properties"] if parent == ("gap",) else properties
+        if parent == ("gap",):
+            keys = properties["gap"]["anyOf"][0]["properties"]
+        elif not parent:
+            keys = properties
+        else:
+            continue
         record["msg"] = f"Remove the extra key. Allowed keys: {', '.join(sorted(keys))}."
     return records
 

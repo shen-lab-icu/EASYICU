@@ -49,6 +49,7 @@ from pydantic import ValidationError
 
 from easyicu.research_agent.agents.family_spec_planner import (
     FAMILY_SPEC_GUIDE,
+    _question_requirement_schema_feedback,
     family_spec_response_shape,
     family_spec_structured_output_request,
     family_spec_user_prompt,
@@ -275,6 +276,7 @@ def test_a_requirement_is_held_to_the_question_and_the_run(
 @pytest.mark.parametrize(("original", "quote"), [
     ("比较 ABC 指标（１２分），再报告结果。", "比较abc指标(12分),再报告结果."),
     ("Compare “Cafe\u0301 Index”\n  （１２ points）…", 'compare "Café Index" (12 points)...'),
+    ("Compare mean x\u0304", "compare mean x\u0304"),
 ])
 def test_normalized_quote_keeps_exact_question_text_and_offsets(tmp_path, original, quote):
     question = f"  {_QUESTION}\n{original} Confirm the result.  "
@@ -295,6 +297,32 @@ def test_normalized_quote_keeps_exact_question_text_and_offsets(tmp_path, origin
     replayed = judge_recorded_requirements(record, plan=result.output)
     assert replayed.record["judged"] == [row]
 
+    legacy_row = {key: value for key, value in row.items() if key != "quote_span"}
+    legacy_row["quote"] = quote
+    legacy = judge_recorded_requirements({**record, "judged": [legacy_row]}, plan=result.output)
+    assert legacy.record["judged"] == [legacy_row]
+
+
+@pytest.mark.parametrize(("question", "quote"), [
+    ("In chronic kidney disease, report HR", "HR"),
+    ("For sepsis patients, report OR", "OR"),
+    ("Assess dosage and age", "age"),
+    ("Compare 124 against 241 and report 24", "24"),
+])
+def test_judged_quote_skips_matches_inside_ascii_runs(tmp_path, question, quote):
+    context = _context(named=False).model_copy(update={"research_question": question})
+    claim = {**_BENCHMARK, "kind": "analysis", "concepts": [], "quote": quote}
+    result = _planned(context, [claim])
+    question_requirement_outcome(
+        context=context, plan=result.output, facts=result.facts, run_dir=tmp_path,
+    )
+
+    record = json.loads((tmp_path / QUESTION_REQUIREMENTS_FILENAME).read_text())
+    (row,) = record["judged"]
+    start = question.rindex(quote)
+    assert row["quote_span"] == {"start": start, "end": start + len(quote)}
+    assert row["quote"] == quote
+
 
 @pytest.mark.parametrize(("question", "quote"), [
     ("比较 ABC 指标（１２分）与观察时长。", "比较 ABC 得分（１２分）"),
@@ -305,6 +333,10 @@ def test_normalized_quote_keeps_exact_question_text_and_offsets(tmp_path, origin
     ("Compare the scores…", "the scores."),
     ("Compare North Bay and South Bay.", '"North Bay"'),
     ("Compare North Bay and South Bay.", "   "),
+    ("For sepsis patients, compare mortality", "OR"),
+    ("Compare 240 and 124 hours", "24"),
+    ("Compare mean x\u0304 and SD", "Compare mean x"),
+    ("Compare p\u0302 and SD", "\u0302 and SD"),
 ])
 def test_quote_must_be_one_contiguous_source_span(question, quote):
     context = _context(named=False).model_copy(update={"research_question": question})
@@ -326,12 +358,15 @@ def test_family_retry_names_allowed_keys_and_all_rejected_quote_paths():
         **_BENCHMARK, "id": "r2", "kind": "analysis", "concepts": [],
         "quote": "first-24-hour vitals and labs",
     }
+    extra_gap = {**_UNCHECKABLE, "gap": {**_UNCHECKABLE["gap"], "extra": True}}
     wrong_first = "compare to another score"
     wrong_second = "labs and vitals across two days"
     llm, result = _run(
         context,
         [
-            json.dumps(_payload(request, [{**first, "quote_span": {"start": 1, "end": 2}}, second])),
+            json.dumps(_payload(request, [
+                {**first, "quote_span": {"start": 1, "end": 2}}, extra_gap,
+            ])),
             json.dumps(_payload(request, [{**first, "quote": wrong_first}, {**second, "quote": wrong_second}])),
             json.dumps(_payload(request, [first, second])),
         ],
@@ -344,9 +379,17 @@ def test_family_retry_names_allowed_keys_and_all_rejected_quote_paths():
     assert item_schema["additionalProperties"] is False
     assert "quote_span" not in item_schema["properties"]
     extra_feedback = llm.calls[1][0][-1].content
-    assert "question_requirements.0.quote_span" in extra_feedback
-    allowed_keys = ", ".join(item_schema["properties"])
-    assert f"Allowed keys: {allowed_keys}." in extra_feedback
+    allowed_keys = ", ".join(sorted(item_schema["properties"]))
+    assert (
+        f"question_requirements.0.quote_span: Remove the extra key. Allowed keys: {allowed_keys}."
+        in extra_feedback
+    )
+    gap_schema = item_schema["properties"]["gap"]["anyOf"][0]
+    gap_keys = ", ".join(sorted(gap_schema["properties"]))
+    assert (
+        f"question_requirements.1.gap.extra: Remove the extra key. Allowed keys: {gap_keys}."
+        in extra_feedback
+    )
     quote_feedback = llm.calls[2][0][-1].content
     assert "question_requirement_quote_not_in_question" in quote_feedback
     assert "Copy one contiguous span from the research question" in quote_feedback
@@ -355,6 +398,17 @@ def test_family_retry_names_allowed_keys_and_all_rejected_quote_paths():
     assert [item.quote for item in result.facts.question_requirements] == [
         first["quote"], second["quote"],
     ]
+
+
+def test_family_retry_preserves_extra_key_feedback_for_unknown_nested_objects():
+    request = _request(_context(named=False), cohort_mode=None)
+    error = ValidationError.from_exception_data("FamilyPlanSpec", [{
+        "type": "extra_forbidden",
+        "loc": ("question_requirements", 0, "gap", "nested", "extra"),
+        "input": True,
+    }])
+
+    assert _question_requirement_schema_feedback(error, request) == error.errors(include_url=False)
 
 
 def test_a_named_concept_no_requirement_reads_refuses_the_spec() -> None:
@@ -1153,6 +1207,8 @@ def _break_record(record: dict[str, Any], how: str) -> Any:
         return {**record, "denoted_columns": {}}
     if how == "a-study-digest-that-is-not-one":
         return {**record, "coverage": {**record["coverage"], "context_sha256": "x"}}
+    if how == "no-judged-rows":
+        return {key: value for key, value in record.items() if key != "judged"}
     if how == "a-gap-without-its-check":
         return {
             **record,
@@ -1170,6 +1226,7 @@ def _break_record(record: dict[str, Any], how: str) -> Any:
         "no-columns-for-a-concept",
         "a-gap-without-its-check",
         "a-study-digest-that-is-not-one",
+        "no-judged-rows",
     ],
 )
 def test_a_planning_record_that_cannot_be_read_refuses_approval(
