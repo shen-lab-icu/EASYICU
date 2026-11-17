@@ -232,12 +232,14 @@ def family_spec_user_prompt(
     response_shape: str = "",
     elided_planning_contract_context: str | None = None,
     prompt_blocks: list[PlannerPromptBlock] | None = None,
-    variable_description_authority: frozenset[str] = frozenset(),
+    variable_description_authority: frozenset[str] | None = None,
 ) -> str:
     """Build the single user prompt for one family-spec attempt.
 
     ``response_shape`` is the written response contract for a route that
     cannot enforce the strict schema; a strict route leaves it empty.
+    An explicit empty ``variable_description_authority`` still permits
+    projection when no context is supplied.
     """
 
     sections = PlannerPromptBlocks()
@@ -423,12 +425,12 @@ def family_spec_user_prompt(
                 + json.dumps(request.membership_candidates, sort_keys=True),
                 block="variables",
             )
-    protected = (
-        protected_planner_variable_names(context, planning_contract_context)
-        if context is not None
-        else frozenset(variable_descriptions)
-    )
-    protected |= variable_description_authority | frozenset(request.exact_roster)
+    protected = variable_description_authority or frozenset()
+    if context is not None:
+        protected |= protected_planner_variable_names(context, planning_contract_context)
+    elif variable_description_authority is None:
+        protected = frozenset(variable_descriptions)
+    protected |= frozenset(request.exact_roster)
     described_keys = [
         *request.required_reader_label_keys,
         *(item.name for item in request.feature_candidates if item.selectable),
@@ -579,7 +581,7 @@ def family_spec_messages(
     response_shape: str = "",
     elided_planning_contract_context: str | None = None,
     prompt_blocks: list[PlannerPromptBlock] | None = None,
-    variable_description_authority: frozenset[str] = frozenset(),
+    variable_description_authority: frozenset[str] | None = None,
 ) -> list[LLMMessage]:
     return [
         LLMMessage(role="system", content=FAMILY_SPEC_GUIDE),
@@ -1292,7 +1294,7 @@ def run_family_spec_attempt(
                 str(getattr(descriptor, "description", "") or ""),
                 *(
                     str(item)
-                    for item in (getattr(descriptor, "clinical_caveats", None) or ())
+                    for item in (getattr(descriptor, "clinical_caveats", None) or ())[:2]
                 ),
             )
             if part

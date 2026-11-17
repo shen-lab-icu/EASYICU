@@ -1041,7 +1041,8 @@ def test_ancestor_elision_preserves_intervening_requirements_and_seeds():
 
 
 def _scripted_projection_run(
-    *, family=False, strict=False, limit=200_000, know_how="", contract="", context=None
+    *, family=False, strict=False, limit=200_000, know_how="", contract="", context=None,
+    with_article_context=True,
 ):
     context = context or (_family_context() if family else _context())
     # Clinical definitions are authority even when optional guidance dominates.
@@ -1058,7 +1059,9 @@ def _scripted_projection_run(
         }
     )
     if family and know_how:
-        context.variable("score_first").description += " " + know_how
+        descriptor = context.variable("score_first")
+        descriptor.description += " " + know_how
+        descriptor.clinical_caveats = ["The baseline score has an advisory caveat."]
     options = {"planning_contract_context": contract}
     if know_how and not family:
         claims = [
@@ -1110,8 +1113,8 @@ def _scripted_projection_run(
             direct_comparator_literature_keys=_FAMILY_COMPARATORS,
             comparison_literature_keys=_FAMILY_COMPARATORS,
             required_primary_cohort_selection_mode="all_input_rows",
-            enforce_article_contract=True,
-            article_contract_context=context,
+            enforce_article_contract=with_article_context,
+            article_contract_context=context if with_article_context else None,
         )
         responses = [
             _family_payload(
@@ -1145,9 +1148,15 @@ def _scripted_projection_run(
     return client, result, context
 
 
-@pytest.mark.parametrize("family", [False, True], ids=["progressive", "family_spec"])
+@pytest.mark.parametrize(
+    "family, with_article_context",
+    [(False, False), (True, True), (True, False)],
+    ids=["progressive", "family_spec", "family_spec_without_article_context"],
+)
 @pytest.mark.parametrize("strict", [False, True], ids=["text_shape", "strict_schema"])
-def test_advisory_overflow_compiles_with_receipts_and_all_authority(family, strict):
+def test_advisory_overflow_compiles_with_receipts_and_all_authority(
+    family, strict, with_article_context
+):
     guidance = "Optional protocol discussion about uncertainty. " * 100
     requirement = "Reviewed requirement: preserve the requested outcomes and every sensitivity analysis."
     full_client, full, _ = _scripted_projection_run(
@@ -1155,6 +1164,7 @@ def test_advisory_overflow_compiles_with_receipts_and_all_authority(family, stri
         strict=strict,
         know_how=guidance,
         contract=requirement,
+        with_article_context=with_article_context,
     )
     limit = int(full.facts.prompt_metrics["total_bytes"] / 1.02) // 3
     client, result, context = _scripted_projection_run(
@@ -1163,6 +1173,7 @@ def test_advisory_overflow_compiles_with_receipts_and_all_authority(family, stri
         know_how=guidance,
         contract=requirement,
         limit=limit,
+        with_article_context=with_article_context,
     )
     metrics = result.facts.prompt_metrics
     assert 1.019 <= full.facts.prompt_metrics["total_bytes"] / (limit * 3) <= 1.022
@@ -1193,6 +1204,11 @@ def test_advisory_overflow_compiles_with_receipts_and_all_authority(family, stri
         for name in _family_request(context, cohort_mode="all_input_rows").exact_roster:
             assert name in prompt
             assert context.variable(name).description in prompt
+        descriptor = context.variable("score_first")
+        assert '"score_first"' in prompt
+        for caveat in descriptor.clinical_caveats:
+            assert caveat in full_client.calls[0][0][1].content
+            assert caveat not in prompt
     else:
         for name in ("age_years", "sex_code"):
             assert name in prompt
@@ -1521,22 +1537,110 @@ def test_exact_family_covariate_definitions_are_authority_even_without_article_c
     )
 
     request = landmark_request(landmark_context())
+    optional_candidate = next(
+        item for item in landmark_request(landmark_context(exact=False)).adjustment_candidates
+        if item.name == "severity_score_24h"
+    )
+    assert optional_candidate.selectable and optional_candidate.name not in request.exact_roster
+    request = request.model_copy(
+        update={"adjustment_candidates": [*request.adjustment_candidates, optional_candidate]}
+    )
     definitions = {
         name: f"Declared clinical definition of {name}."
-        for name in request.required_reader_label_keys
+        for name in [*request.exact_roster, optional_candidate.name]
     }
     blocks: list[PlannerPromptBlock] = []
     prompt = family_spec_user_prompt(
-        request, variable_descriptions=definitions, prompt_blocks=blocks
+        request,
+        variable_descriptions=definitions,
+        prompt_blocks=blocks,
+        variable_description_authority=frozenset(),
     )
     messages = [
         LLMMessage(role="system", content="system"),
         LLMMessage(role="user", content=prompt),
     ]
-    projected = project_planner_request(messages, blocks, byte_limit=1)
+    initial_bytes = _request_bytes(messages)
+    projected = project_planner_request(messages, blocks, byte_limit=initial_bytes - 1)
+    projected_prompt = projected.messages[1].content
+    assert projected.metrics["request_bytes"] < initial_bytes
+    assert definitions[optional_candidate.name] in prompt
+    assert definitions[optional_candidate.name] not in projected_prompt
+    assert f'"{optional_candidate.name}"' in projected_prompt
     for name in request.exact_roster:
-        assert definitions[name] in projected.messages[1].content
-    assert projected.metrics["request_bytes"] > 1
+        assert definitions[name] in projected_prompt
+
+
+@pytest.mark.parametrize("strict", [False, True], ids=["text_shape", "strict_schema"])
+def test_family_overflow_without_article_context_preserves_named_descriptions(strict):
+    from easyicu.research_agent.schema import VariableRole
+
+    from .family_spec_fixtures import _context as landmark_context, _spec_payload
+
+    context = landmark_context()
+    question_named = "stage_source_flag"
+    plan_named = "window_row_count"
+    optional = "severity_score_24h"
+    optional_caveats = ["Advisory score caveat one.", "Advisory score caveat two."]
+    required_caveats = ["Prespecified comorbidity caveat one.", "Prespecified comorbidity caveat two."]
+    extra_caveat = "Third caveat would overflow the legacy budget. " * 200
+    for descriptor in context.variables:
+        descriptor.description = f"Prespecified clinical definition of {descriptor.name}."
+    # The exact model roster leaves this untimed score in the measurement audit.
+    optional_descriptor = context.variable(optional)
+    optional_descriptor.role = VariableRole.OTHER
+    optional_descriptor.description = "Optional audit score definition. " * 100
+    optional_descriptor.clinical_caveats = optional_caveats
+    required_descriptor = context.variable("comorbidity_index")
+    required_descriptor.clinical_caveats = required_caveats
+    context = context.model_copy(
+        update={
+            "research_question": context.research_question
+            + f" Include {question_named} in the measurement audit.",
+        }
+    )
+    contract = f"Reviewed planning instruction: retain the {plan_named} definition."
+    request = _family_request(context)
+    assert request.exact_roster
+    assert {optional, question_named, plan_named} <= set(request.measurement_audit_columns)
+    response = json.dumps(_spec_payload(request))
+
+    def run(context, limit):
+        client = ScriptedMockLLMClient([response])
+        client.supports_strict_json_schema = strict
+        client.budget = PROMPT_TRANSPORT_BUDGETS["planner_plan_generation"].with_limit_tokens(limit)
+        result = progressive.ProgressivePlannerAgent(client).run_attempt(
+            context,
+            planner_strategy=progressive.FAMILY_SPEC_STRATEGY,
+            allowed_literature_citation_keys=_FAMILY_CITATIONS,
+            direct_comparator_literature_keys=_FAMILY_COMPARATORS,
+            comparison_literature_keys=_FAMILY_COMPARATORS,
+            required_primary_cohort_selection_mode="predicate_filtered",
+            article_contract_context=None,
+            planning_contract_context=contract,
+        )
+        assert len(client.calls) == 1
+        assert result.output.steps
+        return client.calls[0][0][1].content, result.facts.prompt_metrics
+
+    baseline_prompt, baseline = run(context, 200_000)
+    required_descriptor.clinical_caveats = [*required_caveats, extra_caveat]
+    limit = (baseline["request_bytes"] - 1) // 3
+    prompt, metrics = run(context, limit)
+    assert metrics["planner_strategy"] == progressive.FAMILY_SPEC_STRATEGY
+    assert metrics["source_request_bytes"] == baseline["request_bytes"]
+    assert metrics["request_bytes"] <= metrics["byte_limit"] < baseline["request_bytes"]
+    (receipt,) = metrics["prompt_projection_receipts"]
+    assert receipt["reason"] == "optional_variable_descriptions_omitted"
+    assert f'"{optional}"' in prompt
+    for text in [optional_descriptor.description, *optional_caveats]:
+        assert text in baseline_prompt
+        assert text not in prompt
+    for name in [*request.exact_roster, question_named, plan_named]:
+        assert context.variable(name).description in prompt
+    for caveat in required_caveats:
+        assert caveat in prompt
+    assert extra_caveat not in prompt
 
 
 def test_progressive_prompt_bytes_do_not_depend_on_mapping_insertion_order():
