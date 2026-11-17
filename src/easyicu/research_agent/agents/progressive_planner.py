@@ -3285,6 +3285,8 @@ class ProgressivePlannerAgent:
         )
         plan = bind_plan_tier(plan, execution_tier)
         receipt = receipt.model_copy(update={"analysis_plan_sha256": canonical_sha256(plan.model_dump(mode="json"))})
+        if self.scientific_authorities is not None:
+            self.scientific_authorities.check_planner_plan(plan, agent_context)
         _accept_compiled_plan(
             plan=plan,
             agent_context=agent_context,
@@ -3295,8 +3297,6 @@ class ProgressivePlannerAgent:
             enforce_article_contract=enforce_article_contract,
             llm=self.llm,
         )
-        if self.scientific_authorities is not None:
-            self.scientific_authorities.check_planner_plan(plan, agent_context)
         return plan, receipt
 
     def _accept_materialized_plan(
@@ -4537,7 +4537,7 @@ class ProgressivePlannerAgent:
                     article_context=article_context,
                 )
                 if self.scientific_authorities is not None:
-                    self.scientific_authorities.check_planner_outline(parsed)
+                    self.scientific_authorities.check_planner_outline(parsed, execution_tier=tier_from_planning_contract(planning_contract_context))
                 return parsed
 
             outline_llm = self.llm

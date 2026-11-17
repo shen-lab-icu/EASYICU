@@ -286,6 +286,84 @@ def test_contrast_repair_cannot_hide_an_adjustment_roster_change():
     assert not authorities.planner_retryable_error(caught.value)
 
 
+def test_baseline_outline_retries_the_checkpoint_shaped_roster_before_sealing():
+    from easyicu.research_agent.authority.baseline_association_runtime import BASELINE_STEPS
+    from tests.support.baseline_association import baseline_context, baseline_plan_attempt, baseline_runtime
+
+    context = baseline_context(covariates=("age",))
+    attempt, _ = baseline_plan_attempt(context)
+    authorities = baseline_runtime(context, attempt.output)
+    valid = attempt.facts.outline.model_dump(mode="json")
+    rejected = attempt.facts.outline.model_dump(mode="json")
+    aliases = dict(zip(
+        BASELINE_STEPS,
+        ("cohort_accounting", "baseline_context", "data_quality_audit", "primary_adjusted_model",
+         "absolute_risk_context", "display_package", "observational_report"),
+    ))
+    aliases["age_functional_form"] = "age_functional_form_sensitivity"
+    rejected["steps"] = [step for step in rejected["steps"] if step["step_id"] != "family_cohort_flow_figure"]
+    for step in rejected["steps"]:
+        step["step_id"] = aliases[step["step_id"]]
+        step["depends_on"] = [aliases[key] for key in step["depends_on"]]
+    rejected["steps"].insert(4, {
+        **rejected["steps"][4], "step_id": "exposure_outcome_context",
+        "module_id": "exposure_outcome_distribution", "population_scope": None,
+    })
+    rejected["steps"].insert(6, {
+        **rejected["steps"][5], "step_id": "robustness_replay",
+        "module_id": "robustness_replay", "planned_analysis_role": "sensitivity", "population_scope": None,
+    })
+
+    llm = ScriptedMockLLMClient([json.dumps(rejected), json.dumps(valid)])
+    agent = owner.ProgressivePlannerAgent(llm, scientific_authorities=authorities)
+    result = agent.run(context, stop_after_outline=True)
+
+    assert [step.step_id for step in result.steps] == [step["step_id"] for step in valid["steps"]]
+    assert len(llm.calls) == 2
+    feedback = llm.calls[1][0][-1].content
+    assert json.dumps(list(BASELINE_STEPS)) in feedback
+    assert "exposure_outcome_context" in feedback
+    history = agent.last_result.facts.prompt_metrics["structured_retry_history"]
+    assert history[0]["reason_code"] == "progressive_scientific_authority_repairable"
+    assert "baseline_association_step_roster_mismatch" in feedback
+
+
+def test_baseline_compiled_roster_retry_preserves_the_signed_model_and_legitimate_display():
+    from easyicu.research_agent.authority.baseline_association_runtime import BASELINE_STEPS, BaselineAssociationAuthorityError
+    from tests.support.baseline_association import baseline_context, baseline_plan_attempt, baseline_runtime
+
+    context = baseline_context()
+    attempt, _ = baseline_plan_attempt(context)
+    plan = attempt.output
+    authorities = baseline_runtime(context, plan)
+    display = plan.steps[-1]
+    assert display.expected_outputs == ["figure:cohort_flow"]
+    drift = plan.model_copy(update={"steps": [
+        *plan.steps[:-1], display.model_copy(update={"planned_analysis_role": "secondary"}),
+    ]})
+    assert AnalysisPlan.model_validate_json(drift.model_dump_json()) == drift
+
+    with pytest.raises(BaselineAssociationAuthorityError) as refused:
+        authorities.bind_plan(drift)
+    assert refused.value.reason_code == "baseline_association_step_roster_mismatch"
+
+    llm = ScriptedMockLLMClient([drift.model_dump_json(), plan.model_dump_json()])
+    events = []
+    repaired = call_llm_with_structured_retry(
+        llm, [], parser=lambda raw: authorities.check_planner_plan(AnalysisPlan.model_validate_json(raw), context),
+        retryable_parse_error=authorities.planner_retryable_error, max_retries=1, progress_callback=events.append,
+    )
+    assert repaired == plan
+    assert len(llm.calls) == 2
+    feedback = llm.calls[1][0][-1].content
+    assert json.dumps(list(BASELINE_STEPS)) in feedback
+    assert display.step_id in feedback
+    assert [event.phase for event in events] == ["started", "rejected", "started", "accepted"]
+    sealed = authorities.seal_for_plan(repaired)
+    bound, _ = sealed.bind_plan(repaired)
+    sealed.validate_plan(bound)
+
+
 def test_later_design_stop_preserves_prior_retry_history():
     authorities, optional, changed = _authorities(), _plan(), _plan(sensitivity=False)
     changed.steps[0].model_requirements[0].exposure_source = "different_variable"

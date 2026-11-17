@@ -32,6 +32,13 @@ BASELINE_STEPS = ("cohort_definition", "table_one", "measurement_audit", "adjust
                   "absolute_risk_context", "visualization", "report")
 
 
+def baseline_core_step_ids(execution_tier: str | None, *, has_visualization: bool) -> tuple[str, ...]:
+    """Return the required ordered IDs before any separately validated additions."""
+    if execution_tier == "first_result":
+        return BASELINE_STEPS[:6] if has_visualization else BASELINE_STEPS[:5]
+    return BASELINE_STEPS
+
+
 AssociationAuthorityReason = Literal[
     "association_adjustment_exposure_conflict",
     "baseline_association_roster_mismatch",
@@ -293,9 +300,10 @@ class BaselineAssociationRuntimeAuthority(BaseModel):
             raise _refusal("baseline template step roster drifted", reason_code="baseline_association_step_roster_mismatch",
                            mismatch_fields=("step_roster",), step_id="plan")
         primary = self.governed_primary_step(plan)
-        required_steps = BASELINE_STEPS
-        if getattr(plan.design_selection, "execution_tier", "article") == "first_result":
-            required_steps = BASELINE_STEPS[:6] if any(step.step_id == "visualization" for step in plan.steps) else BASELINE_STEPS[:5]
+        required_steps = baseline_core_step_ids(
+            getattr(plan.design_selection, "execution_tier", None),
+            has_visualization=any(step.step_id == "visualization" for step in plan.steps),
+        )
         checks = [step for step in plan.steps if self._prespecified_check(step, plan)]
         remaining = [step for step in plan.steps if step not in checks]
         core, companions = remaining[:len(required_steps)], remaining[len(required_steps):]

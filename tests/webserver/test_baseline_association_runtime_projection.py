@@ -107,6 +107,19 @@ def test_a_physical_post_baseline_window_cannot_be_signed_as_baseline(tmp_path, 
     ) is None
 
 
+@pytest.mark.parametrize("time_window", [None, {"anchor": "icu_admission", "hours": 12}])
+def test_outer_materialization_window_prevents_a_baseline_signature(tmp_path, time_window):
+    path = tmp_path / "status.parquet"
+    pd.DataFrame({"infection_status": pd.Series(dtype="bool"),
+                  "death": pd.Series(dtype="bool")}).to_parquet(path)
+    assert compile_web_scientific_runtime_projection(
+        study={"analysis_design": {"analysis_family": "association_study"}, "time_window": time_window},
+        sensitivity_specs=(), primary_exposure="infection_status", primary_exposure_source="infection_status",
+        target_outcome="death", declared_covariates=(), covariate_operationalizations={},
+        target_is_event_status=True, universe_path=path, scientific_configuration_sha256="c" * 64,
+    ) is None
+
+
 @pytest.mark.parametrize("reason", [
     "web_baseline_association_incomplete",
     "family_spec_stated_adjustment_unavailable",

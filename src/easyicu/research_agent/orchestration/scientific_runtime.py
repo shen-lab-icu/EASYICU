@@ -5,9 +5,13 @@ from __future__ import annotations
 import json
 from dataclasses import dataclass, replace
 from pathlib import Path
-from typing import Any, Mapping
+from typing import Any, Mapping, Sequence
 
-from ..authority.baseline_association_runtime import BaselineAssociationRuntimeAuthority, BaselineAssociationAuthorityError
+from ..authority.baseline_association_runtime import (
+    BaselineAssociationAuthorityError,
+    BaselineAssociationRuntimeAuthority,
+    baseline_core_step_ids,
+)
 from ..authority.current_case_scientific_runtime import (
     CurrentCaseScientificAuthorityError,
     CurrentCaseScientificRuntimeAuthority,
@@ -603,8 +607,8 @@ class ScientificRuntimeAuthorities:
     def check_planner_plan(self, plan: AnalysisPlan, context: ResearchContext | None = None) -> AnalysisPlan:
         return check_authority_plan(self, plan, context)
 
-    def check_planner_outline(self, outline: ProgressivePlanOutline) -> None:
-        check_authority_outline(self.current_case, outline)
+    def check_planner_outline(self, outline: ProgressivePlanOutline, *, execution_tier: str | None = None) -> None:
+        check_authority_outline(self.current_case, outline, execution_tier=execution_tier)
 
     @staticmethod
     def planner_retryable_error(error: Exception) -> bool:
@@ -766,6 +770,7 @@ __all__ = ["ScientificRuntimeAuthorities"]
 
 
 REPAIRABLE_AUTHORITY_REASON = "progressive_scientific_authority_repairable"
+_BASELINE_STEP_ROSTER_MISMATCH = "baseline_association_step_roster_mismatch"
 _SPLINE_SUPPORT = (
     "The landmark spline family supports the signed complete-case robustness replay "
     "and restricted_cubic_spline_vs_linear checks with one functional_form_spec "
@@ -782,14 +787,15 @@ class ScientificAuthorityRepairError(ProgressivePlanCompileError):
 
     def __init__(
         self, *, authority: CurrentCaseScientificRuntimeAuthority,
-        step: AnalysisStep | ProgressiveOutlineStep, index: int, path: str,
+        step: AnalysisStep | ProgressiveOutlineStep | None, index: int | None, path: str,
         cause_code: str, supports: str | dict[str, Any],
         mismatch_fields: tuple[str, ...] = (),
     ) -> None:
+        step_id = step.step_id if step is not None else None
         detail = {
             "authority_kind": authority.authority_kind,
             "authority_sha256": authority.execution_contract_sha256,
-            "refused_step_id": step.step_id,
+            "refused_step_id": step_id,
             "sensitivity_spec_ids": list(getattr(step, "sensitivity_spec_ids", ())),
             "scientific_capability": getattr(step, "scientific_capability", None),
             "supported_repair": supports,
@@ -797,7 +803,7 @@ class ScientificAuthorityRepairError(ProgressivePlanCompileError):
         super().__init__(
             REPAIRABLE_AUTHORITY_REASON,
             f"{cause_code}: {json.dumps(detail, ensure_ascii=False)}",
-            step_id=step.step_id, step_index=index, path=path,
+            step_id=step_id, step_index=index, path=path,
             cause_code=cause_code, findings=(detail,),
         )
         if mismatch_fields:
@@ -810,15 +816,74 @@ def retryable_planner_error(error: Exception) -> bool:
     return not isinstance(error, (CurrentCaseScientificAuthorityError, BaselineAssociationAuthorityError))
 
 
+def _baseline_core_matches(step_ids: tuple[str, ...], expected: tuple[str, ...]) -> bool:
+    return (
+        step_ids[:5] == expected[:5]
+        and tuple(step_id for step_id in step_ids if step_id in expected) == expected
+    )
+
+
+def _baseline_roster_feedback(
+    authority: BaselineAssociationRuntimeAuthority,
+    steps: Sequence[AnalysisStep | ProgressiveOutlineStep],
+    expected: tuple[str, ...],
+    *,
+    index: int | None = None,
+) -> ScientificAuthorityRepairError:
+    return ScientificAuthorityRepairError(
+        authority=authority, step=steps[index] if index is not None else None, index=index, path="steps",
+        cause_code=_BASELINE_STEP_ROSTER_MISMATCH, mismatch_fields=("step_roster",),
+        supports={
+            "expected_core_step_ids": list(expected),
+            "received_step_ids": [step.step_id for step in steps],
+            "instruction": (
+                "Use the exact core step IDs in order. Keep only authority-supported prespecified checks "
+                "after absolute_risk_context and before the core visualization or report. Additional "
+                "visualizations may follow the core only as source-bound cohort-flow or (article tier) "
+                "data-quality figures, with exact panels and all-row product inputs. Preserve the approved "
+                "population, exposure, outcome, adjustment, dependence and primary estimand."
+            ),
+        },
+    )
+
+
+def _check_baseline_outline(
+    authority: BaselineAssociationRuntimeAuthority, outline: ProgressivePlanOutline, execution_tier: str | None,
+) -> None:
+    steps = outline.steps
+    step_ids = tuple(step.step_id for step in steps)
+    expected = baseline_core_step_ids(execution_tier, has_visualization="visualization" in step_ids)
+    if not _baseline_core_matches(step_ids, expected):
+        raise _baseline_roster_feedback(authority, steps, expected)
+    last_core = step_ids.index(expected[-1])
+    first_display = next(
+        (index for index, step in enumerate(steps) if step.module_id in {"visualization", "report"}), len(steps),
+    )
+    for index, step in enumerate(steps):
+        if step.step_id in expected:
+            continue
+        if step.module_id == "visualization" and index > last_core:
+            continue
+        if step.module_id == "custom_analysis" and index < first_display:
+            continue
+        raise _baseline_roster_feedback(authority, steps, expected)
+
+
 def check_authority_outline(
     authority: CurrentCaseScientificRuntimeAuthority | None, outline: ProgressivePlanOutline,
+    *, execution_tier: str | None = None,
 ) -> None:
-    """Reject unsupported inherited sensitivities while the outline is editable.
+    """Check signed roster and sensitivity constraints while the outline is editable.
 
     A custom sensitivity depending on the primary association is compiled to
     the binary sensitivity capability. Target-bound functional-form checks and
     the host robustness replay have separate execution owners.
     """
+    if isinstance(authority, BaselineAssociationRuntimeAuthority):
+        _check_baseline_outline(
+            authority, outline, execution_tier or getattr(outline.design_selection, "execution_tier", None),
+        )
+        return
     if not isinstance(authority, LandmarkSplineRuntimeAuthority):
         return
     primary_ids = {step.step_id for step in outline.steps if step.planned_analysis_role == "primary"}
@@ -959,6 +1024,17 @@ def check_authority_plan(
         bound, _findings = sealed.bind_plan(plan)
         sealed.current_case.validate_plan(bound)
     except (CurrentCaseScientificAuthorityError, BaselineAssociationAuthorityError) as error:
+        if isinstance(authority, BaselineAssociationRuntimeAuthority) and error.reason_code == _BASELINE_STEP_ROSTER_MISMATCH:
+            steps = tuple(step.step_id for step in plan.steps)
+            expected = baseline_core_step_ids(
+                getattr(plan.design_selection, "execution_tier", None), has_visualization="visualization" in steps,
+            )
+            # Only an addition's executable detail is editable in a sealed outline.
+            # Core ID or order drift has to be repaired in the outline itself.
+            index = None
+            if _baseline_core_matches(steps, expected):
+                index = next((i for i, step_id in enumerate(steps) if step_id not in expected), None)
+            raise _baseline_roster_feedback(authority, plan.steps, expected, index=index) from error
         if isinstance(authority, LandmarkSplineRuntimeAuthority) and error.reason_code == "landmark_spline_binary_sensitivity_unsupported":
             for index, step in enumerate(plan.steps):
                 if (

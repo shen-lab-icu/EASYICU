@@ -73,6 +73,7 @@ def compile_baseline_association_runtime_projection(
         ))
     if verified:
         variables = _apply_materialized_column_metadata(descriptors=variables, verified=verified)
+    window = launch_materialization_window(study)
     # All names come from the schema or the study's typed reading, never from rows.
     context = ResearchContext(
         research_question=str(study.get("research_question") or "Baseline association"),
@@ -85,7 +86,7 @@ def compile_baseline_association_runtime_projection(
             covariates=list(declared_covariates), covariate_operationalizations=dict(covariate_operationalizations),
             data_constraints=json.dumps({
                 **{field: study.get(field) or [] for field in ("stated_adjustments", "stated_subgroups")},
-                "materialization_window": launch_materialization_window(study),
+                "materialization_window": {**window, "role": "outer_observation_window"} if window else None,
             }),
         ),
     )
