@@ -114,7 +114,6 @@ from ..contracts.product_files import (
     host_delivery_coverage, requested_deliverable_kinds,
 )
 from ..schema import AnalysisPlan, ResearchContext, ValidationFinding
-from .population_spec import quote_written_in
 from .progressive_contract import (
     CapabilityGapElement,
     CapabilityGapRequirement,
@@ -141,7 +140,9 @@ QUESTION_REQUIREMENTS_FILENAME = "question_requirements.json"
 QUESTION_REQUIREMENTS_REVIEW_SCHEMA_VERSION = "easyicu.question_requirements_review/1"
 QUESTION_REQUIREMENTS_REVIEW_FILENAME = "question_requirements_review.json"
 MAX_QUESTION_REQUIREMENTS = 6
-MAX_REQUIREMENT_CONCEPTS = 4
+# One requirement can describe the whole selected design. Its roster can
+# include up to 24 variables (including fit coordinates and an endpoint).
+MAX_REQUIREMENT_CONCEPTS = 24
 MAX_NAMED_QUESTION_CONCEPTS = 8
 #: The columns one named concept may denote, the dictionary's relatives included.
 MAX_DENOTED_COLUMNS = 8
@@ -487,21 +488,22 @@ class QuestionRequirement(BaseModel):
             raise ValueError("only a delivery requirement names distinct deliverable kinds")
         if self.kind == "delivery" and (concepts or (self.gap and self.gap.concept)):
             raise ValueError("a delivery requirement names outputs, not scientific concepts")
-        if self.clauses and (
-            self.kind != "analysis" or len(set(self.clauses)) != len(self.clauses)
-            or any(not clause.strip() or not quote_written_in(clause, "question", (self.quote,))
-                   for clause in self.clauses)
-        ):
-            invalid_clauses("analysis clauses must quote distinct parts of their requirement; use distinct verbatim parts of quote for kind=analysis, otherwise []")
         if self.clauses:
+            matcher = QuestionQuoteMatcher(self.quote)
+            if (
+                self.kind != "analysis"
+                or len({normalize_question_quote(clause) for clause in self.clauses}) != len(self.clauses)
+                or any(matcher.find(clause) is None for clause in self.clauses)
+            ):
+                invalid_clauses("analysis clauses must quote distinct parts of their requirement; use distinct verbatim parts of quote for kind=analysis, otherwise []")
             cursor = 0
             gaps = []
             for clause in self.clauses:
-                match = re.search(re.escape(clause), self.quote[cursor:], flags=re.IGNORECASE)
+                match = matcher.find(clause, offset=cursor)
                 if match is None:
                     invalid_clauses("clauses must account for the complete requirement quote in order; use [] for an atomic analysis")
-                gaps.append(self.quote[cursor:cursor + match.start()])
-                cursor += match.end()
+                gaps.append(self.quote[cursor:match.start])
+                cursor = match.end
             gaps.append(self.quote[cursor:])
             for index, gap in enumerate(gaps):
                 # Keep the established connective/method-request allowance;
@@ -2154,7 +2156,7 @@ def question_requirements_schema(
                     "enum": list(get_args(RequirementKind)),
                 },
                 "quote": {"type": "string"},
-                "concepts": {"type": "array", "items": concept},
+                "concepts": {"type": "array", "items": concept, "maxItems": MAX_REQUIREMENT_CONCEPTS},
                 "deliverable_kinds": {
                     "type": "array", "items": {"type": "string", "enum": list(get_args(DeliverableKind))},
                 },
@@ -2162,7 +2164,7 @@ def question_requirements_schema(
                     "type": "array", "items": {"type": "string"},
                     "description": "For kind=analysis only: clauses tile the complete quote in order, with only whitespace or CJK/ASCII punctuation between or after them; otherwise [].",
                 },
-                "analysis_exposures": {"type": "array", "items": concept},
+                "analysis_exposures": {"type": "array", "items": concept, "maxItems": MAX_REQUIREMENT_CONCEPTS},
                 "coverage": {
                     "type": "string",
                     "enum": list(get_args(CoverageClaim)),
@@ -2201,7 +2203,7 @@ def question_requirements_shape(
     return (
         '- "question_requirements": array of 0-6 objects, each exactly {"id": "r1".."r6", '
         '"kind": "benchmark"|"subgroup"|"estimand"|"analysis"|"cohort_accounting"|"definition"|"delivery", "quote": "<the '
-        'question\'s own words, 2-240 characters>", "concepts": [0-4 distinct names from '
+        f'question\'s own words, 2-240 characters>", "concepts": [0-{MAX_REQUIREMENT_CONCEPTS} distinct names from '
         + json.dumps(list(concepts), ensure_ascii=False)
         + '], "deliverable_kinds": [0-5 distinct kinds from '
         + json.dumps(list(get_args(DeliverableKind)))

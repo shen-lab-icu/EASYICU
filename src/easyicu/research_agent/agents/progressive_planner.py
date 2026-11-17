@@ -1790,6 +1790,7 @@ class ProgressivePlannerAgent:
         continuous_domain_variables: Sequence[str] | None = None,
         primary_exposure: str | None = None,
         target_outcome: str | None = None,
+        question_anchors: Sequence[str] | None = None,
         required_exact_covariates: Sequence[str] = (),
         required_functional_form_targets: Sequence[str] = (),
         context_required_method_layers: Sequence[str] | None = None,
@@ -1874,14 +1875,11 @@ class ProgressivePlannerAgent:
             allowed_analysis_types=analysis_types,
             allowed_variables=variable_names,
             allowed_literature_citation_keys=allowed_literature_citation_keys,
-            question_anchors=(primary_exposure or "", target_outcome or ""),
+            question_anchors=question_anchors,
+            fallback_question_anchors=(primary_exposure or "", target_outcome or ""),
             required=require_design_selection,
+            article_context=article_context,
         )
-        if article_context is not None:
-            # The selected design can add an unavailable input without naming
-            # it in any step. Its source check belongs to outline repair, not
-            # the subsequent reader-label request outside that retry boundary.
-            required_reader_display_label_keys(article_context, outline.design_selection)
         if article_context is not None and descriptive_counts_only_required(
             article_context, analysis_type=outline.analysis_type,
         ):
@@ -3926,9 +3924,10 @@ class ProgressivePlannerAgent:
                 continuous_domain_variables=continuous_domain_variables,
             )
 
-        def validate_outline(outline: ProgressivePlanOutline) -> None:
+        def validate_outline(outline: ProgressivePlanOutline, question_anchors: Sequence[str] | None) -> None:
             self._validate_outline_authority(
                 outline,
+                question_anchors=question_anchors,
                 execution_tier=tier_from_planning_contract(planning_contract_context),
                 analysis_types=analysis_types,
                 variable_names=variables,

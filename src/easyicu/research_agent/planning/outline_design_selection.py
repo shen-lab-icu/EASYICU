@@ -26,11 +26,13 @@ from __future__ import annotations
 
 from typing import Sequence
 
+from ..schema import ResearchContext
 from .design_selection import (
     ResearchDesignSelectionError,
     validate_research_design_selection,
 )
 from .family_spec.plan_language import plan_language
+from .progressive_compiler import required_reader_display_label_keys
 from .progressive_contract import ProgressivePlanCompileError, ProgressivePlanOutline
 
 __all__ = [
@@ -91,11 +93,14 @@ def validate_outline_design_selection(
     allowed_analysis_types: Sequence[str],
     allowed_variables: Sequence[str],
     allowed_literature_citation_keys: Sequence[str],
-    question_anchors: Sequence[str],
+    question_anchors: Sequence[str] | None,
     required: bool,
+    fallback_question_anchors: Sequence[str] = (),
+    article_context: ResearchContext | None = None,
 ) -> None:
-    """Refuse an outline whose design selection the design owner refuses."""
+    """Validate design authority, with sealed family anchors taking precedence."""
 
+    anchors = fallback_question_anchors if question_anchors is None else question_anchors
     try:
         validate_research_design_selection(
             outline.design_selection,
@@ -103,14 +108,14 @@ def validate_outline_design_selection(
             allowed_analysis_types=allowed_analysis_types,
             allowed_variables=allowed_variables,
             allowed_literature_citation_keys=allowed_literature_citation_keys,
-            question_anchors=question_anchors,
+            question_anchors=anchors,
             required=required,
         )
     except ResearchDesignSelectionError as exc:
         message, findings = str(exc), ()
         if exc.reason_code == _ANCHOR_MISSING:
             listable = list(
-                listable_question_anchors(question_anchors, allowed_variables)
+                listable_question_anchors(anchors, allowed_variables)
             )
             if listable:
                 named = " or ".join(repr(anchor) for anchor in listable)
@@ -124,3 +129,8 @@ def validate_outline_design_selection(
             path=exc.path,
             findings=findings,
         ) from exc
+
+    if article_context is not None:
+        # A design can name an input absent from its steps. Check its source
+        # during outline repair, before the subsequent reader-label request.
+        required_reader_display_label_keys(article_context, outline.design_selection)

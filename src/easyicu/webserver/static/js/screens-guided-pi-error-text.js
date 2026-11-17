@@ -672,6 +672,7 @@
         );
       }
       const detailCopy = {
+        progressive_family_spec_trajectory_roster_empty: tr('The study inputs lack a usable column for the fixed-window trajectory design. Add the repeated measurements for at least one selected trajectory variable, then generate the plan again.', '研究输入缺少固定时间窗轨迹设计所需的可用字段。请为至少一个选定的轨迹变量补充重复测量，再重新生成计划。'),
         progressive_action_module_mismatch: tr("The candidate plan assigns a scientific method to an analysis step that cannot execute it, so planning stopped and no analysis was run. Generate the plan again.", "候选计划把科学方法分配给了无法执行它的分析步骤，因此规划已停止，没有运行分析。请重新生成计划。"),
         progressive_outline_action_module_mismatch: tr("The candidate plan assigns a scientific method to an analysis step that cannot execute it, so planning stopped and no analysis was run. Generate the plan again.", "候选计划把科学方法分配给了无法执行它的分析步骤，因此规划已停止，没有运行分析。请重新生成计划。"),
         progressive_outline_primary_module_family_mismatch: tr("The candidate primary analysis method does not apply to the selected study type, so planning stopped and no analysis was run. Generate the plan again.", "候选主要分析方法不适用于所选研究类型，因此规划已停止，没有运行分析。请重新生成计划。"),

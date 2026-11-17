@@ -1285,7 +1285,7 @@ def run_family_spec_attempt(
     max_compile_revisions: int,
     prompt_byte_limit: int,
     bind_outline: Callable[[ProgressivePlanOutline], ProgressivePlanOutline],
-    validate_outline: Callable[[ProgressivePlanOutline], None],
+    validate_outline: Callable[[ProgressivePlanOutline, Sequence[str] | None], None],
     materialize_and_accept: Callable[
         [FamilySkeletonDraft], tuple[AnalysisPlan, ProgressivePlanCompileReceipt, ProgressivePlanSkeleton]
     ],
@@ -1521,6 +1521,10 @@ def run_family_spec_attempt(
             }
         )
 
+    # The signed fit coordinates and optional outcome own the anchor set
+    # for this template. Its spec cannot change either of them.
+    sealed = request.sealed_trajectory
+    question_anchors = (*sealed.coordinate_concepts, request.outcome) if sealed else None
     parse_attempts = 0
 
     def parse_spec(raw: str) -> tuple[FamilyPlanSpec, FamilySkeletonDraft]:
@@ -1556,7 +1560,7 @@ def run_family_spec_attempt(
                 # explicit choice and blocks approval until the user resolves it.
                 attempt.prompt_metrics["question_exposure_choice_fallback"] = choices
             draft = project_spec(spec)
-            validate_outline(draft.outline)
+            validate_outline(draft.outline, question_anchors)
             try:
                 compile_draft_prefixes(draft)
             except ProgressivePlanCompileError as exc:

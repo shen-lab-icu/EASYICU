@@ -7,7 +7,8 @@ from pydantic import ValidationError
 
 from easyicu.research_agent.agents.family_spec_planner import parse_family_plan_spec
 from easyicu.research_agent.planning.question_requirements import (
-    QuestionRequirement, question_requirements_schema, question_requirements_shape,
+    MAX_REQUIREMENT_CONCEPTS, QuestionRequirement, question_requirements_schema,
+    question_requirements_shape,
 )
 from easyicu.research_agent.providers.mocks import ScriptedMockLLMClient
 from easyicu.research_agent.providers.structured_retry import call_llm_with_structured_retry
@@ -82,3 +83,49 @@ def test_analysis_clauses_tile_the_quote_across_punctuation(separator, ending):
 def test_clause_tiling_cannot_reorder_overlap_or_omit_content(quote, clauses):
     with pytest.raises(ValidationError, match="complete requirement quote"):
         QuestionRequirement(id="r1", kind="analysis", coverage="plan", quote=quote, clauses=clauses)
+
+
+def test_one_joint_requirement_can_name_seven_trajectory_features():
+    features = ["hr", "map", "sbp", "resp", "lact", "crea", "plt"]
+    requirement = QuestionRequirement(
+        id="r1", kind="analysis", coverage="plan", concepts=features,
+        quote="Cluster repeated measurements of heart rate, mean and systolic pressure, "
+              "respiratory rate, lactate, creatinine and platelets jointly.",
+    )
+    assert requirement.concepts == features
+    properties = question_requirements_schema(features)["items"]["properties"]
+    limit = properties["concepts"]["maxItems"]
+    assert limit >= len(features)
+    assert properties["analysis_exposures"]["maxItems"] == limit
+    assert f"[0-{limit} distinct names from" in question_requirements_shape(features)
+
+
+def test_family_retry_names_the_field_and_its_concept_limit():
+    request = _request(_context())
+    limit = MAX_REQUIREMENT_CONCEPTS
+    requirement = {"id": "r1", "kind": "analysis", "quote": "adult ICU stays", "coverage": "plan"}
+    bad = _spec_payload(request, question_requirements=[{
+        **requirement, "concepts": [f"feature_{index}" for index in range(limit + 1)],
+    }])
+    good = _spec_payload(request, question_requirements=[{**requirement, "concepts": ["age"]}])
+    llm = ScriptedMockLLMClient([json.dumps(bad), json.dumps(good)])
+
+    result = call_llm_with_structured_retry(
+        llm, [], parser=lambda raw: parse_family_plan_spec(raw, request),
+        max_retries=1, role="family_spec_planner",
+    )
+
+    assert result.question_requirements[0].concepts == ["age"]
+    feedback = llm.calls[1][0][-1].content
+    assert "question_requirements.0.concepts" in feedback
+    assert f"at most {limit} items" in feedback
+
+
+def test_clauses_use_the_question_quote_matchers_normalization():
+    # A single contiguous quote with a CJK span and a full-width Latin token.
+    item = QuestionRequirement(
+        id="r1", kind="analysis", coverage="plan",
+        quote="比较 ＭＡＰ 轨迹；复核分组稳定性。",
+        clauses=["比较MAP轨迹", "复核分组稳定性."],
+    )
+    assert item.clauses == ["比较MAP轨迹", "复核分组稳定性."]

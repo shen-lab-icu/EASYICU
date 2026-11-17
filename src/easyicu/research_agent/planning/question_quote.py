@@ -117,8 +117,8 @@ class QuestionQuoteMatcher:
             parts.append(part)
         self.normalized = "".join(parts)
 
-    def find(self, quote: str) -> QuestionQuoteSpan | None:
-        """Return the first original span whose normalized text matches the quote."""
+    def find(self, quote: str, *, offset: int = 0) -> QuestionQuoteSpan | None:
+        """Return the first matching original span starting at or after offset."""
         needle = normalize_question_quote(quote)
         if not needle:
             return None
@@ -126,7 +126,7 @@ class QuestionQuoteMatcher:
         while position >= 0:
             start = self.starts.get(position)
             end = self.ends.get(position + len(needle))
-            if start is not None and end is not None:
+            if start is not None and start >= offset and end is not None:
                 text = self.question[start:end]
                 # Canonical reordering can preserve lengths while moving marks.
                 if normalize_question_quote(text) == needle:

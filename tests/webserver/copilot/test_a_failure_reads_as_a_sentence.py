@@ -46,6 +46,9 @@ process.stdout.write(JSON.stringify({
   jobKnown: owner.jobErrorText('pi_session_authority_stale: the binding digest changed'),
   jobRaw: owner.jobErrorText('RuntimeError: worker exited'),
   manifest: owner.runFailureText('research_pipeline_manifest_required'),
+  trajectory: owner.runFailureText('research_pipeline_progressive_compile_failed', {
+    code: 'progressive_family_spec_trajectory_roster_empty',
+  }),
 }));
 """
 
@@ -86,6 +89,7 @@ def test_a_chinese_reader_gets_a_sentence_with_the_code_for_the_administrator() 
     assert out["jobKnown"] == "这段对话保存后研究绑定发生了变化，请先重新绑定再继续。"
     assert out["jobRaw"].startswith("这一步没有完成（RuntimeError: worker exited）")
     assert "数据包" in out["manifest"] and "research_pipeline" not in out["manifest"]
+    assert "补充重复测量" in out["trajectory"] and "重新生成计划" in out["trajectory"]
 
 
 @pytest.mark.requires_node
@@ -99,6 +103,8 @@ def test_an_english_reader_keeps_the_server_sentence_and_a_local_build_names_no_
     assert "administrator" not in out["server"]
     assert "/api/" not in out["server"]
     assert out["jobRaw"] == "RuntimeError: worker exited"
+    assert "Add the repeated measurements" in out["trajectory"]
+    assert "generate the plan again" in out["trajectory"]
 
 
 def test_failed_jobs_and_patient_review_read_through_their_owners() -> None:

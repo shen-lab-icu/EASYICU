@@ -41,6 +41,8 @@ from easyicu.research_agent.planning.family_spec.contract import (
     SpecReaderLabel,
     design_field_max_length,
 )
+from easyicu.research_agent.planning.progressive_contract import ProgressivePlanCompileError
+from easyicu.research_agent.planning.question_requirements import QuestionRequirement
 from easyicu.research_agent.providers.mocks import ScriptedMockLLMClient
 from easyicu.research_agent.schema import (
     AnalysisPlan,
@@ -106,7 +108,7 @@ def _authorities(coordinates) -> ScientificRuntimeAuthorities:
     return ScientificRuntimeAuthorities(trajectory=authority, current_case=None)
 
 
-def _context(coordinates, *, outcome: str | None) -> ResearchContext:
+def _context(coordinates, *, outcome: str | None, question: str | None = None) -> ResearchContext:
     provenance = {
         "analysis_unit": "icu_stay",
         "patient_identity_available": False,
@@ -133,7 +135,7 @@ def _context(coordinates, *, outcome: str | None) -> ResearchContext:
             )
         )
     return ResearchContext(
-        research_question=(
+        research_question=question or (
             "Do physiologic trajectories over the first 24 h of an ICU stay form distinct classes?"
         ),
         cohort=CohortDescriptor(
@@ -156,7 +158,8 @@ def _context(coordinates, *, outcome: str | None) -> ResearchContext:
 
 
 def _plan(
-    labels: dict[str, str], *, outcome: str | None, outcome_label: str = "In-hospital death"
+    labels: dict[str, str], *, outcome: str | None, outcome_label: str = "In-hospital death",
+    requirement: QuestionRequirement | None = None,
 ) -> tuple[AnalysisPlan, AnalysisPlan]:
     """Plan through the host as a run does: one labels call, then shape and bind.
 
@@ -165,7 +168,7 @@ def _plan(
     """
 
     coordinates = tuple(labels)
-    context = _context(coordinates, outcome=outcome)
+    context = _context(coordinates, outcome=outcome, question=requirement.quote if requirement else None)
     authorities = _authorities(coordinates)
     disclosure = authorities.planning_contract_context()
     request = build_family_spec_request(
@@ -188,6 +191,8 @@ def _plan(
         "comparator_applications": [],
         "roster_decision_note": "The sealed suite owns every coordinate.",
     }
+    if requirement is not None:
+        payload["question_requirements"] = [requirement.model_dump(mode="json")]
     llm = ScriptedMockLLMClient([json.dumps(payload)])
     draft = ProgressivePlannerAgent(llm).run_attempt(
         context,
@@ -236,7 +241,12 @@ def test_a_roster_that_fits_is_named_in_the_estimand_without_another_construct()
 def test_seven_ordinary_coordinate_labels_compile_with_a_bounded_estimand(outcome) -> None:
     assert len(", ".join(_ORDINARY.values())) > 300
 
-    draft, _bound = _plan(_ORDINARY, outcome=outcome)
+    requirement = QuestionRequirement(
+        id="r1", kind="analysis", coverage="plan", concepts=list(_ORDINARY),
+        quote="Group the trajectories of heart rate, mean arterial pressure, systolic pressure, "
+              "respiratory rate, lactate, creatinine, and platelets together.",
+    )
+    draft, _bound = _plan(_ORDINARY, outcome=outcome, requirement=requirement)
 
     design = draft.design_selection.selected
     assert len(design.estimand) <= design_field_max_length("estimand")
@@ -259,3 +269,60 @@ def test_the_longest_roster_and_labels_the_contracts_allow_still_compile() -> No
     # The item is a sentence, so its first label is capitalized.
     named = design.reviewable_plan[1].casefold()
     assert all(label.casefold() in named for label in labels.values())
+
+
+@pytest.mark.parametrize("question", [
+    "Cluster the repeated measurements of heart rate and lactate on the same grid.",
+    "按固定时间网格对心率与乳酸的重复测量进行轨迹分型。",
+])
+def test_sealed_fit_coordinates_bind_the_design_when_the_scalar_anchor_is_unused(question):
+    context = _context([*_SHORT, "age"], outcome=None, question=question).model_copy(
+        update={"primary_exposure": "age"}
+    )
+    disclosure = _authorities(_SHORT).planning_contract_context()
+    request = build_family_spec_request(
+        context, analysis_types=candidate_analysis_types(context),
+        variable_roster=select_progressive_variables(context),
+        allowed_literature_citation_keys=_CITATIONS, planning_contract_context=disclosure,
+    )
+    llm = ScriptedMockLLMClient([json.dumps({
+        "adjustment_set": [],
+        "reader_display_labels": [
+            {"key": key, "value": _SHORT[key]} for key in request.required_reader_label_keys
+        ],
+        "comparator_applications": [],
+        "roster_decision_note": "The signed design supplies the fitting coordinates.",
+        "question_requirements": [{
+            "id": "r1", "kind": "analysis", "coverage": "plan", "concepts": ["hr", "lact"],
+            "quote": question.replace("。", "."),
+        }],
+    })])
+
+    found = ProgressivePlannerAgent(llm).run_attempt(
+        context, planner_strategy=FAMILY_SPEC_STRATEGY,
+        planning_contract_context=disclosure, allowed_literature_citation_keys=_CITATIONS,
+        enforce_article_contract=False,
+    )
+
+    assert len(llm.calls) == 1
+    assert found.facts.compile_receipt is not None
+    assert found.output.design_selection.selected.required_variables == ["stay_id", *_SHORT]
+
+
+def test_no_offered_trajectory_anchor_stops_before_the_provider():
+    context = _context(["age"], outcome=None).model_copy(update={"primary_exposure": "age"})
+    disclosure = _authorities(_SHORT).planning_contract_context()
+    llm = ScriptedMockLLMClient([])
+
+    with pytest.raises(ProgressivePlanCompileError) as refused:
+        ProgressivePlannerAgent(llm).run_attempt(
+            context, planner_strategy=FAMILY_SPEC_STRATEGY,
+            planning_contract_context=disclosure, allowed_literature_citation_keys=_CITATIONS,
+            enforce_article_contract=False,
+        )
+
+    assert llm.calls == []
+    assert refused.value.reason_code == "progressive_family_spec_trajectory_roster_empty"
+    assert refused.value.path == "sealed_trajectory.coordinate_concepts"
+    assert refused.value.details["metrics"]["planner_provider_calls"] == 0
+    assert "Include" in str(refused.value) and "trajectory coordinates" in str(refused.value)
