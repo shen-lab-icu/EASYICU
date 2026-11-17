@@ -735,7 +735,7 @@ def test_native_agent_render_layer_is_split_into_owner_file() -> None:
     assert fixtures_pos < vocab_pos < render_pos
     assert "js/screens-agent-report-reader.js?v=20261103-lineage1" in index_html
     assert "js/screens-agent-render.js?v=20261026-run-files1" in index_html
-    assert "js/screens-agent-question-requirements.js?v=20261026-rr1" in index_html
+    assert "js/screens-agent-question-requirements.js?v=20261117-fix1" in index_html
     assert "css/agent-plan.css?v=20261026-run-files1" in index_html
 
 
