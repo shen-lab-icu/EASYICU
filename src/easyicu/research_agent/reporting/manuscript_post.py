@@ -2044,11 +2044,17 @@ def repair_miscited_numeric_citations(
         return scaffold, []
     resolvable = set(evidence.resolvable_names())
     skip_spans = _spans_to_skip(scaffold)
+    definitions = registered_definition_spans(
+        scaffold, evidence, sentence_bounds=_numeric_sentence_bounds,
+        parse_literal=_parsed_numeric_literal, skip_spans=skip_spans,
+    )
     repairs: List[Dict[str, str]] = []
     insertions: List[tuple[int, str]] = []
-    for match in _NUMERIC_IN_PROSE_RE.finditer(scaffold):
+    for match in definition_number_matches(scaffold, definitions):
         start, end = match.start("value"), match.end("value")
-        if _position_is_inside(start, skip_spans):
+        if _position_is_inside(start, skip_spans) or any(
+            span.start <= start and end <= span.end for span in definitions
+        ):
             continue
         value = match.group("value")
         lookup_value = _lookup_literal_for_numeric_match(
@@ -2217,10 +2223,9 @@ def bind_numeric_values(
     * STRICT mode → raise :class:`EvidenceEnforcementError` after
       scanning, with the offending values in ``detail['untraced']``.
 
-    Exact host rules bind values reproduced from typed parameters. Quoted
-    source-definition lines and registered plan labels bind their own numeric
-    occurrences to their definition source, never to a result. Edited lines
-    and equal values outside those spans gain no definition authority.
+    Host rules, registered plan labels and source-cited typed paraphrases bind
+    their own numeric occurrences to a definition source. Other occurrences
+    use the result claim registry.
 
     The implementation skips numbers that are already inside
     ``{evidence:<id>}`` placeholders, existing footnote markers
@@ -2256,7 +2261,10 @@ def bind_numeric_values(
     )
     skip_spans = sorted(_spans_to_skip(manuscript) + bibliographic_year_spans(manuscript, literature))
     released = released_fact_lines(manuscript, method_facts, bind_fact)
-    definitions = (*registered_definition_spans(manuscript, evidence), *(
+    definitions = (*registered_definition_spans(
+        manuscript, evidence, sentence_bounds=_numeric_sentence_bounds,
+        parse_literal=_parsed_numeric_literal, skip_spans=skip_spans,
+    ), *(
         DefinitionSpan(start, end, fact.evidence_id, fact.source_field, fact.source_sha256)
         for start, end, fact in released if fact.source_field.endswith(".description")
     ))

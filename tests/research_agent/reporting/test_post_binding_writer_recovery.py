@@ -19,6 +19,7 @@ from easyicu.research_agent.reporting.manuscript_sections import completed_secti
 from easyicu.research_agent.reporting import write_phase
 from easyicu.research_agent.schema import AnalysisPlan, AnalysisStep, CritiqueReport, ResearchContext, ValidationFinding
 
+from .test_manuscript_definition_numerics import _grouping, _register_context
 from .test_manuscript_quality import _valid_manuscript
 
 
@@ -200,7 +201,7 @@ def _section(text, name):
     return text.split(f"## {name}\n", 1)[1].split("\n## ", 1)[0].strip()
 
 
-def _exercise(tmp_path, monkeypatch, bad, responses, *, changed_bindings=False, initial_findings=(), baseline_mentions=None, definition_labels=None):
+def _exercise(tmp_path, monkeypatch, bad, responses, *, changed_bindings=False, initial_findings=(), baseline_mentions=None, definition_labels=None, grouping=None):
     context = ResearchContext.model_validate({
         "research_question": "Assess potassium-based renal readmission prediction.",
         "cohort": {"cohort_name": "synthetic", "database": "miiv", "n_stays": 120},
@@ -215,8 +216,13 @@ def _exercise(tmp_path, monkeypatch, bad, responses, *, changed_bindings=False, 
     if baseline_mentions is not None:
         monkeypatch.setattr(write_phase, "baseline_reporting_mentions", lambda *_args: baseline_mentions)
     store = EvidenceStore(tmp_path, enforcement_mode=EvidenceEnforcementMode.STRICT)
-    if definition_labels:
-        plan.display_labels = definition_labels
+    if grouping:
+        context = context.model_copy(update={"cohort": context.cohort.model_copy(update={
+            "provenance": {"exposure_group_labels": [grouping]},
+        })})
+        _register_context(store, context)
+    if definition_labels or grouping:
+        plan.display_labels = definition_labels or {}
         store.register_json(kind="log", description="Registered synthetic plan", payload=plan.model_dump(mode="json"),
                             filename="plan.json", evidence_id="analysis_plan", producer="planner", generation_mode="system")
     summary = {"cohort_n": 120, "another_count": 121, "auroc": 0.74, "events": 15}
@@ -260,7 +266,7 @@ def _exercise(tmp_path, monkeypatch, bad, responses, *, changed_bindings=False, 
         # harness's authority. It is not used to construct numeric evidence.
         assert "The cohort comprised" in filtered.scaffold
         bound = store.bind_manuscript(scaffold, per_step_records=records)
-        if definition_labels:
+        if definition_labels or grouping:
             from easyicu.research_agent.reporting.manuscript_post import drop_untraceable_numeric_sentences
             bound, removed = drop_untraceable_numeric_sentences(bound, evidence=store, per_step_records=records)
             if removed:
@@ -622,3 +628,27 @@ def test_adjustment_repair_cannot_drop_a_definition_written_in_scientific_notati
     response = "## Methods\n\n" + _section(bad, "Methods").replace("age and severity, using " + label, "age and sex")
     with pytest.raises(EvidenceEnforcementError, match="existing bound number or source changed"):
         _exercise(tmp_path, monkeypatch, bad, [response], definition_labels={"potassium=low": label})
+
+
+def test_cited_paraphrases_do_not_block_repair_of_a_callout_only_subsection(tmp_path, monkeypatch):
+    definition = ("Serum potassium was represented by two ordered categories: under 4.0 mmol/L and 4.0 mmol/L or higher "
+                  "{evidence:research_context}.")
+    contrast = ("The contrast was serum potassium of 4.0 mmol/L or higher versus below 4.0 mmol/L, "
+                "with the under-4.0 group as the reference {evidence:research_context} {evidence:renal_summary}.")
+    bad = GOOD.replace("The AUROC was 0.74 {evidence:renal_summary}.", "See Figure 1 {evidence:renal_summary}.")
+    bad = bad.replace("## Introduction\n\n", "## Introduction\n\n" + definition + "\n\n")
+    bad = bad.replace("### Variables\n", "### Variables\n" + definition + "\n\n" + contrast + "\n\n")
+    bad = bad.replace("## Limitations\n\n", "## Limitations\n\n" + definition + "\n\n")
+    result, client, drafts, bindings, findings = _exercise(
+        tmp_path, monkeypatch, bad, ["## Results\n\n" + _section(GOOD, "Results")],
+        grouping=_grouping("potassium", 4, "mmol/L"),
+    )
+    assert result[1].manuscript_critique.status == "pass"
+    assert len(client.calls) == 1 and len(drafts) == len(bindings) == 2
+    assert "MANUSCRIPT_RESULT_SUBSECTION_CALLOUT_ONLY" in client.calls[0][0][-1].content
+    assert not any((finding.detail or {}).get("removed_sentences") for finding in findings)
+    assert result[1].untraced_numerics == ()
+    assert result[1].bound.count("4.0[^claim_") == 9
+    receipt = json.loads((tmp_path / "manuscript_audit_repair.json").read_text())
+    assert receipt["status"] == "pass" and len(receipt["attempts"]) == 1
+    assert receipt["attempts"][0]["numeric_checks"] == "pass"
