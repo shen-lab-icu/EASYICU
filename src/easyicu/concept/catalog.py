@@ -996,6 +996,11 @@ PLANNER_HIDDEN_CONCEPTS = frozenset({
     # SICdb audit companions (R5-SIC-001/011/015): exported beside their values.
     'cvp_raw', 'cvp_qc', 'minute_vol_raw', 'minute_vol_qc',
     'mech_vent_rule', 'mech_vent_opioid_sensitivity',
+    # S732TW: worst active dose per hour, read by SOFA cardiovascular scoring;
+    # the Planner chooses the active-time rate itself.
+    'adh_rate_max', 'angiotensin_ii_rate_max', 'dobu_rate_max', 'dopa_rate_max',
+    'enoximone_rate_max', 'epi_rate_max', 'milrinone_rate_max', 'norepi_rate_max',
+    'phn_rate_max',
 })
 
 # 双语显示名称映射（优化：更清晰的命名区分评分vs诊断，包含准确特征数量）

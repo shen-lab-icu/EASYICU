@@ -7,6 +7,17 @@ answers is in brackets.
 lead-r13 (0.1.0) is validated on SICdb 1.0.8, the default release, and
 remains compatible with SICdb 1.0.6 (the release is detected from the schema).
 
+## 2026-11-17 — fourteenth dictionary reseal [S732]
+
+**What changed.** Under the user's consent ("同意，全部封存") `tools/reseal_concept_dict.py` moved
+`concept-dict.LOCK.json` and the current research profiles to AUDIT14 (SICdb overlay v16); AUDIT13 stays
+registered as history. The sealed dictionary (417 concepts, was 408) now carries the four "reseal 14" entries
+below: the MIMIC-IV pre-ICU creatinine baseline, `sofa_resp` without P/F or ventilation, MIMIC microbiology
+attribution and the active-time hourly dose rates with their hidden `_max` companions (S732TW), plus the
+declared Sepsis-3 definition options (defaults unchanged). Against R ricu 0.6.3 gold the MIMIC-IV SOFA total is
+unchanged; the dose-rate change moves vasopressor-rate agreement as recorded in DEV-RICUC-10 of
+[ricu deviations](ricu_deviations.md).
+
 ## Unreleased (reseal 14) — MIMIC-IV pre-ICU creatinine reaches the KDIGO baseline [S732, mimic-code parity B1]
 
 **What changed.** MIMIC-IV only. Laboratory rows without an admission ID that

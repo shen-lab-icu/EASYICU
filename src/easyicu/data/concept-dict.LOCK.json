@@ -2,9 +2,9 @@
   "finalized": true,
   "finalized_note": "2026-09-21 v6 数据基础已完成重建与质控：六库受影响模块均从原始数据刷新，全部 114 个 native-v2 模块由同一 clean runtime 97f508c6 重新发布。MIMIC-III/IV 住院死亡状态逐 stay 与原始 admissions 完全一致，death_time 的缺失性逐行一致，非缺失值仅有 float32 写出误差（最大分别 0.000115/0.000228 小时）。其余字典、临床合同、数据源与运行时修复均由候选包 provenance 和封存门禁绑定。",
   "locked_for_extraction_run": "full6_native_v6_clean_rebuild_97f508c6_20260921",
-  "concept_dict_sha256": "d96618449f127e142784c87f53251109cb6c2efb7cf0f5a2346d66988661ba38",
-  "sofa2_dict_sha256": "a3f64f28dbf704a6d4822376a6778620eff455f1e703ee9081e51c85a750b118",
-  "total_concepts": 408,
+  "concept_dict_sha256": "0608b7fe42d12e46efa828d34f839712c05debf948e0c96f528ce25876a03f42",
+  "sofa2_dict_sha256": "a0d1c96da76cb64bef07b96c268497d3506ef116cde0f2700aa8ab11aeceadcf",
+  "total_concepts": 417,
   "new_this_round": [],
   "pending_foundation_changes": [],
   "previous_published_lock": {
@@ -93,7 +93,7 @@
     "vent_mode": "new harmonised mode concepts (MIMIC-IV/III/AUMC/HiRID); driving_pres_controlled = mode-conditioned driving pressure",
     "final_data_distribution_check": "PASSED — candidate full6_native_v3_aki_ref_native_d34ca8a5_20260901 contains 6 x 19 readable native-v2 modules. Reference AKI stage is materialized in all six databases; source-native stage is materialized for MIMIC-III/MIMIC-IV, while AUMC/SIC future-looking case endpoints are not embedded in hourly exports, eICU remains components-only, and HiRID fails closed without the required auxiliary source. MIMIC-IV reference/native differences are consistent with the intentional broad-active-RRT versus official-CRRT distinction."
   },
-  "clinical_contracts_sha256": "9b2cb43b86a3763b32be9ab010308177d3f8b1c03da0318fd88a7af946533647",
+  "clinical_contracts_sha256": "d87138c475cbc11b3a2ca0d66a580a955e4252f84c7a437bcd39be2bd3a566ba",
   "clinical_contract_validator_sha256": "b17da6b29d089d17a99c4107199a8597952bdf102a0477bde44b533676be469e",
   "data_sources_sha256": "534288eecb0487aeef9fcedfc4b82ea3dc7e9117c6b29cda91fb49f6991a6a32",
   "finalized_foundation_changes": [
@@ -176,6 +176,10 @@
     {
       "git_commit": "659ef8fd0f45fbaab308a858b86680800c327aa3",
       "change": "User-approved 20261116-audit13 reseal: thirteenth reseal: S907 + TB1 + nativevent + haemo_native + fluid_events Consent: 同意重新封存，并继续 TB2"
+    },
+    {
+      "git_commit": "4a73363da1a1349fcaca494bda66773a71b389c8",
+      "change": "User-approved 20261117-audit14 reseal: fourteenth reseal: B1 sofa_resp + MIMIC microbiology + KDIGO pre-ICU creatinine + Sepsis-3 options + S732TW active-time dose rates Consent: 同意，全部封存"
     }
   ]
 }
