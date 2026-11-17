@@ -234,7 +234,7 @@ class PlanRevisionGuard:
         return "\n".join((
             "REPAIR-OR-REMOVE REVISION SCOPE (host-derived):",
             f"- source_plan_sha256: {self.review.plan_sha256}",
-            "- Repair or remove existing analyses. Add a step only to satisfy a typed question requirement or a blocking finding's required remediation.",
+            "- Repair or remove existing analyses. Add a step only to satisfy a typed question requirement or an applicable plan-owned finding's scoped remediation.",
             "- Do not add optional sensitivities, functional-form exploration, subgroup analyses, ordinal trends, E-values, imputation, figures or tables.",
             "- source_plan_json: " + self.source_plan_json,
         )) + StructuralRepairScope(self.review, self.previous_plan).prompt()

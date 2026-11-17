@@ -456,6 +456,51 @@ def _blocker(code, **kwargs):
     })
 
 
+@pytest.mark.parametrize("legacy", [False, True])
+@pytest.mark.parametrize("code", ["ROBUSTNESS_AXES_TOO_NARROW", "ROBUSTNESS_AUTHORITY_NOT_PRESPECIFIED", "ROBUSTNESS_SPECS_NOT_EXECUTABLE"])
+def test_robustness_review_item_authorizes_its_bounded_replay(code, legacy):
+    from easyicu.research_agent.planning.publication_readiness import bind_required_plan_shape
+    from tests.research_agent.planning.scientific_review_fixtures import _context
+
+    context = _context()
+    previous = _revision_plan()
+    findings, _ = bind_required_plan_shape(
+        context=context, plan=previous,
+        findings=[_blocker(code, severity="major")], missing_outcomes=(), missing_roles=[],
+    )
+    if legacy:
+        findings = [finding.model_copy(update={"structural_remediations": ()}) for finding in findings]
+    replay = _revision_step("robustness_sensitivity", inputs=["exposure", "death"],
+                            robustness_replay_spec={"products": [{"product_id": "extra", "output": "robustness_matrix"}]})
+    receipt = _revision_guard(previous, *findings).validate_plan(plan=_revision_plan(replay), context=context)
+    assert receipt.structural_changes[0].finding_code == code
+    for extra in (
+        replay.model_copy(update={"method": "e_value"}),
+        replay.model_copy(update={"inputs": ["exposure", "death", "unrequested"]}),
+        replay.model_copy(update={"robustness_replay_spec": None}),
+    ):
+        with pytest.raises(owner.ResearchPipelineRunError, match="unrequested"):
+            _revision_guard(previous, *findings).validate_plan(plan=_revision_plan(extra), context=context)
+    with pytest.raises(owner.ResearchPipelineRunError, match="unrequested"):
+        _revision_guard(previous).validate_plan(plan=_revision_plan(replay), context=context)
+    with pytest.raises(owner.ResearchPipelineRunError, match="unrequested"):
+        _revision_guard(previous, *findings).validate_plan(
+            plan=_revision_plan(replay, replay.model_copy(update={"step_id": "duplicate"})), context=context,
+        )
+
+
+def test_a_descriptive_robustness_finding_does_not_authorize_an_effect_replay():
+    from easyicu.research_agent.planning.publication_readiness import bind_required_plan_shape
+    from tests.research_agent.planning.scientific_review_fixtures import _context
+
+    plan = _revision_plan().model_copy(update={"analysis_type": "descriptive_epidemiology"})
+    findings, _ = bind_required_plan_shape(
+        context=_context(), plan=plan, findings=[_blocker("ROBUSTNESS_AXES_TOO_NARROW", severity="major")],
+        missing_outcomes=(), missing_roles=[],
+    )
+    assert not findings[0].structural_remediations
+
+
 def test_a_finding_authorizes_only_its_exact_structural_repair():
     from tests.research_agent.planning.scientific_review_fixtures import _context
 

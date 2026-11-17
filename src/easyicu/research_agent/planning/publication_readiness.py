@@ -375,6 +375,36 @@ def render_required_plan_shape(context: ResearchContext, **kwargs) -> str:
     return "\n".join(lines)
 
 
+def robustness_review_remediations(
+    plan: AnalysisPlan | Mapping[str, Any], code: str,
+) -> tuple[PlanShapeRemediation, ...]:
+    """Bind a robustness review item, including a stored review from an older host."""
+
+    if code not in {
+        "ROBUSTNESS_AXES_TOO_NARROW", "ROBUSTNESS_AUTHORITY_NOT_PRESPECIFIED",
+        "ROBUSTNESS_SPECS_NOT_EXECUTABLE",
+    }:
+        return ()
+    raw = plan.model_dump(mode="json") if isinstance(plan, AnalysisPlan) else plan
+    steps = raw["steps"]
+    primary = next((step for step in steps if step.get("planned_analysis_role") == "primary"), None)
+    if primary is not None and canonical_analysis_family(raw.get("analysis_type")) != "descriptive_epidemiology":
+        # A plan-owned robustness finding asks for the locked-grid replay,
+        # including major findings. Bind that exact owner to existing inputs;
+        # it grants no optional model, subgroup, endpoint or rendering module.
+        source = next((step for step in steps if step.get("robustness_replay_spec") is not None), None)
+        return (PlanShapeRemediation(
+            operation="replace_module" if source else "add_step",
+            step_id=source["step_id"] if source else None, module="robustness_sensitivity",
+            planned_analysis_role="sensitivity",
+            inputs=tuple(dict.fromkeys(
+                value for step in steps for value in (*step.get("inputs", ()), *step.get("expected_outputs", ()))
+                if not value.startswith("figure:")
+            )),
+        ),)
+    return ()
+
+
 def _remediations(
     context: ResearchContext, plan: AnalysisPlan, items: tuple[RequiredPlanShape, ...],
     code: str, missing_outcomes: tuple[str, ...], missing_roles: list[str],
@@ -385,6 +415,9 @@ def _remediations(
         if is_closed_cohort_product_key(key)
     ))
     primary = next((step for step in plan.steps if step.planned_analysis_role == "primary"), None)
+    robustness = robustness_review_remediations(plan, code)
+    if robustness:
+        return robustness
     for item in items:
         if not _repairs_finding(item, code) or (item.kind == "article_role" and item.article_role not in missing_roles):
             continue

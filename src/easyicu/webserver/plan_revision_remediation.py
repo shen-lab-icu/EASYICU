@@ -7,6 +7,7 @@ import json
 from easyicu.research_agent.canonical_json import canonical_sha256
 from easyicu.research_agent.planning.requirement_coverage import PlanRevisionReceipt, PlanStructuralChange
 from easyicu.research_agent.planning.scientific_review import remediation_route_for_finding
+from easyicu.research_agent.planning.publication_readiness import robustness_review_remediations
 
 
 def _module(value: str | None) -> str:
@@ -24,7 +25,9 @@ class StructuralRepairScope:
             for finding in review.findings
             if not finding.requires_user_authorization
             and remediation_route_for_finding(finding) == "agent_plan_revision"
-            for index, remediation in enumerate(finding.structural_remediations)
+            for index, remediation in enumerate(
+                finding.structural_remediations or robustness_review_remediations(previous, finding.code)
+            )
         ]
         self.used: set[str] = set()
         self.changes: list[PlanStructuralChange] = []
@@ -43,6 +46,8 @@ class StructuralRepairScope:
             if identity in self.used or not action_matches or not module_matches:
                 continue
             if step.planned_analysis_role != repair.planned_analysis_role or not set(step.inputs) <= set(repair.inputs):
+                continue
+            if repair.module == "robustness_sensitivity" and step.robustness_replay_spec is None:
                 continue
             # A model's hidden roster cannot extend a declared input ceiling.
             columns = {value for req in step.model_requirements for value in (
