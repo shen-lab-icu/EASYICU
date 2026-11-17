@@ -237,7 +237,7 @@ def prepare_registered_export_bundle(
             "registered_export_manifest_unreadable",
             "The registered export manifest cannot be read safely.",
         ) from exc
-    if not isinstance(manifest, Mapping):
+    if not isinstance(manifest, Mapping) or not isinstance(manifest.get("files", []), list):
         raise ExportDownloadError(
             "registered_export_manifest_invalid",
             "The registered export manifest is invalid.",
@@ -245,7 +245,7 @@ def prepare_registered_export_bundle(
     if is_hosted() and any(
         isinstance(row, Mapping)
         and (str(row.get("module")) in SUBHOUR_MODULE_INTERVALS or row.get("time_resolution"))
-        for row in manifest.get("files") or []
+        for row in manifest.get("files", [])
     ):
         raise ExportDownloadError(HOSTED_SUBHOUR_CODE, HOSTED_SUBHOUR_REASON, status_code=403)
 

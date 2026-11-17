@@ -140,3 +140,23 @@ def test_hosted_download_refuses_a_registered_minute_export(tmp_path, monkeypatc
     )
     assert response.status_code == 403
     assert response.json()["detail"]["error"] == "subhour_unavailable_when_hosted"
+
+
+@pytest.mark.parametrize("hosted", [True, False])
+@pytest.mark.parametrize("declarations", [37, {"file": "demographics.csv"}])
+def test_download_refuses_non_list_file_declarations(tmp_path, monkeypatch, hosted, declarations):
+    root = tmp_path / "export"
+    registry = _export(root)
+    manifest = root / "_manifest.json"
+    payload = json.loads(manifest.read_text())
+    payload["files"] = declarations
+    manifest.write_text(json.dumps(payload))
+    monkeypatch.setenv("EASYICU_HOSTED", "1" if hosted else "0")
+    monkeypatch.setenv("EASYICU_HOME", str(tmp_path))
+    monkeypatch.setattr(export_download.sources, "load_registry", lambda **_: registry)
+
+    response = TestClient(app, raise_server_exceptions=False).post(
+        "/api/workspaces/download", json={"source_id": "src_0123456789ab"},
+    )
+    assert response.status_code == 400
+    assert response.json()["detail"]["error"] == "registered_export_manifest_invalid"

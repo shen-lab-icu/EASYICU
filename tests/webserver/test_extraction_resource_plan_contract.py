@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 from contextlib import contextmanager
 from pathlib import Path
+from types import SimpleNamespace
 
 import pandas as pd
 import pytest
@@ -213,6 +214,56 @@ def test_minute_route_refuses_an_unmapped_or_hosted_request(tmp_path, monkeypatc
         refusal = client.post("/api/jobs/extract", json={**request, "concepts": None})
         assert refusal.status_code == 403
         assert refusal.json()["detail"]["error"] == "subhour_unavailable_when_hosted"
+
+
+@pytest.mark.parametrize(
+    ("hosted", "modules", "status", "code"),
+    [
+        (True, ["respiratory"], 403, "subhour_unavailable_when_hosted"),
+        (False, ["respiratory"], 400, "subhour_signal_selection_invalid"),
+        (False, ["respiratory", "vent_native"], 400, "subhour_signal_selection_invalid"),
+    ],
+)
+def test_minute_projection_requires_a_selected_module(tmp_path, monkeypatch, hosted, modules, status, code):
+    from fastapi import FastAPI
+    from fastapi.testclient import TestClient
+
+    from easyicu.webserver.routes import jobs
+
+    app = FastAPI()
+    app.include_router(jobs.submission_router)
+    monkeypatch.setenv("EASYICU_HOSTED", "1" if hosted else "0")
+    monkeypatch.setenv("EASYICU_DATA_ROOTS", str(tmp_path))
+    monkeypatch.setenv("EASYICU_HOME", str(tmp_path))
+    monkeypatch.setattr(jobs.settings_store, "load_settings", lambda: {})
+    effects = []
+
+    def get_context(study_id):
+        effects.append(("get", study_id))
+        return {"revision": 2, "data_source": {"path": str(tmp_path), "database": "hirid"}}
+
+    def submit(kind, _runner):
+        effects.append(("submit", kind))
+        return SimpleNamespace(id="test-job", kind=kind, status="queued")
+
+    def handoff(study_id, **kwargs):
+        effects.append(("handoff", study_id, kwargs))
+        return {"context": {"revision": 3}}
+
+    monkeypatch.setattr(jobs.context_store, "get_context", get_context)
+    monkeypatch.setattr(jobs.source_store, "registered_source_identity", lambda _path: None)
+    monkeypatch.setattr(jobs, "submit_job", submit)
+    monkeypatch.setattr(jobs.context_store, "handoff_context", handoff)
+    with TestClient(app) as client:
+        refusal = client.post("/api/jobs/extract", json={
+            "path": str(tmp_path), "database": "hirid", "modules": modules,
+            "concepts": {"respiratory": ["resp"], "subhour_signals": ["map_invasive"]},
+            "study_context_id": "test-study", "study_context_revision": 2,
+        })
+
+    assert refusal.status_code == status, (refusal.json(), effects)
+    assert refusal.json()["detail"]["error"] == code
+    assert effects == []
 
 
 def test_default_web_extraction_dispatches_the_same_hourly_modules(tmp_path, monkeypatch):

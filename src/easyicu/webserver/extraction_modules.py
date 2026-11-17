@@ -47,13 +47,19 @@ def minute_export_modules(database, modules, concepts) -> dict[str, list[str]]:
         module for module in (modules or ())
         if isinstance(module, str) and module in SUBHOUR_MODULE_INTERVALS
     ]
-    if not selected:
+    projection = concepts if isinstance(concepts, Mapping) else {}
+    concept_minute = SUBHOUR_MODULE_INTERVALS.keys() & projection.keys()
+    if not selected and not concept_minute:
         return {}
     if is_hosted():
         raise SubhourSelectionError(HOSTED_SUBHOUR_CODE, HOSTED_SUBHOUR_REASON)
+    if concept_minute.difference(selected):
+        raise SubhourSelectionError(
+            "subhour_signal_selection_invalid",
+            "Signal projections require explicitly selected minute-resolution modules.",
+        )
 
     coverage = subhour_module_coverage(database)
-    projection = concepts if isinstance(concepts, Mapping) else {}
     for module in selected:
         select_subhour_concepts(module, database, coverage[module], projection.get(module))
     return {module: coverage[module] for module in selected}

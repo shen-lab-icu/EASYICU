@@ -333,7 +333,8 @@
     // Even a same-study revision (or the first study on a native run) must
     // wait: replacing those values would relabel the old terminal result.
     if (extractionTaskRunning()) return null;
-    minuteModules?.clear();
+    if (nextStudyId !== exHydratedStudyId) minuteModules?.reset();
+    else minuteModules?.clear();
     if (changingStudy) {
       abandonExtractionContinuity();
       exView = 'home'; exReal = 'connect'; exPath = ''; exSource = null;
@@ -452,7 +453,7 @@
      screen never shows a stale "Extraction complete" for the new source. */
   window.__euExtractReset = function () {
     abandonExtractionContinuity();
-    minuteModules?.clear();
+    minuteModules?.reset();
     exView = 'home';
     exReal = 'connect';
   };
@@ -852,7 +853,7 @@
 
   function startScan(src) {
     abandonExtractionContinuity();
-    minuteModules?.clear();
+    minuteModules?.reset();
     if (!String(exPath || '').trim()) {
       exSource = src || null;
       exScanResult = null;
@@ -1044,6 +1045,7 @@
     begin(record) {
       const source = record.source || {};
       const config = record.config || {};
+      if (exPath !== source.path || exScanResult?.db_key !== source.database) minuteModules?.reset();
       exPath = source.path || '';
       exScanResult = Object.assign({}, exScanResult || {}, { ok: true, db_key: source.database || '' });
       if (record.kind === 'extract') {
@@ -1927,7 +1929,7 @@
         });
       });
       const startConvBtn = root.querySelector('[data-ex-startconv]'); if (startConvBtn) startConvBtn.addEventListener('click', () => { startConvert(); });
-      root.querySelectorAll('[data-ex-rescan]').forEach(b => b.addEventListener('click', () => { abandonExtractionContinuity(); exReal = 'connect'; exSource = null; exScanResult = null; exScanError = null; convProg = null; convResult = null; convErr = null; repaint(); }));
+      root.querySelectorAll('[data-ex-rescan]').forEach(b => b.addEventListener('click', () => { abandonExtractionContinuity(); minuteModules?.reset(); exReal = 'connect'; exSource = null; exScanResult = null; exScanError = null; convProg = null; convResult = null; convErr = null; repaint(); }));
       const convDoneBtn = root.querySelector('[data-ex-convdone]'); if (convDoneBtn) convDoneBtn.addEventListener('click', () => { abandonExtractionContinuity(); exReal = 'ready'; repaint(); });
       // run
       root.querySelectorAll('[data-ex-run]').forEach(b => b.addEventListener('click', () => runExtract(b.dataset.exRun || 'custom')));
@@ -1938,7 +1940,7 @@
       root.querySelectorAll('[data-ex-cancel]').forEach(b => b.addEventListener('click', cancelExportJob));
       root.querySelectorAll('[data-ex-open-output]').forEach(b => b.addEventListener('click', () => openExtractionOutput(b.dataset.exOpenOutput || '', b)));
       root.querySelectorAll('[data-ex-sync-guided]').forEach(b => b.addEventListener('click', () => continueInGuidedCopilot(b)));
-      root.querySelectorAll('[data-ex-reset]').forEach(b => b.addEventListener('click', () => { abandonExtractionContinuity(); minuteModules?.clear(); exView = 'home'; exSetupStep = 'modules'; exExpandedMod = null; exportProg = null; exportResult = null; exportErr = null; exportCancelled = null; exportCohortReport = null; exportResourcePlan = null; exportJobId = null; exportCancelRequested = false; exportRunModules = null; exOutputNotice = ''; exOutputError = ''; exSyncNotice = ''; exSyncError = ''; repaint(); }));
+      root.querySelectorAll('[data-ex-reset]').forEach(b => b.addEventListener('click', () => { abandonExtractionContinuity(); minuteModules?.reset(); exView = 'home'; exSetupStep = 'modules'; exExpandedMod = null; exportProg = null; exportResult = null; exportErr = null; exportCancelled = null; exportCohortReport = null; exportResourcePlan = null; exportJobId = null; exportCancelRequested = false; exportRunModules = null; exOutputNotice = ''; exOutputError = ''; exSyncNotice = ''; exSyncError = ''; repaint(); }));
       root.querySelectorAll('[data-ex-step-next], [data-ex-step-back], [data-ex-step-target]').forEach(button => button.addEventListener('click', () => {
         moveToSetupStep(button.dataset.exStepNext || button.dataset.exStepBack || button.dataset.exStepTarget || 'modules');
       }));
@@ -2074,6 +2076,7 @@
     beginSourceBinding() {
       if (extractionTaskRunning()) return false;
       abandonExtractionContinuity();
+      minuteModules?.reset();
       exView = 'home';
       exSetupStep = 'modules';
       exReal = 'connect';

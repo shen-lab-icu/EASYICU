@@ -18,6 +18,8 @@ const source = file(process.argv[2], OWNER);
 const hostedCopy = file(process.argv[3], 'screens-extraction-hosted.js');
 const html = file(process.argv[4], 'html-escape.js');
 const names = fs.readFileSync(path.join(process.argv[2] ? path.dirname(path.resolve(process.argv[2])) : root, 'database-names.js'), 'utf8');
+const minuteSource = file(null, 'screens-extraction-minute.js');
+const studyContext = file(null, 'screens-extraction-study-context.js');
 
 function section(begin, end) {
   const a = source.indexOf(begin), b = source.indexOf(end, a + begin.length);
@@ -169,7 +171,6 @@ test('a finished extraction the job registered is re-read, not registered again'
 });
 
 test('minute chooser sends only explicit, database-covered modules and renders the result receipt', async () => {
-  const minuteSource = file(null, 'screens-extraction-minute.js');
   let hosted = false;
   let stale = false;
   const groups = {
@@ -230,4 +231,184 @@ test('minute chooser sends only explicit, database-covered modules and renders t
   hosted = true;
   assert.match(owner.render('sic'), /Patient-level minute exports are unavailable on hosted instances/);
   assert.doesNotMatch(owner.render('sic'), /data-ex-minute-module/);
+});
+
+const coverage = { minute_resolution: { modules: [
+  { id: 'haemo_native', label: ['Arterial line readings', '动脉压读数'], signals: ['sbp_invasive'] },
+  { id: 'subhour_signals', label: ['Bedside monitor readings', '床旁监护读数'], signals: ['map_invasive'] },
+] } };
+const recommendedModules = ['demographics', 'vitals', 'chemistry', 'sofa2_score', 'sepsis3_sofa2', 'outcome'];
+const settle = () => new Promise(resolve => setImmediate(resolve));
+
+function minuteScreen(getOptions = async () => coverage) {
+  const posted = [];
+  const requests = [];
+  const c = vm.createContext({
+    t: en => en, icon: () => '', location: { hash: '#extraction' }, setTimeout() {},
+    window: {
+      EU_SETTINGS: { export_dir: '/fixture/output' },
+      EU_CATALOG: { groupConcepts: { vitals: ['sbp'] } },
+      EventSource() {},
+      EU_API: {
+        async scanPath() {
+          return { ok: true, db_key: 'sic', db: 'SICdb', source: 'prepared', ready: true };
+        },
+        getJSON(url) { requests.push(url); return getOptions(); },
+        async postJSON(url, body) {
+          posted.push({ url, body: JSON.parse(JSON.stringify(body)) });
+          return { job_id: 'fixture-job' };
+        },
+      },
+      EU_EXTRACTION_JOB_CONTINUITY: {
+        prepare: record => record, abandon() {}, isPending: () => false,
+        attach(record, jobId) {
+          c.window.EU_EXTRACTION_JOB_HOST.begin({ ...record, job_id: jobId });
+          return true;
+        },
+      },
+    },
+  });
+  for (const script of [names, html, hostedCopy, studyContext, minuteSource, source]) vm.runInContext(script, c);
+  const screen = c.window.SCREENS.extraction;
+  const render = () => screen.render();
+
+  // Bind each interaction to a control actually rendered by the page.
+  function interact(attribute, value, event = 'click', properties = {}) {
+    const field = value === undefined ? attribute : attribute + '="' + value + '"';
+    const tag = render().match(/<(?:input|button)\b[^>]*>/g)
+      .find(candidate => new RegExp(' ' + field + '(?=[\\s>/])').test(candidate));
+    assert.ok(tag, 'Missing control ' + field);
+    assert.doesNotMatch(tag, /\sdisabled(?=[\s>])/);
+    const selector = attribute === 'id' ? '#' + value : '[' + attribute + ']';
+    const datasetKey = attribute.slice(5).replace(/-([a-z])/g, (_, letter) => letter.toUpperCase());
+    let handle;
+    const node = {
+      dataset: { [datasetKey]: value }, ...properties,
+      addEventListener(name, listener) { if (name === event) handle = listener; },
+      focus() {},
+    };
+    const query = selectors => selectors.split(', ').includes(selector) ? [node] : [];
+    screen.afterRender({ querySelectorAll: query, querySelector: selectors => query(selectors)[0] });
+    assert.ok(handle, 'Missing ' + event + ' handler for ' + field);
+    handle();
+  }
+
+  async function connect(path = '/fixture/sic-converted') {
+    interact('id', 'exPathInput', 'input', { value: path });
+    interact('data-ex-analyze');
+    await settle();
+    interact('data-ex-usedata');
+    await settle();
+    render();
+    await settle();
+  }
+
+  async function submit() {
+    interact('data-ex-step-next', 'cohort');
+    interact('data-ex-step-next', 'export');
+    interact('data-ex-run', 'custom');
+    await settle();
+    assert.equal(posted.length, 1);
+    assert.equal(posted[0].url, '/api/jobs/extract');
+    return posted[0].body;
+  }
+
+  return { c, render, interact, connect, submit, requests };
+}
+
+test('an explicitly checked minute module survives the real extraction form submission', async () => {
+  const screen = minuteScreen();
+  await screen.connect();
+  screen.interact('data-ex-core');
+  screen.interact('data-ex-minute-module', 'haemo_native', 'change', { checked: true });
+  assert.match(screen.render(), /SICdb<\/b> · sbp_invasive/);
+  const body = await screen.submit();
+  assert.equal(body.path, '/fixture/sic-converted');
+  assert.equal(body.database, 'sic');
+  assert.deepEqual(body.modules, [...recommendedModules, 'haemo_native']);
+  assert.deepEqual(body.concepts, { vitals: ['sbp'], haemo_native: ['sbp_invasive'] });
+});
+
+test('Select all submits hourly modules without adding minute options', async () => {
+  const screen = minuteScreen();
+  await screen.connect();
+  screen.interact('data-ex-selectall');
+  const body = await screen.submit();
+  assert.equal(body.modules.length, 20);
+  assert.ok(body.modules.includes('vasopressors'));
+  assert.ok(coverage.minute_resolution.modules.every(row => !body.modules.includes(row.id)));
+  assert.deepEqual(body.concepts, { vitals: ['sbp'] });
+});
+
+test('Use recommended modules clears an explicit minute selection before submitting', async () => {
+  const screen = minuteScreen();
+  await screen.connect();
+  screen.interact('data-ex-minute-module', 'haemo_native', 'change', { checked: true });
+  screen.interact('data-ex-core');
+  const body = await screen.submit();
+  assert.deepEqual(body.modules, recommendedModules);
+  assert.deepEqual(body.concepts, { vitals: ['sbp'] });
+});
+
+test('an empty coverage reply offers Retry and can recover', async () => {
+  let attempts = 0;
+  const screen = minuteScreen(async () => ++attempts === 1 ? {} : coverage);
+  await screen.connect();
+  const markup = screen.render();
+  assert.ok(markup.includes('Could not load coverage'), 'An empty response must show a coverage error');
+  assert.ok(!markup.includes('Checking database coverage'));
+  screen.interact('data-ex-minute-retry');
+  await settle();
+  assert.match(screen.render(), /Arterial line readings/);
+  assert.deepEqual(screen.requests, Array(2).fill('/api/extraction/module-options?database=sic'));
+});
+
+test('a new extraction and a fresh scan can reload coverage for the same database', async () => {
+  let attempts = 0;
+  const screen = minuteScreen(async () => {
+    if (++attempts < 3) throw new Error('Coverage endpoint temporarily unavailable');
+    return coverage;
+  });
+  await screen.connect();
+  assert.match(screen.render(), /Could not load coverage/);
+  screen.interact('data-ex-selectall');
+  await screen.submit();
+  screen.c.window.EU_EXTRACTION_JOB_HOST.applyEvent({ kind: 'extract', job_id: 'fixture-job' }, {
+    type: 'end', status: 'error', error: 'Export destination unavailable',
+  });
+  screen.interact('data-ex-reset');
+  screen.render();
+  assert.equal(attempts, 2, 'Back to setup must retry coverage for the same database');
+  await settle();
+  assert.match(screen.render(), /Could not load coverage/);
+  screen.c.window.__euExtractReset();
+  await screen.connect('/fixture/second-sic-folder');
+  assert.match(screen.render(), /Arterial line readings/);
+  assert.equal(attempts, 3);
+});
+
+test('rendering with no scanned source removes loaded minute choices', async () => {
+  const c = vm.createContext({ window: { EU_API: { getJSON: async () => coverage } } });
+  vm.runInContext(minuteSource, c);
+  const owner = c.window.EU_EXTRACTION_MINUTE.create({
+    t: en => en, escHtml: text => text, hosted: () => false,
+    repaint() {}, backgroundRepaint() {},
+  });
+  owner.render('sic');
+  await settle();
+  assert.match(owner.render('sic'), /Arterial line readings/);
+  assert.doesNotMatch(owner.render(''), /data-ex-minute-module|data-ex-minute-retry/);
+  assert.equal(owner.count(), 0);
+});
+
+test('starting source binding discards an in-flight coverage response', async () => {
+  let finishPending;
+  let repaints = 0;
+  const screen = minuteScreen(() => new Promise(resolve => { finishPending = resolve; }));
+  await screen.connect();
+  screen.c.window.__euRender = () => { repaints++; };
+  screen.c.window.EU_EXTRACTION_NATIVE_OWNER.beginSourceBinding();
+  finishPending(coverage);
+  await settle();
+  assert.equal(repaints, 0, 'a disconnected lookup must not publish coverage');
 });

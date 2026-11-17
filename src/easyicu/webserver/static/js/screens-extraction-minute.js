@@ -7,20 +7,29 @@
     let failed = false;
     let request = 0;
 
-    function load(key) {
-      database = key;
+    function reset() {
+      database = '';
       group = null;
       failed = false;
       selected.clear();
-      const current = ++request;
+      ++request;
+    }
+
+    function load(key) {
+      reset();
+      database = key;
+      const current = request;
       window.EU_API.getJSON('/api/extraction/module-options?database=' + encodeURIComponent(key))
         .then(payload => {
           if (current !== request) return;
-          group = payload.minute_resolution;
+          const options = payload?.minute_resolution;
+          if (!Array.isArray(options?.modules)) throw new Error('Invalid minute module options');
+          group = options;
           backgroundRepaint();
         })
         .catch(() => {
           if (current !== request) return;
+          group = null;
           failed = true;
           backgroundRepaint();
         });
@@ -32,7 +41,8 @@
     }
 
     function render(key) {
-      if (key && key !== database && window.EU_API?.getJSON) load(key);
+      if (!key || !window.EU_API?.getJSON) reset();
+      else if (key !== database) load(key);
       const hostedReason = hosted() || group?.unavailable_reason === 'subhour_unavailable_when_hosted';
       let note = '';
       if (hostedReason) {
@@ -40,7 +50,7 @@
       } else if (failed) {
         note = t('Could not load coverage.', '无法加载覆盖范围。') +
           ` <button type="button" class="linkbtn" data-ex-minute-retry>${t('Retry', '重试')}</button>`;
-      } else if (!key || !window.EU_API?.getJSON) {
+      } else if (!database) {
         note = t('Database coverage is unavailable.', '数据库覆盖范围暂不可用。');
       } else if (!group) {
         note = t('Checking database coverage…', '正在查询数据库覆盖范围…');
@@ -69,7 +79,11 @@
     }
 
     function bind(root, markStale) {
-      root.querySelector('[data-ex-minute-retry]')?.addEventListener('click', () => { load(database); repaint(); });
+      root.querySelector('[data-ex-minute-retry]')?.addEventListener('click', () => {
+        if (!failed || !database || !window.EU_API?.getJSON) return;
+        load(database);
+        repaint();
+      });
       root.querySelectorAll('[data-ex-minute-module]').forEach(input => {
         input.addEventListener('change', () => {
           const id = input.dataset.exMinuteModule;
@@ -93,7 +107,7 @@
     }
 
     return {
-      render, bind, resultDetail,
+      render, bind, resultDetail, reset,
       clear: () => selected.clear(),
       keys: () => choices().map(row => row.id),
       count: () => choices().reduce((count, row) => count + row.signals.length, 0),
