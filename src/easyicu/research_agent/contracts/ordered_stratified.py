@@ -927,6 +927,11 @@ def ordered_stratified_numeric_findings(
     try:
         stratified = pd.read_csv(stratified_path)
         trend = pd.read_csv(trend_path)
+        # A text field is compared as the file stores it: type inference turns
+        # a formatted p-value such as '2.860e-06' into a float and drops its
+        # reported precision. Rows align with the typed reading of each file.
+        stratified_text = pd.read_csv(stratified_path, dtype=str, keep_default_na=False)
+        trend_text = pd.read_csv(trend_path, dtype=str, keep_default_na=False)
     except Exception as exc:
         findings.append(
             _finding(
@@ -1055,10 +1060,12 @@ def ordered_stratified_numeric_findings(
                 "continuous_outcome",
                 "binary_ci_method",
             }:
+                if field != "level_value":
+                    observed_value = stratified_text.at[matches.index[0], field]
                 equal = (
                     _labels_equal(observed_value, expected_value)
                     if field == "level_value"
-                    else str(observed_value) == str(expected_value)
+                    else observed_value == str(expected_value)
                 )
             else:
                 equal = _close(observed_value, expected_value)
@@ -1227,7 +1234,8 @@ def ordered_stratified_numeric_findings(
             elif expected_value is None:
                 equal = pd.isna(observed_value)
             else:
-                equal = str(observed_value) == str(expected_value)
+                observed_value = trend_text.at[matches.index[0], field]
+                equal = observed_value == str(expected_value)
             if not equal:
                 findings.append(
                     _comparison_finding(

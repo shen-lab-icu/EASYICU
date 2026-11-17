@@ -331,6 +331,49 @@ def test_numeric_contract_replays_complete_tables_from_locked_cohort(
     assert findings == []
 
 
+def test_numeric_contract_reads_formatted_text_as_the_file_stores_it(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Anonymized dA6 r3 shape: every reported p-value is numeric-looking text.
+
+    A CSV reader infers the column as float, so '2.900e-06' would return as
+    2.9e-06 and a correct replay would fail closed on its own formatting.
+    """
+    from easyicu.research_agent.methods import ordered_trends
+
+    exact_tail = ordered_trends._normal_tail
+
+    def trailing_zero_tail(z_statistic, alternative):
+        tail = exact_tail(z_statistic, alternative)
+        two_figures = float(format(tail["p_value"], ".2e"))
+        tail["p_value_reporting"] = format(two_figures, ".3e")
+        return tail
+
+    monkeypatch.setattr(ordered_trends, "_normal_tail", trailing_zero_tail)
+    cohort = _cohort()
+    cohort_path = tmp_path / "cohort.parquet"
+    cohort.to_parquet(cohort_path, index=False)
+    out_dir = tmp_path / "out"
+    summary = _write_valid_outputs(out_dir, cohort)
+    reported = pd.read_csv(out_dir / "ordinal_trend.csv")["p_value_reporting"]
+    assert pd.api.types.is_float_dtype(reported)
+
+    assert ordered_stratified_numeric_findings(
+        cohort_path=cohort_path, step=_step(), out_dir=out_dir, step_summary=summary,
+    ) == []
+
+    trend_path = out_dir / "ordinal_trend.csv"
+    text = pd.read_csv(trend_path, dtype=str, keep_default_na=False)
+    text.loc[0, "p_value_reporting"] = "2.9e-06" if text.loc[0, "p_value_reporting"] != "2.9e-06" else "3.0e-06"
+    text.to_csv(trend_path, index=False)
+    findings = ordered_stratified_numeric_findings(
+        cohort_path=cohort_path, step=_step(), out_dir=out_dir, step_summary=summary,
+    )
+    assert [(f.detail["kind"], f.detail["field"]) for f in findings] == [
+        ("trend_value_mismatch", "p_value_reporting"),
+    ]
+
+
 @pytest.mark.parametrize(
     ("table_name", "column", "replacement", "expected_kind"),
     [
