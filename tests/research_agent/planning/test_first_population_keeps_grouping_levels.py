@@ -7,6 +7,8 @@ from tests.support.distribution_policies import EXCLUDE_MISSING
 import pytest
 
 from easyicu.research_agent.agents.progressive_planner import select_progressive_variables
+from easyicu.research_agent.agents.progressive_planner import _MAX_STEP_PARSE_RETRIES
+from easyicu.research_agent.providers.structured_retry import StructuredResponseFailure
 from easyicu.research_agent.contracts.exposure_group_rules import EXPOSURE_GROUP_LABELS_KEY
 from easyicu.research_agent.planning.cohort_predicate_domain import population_emptied_exposure_levels
 from easyicu.research_agent.planning.family_spec import (
@@ -182,9 +184,27 @@ def test_outcome_only_within_a_restricted_population_declares_no_exposure_levels
 
 def test_an_unresolved_conflict_stops_before_review_without_dropping_eligibility():
     context = _study()
-    with pytest.raises(ProgressivePlanCompileError) as caught:
-        _run(context, [json.dumps(_payload(context, reading=False))])
-    assert caught.value.reason_code == "declared_exposure_level_empty"
+    _expect_exhausted_empty_level(context, _payload(context, reading=False))
+
+
+def _expect_exhausted_empty_level(context, payload):
+    with pytest.raises(StructuredResponseFailure) as caught:
+        _run(context, [json.dumps(payload)] * (_MAX_STEP_PARSE_RETRIES + 1))
+    assert caught.value.__cause__.reason_code == "declared_exposure_level_empty"
+    assert len(caught.value.easyicu_structured_attempt_metadata) == _MAX_STEP_PARSE_RETRIES + 1
+
+
+def test_a_real_empty_level_refusal_can_be_repaired_in_the_same_family_attempt():
+    context = _study()
+    llm, result = _run(context, [
+        json.dumps(_payload(context, reading=False)), json.dumps(_payload(context)),
+    ])
+    assert len(llm.calls) == 2
+    assert not population_emptied_exposure_levels(context, result.output)
+    feedback = llm.calls[1][0][-1].content
+    assert "declared_exposure_level_empty" in feedback
+    assert "g1" in feedback and "code=1" in feedback and "Lower" in feedback
+    assert "Observed level counts: unavailable" in feedback
 
 
 @pytest.mark.parametrize("concepts", [["entry_band", "death"], ["entry_measure", "death"]])
@@ -192,9 +212,7 @@ def test_a_reading_must_bind_both_the_source_concept_and_its_grouping(concepts):
     context = _study()
     payload = _payload(context)
     payload["question_requirements"][0]["concepts"] = concepts
-    with pytest.raises(ProgressivePlanCompileError) as caught:
-        _run(context, [json.dumps(payload)])
-    assert caught.value.reason_code == "declared_exposure_level_empty"
+    _expect_exhausted_empty_level(context, payload)
 
 
 @pytest.mark.parametrize("kind,coverage", [("definition", "definition_only"), ("analysis", "plan")])
@@ -204,9 +222,7 @@ def test_reading_a_concept_without_requesting_its_grouping_cannot_remove_eligibi
     payload["question_requirements"][0].update(kind=kind, coverage=coverage)
     if kind == "definition":
         payload["question_requirements"][0]["note"] = "Defines the eligible population only."
-    with pytest.raises(ProgressivePlanCompileError) as caught:
-        _run(context, [json.dumps(payload)])
-    assert caught.value.reason_code == "declared_exposure_level_empty"
+    _expect_exhausted_empty_level(context, payload)
 
 
 def test_an_independent_compatible_bound_on_the_same_concept_survives():

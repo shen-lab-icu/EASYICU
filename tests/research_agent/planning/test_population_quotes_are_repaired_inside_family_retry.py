@@ -135,6 +135,44 @@ def _answer(context, quote):
     }))
 
 
+@pytest.mark.parametrize("recovers", [True, False])
+def test_empty_declared_level_is_repaired_within_family_budget(population_projection, monkeypatch, recovers):
+    from easyicu.research_agent.planning.exposure_group_compile import ExposureGroupContrastError
+
+    original = family_spec_planner.compile_progressive_prefix
+    calls = []
+
+    def compile_prefix(*args, **kwargs):
+        calls.append(None)
+        if not recovers or len(calls) == 1:
+            cause = ExposureGroupContrastError(
+                "Grouping 'entry_band' level 'g1' (code 1, Lower) is empty by its typed rule. "
+                "Observed level counts: unavailable (metadata-only planning); do not invent counts. "
+                "Repair the population or contrast while preserving the question.",
+                step_id="cohort", reason_code="declared_exposure_level_empty",
+            )
+            raise ProgressivePlanCompileError(
+                cause.reason_code, str(cause), step_id="cohort", step_index=0,
+                path="exposure_group_contrast",
+            ) from cause
+        return original(*args, **kwargs)
+
+    monkeypatch.setattr(family_spec_planner, "compile_progressive_prefix", compile_prefix)
+    monkeypatch.setattr(progressive_planner, "_MAX_STEP_PARSE_RETRIES", 1)
+    llm = ScriptedMockLLMClient([_answer(population_projection, _GOOD)], repeat_last=True)
+    if recovers:
+        assert _run(llm, population_projection).facts.compile_receipt is not None
+    else:
+        with pytest.raises(StructuredResponseFailure) as stopped:
+            _run(llm, population_projection)
+        assert stopped.value.__cause__.reason_code == "declared_exposure_level_empty"
+        assert _safe_pipeline_typed_failure(stopped.value)["reason_code"] == "declared_exposure_level_empty"
+    assert len(llm.calls) == 2
+    feedback = llm.calls[1][0][-1].content
+    assert "declared_exposure_level_empty" in feedback and "g1" in feedback
+    assert "Observed level counts: unavailable" in feedback
+
+
 def test_a_bad_quote_then_the_source_words_succeeds_within_the_same_budget(
     population_projection, monkeypatch, tmp_path,
 ):

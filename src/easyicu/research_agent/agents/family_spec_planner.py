@@ -1358,6 +1358,7 @@ def run_family_spec_attempt(
                 "progressive_distribution_spec_invalid",
                 "progressive_distribution_missingness_authority_invalid",
                 "progressive_question_named_exposure_demoted",
+                "declared_exposure_level_empty",
             }
         )
 

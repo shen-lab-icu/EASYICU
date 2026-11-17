@@ -529,12 +529,12 @@ def planned_exposure_contrasts(
 
 def validate_exposure_group_contrasts(plan: AnalysisPlan, context: ResearchContext) -> None:
     """Reject a grouped contrast that changes a stated choice or uses missingness."""
-    from .cohort_predicate_domain import population_emptied_exposure_levels
+    from .cohort_predicate_domain import exposure_level_conflict_feedback, population_emptied_exposure_levels
 
     conflicts = population_emptied_exposure_levels(context, plan)
     if conflicts:
         raise ExposureGroupContrastError(
-            " ".join(item.message() for item in conflicts),
+            exposure_level_conflict_feedback(context, conflicts),
             step_id=next((step.step_id for step in plan.steps
                           if step.cohort_definition_spec is not None), ""),
             reason_code="declared_exposure_level_empty",

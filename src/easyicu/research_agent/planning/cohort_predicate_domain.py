@@ -199,6 +199,30 @@ class PredicateEmptiesExposureLevel:
         )
 
 
+def exposure_level_conflict_feedback(
+    context: ResearchContext, conflicts: Sequence[PredicateEmptiesExposureLevel],
+) -> str:
+    """Locate a symbolic contradiction without manufacturing observed counts."""
+
+    labels = {
+        (item["variable"], level["group"]): level
+        for item in context.cohort.provenance.get(EXPOSURE_GROUP_LABELS_KEY, ())
+        for level in item.get("levels", ())
+    }
+    messages = []
+    for conflict in conflicts:
+        level = labels.get((conflict.grouping, conflict.level), {})
+        messages.append(conflict.message() + (
+            f" Declared code={level['code']!r}, label={level.get('label')!r}." if level else ""
+        ))
+    return " ".join(messages) + (
+        " Observed level counts: unavailable in this planning context; this is a "
+        "typed-rule contradiction, not an observed count. Repair the population "
+        "or declared contrast to preserve the question and all required levels; "
+        "do not invent counts or silently discard a requested level."
+    )
+
+
 def population_emptied_exposure_levels(
     context: ResearchContext, plan: AnalysisPlan,
 ) -> tuple[PredicateEmptiesExposureLevel, ...]:

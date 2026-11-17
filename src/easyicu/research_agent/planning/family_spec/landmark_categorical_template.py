@@ -48,7 +48,7 @@ from ...contracts.model_retention import MISSING_CATEGORY_SHARE_THRESHOLD
 from ...contracts.model_terms import AdjustmentProposal
 from ...schema import ResearchContext
 from ..cohort_contract import ConceptPredicate, cohort_concept_id_scope
-from ..cohort_predicate_domain import cohort_emptied_exposure_levels
+from ..cohort_predicate_domain import cohort_emptied_exposure_levels, exposure_level_conflict_feedback
 from ..progressive_compiler import planner_cohort_definition, progressive_cohort_concept_ids
 from ..design_selection import ResearchDesignCandidate, ResearchDesignSelection
 from ..method_literature import METHOD_CARDS
@@ -942,7 +942,7 @@ def reconcile_population_grouping(
     if unresolved:
         raise ProgressivePlanCompileError(
             "declared_exposure_level_empty",
-            " ".join(item.message() for item in unresolved), path="cohort",
+            exposure_level_conflict_feedback(context, unresolved), path="cohort",
         )
     removed = {(item.side, item.index) for item in conflicts}
     changed_concepts = {item.predicate.concept_id for item in conflicts}
