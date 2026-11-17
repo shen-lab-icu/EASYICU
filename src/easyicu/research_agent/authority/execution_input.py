@@ -16,7 +16,7 @@ from ..canonical_json import sha256_file as _sha256_file
 
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Callable, Optional, Sequence
+from typing import Any, Callable, Iterable, Optional
 
 from .analysis_cohort import (
     ExecutionCohortAuthority,
@@ -65,10 +65,11 @@ class ExecutionInputAuthorityState:
         legacy_trajectory_verifier: Optional[Callable[..., None]],
         plan: Any,
         context: Any,
-        cohort_concept_ids: Sequence[str] = (),
+        cohort_concept_ids: Iterable[str] = (),
         development_sample: Optional[Any] = None,
         approved_case_duration_binding: Optional[Any] = None,
     ) -> "ExecutionInputAuthorityState":
+        normalized_concept_ids = tuple(cohort_concept_ids)
         universe_path = Path(universe_path)
         analysis_path = Path(analysis_path)
         cohort_authority = bind_execution_cohort_authority(
@@ -76,7 +77,7 @@ class ExecutionInputAuthorityState:
             analysis_path=analysis_path,
             plan=plan,
             context=context,
-            cohort_concept_ids=cohort_concept_ids,
+            cohort_concept_ids=normalized_concept_ids,
             approved_case_duration_binding=approved_case_duration_binding,
         )
         state = cls(
@@ -86,7 +87,7 @@ class ExecutionInputAuthorityState:
             trajectory_binding=trajectory_binding,
             run_dir=Path(run_dir),
             legacy_trajectory_verifier=legacy_trajectory_verifier,
-            cohort_concept_ids=tuple(cohort_concept_ids),
+            cohort_concept_ids=normalized_concept_ids,
             approved_case_duration_binding=approved_case_duration_binding,
         )
         if development_sample is not None:

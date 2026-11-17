@@ -9,6 +9,7 @@ import re
 
 
 _PHASES = {"planning": "plan", "plan": "plan", "execute": "execute", "execution": "execute",
+           "step": "execute", "runner": "execute",
            "context": "context", "audit": "context", "hypothesis": "plan", "runtime": "runtime",
            "human_review": "human_review", "write": "write", "finalise": "finalise"}
 _RUNNERS = {"host", "docker", "subprocess", "host_sandbox", "not_started", "unknown"}
@@ -23,7 +24,7 @@ EXECUTION_FAILURE_CODES = frozenset({
 })
 
 
-def _step(value):
+def safe_execution_step_id(value):
     return value if isinstance(value, str) and re.fullmatch(r"[a-z0-9][a-z0-9_]{0,79}", value) else "unknown"
 
 
@@ -47,7 +48,7 @@ class FailureLocation:
         if not isinstance(event, Mapping):
             return self
         phase = _phase(event.get("phase") or event.get("stage") or event.get("step"), self.phase)
-        step = _step(event.get("step_id"))
+        step = safe_execution_step_id(event.get("step_id"))
         if step == "unknown" and phase == self.phase:
             step = self.step_id
         if phase == "plan":
@@ -99,7 +100,7 @@ def execution_failure_diagnostic(chain, *, observed_coordinates_only=False):
     if not isinstance(location, FailureLocation):
         location = FailureLocation()
     phase = _phase(location.phase)
-    step = _step(location.step_id)
+    step = safe_execution_step_id(location.step_id)
     runner = _runner(location.runner_kind)
     if phase in {"context", "plan", "human_review"}:
         runner = "not_started"

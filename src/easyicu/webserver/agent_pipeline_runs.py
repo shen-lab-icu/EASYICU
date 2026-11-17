@@ -32,7 +32,13 @@ from pydantic import ValidationError
 from easyicu.webserver import planning_coordinate_readings
 from easyicu.webserver.descriptive_result_projection import bound_descriptive_variables, descriptive_summary_projection
 from easyicu.webserver.stratified_result_projection import requested_secondary_step_ids, requested_secondary_tables, stratified_summary
-from easyicu.webserver.execution_failure import EXECUTION_FAILURE_CODES, call_with_failure_location, execution_failure_diagnostic, track_failure_location
+from easyicu.webserver.execution_failure import (
+    EXECUTION_FAILURE_CODES,
+    call_with_failure_location,
+    execution_failure_diagnostic,
+    safe_execution_step_id,
+    track_failure_location,
+)
 
 from easyicu.research_agent.authority.plan_review import PlanReviewAuthority
 from easyicu.research_agent.authority.run_input import (
@@ -1123,7 +1129,8 @@ def _safe_pipeline_typed_failure(exc: BaseException) -> Dict[str, Any]:
     )
     from easyicu.research_agent.authority.provider_hard_stop import ProviderHardStopExceeded
 
-    for item in _pipeline_exception_chain(exc):
+    chain = _pipeline_exception_chain(exc)
+    for item in chain:
         if isinstance(item, CapabilityApprovalError):
             return item.diagnostic()
         if isinstance(item, ProviderHardStopExceeded):
@@ -1151,9 +1158,27 @@ def _safe_pipeline_typed_failure(exc: BaseException) -> Dict[str, Any]:
             "status_code": outer_http_status,
         }
 
-    for item in _pipeline_exception_chain(exc):
+    for item in chain:
         if isinstance(item, ExecutionCohortSchemaError):
-            return item.diagnostic()
+            location = execution_failure_diagnostic(chain)
+            # A configured runner and earlier planning progress do not establish
+            # that any step started before the initial cohort bind.
+            if location["phase"] not in {"execute", "write", "finalise"} and location[
+                "step_id"
+            ] in {"unknown", "plan"}:
+                location.update(
+                    phase="execution_input_binding",
+                    step_id=safe_execution_step_id(
+                        item.cohort_step_id or "cohort_definition"
+                    ),
+                    runner_kind="not_started",
+                )
+            return {
+                **location,
+                "owner": "easyicu.execution.cohort_authority_v1",
+                "reason_code": "execution_cohort_schema_invalid",
+                "exception_type": "ExecutionCohortSchemaError",
+            }
         if isinstance(item, (CurrentCaseScientificAuthorityError, BaselineAssociationAuthorityError)):
             return {
                 "owner": "easyicu.current_case_scientific_authority_v1",
@@ -1372,7 +1397,7 @@ def _safe_pipeline_typed_failure(exc: BaseException) -> Dict[str, Any]:
             if isinstance(exit_code, int) and not isinstance(exit_code, bool) and -128 <= exit_code <= 255:
                 projected["exit_code"] = exit_code
             return projected
-    for item in _pipeline_exception_chain(exc):
+    for item in chain:
         status_code = safe_provider_http_status_code(item)
         if status_code is not None:
             return {

@@ -16,20 +16,15 @@ from ..intake.materialized_metadata import (
     read_verified_materialized_cohort_table,
 )
 from ..planning.cohort_contract import CohortSchemaError, cohort_concept_id_scope
+from .run_input import _declares_host_cohort_products
 
 
 class ExecutionCohortSchemaError(CohortSchemaError):
     """The locked cohort cannot be replayed under this run's concept authority."""
 
-    def diagnostic(self) -> dict[str, str]:
-        return {
-            "owner": "easyicu.execution.cohort_authority_v1",
-            "reason_code": "execution_cohort_schema_invalid",
-            "phase": "execution_input_binding",
-            "step_id": "cohort_definition",
-            "runner_kind": "not_started",
-            "exception_type": "ExecutionCohortSchemaError",
-        }
+    def __init__(self, message: str, *, cohort_step_id: str | None = None) -> None:
+        super().__init__(message)
+        self.cohort_step_id = cohort_step_id
 
 
 @dataclass(frozen=True, slots=True)
@@ -104,7 +99,14 @@ def bind_execution_cohort_authority(
                         data=data,
                     )
             except CohortSchemaError as exc:
-                raise ExecutionCohortSchemaError(str(exc)) from exc
+                cohort_steps = [
+                    step.step_id for step in getattr(plan, "steps", ()) or ()
+                    if _declares_host_cohort_products(step)
+                ]
+                raise ExecutionCohortSchemaError(
+                    str(exc),
+                    cohort_step_id=cohort_steps[0] if len(cohort_steps) == 1 else None,
+                ) from exc
             actual = {
                 "cohort_definition_sha256": (
                     analysis.authority.producer_parameters.get(
