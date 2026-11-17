@@ -1,6 +1,7 @@
 """Command-line helper to extract ICU feature tables from local datasets.
 
-Groups clinical concepts into thematic tables and exports them as CSV files.
+Groups clinical concepts into thematic CSV tables. Explicit minute modules
+publish per-source Parquet packages.
 It relies on the packaged concept dictionary and data-source registry
 provided by :mod:`easyicu`.
 
@@ -26,6 +27,12 @@ from typing import Dict, Iterable, Mapping, Optional, Sequence
 import pandas as pd
 
 from easyicu import ConceptDictionary, ConceptResolver, DataSourceRegistry, ICUDataSource
+from easyicu.concept.minute_resolution import (
+    SUBHOUR_MODULE_INTERVALS,
+    SubhourSelectionError,
+    select_subhour_concepts,
+    subhour_module_coverage,
+)
 from easyicu.resources import load_data_sources, load_dictionary
 
 LOGGER = logging.getLogger(__name__)
@@ -256,12 +263,23 @@ def build_parser() -> argparse.ArgumentParser:
         "--output",
         type=Path,
         default=Path("feature_exports"),
-        help="Directory where CSV outputs will be written.",
+        help="Destination for CSV groups or per-source Parquet packages with --modules.",
+    )
+    extract_parser.add_argument(
+        "--modules",
+        nargs="+",
+        choices=tuple(SUBHOUR_MODULE_INTERVALS),
+        metavar="MODULE",
+        help=(
+            f"Select opt-in minute-resolution modules: {', '.join(SUBHOUR_MODULE_INTERVALS)}. "
+            "Writes Parquet and a manifest per source, including outcome for ICU stay bounds. "
+            "Minute exports can be larger and take longer."
+        ),
     )
     extract_parser.add_argument(
         "--groups-json",
         type=Path,
-        help="Optional JSON file overriding the default concept groups.",
+        help="JSON overriding the CSV groups or narrowing signals in selected --modules.",
     )
     extract_parser.add_argument(
         "--dictionary",
@@ -534,21 +552,50 @@ def handle_setup(args) -> int:
     return EXIT_OK
 
 
+def _plan_minute_extraction(sources, modules, groups):
+    modules = list(dict.fromkeys(modules))
+    groups = groups or {}
+    if set(groups) - set(modules):
+        raise SubhourSelectionError(
+            "subhour_signal_selection_invalid",
+            "With --modules, --groups-json may name only the selected minute modules.",
+        )
+    projections = {}
+    for source in sources:
+        coverage = subhour_module_coverage(source)
+        projections[source] = {
+            module: select_subhour_concepts(module, source, coverage[module], groups.get(module))
+            for module in modules
+        }
+    return projections
+
+
 def handle_extract(args) -> int:
     """Handle the extract command."""
     if len(args.sources) != len(args.data_dirs):
         LOGGER.error("Number of --sources must match number of --data-dirs.")
         return EXIT_USAGE
 
+    minute_modules = getattr(args, "modules", None)
+    if minute_modules and (args.dictionary or args.registry):
+        LOGGER.error("--modules uses the packaged dictionary and source registry.")
+        return EXIT_USAGE
     try:
         registry = load_data_sources(args.registry) if args.registry else load_data_sources()
-        dictionary = load_dictionary(args.dictionary) if args.dictionary else load_dictionary()
         groups = load_groups(args.groups_json) if hasattr(args, 'groups_json') else load_groups(None)
+        if minute_modules:
+            minute_projections = _plan_minute_extraction(
+                args.sources, minute_modules, groups if args.groups_json else None,
+            )
+        else:
+            dictionary = load_dictionary(args.dictionary) if args.dictionary else load_dictionary()
+            resolver = ConceptResolver(dictionary)
+    except SubhourSelectionError as exc:
+        LOGGER.error("%s", exc)
+        return EXIT_USAGE
     except (OSError, ValueError) as exc:
         LOGGER.error("Cannot read the extract configuration: %s", exc)
         return EXIT_USAGE
-
-    resolver = ConceptResolver(dictionary)
 
     snapshot = None
     if getattr(args, "input_snapshot", False):
@@ -567,6 +614,7 @@ def handle_extract(args) -> int:
     # S778: a requested source that is skipped or yields no rows makes the run
     # fail (exit 2) instead of reporting success with nothing written for it.
     incomplete = []
+    minute_export_failed = False
     for source_name, dir_name in zip(args.sources, args.data_dirs):
         data_dir = Path(dir_name)
         if not data_dir.exists():
@@ -587,10 +635,25 @@ def handle_extract(args) -> int:
 
         LOGGER.info("Processing %s @ %s", source_name, data_dir)
         try:
+            if minute_modules:
+                from easyicu.api import extract_database
+
+                projection = minute_projections[source_name]
+                extract_database(
+                    source_name, data_path=data_dir, output_dir=args.output / source_name,
+                    modules=["outcome", *projection], subhour_concepts=projection,
+                )
+                continue
             frames = extract_groups(resolver, datasource, groups)
-        except KNOWN_INPUT_ERRORS as exc:
+        except (*KNOWN_INPUT_ERRORS, SubhourSelectionError) as exc:
             LOGGER.error("Extraction refused for %s in %s: %s", source_name, data_dir, exc)
             incomplete.append(f"{source_name}: {exc}")
+            continue
+        except (OSError, ValueError) as exc:
+            if not minute_modules:
+                raise
+            LOGGER.error("Minute export failed for %s: %s", source_name, exc)
+            minute_export_failed = True
             continue
         if not frames or all(frame is None or len(frame) == 0 for frame in frames.values()):
             LOGGER.error("No concept rows extracted for %s; nothing written for it.", source_name)
@@ -606,6 +669,8 @@ def handle_extract(args) -> int:
         except InputSnapshotError as error:
             LOGGER.error("Inputs changed during the run; the outputs are not valid: %s", error)
             return EXIT_INPUT_CHANGED
+    if minute_export_failed:
+        return EXIT_FAILURE
     # Every incomplete source has already been reported by its own error line.
     if incomplete:
         return EXIT_USAGE

@@ -167,3 +167,67 @@ test('a finished extraction the job registered is re-read, not registered again'
     assert.equal(JSON.stringify(calls), JSON.stringify(byJob ? ['read'] : [['register', SERVER_PATH, { active: true, crossdb: true }]]));
   }
 });
+
+test('minute chooser sends only explicit, database-covered modules and renders the result receipt', async () => {
+  const minuteSource = file(null, 'screens-extraction-minute.js');
+  let hosted = false;
+  let stale = false;
+  const groups = {
+    hirid: [
+      { id: 'subhour_signals', label: ['Bedside signals', '床旁信号'], signals: ['hr'], default_selected: false },
+      { id: 'vent_native', label: ['Ventilator mechanics', '呼吸力学'], signals: ['peep_total'], default_selected: false },
+    ],
+    sic: [
+      { id: 'subhour_signals', label: ['Bedside signals', '床旁信号'], signals: ['hr'], default_selected: false },
+      { id: 'vent_native', label: ['Ventilator mechanics', '呼吸力学'], signals: [], unavailable_reason: 'no_whitelisted_signals' },
+    ],
+  };
+  const context = vm.createContext({ window: { EU_API: {
+    async getJSON(url) {
+      const key = url.split('database=')[1];
+      return { minute_resolution: { modules: groups[key] } };
+    },
+  } } });
+  vm.runInContext(html, context);
+  vm.runInContext(minuteSource, context);
+  const owner = context.window.EU_EXTRACTION_MINUTE.create({
+    t: en => en, escHtml: context.window.EU_HTML.esc,
+    hosted: () => hosted, repaint() {}, backgroundRepaint() {},
+  });
+  const render = async key => {
+    owner.render(key);
+    await new Promise(resolve => setImmediate(resolve));
+    return owner.render(key);
+  };
+  const initial = await render('hirid');
+  assert.match(initial, /Minute resolution/);
+  assert.match(initial, /data-ex-minute-module="vent_native"/);
+  assert.doesNotMatch(initial, /checked|peep_total/);
+  assert.deepEqual(Array.from(owner.keys()), []);
+
+  const input = {
+    dataset: { exMinuteModule: 'vent_native' }, checked: true,
+    addEventListener(_event, listener) { this.toggle = listener; },
+    focus() {},
+  };
+  owner.bind({ querySelector: () => null, querySelectorAll: () => [input] }, () => { stale = true; });
+  input.toggle();
+  assert.equal(stale, true);
+  assert.deepEqual(Array.from(owner.keys()), ['vent_native']);
+  assert.deepEqual(Object.keys(owner.payload(new Set(['vitals']))), []);
+  assert.deepEqual(Array.from(owner.payload(new Set(['vent_native'])).vent_native), ['peep_total']);
+  assert.match(owner.render('hirid'), /hirid<\/b> · peep_total/);
+  assert.match(owner.render('hirid'), /larger and take longer/);
+  assert.equal(owner.resultDetail({
+    time_resolution: { interval_minutes: 1, signals: { peep_total: { rows: 10 } } },
+  }), '1-minute grid · peep_total');
+  assert.equal(owner.resultDetail({ module: 'vitals', rows: 10 }), '');
+
+  const switched = await render('sic');
+  assert.match(switched, /No covered signals/);
+  assert.doesNotMatch(switched, /data-ex-minute-module="vent_native"/);
+  assert.deepEqual(Array.from(owner.keys()), []);
+  hosted = true;
+  assert.match(owner.render('sic'), /Patient-level minute exports are unavailable on hosted instances/);
+  assert.doesNotMatch(owner.render('sic'), /data-ex-minute-module/);
+});

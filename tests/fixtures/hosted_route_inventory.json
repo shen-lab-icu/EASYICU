@@ -1482,6 +1482,15 @@
   },
   {
     "method": "GET",
+    "route": "/api/extraction/module-options",
+    "fields": [],
+    "reaches": "Packaged concept dictionary and source registry by database key; hosted availability",
+    "protection": "no path inputs",
+    "writes": "none",
+    "write_owner": "Read-only chooser metadata."
+  },
+  {
+    "method": "GET",
     "route": "/api/fs/list",
     "fields": [
       "query:path"

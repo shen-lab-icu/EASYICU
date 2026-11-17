@@ -122,3 +122,21 @@ def test_registered_export_download_route_accepts_only_source_id(
     assert response.headers["x-easyicu-source-id"] == "src_0123456789ab"
     with zipfile.ZipFile(io.BytesIO(response.content)) as archive:
         assert "demographics.csv" in archive.namelist()
+
+
+def test_hosted_download_refuses_a_registered_minute_export(tmp_path, monkeypatch):
+    root = tmp_path / "export"
+    registry = _export(root)
+    manifest = root / "_manifest.json"
+    payload = json.loads(manifest.read_text())
+    payload["files"][0].update(module="subhour_signals", time_resolution={"interval_minutes": 1})
+    manifest.write_text(json.dumps(payload))
+    monkeypatch.setenv("EASYICU_HOSTED", "1")
+    monkeypatch.setenv("EASYICU_HOME", str(tmp_path))
+    monkeypatch.setattr(export_download.sources, "load_registry", lambda **_: registry)
+
+    response = TestClient(app).post(
+        "/api/workspaces/download", json={"source_id": "src_0123456789ab"},
+    )
+    assert response.status_code == 403
+    assert response.json()["detail"]["error"] == "subhour_unavailable_when_hosted"

@@ -37,6 +37,11 @@ from easyicu.concept.export_metadata import (
     missing_primary_metadata_concepts,
 )
 from easyicu.concept.availability_signal import ConceptAvailabilityRecord
+from easyicu.concept.minute_resolution import (
+    SUBHOUR_MODULE_INTERVALS,
+    resolution_summary,
+    subhour_load_options,
+)
 from easyicu.concept_output_sources import (
     ConceptLoadPlan,
     ConceptLoadPlanError,
@@ -72,6 +77,7 @@ from easyicu.scores.aki_profiles import renal_bundle_column_unavailability
 from easyicu.webserver import entity_ids as entity_id_contract
 from easyicu.webserver import primary_cohort
 from easyicu.webserver import state_paths
+from easyicu.webserver.extraction_modules import minute_export_modules
 
 # Core metadata tables per database — a folder that holds these (as parquet or
 # csv) is recognised as that database. Mirrors check_data_status' core_tables.
@@ -2725,6 +2731,19 @@ def _prepare_export_availability(
     return frame, statuses
 
 
+def _export_time_resolution(
+    module: str, frame: Any, concepts: Sequence[str], *, identity_column: str,
+) -> dict:
+    if module not in SUBHOUR_MODULE_INTERVALS:
+        return {}
+    return {
+        "time_resolution": {
+            "interval_minutes": SUBHOUR_MODULE_INTERVALS[module].total_seconds() / 60,
+            "signals": resolution_summary(frame, id_column=identity_column, concepts=concepts),
+        },
+    }
+
+
 def make_export_runner(
     data_path: str,
     database: str,
@@ -2749,6 +2768,7 @@ def make_export_runner(
     import os
     from easyicu.webserver.hosted import is_hosted, require_path
 
+    minute_modules = minute_export_modules(database, modules, concepts)
     require_path(data_path)
     if is_hosted():
         _resolve_export_out_dir(
@@ -2796,6 +2816,8 @@ def make_export_runner(
                 **CONCEPT_GROUPS_INTERNAL,
                 "sic_case_landmark": extraction.EXTRACT_MODULES["sic_case_landmark"],
             }
+        if minute_modules:
+            CONCEPT_GROUPS_INTERNAL = {**CONCEPT_GROUPS_INTERNAL, **minute_modules}
         sel_modules = [
             m
             for m in (modules or list(CONCEPT_GROUPS_INTERNAL.keys()))
@@ -2959,7 +2981,7 @@ def make_export_runner(
                 module_resource_plans[mod] = module_resource_plan
                 # The cohort's observation window is not a scoring window: a
                 # module's SOFA and SOFA-2 keep their own (``cohort_execution``).
-                module_kwargs: Dict[str, Any] = {}
+                module_kwargs: Dict[str, Any] = subhour_load_options(mod)
                 # Explicitly carry the owner decision into load_concepts so its
                 # legacy estimate cannot silently re-batch a measured fast path.
                 # ``batch_size == cohort_size`` is one scan / one patient batch.
@@ -3089,6 +3111,9 @@ def make_export_runner(
                                 "concepts": len(module_concepts),
                                 "concept_ids": list(module_concepts),
                                 "rows": rows,
+                                **_export_time_resolution(
+                                    mod, sub, module_concepts, identity_column=binding.identity_column,
+                                ),
                                 **member_digest_record(out / fname),
                             }
                         )
@@ -3123,6 +3148,9 @@ def make_export_runner(
                             "concepts": len(module_concepts),
                             "concept_ids": list(module_concepts),
                             "rows": rows,
+                            **_export_time_resolution(
+                                mod, df, module_concepts, identity_column=binding.identity_column,
+                            ),
                             **member_digest_record(out / fname),
                         }
                     )

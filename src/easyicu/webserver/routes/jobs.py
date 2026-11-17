@@ -14,6 +14,7 @@ from typing import Any, Dict, Optional
 from fastapi import APIRouter, HTTPException
 from fastapi.responses import StreamingResponse
 
+from easyicu.concept.minute_resolution import SubhourSelectionError
 from easyicu.webserver import crossdb_review
 from easyicu.webserver import dataio
 from easyicu.webserver import hosted
@@ -21,6 +22,7 @@ from easyicu.webserver import jobs as job_store
 from easyicu.webserver import settings as settings_store
 from easyicu.webserver import sources as source_store
 from easyicu.webserver import study_contexts as context_store
+from easyicu.webserver.extraction_modules import HOSTED_SUBHOUR_CODE
 from easyicu.webserver.routes.request_parsing import body_bool
 
 submission_router = APIRouter()
@@ -198,21 +200,25 @@ def submit_extraction(body: Dict[str, Any], *, submit=None) -> dict:
         raise HTTPException(status_code=400, detail="path and database are required")
     settings = settings_store.load_settings()
     out_dir = body.get("out_dir") or (None if hosted.is_hosted() else settings.get("export_dir"))
-    export_runner = dataio.make_export_runner(
-        data_path=path,
-        database=database,
-        modules=body.get("modules"),
-        concepts=body.get("concepts"),
-        export_format=str(body.get("format") or "csv"),
-        merge=body_bool(body, "merge"),
-        out_dir=out_dir,
-        create_run_subdir=True,
-        max_patients=body.get("max_patients"),
-        cohort=body.get("cohort"),
-        include_feature_definitions=body_bool(
-            body, "include_feature_definitions", True
-        ),
-    )
+    try:
+        export_runner = dataio.make_export_runner(
+            data_path=path,
+            database=database,
+            modules=body.get("modules"),
+            concepts=body.get("concepts"),
+            export_format=str(body.get("format") or "csv"),
+            merge=body_bool(body, "merge"),
+            out_dir=out_dir,
+            create_run_subdir=True,
+            max_patients=body.get("max_patients"),
+            cohort=body.get("cohort"),
+            include_feature_definitions=body_bool(
+                body, "include_feature_definitions", True
+            ),
+        )
+    except SubhourSelectionError as exc:
+        status_code = 403 if exc.code == HOSTED_SUBHOUR_CODE else 400
+        raise HTTPException(status_code=status_code, detail=exc.detail) from exc
 
     study_context_id = str(body.get("study_context_id") or "").strip()
     expected_revision = body.get("study_context_revision")

@@ -22,7 +22,7 @@ from __future__ import annotations
 
 from contextlib import contextmanager
 from contextvars import ContextVar
-from typing import Iterator, Mapping, Optional
+from typing import Iterator, Mapping, Optional, Sequence
 
 import numpy as np
 import pandas as pd
@@ -35,6 +35,81 @@ SUBHOUR_MODULE_INTERVALS: Mapping[str, pd.Timedelta] = {
     "vent_native": pd.Timedelta(minutes=1),
     "haemo_native": pd.Timedelta(minutes=1),
 }
+
+class SubhourSelectionError(ValueError):
+    """An explicit minute module or signal falls outside declared support."""
+
+    def __init__(self, code: str, reason: str, **coordinates: str) -> None:
+        super().__init__(f"{code}: {reason}")
+        self.code = code
+        self.detail = {"error": code, "reason": reason, **coordinates}
+
+
+def subhour_module_coverage(database: str) -> dict[str, list[str]]:
+    """Project the module whitelist through the loader's declared source mappings."""
+    from ..config import load_src_cfg
+    from ..resources import load_dictionary
+    from .catalog import OPT_IN_MODULE_CONCEPTS
+
+    try:
+        config = load_src_cfg(database)
+    except KeyError:
+        return {module: [] for module in SUBHOUR_MODULE_INTERVALS}
+    dictionary = load_dictionary(source_name=config.name)
+
+    def mapped(concept: str) -> bool:
+        definition = dictionary[concept]
+        return any(source.table in config.tables for source in definition.for_data_source(config))
+
+    def covered(concept: str) -> bool:
+        # CVP needs a CVP reading. DBP is ancillary to its quality rule.
+        if concept == "cvp":
+            return mapped("cvp_raw")
+        # The rate callback sums whichever pressor inputs are charted.
+        if concept == "norepi_equiv":
+            return any(mapped(dependency) for dependency in dictionary[concept].sub_concepts)
+        return mapped(concept)
+
+    return {
+        module: [concept for concept in OPT_IN_MODULE_CONCEPTS[module] if covered(concept)]
+        for module in SUBHOUR_MODULE_INTERVALS
+    }
+
+
+def select_subhour_concepts(
+    module: str, database: str, coverage: Sequence[str], requested: Sequence[str] | None,
+) -> list[str]:
+    """Resolve a module's default coverage or validate explicitly named cells."""
+    if not coverage:
+        raise SubhourSelectionError(
+            "subhour_module_unavailable",
+            f"{module} has no whitelisted signals for {database}.",
+            module=module, database=database,
+        )
+    if requested is None:
+        return list(coverage)
+    if not isinstance(requested, (list, tuple)) or not requested:
+        raise SubhourSelectionError(
+            "subhour_signal_selection_invalid",
+            f"{module} requires a non-empty list of signal IDs.",
+            module=module, database=database,
+        )
+    for signal in requested:
+        if signal not in coverage:
+            raise SubhourSelectionError(
+                "subhour_signal_not_whitelisted",
+                f"{signal!r} is outside {module} coverage for {database}.",
+                module=module, database=database, signal=str(signal),
+            )
+    return list(dict.fromkeys(requested))
+
+
+def subhour_load_options(module: str) -> dict:
+    """The minute opt-in belongs to the explicit module coordinate."""
+    if module not in SUBHOUR_MODULE_INTERVALS:
+        return {}
+    return {"interval": SUBHOUR_MODULE_INTERVALS[module], MINUTE_RESOLUTION_KWARG: True}
+
 
 SICDB_MINUTE_TABLE = "data_float_h"
 SICDB_MINUTE_COLUMNS = ("cnt", "rawdata")
@@ -182,7 +257,7 @@ def expand_sicdb_minute_rows(
     return out
 
 
-def resolution_summary(parquet_path, *, id_column: str, concepts, time_column: str = "charttime",
+def resolution_summary(source, *, id_column: str, concepts, time_column: str = "charttime",
                        memory_mb: int = 1024) -> dict:
     """Per-signal inter-sample gaps in minutes of a published module; aggregates only.
 
@@ -204,9 +279,18 @@ def resolution_summary(parquet_path, *, id_column: str, concepts, time_column: s
         database=":memory:",
         config={"memory_limit": f"{int(memory_mb)}MB", "threads": "1"},
     ) as connection:
-        columns = {row[0] for row in connection.execute(
-            "SELECT name FROM parquet_schema(?)", [str(parquet_path)]
-        ).fetchall()}
+        if isinstance(source, pd.DataFrame):
+            columns = set(source.columns)
+            connection.register("minute_observations", source)
+            relation, parameters = "minute_observations", []
+        else:
+            parameters = [str(source)]
+            columns = {row[0] for row in connection.execute(
+                "SELECT name FROM parquet_schema(?)", parameters
+            ).fetchall()}
+            relation = "read_parquet(?)"
+        if id_column not in columns or time_column not in columns:
+            return summary
         ident, time = quote_identifier(id_column), quote_identifier(time_column)
         for concept in concepts:
             if concept not in columns:
@@ -216,7 +300,7 @@ def resolution_summary(parquet_path, *, id_column: str, concepts, time_column: s
                 f"""
                 WITH present AS (
                     SELECT {ident} AS id, {time} * 60.0 AS t
-                    FROM read_parquet(?)
+                    FROM {relation}
                     WHERE {value} IS NOT NULL AND {time} IS NOT NULL
                 ), gaps AS (
                     SELECT t - lag(t) OVER (PARTITION BY id ORDER BY t) AS gap FROM present
@@ -230,7 +314,7 @@ def resolution_summary(parquet_path, *, id_column: str, concepts, time_column: s
                     avg(CASE WHEN gap <= 15 THEN 1.0 ELSE 0.0 END) FILTER (WHERE gap IS NOT NULL)
                 FROM gaps
                 """,
-                [str(parquet_path)],
+                parameters,
             ).fetchone()
             entry = {"rows": rounded(rows), "stays": rounded(stays), "gaps": rounded(gaps)}
             if int(gaps or 0) >= 10:

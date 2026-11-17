@@ -18,6 +18,7 @@ from dataclasses import dataclass, field as dataclass_field
 from pathlib import Path
 from typing import Any, Mapping, Optional
 
+from easyicu.concept.minute_resolution import SUBHOUR_MODULE_INTERVALS
 from easyicu.export_publication import (
     INTEGRITY_UNRECORDED,
     REASON_INTEGRITY_UNRECORDED,
@@ -36,7 +37,8 @@ from easyicu.export_publication import (
 )
 
 from easyicu.webserver import sources, state_paths
-from easyicu.webserver.hosted import require_instance_path, require_path
+from easyicu.webserver.extraction_modules import HOSTED_SUBHOUR_CODE, HOSTED_SUBHOUR_REASON
+from easyicu.webserver.hosted import is_hosted, require_instance_path, require_path
 
 
 INTEGRITY_RECEIPT_NAME = "EASYICU_MEMBER_INTEGRITY.json"
@@ -240,6 +242,12 @@ def prepare_registered_export_bundle(
             "registered_export_manifest_invalid",
             "The registered export manifest is invalid.",
         )
+    if is_hosted() and any(
+        isinstance(row, Mapping)
+        and (str(row.get("module")) in SUBHOUR_MODULE_INTERVALS or row.get("time_resolution"))
+        for row in manifest.get("files") or []
+    ):
+        raise ExportDownloadError(HOSTED_SUBHOUR_CODE, HOSTED_SUBHOUR_REASON, status_code=403)
 
     files = _manifest_files(root, manifest)
     source_bytes = sum(path.stat().st_size for path in files)

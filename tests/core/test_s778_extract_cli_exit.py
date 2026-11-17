@@ -56,3 +56,53 @@ def test_an_extraction_without_rows_fails_and_writes_nothing(tmp_path, monkeypat
 def test_one_failed_source_fails_the_run_but_keeps_the_written_one(tmp_path, monkeypatch, stub_source):
     monkeypatch.setattr(extract_features, "extract_groups", _frames)
     assert _run(tmp_path, ("miiv", tmp_path), ("aumc", tmp_path / "absent")) == (2, ["miiv_vitals.csv"])
+
+
+def test_extract_help_names_the_opt_in_minute_modules(capsys):
+    with pytest.raises(SystemExit) as exc:
+        extract_features.main(["extract", "--help"])
+    assert exc.value.code == 0
+    help_text = " ".join(capsys.readouterr().out.split())
+    assert "opt-in minute-resolution" in help_text
+    assert all(module in help_text for module in ("subhour_signals", "vent_native", "haemo_native"))
+
+
+def test_minute_modules_publish_a_manifest_on_the_one_minute_grid(tmp_path):
+    import json
+
+    from easyicu.synthetic_sources import generate_source
+
+    source = tmp_path / "hirid"
+    output = tmp_path / "out"
+    generate_source(source, "hirid", stays=3)
+    assert extract_features.main([
+        "extract", "--sources", "hirid", "--data-dirs", str(source),
+        "--output", str(output), "--modules", "subhour_signals",
+    ]) == 0
+    manifest = json.loads((output / "hirid" / "_manifest.json").read_text())
+    minute = next(row for row in manifest["files"] if row["module"] == "subhour_signals")
+    assert minute["time_resolution"]["interval_minutes"] == 1
+    assert "hr" in minute["time_resolution"]["signals"]
+
+
+@pytest.mark.parametrize(
+    ("database", "groups", "code"),
+    [
+        ("sic", '{"vent_native": ["peep_total"]}', "subhour_signal_not_whitelisted"),
+        ("hirid", '{"vent_native": ["sofa2"]}', "subhour_signal_not_whitelisted"),
+        ("unknown_database", None, "subhour_module_unavailable"),
+    ],
+)
+def test_minute_cli_refuses_outside_whitelisted_cells(tmp_path, caplog, database, groups, code):
+    output = tmp_path / "out"
+    args = [
+        "extract", "--sources", database, "--data-dirs", str(tmp_path),
+        "--output", str(output), "--modules", "vent_native",
+    ]
+    if groups:
+        group_file = tmp_path / "groups.json"
+        group_file.write_text(groups)
+        args += ["--groups-json", str(group_file)]
+    assert extract_features.main(args) == 2
+    assert code in caplog.text
+    assert not output.exists()

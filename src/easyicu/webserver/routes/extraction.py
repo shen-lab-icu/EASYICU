@@ -1,4 +1,4 @@
-"""Data extraction filter API routes."""
+"""Data Extraction chooser and filter API routes."""
 
 from __future__ import annotations
 
@@ -7,8 +7,15 @@ from typing import Any, Dict
 from fastapi import APIRouter, HTTPException
 
 from easyicu.webserver import extraction_filters
+from easyicu.webserver.extraction_modules import extraction_module_options
 
 router = APIRouter()
+
+
+@router.get("/api/extraction/module-options")
+def extraction_modules(database: str) -> dict:
+    """Return declared minute coverage for a database without reading its data."""
+    return extraction_module_options(database)
 
 
 @router.post("/api/extraction/filter-options")

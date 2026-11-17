@@ -33,9 +33,12 @@ from ..concept.catalog import (
     OPT_IN_MODULE_CONCEPTS,
 )
 from ..concept.minute_resolution import (
-    MINUTE_RESOLUTION_KWARG,
     SUBHOUR_MODULE_INTERVALS,
+    SubhourSelectionError,
     resolution_summary,
+    select_subhour_concepts,
+    subhour_load_options,
+    subhour_module_coverage,
 )
 from ..concept.merge_time_index import merge_fill_scope
 from ..concept.native_events import NATIVE_EVENT_MODULES
@@ -3977,10 +3980,7 @@ def _run_module_extraction(
     )
     if patient_ids_filter:
         kwargs["patient_ids"] = patient_ids_filter
-    if module_name in SUBHOUR_MODULE_INTERVALS:
-        # Explicit minute opt-in: the hourly modules never set it.
-        kwargs["interval"] = SUBHOUR_MODULE_INTERVALS[module_name]
-        kwargs[MINUTE_RESOLUTION_KWARG] = True
+    kwargs.update(subhour_load_options(module_name))
 
     # ── 一个模块一次 load、合并成一个宽表、写一个 {module}.parquet（不重复 io）──
     # load_concepts 一次拿到该模块**所有概念**（chartevents/labevents 等共享源表只扫
@@ -8795,6 +8795,7 @@ def extract_database(
     resource_budget_mb: Optional[float] = None,
     module_batch_sizes: Optional[Mapping[str, int]] = None,
     max_workers: Optional[int] = None,
+    subhour_concepts: Optional[Mapping[str, Sequence[str]]] = None,
 ) -> Dict:
     """按 20 个模块分组、子进程隔离地提取整个数据库的全部特征。
 
@@ -8825,6 +8826,8 @@ def extract_database(
         data_path: 数据路径（None 则按数据库名自动解析）
         output_dir: 输出目录（None 则不写文件，仅返回 dict）
         modules: 要提取的模块列表（None = 全部 20 个模块）
+        subhour_concepts: 可选的分钟级信号筛选。键必须是显式选择的分钟级模块，
+            值必须是该数据库覆盖的信号列表。未列出的分钟级模块使用该库的覆盖范围。
         patient_ids: 患者 ID 列表或 dict（None = 全部患者）
         max_patients: 限制患者数量（与 patient_ids 互斥）
         batch_size: 模块内患者分批大小。None(默认) = 优先采用所选模块的实测
@@ -8928,6 +8931,20 @@ def extract_database(
                 )
     if not modules:
         raise ValueError("modules must not be empty")
+    minute_modules = [module for module in modules if module in SUBHOUR_MODULE_INTERVALS]
+    minute_projection = {}
+    if subhour_concepts is not None and set(subhour_concepts) - set(minute_modules):
+        raise SubhourSelectionError(
+            "subhour_signal_selection_invalid",
+            "Signal projections require explicitly selected minute-resolution modules.",
+        )
+    if minute_modules:
+        coverage = subhour_module_coverage(database)
+        for module in minute_modules:
+            requested = (subhour_concepts or {}).get(module)
+            selected = select_subhour_concepts(module, database, coverage[module], requested)
+            if subhour_concepts is not None:
+                minute_projection[module] = selected
     normalized_module_batch_sizes = dict(module_batch_sizes or {})
     unknown_module_batch_sizes = sorted(
         set(normalized_module_batch_sizes) - set(modules)
@@ -9484,7 +9501,7 @@ def extract_database(
         if not group_mods and not group_special:
             continue
 
-        module_specs = [(m, EXTRACT_MODULES[m]) for m in group_mods]
+        module_specs = [(m, minute_projection.get(m, EXTRACT_MODULES[m])) for m in group_mods]
         group_use_sofa2 = any(_concepts_need_sofa2(c) for _, c in module_specs) or any(
             "sofa2" in m for m in group_special
         )
@@ -9850,6 +9867,7 @@ def extract_database(
                 modules=modules,
                 max_patients=max_patients,
                 result=result,
+                **({"concept_projection": minute_projection} if minute_projection else {}),
                 require_stay_time_bounds=True,
                 expected_patient_ids=next(iter(patient_ids_filter.values())),
             )

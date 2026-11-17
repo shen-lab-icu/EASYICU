@@ -458,6 +458,13 @@
 .cx-unit{ font-size:10.5px; color:var(--ink-4); white-space:nowrap; }
 .mod-empty{ padding:9px 10px; color:var(--ink-4); font-size:12px; border:1px dashed var(--hair); border-radius:8px; }
 
+.ex-minute-group{ margin-top:16px; }
+.ex-minute-group h3{ margin:0 0 4px; font-size:13px; font-weight:650; }
+.ex-minute-choice{ display:flex; align-items:center; flex-wrap:wrap; gap:6px; min-height:34px; font-size:12.5px; }
+.ex-minute-choice:has(input){ cursor:pointer; }
+.ex-minute-choice input{ width:16px; height:16px; margin:0; accent-color:var(--accent); }
+.ex-minute-note{ margin:0; color:var(--ink-3); font-size:11.5px; overflow-wrap:anywhere; }
+
 /* Three-page extraction setup */
 .ex-setup-steps{
   display:grid; grid-template-columns:repeat(3,minmax(0,1fr));

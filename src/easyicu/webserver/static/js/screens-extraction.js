@@ -13,6 +13,7 @@
   function hostedServer() { const owner = window.EasyICU?.guidedPi?.optional('hosted'); return Boolean(owner && owner.active()); }
   function runsWhere() { return hostedServer() ? t('on the server', '在服务器上') : t('on your machine', '在本机'); }
   function hostedCopy(key, local, arg) { return hostedServer() ? window.EU_EXTRACTION_HOSTED.text(key, arg) : local; }  // screens-extraction-hosted.js
+  const minuteModules = window.EU_EXTRACTION_MINUTE?.create({ t, escHtml, hosted: hostedServer, repaint, backgroundRepaint });
   const DEFAULT_OBSERVATION_WINDOW_HOURS = 24 * 30;
   const MAX_OBSERVATION_WINDOW_HOURS = 24 * 30;
   let exView = 'home';          // home | running | done
@@ -184,20 +185,20 @@
     return m[3] ? selectedConceptIdsForModule(m).length : 0;
   }
   function conceptTotal(modules) { return (modules || []).reduce((a, m) => a + selectedConceptCount(m), 0); }
-  function conceptN() { return conceptTotal(selMods()); }
+  function conceptN() { return conceptTotal(selMods()) + (minuteModules?.count() || 0); }
   function coreConceptN() { return conceptTotal(MODS.filter(m => m[4])); }
   function recommendedSelectionActive() {
     const selected = selMods();
-    return selected.length === CORE.length
+    return !minuteModules?.keys().length && selected.length === CORE.length
       && selected.every(m => m[4])
       && selected.every(m => selectedConceptCount(m) === moduleConceptCount(m));
   }
-  function modKeys() { return selMods().map(moduleKey); }
+  function modKeys() { return selMods().map(moduleKey).concat(minuteModules?.keys() || []); }
   function coreModuleKeys() { return MODS.filter(m => m[4]).map(moduleKey); }
   function runModuleKeys(mode) { return mode === 'recommended' ? coreModuleKeys() : modKeys(); }
   function selectedConceptPayload(moduleKeys) {
     const wanted = new Set(moduleKeys || modKeys());
-    const payload = {};
+    const payload = minuteModules?.payload(wanted) || {};
     MODS.forEach(m => {
       const key = moduleKey(m);
       if (!wanted.has(key)) return;
@@ -332,6 +333,7 @@
     // Even a same-study revision (or the first study on a native run) must
     // wait: replacing those values would relabel the old terminal result.
     if (extractionTaskRunning()) return null;
+    minuteModules?.clear();
     if (changingStudy) {
       abandonExtractionContinuity();
       exView = 'home'; exReal = 'connect'; exPath = ''; exSource = null;
@@ -450,6 +452,7 @@
      screen never shows a stale "Extraction complete" for the new source. */
   window.__euExtractReset = function () {
     abandonExtractionContinuity();
+    minuteModules?.clear();
     exView = 'home';
     exReal = 'connect';
   };
@@ -535,8 +538,8 @@
       repaint();
     }
   }
-  function resetToCore() { MODS.forEach(m => { m[3] = m[4]; }); exSelectedConcepts = {}; window.EU_STALE = true; }
-  function setAllModules(on) { MODS.forEach(m => { m[3] = !!on; }); exSelectedConcepts = {}; window.EU_STALE = true; }
+  function resetToCore() { minuteModules?.clear(); MODS.forEach(m => { m[3] = m[4]; }); exSelectedConcepts = {}; window.EU_STALE = true; }
+  function setAllModules(on) { MODS.forEach(m => { m[3] = !!on; }); exSelectedConcepts = {}; if (!on) minuteModules?.clear(); window.EU_STALE = true; }
   function cancelExportJob() {
     if (!exportJobId || exportCancelRequested || !window.EU_API || !window.EU_API.postJSON) return;
     exportCancelRequested = true;
@@ -849,6 +852,7 @@
 
   function startScan(src) {
     abandonExtractionContinuity();
+    minuteModules?.clear();
     if (!String(exPath || '').trim()) {
       exSource = src || null;
       exScanResult = null;
@@ -1220,9 +1224,9 @@
     const preset = cohortPresetMeta();
     return {
       cohort: t(preset[1], preset[2]) + ' · ' + fmtObservationWindow(exWindowHours),
-      moduleCount: selMods().length,
+      moduleCount: modKeys().length,
       conceptCount: conceptN(),
-      runnable: selMods().length > 0,
+      runnable: modKeys().length > 0,
     };
   }
 
@@ -1353,8 +1357,7 @@
     </article>`;
   }
   function modulesCfg() {
-    const shown = MODS;
-    const selectedCount = selMods().length;
+    const selectedCount = modKeys().length;
     return `
     <div class="cfg ex-modules-primary">
       <div class="cfg-head">
@@ -1365,11 +1368,12 @@
         </div>
       </div>
       <div class="cfg-body">
-        <div class="ex-module-toolbar"><span>${t('All modules', '全部模块')}</span><span class="grow"></span><button class="linkbtn" data-ex-selectall ${selectedCount === MODS.length ? 'disabled' : ''}>${t('Select all', '全选')}</button><button class="linkbtn" data-ex-clearmods ${selectedCount === 0 ? 'disabled' : ''}>${t('Clear all', '清空')}</button></div>
+        <div class="ex-module-toolbar"><span>${t('Hourly modules', '小时级模块')}</span><span class="grow"></span><button class="linkbtn" data-ex-selectall ${selMods().length === MODS.length ? 'disabled' : ''}>${t('Select all', '全选')}</button><button class="linkbtn" data-ex-clearmods ${selectedCount === 0 ? 'disabled' : ''}>${t('Clear all', '清空')}</button></div>
         <div class="modgrid" id="exModGrid">
-          ${shown.map(m => modCard(m, MODS.indexOf(m))).join('')}
+          ${MODS.map(modCard).join('')}
         </div>
         ${exExpandedMod && String(exExpandedMod).startsWith('sepsis3_') ? sepsisDefinitionPanel() : ''}
+        ${minuteModules && minuteModules.render(exScanResult?.db_key || '') || ''}
       </div>
     </div>`;
   }
@@ -1430,8 +1434,8 @@
         <h2 class="ex-step-heading sr-only" tabindex="-1">${t('Choose modules and features', '选择模块与特征')}</h2>
         ${modulesCfg()}
         <div class="ex-step-actions ex-step-actions-modules">
-          <span>${selMods().length} ${t('modules', '个模块')} · ${conceptN()} ${t('features selected', '个特征已选')}</span>
-          <button class="btn primary" data-ex-step-next="cohort" ${selMods().length ? '' : 'disabled'}>${t('Confirm features', '确认模块与特征')} ${icon('arrow', 13)}</button>
+          <span>${modKeys().length} ${t('modules', '个模块')} · ${conceptN()} ${t('features selected', '个特征已选')}</span>
+          <button class="btn primary" data-ex-step-next="cohort" ${modKeys().length ? '' : 'disabled'}>${t('Confirm features', '确认模块与特征')} ${icon('arrow', 13)}</button>
         </div>
       </section>`;
   }
@@ -1514,7 +1518,7 @@
     const showBack = !!(options && options.showBack);
     const support = cohortExportSupport();
     const exportReady = hostedServer() || !!currentExportDir();
-    const extractDisabled = !selMods().length || !support.ok || !exportReady;
+    const extractDisabled = !modKeys().length || !support.ok || !exportReady;
     // Recommended features do not authorize replacing the reviewed cohort.
     const runMode = 'custom';
     const summaryMessage = !exportReady ? exportDestinationRequiredMessage() : (support.ok ? hostedCopy('dockLine', t('local-only · reproducible manifest', '仅本地 · 可复现清单')) : support.message);
@@ -1524,7 +1528,7 @@
         <div class="ex-action-title">${t('Ready to extract', '准备抽取')}</div>
         <div class="ex-action-line">
           <span>${escHtml(fmtSampleCap())}</span>
-          <span id="exSumMods">${selMods().length} ${t('modules', '个模块')}</span>
+          <span id="exSumMods">${modKeys().length} ${t('modules', '个模块')}</span>
           <span id="exSumConc">${conceptN()} ${t('features', '个特征')}</span>
           <span>${exFormat.toUpperCase()}</span>
         </div>
@@ -1793,8 +1797,11 @@
         </div>
       </div>
       <div class="cols-2 mt-20" style="max-width:720px;margin-left:auto;margin-right:auto;">
-        ${fileList.map(f => `
-          <${canOpen ? 'button type="button"' : 'div'} class="ledger-row ex-output-file" ${canOpen ? `data-ex-open-output="${escHtml(f.file)}" title="${t('Open this file', '打开此文件')}"` : ''}><span class="ledger-ico">${icon(f.manifest || f.metadata ? 'shield' : 'file', 14)}</span><span class="ex-output-file-copy"><span class="mono ex-output-file-name">${escHtml(f.file)}</span><span class="ex-output-file-detail">${f.manifest ? t('reproducibility manifest', '可复现清单') : (f.metadata ? t('digest-bound column metadata', '摘要绑定列元数据') : (String(f.kind || '').startsWith('feature_definitions') ? `${t('selected feature definitions', '已选特征定义')} · ${Number(f.records || 0).toLocaleString()} ${t('records', '条')}` : (f.readme ? t('human-readable extraction README', '可读抽取说明') : (f.rows != null ? Number(f.rows).toLocaleString() + ' ' + t('rows', '行') : escHtml(f.module || '')))))}</span></span>${canOpen ? `<span class="ex-output-open-icon">${icon('arrow', 12)}</span>` : ''}</${canOpen ? 'button' : 'div'}>`).join('')}
+        ${fileList.map(f => {
+          const resolution = minuteModules && minuteModules.resultDetail(f);
+          return `
+          <${canOpen ? 'button type="button"' : 'div'} class="ledger-row ex-output-file" ${canOpen ? `data-ex-open-output="${escHtml(f.file)}" title="${t('Open this file', '打开此文件')}"` : ''}><span class="ledger-ico">${icon(f.manifest || f.metadata ? 'shield' : 'file', 14)}</span><span class="ex-output-file-copy"><span class="mono ex-output-file-name">${escHtml(f.file)}</span><span class="ex-output-file-detail">${f.manifest ? t('reproducibility manifest', '可复现清单') : (f.metadata ? t('digest-bound column metadata', '摘要绑定列元数据') : (String(f.kind || '').startsWith('feature_definitions') ? `${t('selected feature definitions', '已选特征定义')} · ${Number(f.records || 0).toLocaleString()} ${t('records', '条')}` : (f.readme ? t('human-readable extraction README', '可读抽取说明') : (f.rows != null ? Number(f.rows).toLocaleString() + ' ' + t('rows', '行') : escHtml(f.module || '')))))}${resolution ? ' · ' + resolution : ''}</span></span>${canOpen ? `<span class="ex-output-open-icon">${icon('arrow', 12)}</span>` : ''}</${canOpen ? 'button' : 'div'}>`;
+        }).join('')}
       </div>`;
   }
 
@@ -1814,7 +1821,7 @@
         <div class="rail-head"><span class="t">${t('Extraction', '抽取')}</span></div>
         <div class="col gap-6" style="font-size:12px;">
           <div class="setup-row"><span class="k">${t('Source', '数据源')}</span><span class="vv">${hostedServer() ? t('Server', '服务器') : t('This computer', '本机')}</span></div>
-          <div class="setup-row"><span class="k">${t('Modules', '模块')}</span><span class="vv">${selMods().length}</span></div>
+          <div class="setup-row"><span class="k">${t('Modules', '模块')}</span><span class="vv">${modKeys().length}</span></div>
           <div class="setup-row"><span class="k">${t('Format', '格式')}</span><span class="vv">${exFormat.toUpperCase()}</span></div>
         </div>
         <div class="eyebrow mt-16" style="margin-bottom:8px;">${t('Two ways', '两种方式')}</div>
@@ -1931,7 +1938,7 @@
       root.querySelectorAll('[data-ex-cancel]').forEach(b => b.addEventListener('click', cancelExportJob));
       root.querySelectorAll('[data-ex-open-output]').forEach(b => b.addEventListener('click', () => openExtractionOutput(b.dataset.exOpenOutput || '', b)));
       root.querySelectorAll('[data-ex-sync-guided]').forEach(b => b.addEventListener('click', () => continueInGuidedCopilot(b)));
-      root.querySelectorAll('[data-ex-reset]').forEach(b => b.addEventListener('click', () => { abandonExtractionContinuity(); exView = 'home'; exSetupStep = 'modules'; exExpandedMod = null; exportProg = null; exportResult = null; exportErr = null; exportCancelled = null; exportCohortReport = null; exportResourcePlan = null; exportJobId = null; exportCancelRequested = false; exportRunModules = null; exOutputNotice = ''; exOutputError = ''; exSyncNotice = ''; exSyncError = ''; repaint(); }));
+      root.querySelectorAll('[data-ex-reset]').forEach(b => b.addEventListener('click', () => { abandonExtractionContinuity(); minuteModules?.clear(); exView = 'home'; exSetupStep = 'modules'; exExpandedMod = null; exportProg = null; exportResult = null; exportErr = null; exportCancelled = null; exportCohortReport = null; exportResourcePlan = null; exportJobId = null; exportCancelRequested = false; exportRunModules = null; exOutputNotice = ''; exOutputError = ''; exSyncNotice = ''; exSyncError = ''; repaint(); }));
       root.querySelectorAll('[data-ex-step-next], [data-ex-step-back], [data-ex-step-target]').forEach(button => button.addEventListener('click', () => {
         moveToSetupStep(button.dataset.exStepNext || button.dataset.exStepBack || button.dataset.exStepTarget || 'modules');
       }));
@@ -1994,6 +2001,7 @@
       const core = root.querySelector('[data-ex-core]'); if (core) core.addEventListener('click', () => { resetToCore(); noteStudyConfigurationEdit(); repaint(); });
       const selectAll = root.querySelector('[data-ex-selectall]'); if (selectAll) selectAll.addEventListener('click', () => { setAllModules(true); noteStudyConfigurationEdit(); repaint(); });
       const clearMods = root.querySelector('[data-ex-clearmods]'); if (clearMods) clearMods.addEventListener('click', () => { setAllModules(false); noteStudyConfigurationEdit(); repaint(); });
+      if (minuteModules) minuteModules.bind(root, () => { noteStudyConfigurationEdit(); window.EU_STALE = true; });
       // module toggle
       const grid = root.querySelector('#exModGrid');
       if (grid) grid.addEventListener('click', e => {

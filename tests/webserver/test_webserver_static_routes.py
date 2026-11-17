@@ -199,7 +199,7 @@ def test_native_assistant_labels_expose_one_primary_copilot_conversation() -> (
     assert "js/app.js?v=20261117-boot1" in index_html
     assert "js/copilot-dock.js?v=20261027-old1" in index_html
     assert "js/screens-extraction-folder-picker.js?v=20261021-hosted1" in index_html
-    assert "js/screens-extraction.js?v=20261102-merge1" in index_html
+    assert "js/screens-extraction.js?v=20261117-minute1" in index_html
     assert "js/screens-agent.js?" not in index_html
     assert "js/screens-guided-pi-run-files.js?v=20261028-pend1" in index_html
     assert "js/screens-help.js?v=20261027-help3" in index_html
@@ -1064,7 +1064,7 @@ def test_native_extraction_folder_connect_defaults_to_auto_detection() -> None:
     redesign_css = _static_css("redesign.css")
     index_html = _static_html("index.html")
 
-    assert "css/extraction.css?v=20261102-ui1" in index_html
+    assert "css/extraction.css?v=20261117-minute1" in index_html
     assert "data-ex-analyze" in extraction_js
     assert "Choose folder and identify" in extraction_js
     assert "function copilotPrefillSummary()" in extraction_js
@@ -1112,7 +1112,7 @@ def test_native_extraction_uses_separate_feature_cohort_and_export_steps() -> No
     assert "function recommendedSelectionActive()" in extraction_js
     assert "Data modules" in extraction_js
     assert "mod-open-desc" in extraction_js
-    assert "const shown = MODS;" in extraction_js
+    assert "MODS.map(modCard)" in extraction_js
     assert "Browse 13 more modules" not in extraction_js
     assert "Show recommended modules only" not in extraction_js
     assert "data-ex-allmods" not in extraction_js
@@ -1229,7 +1229,7 @@ def test_native_extraction_uses_separate_feature_cohort_and_export_steps() -> No
     assert 'data-ex-run="recommended"' in extraction_js
     assert "function coreModuleKeys()" in extraction_js
     assert "Select at least one module before extracting." not in extraction_js
-    assert 'data-ex-step-next="cohort" ${selMods().length ? \'\' : \'disabled\'}' in extraction_js
+    assert 'data-ex-step-next="cohort" ${modKeys().length ? \'\' : \'disabled\'}' in extraction_js
     assert ".cohort-preset-grid" in extraction_css
     assert ".range-ctl" in extraction_css
     assert ".ex-export-destination" in extraction_css
@@ -1296,7 +1296,7 @@ def test_native_extraction_prefers_parquet_export_by_default() -> None:
     assert "请先选择导出目录再开始抽取。" in extraction_js
     assert "const exportReady = hostedServer() || !!currentExportDir();" in extraction_js
     assert (
-        "extractDisabled = !selMods().length || !support.ok || !exportReady"
+        "extractDisabled = !modKeys().length || !support.ok || !exportReady"
         in extraction_js
     )
     assert "window.EU_API.saveSetting('export_dir', exExportDir)" in extraction_js

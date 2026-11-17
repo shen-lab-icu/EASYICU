@@ -157,3 +157,136 @@ def test_export_runner_locks_fast_plan_without_memory_advisory(
     assert result["resource_plan"]["mode"] == "one_shot"
     assert result["resource_plan"]["advisory"] is None
     assert not any(event.get("phase") == "resource" for event in job.events)
+
+
+def test_minute_module_listing_is_database_scoped_and_opt_in(monkeypatch):
+    from fastapi import FastAPI
+    from fastapi.testclient import TestClient
+
+    from easyicu.webserver.routes.extraction import router
+
+    monkeypatch.delenv("EASYICU_HOSTED", raising=False)
+    app = FastAPI()
+    app.include_router(router)
+    with TestClient(app) as client:
+        def options(database):
+            reply = client.get("/api/extraction/module-options", params={"database": database})
+            assert reply.status_code == 200
+            return reply.json()["minute_resolution"]
+
+        hirid = options("hirid")
+        sic = options("sic")
+        unsupported = options("unknown_database")
+        monkeypatch.setenv("EASYICU_HOSTED", "1")
+        hosted = options("hirid")
+
+    assert [row["id"] for row in hirid["modules"]] == [
+        "subhour_signals", "vent_native", "haemo_native",
+    ]
+    assert all(row["default_selected"] is False and row["interval_minutes"] == 1
+               for row in hirid["modules"])
+    assert "peep_total" in hirid["modules"][1]["signals"]
+    assert "peep_total" not in sic["modules"][1]["signals"]
+    assert all(row["unavailable_reason"] == "no_whitelisted_signals" for row in unsupported["modules"])
+    assert hosted["unavailable_reason"] == "subhour_unavailable_when_hosted"
+
+
+def test_minute_route_refuses_an_unmapped_or_hosted_request(tmp_path, monkeypatch):
+    from fastapi import FastAPI
+    from fastapi.testclient import TestClient
+
+    from easyicu.webserver.routes.jobs import submission_router
+
+    app = FastAPI()
+    app.include_router(submission_router)
+    request = {
+        "path": str(tmp_path), "database": "sic", "modules": ["vent_native"],
+        "concepts": {"vent_native": ["peep_total"]},
+    }
+    monkeypatch.delenv("EASYICU_HOSTED", raising=False)
+    with TestClient(app) as client:
+        refusal = client.post("/api/jobs/extract", json=request)
+        assert refusal.status_code == 400
+        assert refusal.json()["detail"]["error"] == "subhour_signal_not_whitelisted"
+        monkeypatch.setenv("EASYICU_HOSTED", "1")
+        monkeypatch.setenv("EASYICU_DATA_ROOTS", str(tmp_path))
+        refusal = client.post("/api/jobs/extract", json={**request, "concepts": None})
+        assert refusal.status_code == 403
+        assert refusal.json()["detail"]["error"] == "subhour_unavailable_when_hosted"
+
+
+def test_default_web_extraction_dispatches_the_same_hourly_modules(tmp_path, monkeypatch):
+    import easyicu.api as api
+    from easyicu.concept.catalog import CONCEPT_GROUPS_INTERNAL
+    from easyicu.concept.minute_resolution import MINUTE_RESOLUTION_KWARG
+
+    loaded = []
+    _patch_export_api(monkeypatch, loaded)
+    monkeypatch.setattr(api, "get_all_patient_ids", lambda *_, **__: ([1, 2], "stay_id"))
+
+    class FirstModuleLoaded(Exception):
+        pass
+
+    load = api.load_concepts
+
+    def record_first_module(concepts, **kwargs):
+        frame = load(concepts, **kwargs)
+        if concepts != ["los_icu"]:
+            raise FirstModuleLoaded
+        return frame
+
+    monkeypatch.setattr(api, "load_concepts", record_first_module)
+    job = _ExportJob()
+    runner = dataio.make_export_runner(
+        data_path=str(tmp_path), database="miiv", out_dir=str(tmp_path / "out"),
+    )
+    with pytest.raises(FirstModuleLoaded):
+        runner(job)
+    start = next(event for event in job.events if event["type"] == "start")
+    assert start["modules"] == list(CONCEPT_GROUPS_INTERNAL)
+    assert len(start["modules"]) == 20
+    assert loaded[0]["concepts"] == ["los_icu"]
+    assert len(loaded) == 2
+    assert all(MINUTE_RESOLUTION_KWARG not in call["kwargs"] and "interval" not in call["kwargs"] for call in loaded)
+
+
+@pytest.mark.parametrize("export_format", ["parquet", "csv"])
+def test_minute_web_job_publishes_the_resolution_in_its_result(tmp_path, export_format):
+    from easyicu.synthetic_sources import generate_source
+
+    source = tmp_path / "hirid"
+    out = tmp_path / "out"
+    generate_source(source, "hirid", stays=3)
+    observations = source / "observations" / "1.parquet"
+    table = pd.read_parquet(observations)
+    anchor = table.loc[table.variableid.eq(200)].sort_values("datetime").iloc[[0]]
+    extra = anchor.assign(datetime=anchor.datetime + pd.Timedelta(minutes=2), value=88.0)
+    pd.concat([table, extra], ignore_index=True).to_parquet(observations, index=False)
+    runner = dataio.make_export_runner(
+        data_path=str(source), database="hirid", modules=["subhour_signals"],
+        concepts={"subhour_signals": ["hr"]}, export_format=export_format, out_dir=str(out),
+    )
+    result = runner(_ExportJob())
+    manifest = json.loads((out / "_manifest.json").read_text())
+    assert result["files"] == manifest["files"]
+    receipt = result["files"][0]["time_resolution"]
+    assert receipt["interval_minutes"] == 1
+    assert list(receipt["signals"]) == ["hr"]
+    assert result["files"][0]["concept_ids"] == ["hr"]
+    assert manifest["feature_definitions"]["included"]
+    path = out / result["files"][0]["file"]
+    frame = pd.read_parquet(path) if export_format == "parquet" else pd.read_csv(path)
+    assert (frame.loc[frame.hr.eq(88.0), "charttime"] * 60).round(5).tolist() == [2.0]
+
+
+def test_minute_ui_wires_chooser_selection_and_manifest_result():
+    static = Path("src/easyicu/webserver/static")
+    page = (static / "js/screens-extraction.js").read_text()
+    owner = (static / "js/screens-extraction-minute.js").read_text()
+    html = (static / "index.html").read_text()
+    assert html.index("js/screens-extraction-minute.js") < html.index("js/screens-extraction.js")
+    assert "data-ex-minute-module" in owner
+    assert "time_resolution" in owner
+    assert "minuteModules.render(" in page
+    assert "minuteModules.bind(" in page
+    assert "minuteModules.resultDetail(" in page
