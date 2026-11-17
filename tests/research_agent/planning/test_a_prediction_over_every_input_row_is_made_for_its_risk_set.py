@@ -342,5 +342,5 @@ def test_the_pipeline_reads_the_caller_bound_population_from_its_owner() -> None
     # The owner's answer decides the refusal; the modes are not compared here.
     call = source.index("conflict = caller_bound_population_conflict(")
     guard = source.index("if conflict is not None:", call)
-    assert source.index("raise CohortAuthorityError(conflict)", guard) > guard
+    assert source.index('raise CohortAuthorityError(conflict, reason_code="caller_bound_population_mode_conflict")', guard) > guard
     assert "observed_mode" not in source

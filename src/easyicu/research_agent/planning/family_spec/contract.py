@@ -706,6 +706,7 @@ class FamilySpecRequest(BaseModel):
     research_question: str = Field(min_length=1, max_length=6000)
     cohort_name: str = Field(min_length=1, max_length=128)
     cohort_selection_mode: Literal["all_input_rows", "predicate_filtered"]
+    population_grouping_note: str = Field(default="", exclude_if=lambda value: not value)
     age_min: Optional[float] = None
     age_max: Optional[float] = None
     #: A typed minimum ICU stay in hours.  Omitted from the digest when absent,

@@ -112,6 +112,15 @@ class CohortAuthorityError(RuntimeError):
     did not authorise.
     """
 
+    def __init__(self, message: str, *, reason_code: str | None = None) -> None:
+        super().__init__(message)
+        self.reason_code = reason_code
+        if reason_code is not None:
+            self.easyicu_safe_diagnostic = {
+                "owner": "easyicu.planning.cohort_authority_v1",
+                "reason_code": reason_code,
+            }
+
 
 @dataclass(frozen=True)
 class MaterializedInputColumnAuthority:

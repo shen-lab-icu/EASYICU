@@ -779,6 +779,8 @@ def _pipeline_failure_code(
         return typed_failure["reason_code"]
     if typed_failure.get("owner") == "easyicu.execution.host_plan_v1":
         return "research_pipeline_plan_step_needs_sandbox"
+    if typed_failure.get("owner") == "easyicu.planning.cohort_authority_v1":
+        return typed_failure["reason_code"]
     if any("timeout" in type(item).__name__.casefold() for item in chain):
         return "research_pipeline_provider_timeout"
     if any(type(item).__name__ == "StructuredResponseFailure" for item in chain):
@@ -1211,6 +1213,8 @@ def _safe_pipeline_typed_failure(exc: BaseException) -> Dict[str, Any]:
         if not isinstance(raw, Mapping):
             continue
         owner = raw.get("owner")
+        if owner == "easyicu.planning.cohort_authority_v1" and raw.get("reason_code") == "caller_bound_population_mode_conflict":
+            return {"owner": owner, "reason_code": raw["reason_code"]}
         if owner == "easyicu.execution.host_plan_v1" and raw.get("reason_code") == "research_pipeline_plan_step_needs_sandbox":
             coordinates = safe_stop_coordinates({"step_id": raw.get("step_id")})
             return {"owner": owner, "reason_code": raw["reason_code"], **coordinates}
@@ -8206,6 +8210,16 @@ def make_research_pipeline_run_runner(
                 )
             else:
                 required_cohort_mode = _planner_cohort_selection_mode(study)
+            declarations = research_context_declarations(
+                replace(scientific, patient_grouping=patient_grouping), export_path=export_path, acquisition=acquisition,
+                source_identity=prepared.source_identity.to_dict() if prepared.source_identity is not None else None,
+            )
+            from .research_launch_population import resolved_launch_population_mode
+
+            required_cohort_mode = resolved_launch_population_mode(
+                required_mode=required_cohort_mode, question=question, database=database,
+                acquisition=acquisition, declarations=declarations,
+            )
             config = PipelineConfig(
                 workdir=wrapper_dir / "pipeline",
                 no_automatic_retries=True if request.no_automatic_retries else None,
@@ -8407,10 +8421,6 @@ def make_research_pipeline_run_runner(
                 # bounded reconciliation can still discover the exact pause.
                 _register_recoverable_work_root(root)
                 put_recovery_seed(recovery_seed)
-            declarations = research_context_declarations(
-                replace(scientific, patient_grouping=patient_grouping), export_path=export_path, acquisition=acquisition,
-                source_identity=prepared.source_identity.to_dict() if prepared.source_identity is not None else None,
-            )
             _progress(
                 job,
                 step="research_pipeline",

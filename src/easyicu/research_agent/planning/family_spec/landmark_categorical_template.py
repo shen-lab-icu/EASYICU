@@ -51,9 +51,10 @@ from ..cohort_contract import ConceptPredicate, cohort_concept_id_scope
 from ..cohort_predicate_domain import (
     cohort_emptied_exposure_levels,
     exposure_level_conflict_feedback,
-    share_resolves_level_conflict,
+    population_grouping_resolution,
 )
-from ..progressive_compiler import planner_cohort_definition, progressive_cohort_concept_ids
+from ..progressive_compiler import _stated_population_spec, planner_cohort_definition, progressive_cohort_concept_ids
+from ..population_compile import compile_population
 from ..design_selection import ResearchDesignCandidate, ResearchDesignSelection
 from ..method_literature import METHOD_CARDS
 from ..sensitivity_authority import PrespecifiedAnalysisOmission
@@ -919,7 +920,7 @@ def _cohort_intent(
 def reconcile_population_grouping(
     draft: FamilySkeletonDraft, *, context: ResearchContext, spec: FamilyPlanSpec,
 ) -> FamilySkeletonDraft:
-    """Keep every requested grouping level before any population is compiled.
+    """Keep every requested grouping level before executable plan compilation.
 
     This changes only predicates proved contradictory by the shared typed
     rule owner. It never edits the context, spec, or declared grouping. The
@@ -927,14 +928,17 @@ def reconcile_population_grouping(
     """
 
     intent = draft.foundation.foundation.cohort
-    if intent.population_spec is not None or not context.cohort.provenance.get(EXPOSURE_GROUP_LABELS_KEY):
-        return draft  # A separately stated spec has its own compile authority.
+    if not context.cohort.provenance.get(EXPOSURE_GROUP_LABELS_KEY):
+        return draft
+    resolution = population_grouping_resolution(context)
+    typed_spec = _stated_population_spec(intent, context=context)
+    compiled = compile_population(typed_spec, context) if typed_spec is not None else None
     with cohort_concept_id_scope(progressive_cohort_concept_ids(
         context, [variable.name for variable in context.variables],
     )):
-        cohort = planner_cohort_definition(intent)
+        cohort = compiled.cohort_definition() if compiled is not None else planner_cohort_definition(intent)
     conflicts = cohort_emptied_exposure_levels(context, cohort)
-    if not conflicts:
+    if not conflicts and not resolution.note:
         return draft
     requested = [
         set(reading.concepts) for reading in spec.question_requirements
@@ -942,7 +946,7 @@ def reconcile_population_grouping(
     ]
     # A reading that requests both the concept and its grouping, or a question
     # that asks what share of the whole population a level is, keeps the level.
-    share_decided = [item for item in conflicts if share_resolves_level_conflict(context, item)]
+    share_decided = [item for item in conflicts if resolution.absorbs(item)]
     unresolved = [item for item in conflicts if item not in share_decided and not any(
         {item.grouping, item.predicate.concept_id} <= concepts for concepts in requested
     )]
@@ -971,7 +975,36 @@ def reconcile_population_grouping(
                               f"{predicate.value.materialize()}",
                     concept_ids=[predicate.concept_id],
                 ))
+    population_spec = intent.population_spec
+    if compiled is not None:
+        # A typed criterion can contain multiple bounds. Remove only predicates
+        # proved contradictory and preserve the other fields, IDs and quotes.
+        population_spec = typed_spec.model_dump(mode="json")
+        rows = []
+        for row, item in zip(population_spec["criteria"], compiled.criteria):
+            item_conflicts = cohort_emptied_exposure_levels(
+                context, type(cohort)(name="criterion", **{item.side: item.predicates})
+            ) if item.side else ()
+            removed_predicates = [c.predicate for c in item_conflicts]
+            if removed_predicates:
+                if row["kind"] in {"age_years", "icu_stay_hours"}:
+                    low, high = ("min_years", "max_years") if row["kind"] == "age_years" else ("min_hours", "max_hours")
+                    for predicate in removed_predicates:
+                        row[low if predicate.op == ">=" else high] = None
+                    if row.get(low) is None and row.get(high) is None:
+                        continue
+                elif row["kind"] == "condition_present":
+                    removed_concepts = {predicate.concept_id for predicate in removed_predicates}
+                    row["concepts_all_of"] = [concept for concept in row["concepts_all_of"]
+                                              if concept not in removed_concepts]
+                    if not row["concepts_all_of"]:
+                        continue
+                else:
+                    continue
+            rows.append(row)
+        population_spec = {"criteria": rows}
     revised = intent.model_copy(update={
+        "population_spec": population_spec,
         **kept, "population_criteria": criteria,
         "selection_mode": "predicate_filtered" if any(kept.values()) else "all_input_rows",
     })
@@ -986,12 +1019,14 @@ def reconcile_population_grouping(
         "Population: input stays satisfying " + "; ".join(restrictions) + ". "
         if restrictions else "Population: all input stays. "
     )
-    note += "Removed population restriction(s) to preserve the typed grouping estimand: "
-    note += "; ".join(
-        f"{item.side}: {_predicate_text(item.predicate)} would empty "
-        f"{item.grouping} level {item.level}"
-        for item in conflicts
-    ) + "."
+    note += resolution.note + (" " if resolution.note else "")
+    if conflicts:
+        note += "Host-decided: removed population restriction(s) to preserve the typed grouping estimand: "
+        note += "; ".join(
+            f"{item.side}: {_predicate_text(item.predicate)} would empty "
+            f"{item.grouping} level {item.level}"
+            for item in conflicts
+        ) + "."
     if share_decided:
         note += (" The question asks what share of the whole population a level is, so the "
                  "denominator keeps every declared level.")

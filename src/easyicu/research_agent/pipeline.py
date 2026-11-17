@@ -191,6 +191,7 @@ from .planning.dependence_authority import (
     DependenceAuthorityError,
 )
 from .planning.family_spec import caller_bound_population_conflict
+from .planning.cohort_predicate_domain import population_grouping_resolution
 from .reporting.article_contract import (
     build_article_analysis_contract,
     validate_plan_against_article_contract,
@@ -2834,10 +2835,10 @@ class ResearchAgentPipeline:
                 required_selection_mode=self._required_primary_cohort_selection_mode,
             )
             if conflict is not None:
-                raise CohortAuthorityError(conflict)
+                raise CohortAuthorityError(conflict, reason_code="caller_bound_population_mode_conflict")
             if not cohort_definition_has_explicit_selection(plan.cohort):
                 raise CohortAuthorityError(
-                    "Planner primary cohort selection is not explicit"
+                    "Planner primary cohort selection is not explicit", reason_code="caller_bound_population_mode_conflict"
                 )
         validate_plan_against_adjustment_authority(plan=plan, context=agent_context)
         self._scientific_runtime_authorities.validate_plan(plan)
@@ -3443,6 +3444,7 @@ class ResearchAgentPipeline:
             findings=len(findings),
         )
 
+        self._required_primary_cohort_selection_mode = population_grouping_resolution(context).selection_mode(self._config.required_primary_cohort_selection_mode)
         agent_context = context
         if self._context_top_k and skill_obj is None:
             agent_context = build_retrieved_research_context(
@@ -3625,6 +3627,7 @@ class ResearchAgentPipeline:
                 scientific_plan_guardrails,
                 self._bound_plan_revision_contract,
                 self._scientific_runtime_authorities.planning_contract_context(),
+                population_grouping_resolution(context).note,
             )
             if value
         )

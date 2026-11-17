@@ -273,6 +273,11 @@ def family_spec_user_prompt(
             else None
         ),
     }
+    if request.population_grouping_note:
+        host_design["population_grouping_resolution"] = {
+            "cohort_selection_mode": request.cohort_selection_mode,
+            "host_decision": request.population_grouping_note,
+        }
     if request.proposed_suite is not None:
         # The proposal's roster is the Planner's to select, so it is not shown
         # as a binding empty roster beside the host-fixed coordinates.
@@ -553,6 +558,8 @@ def _population_authority(request: FamilySpecRequest) -> dict[str, Any]:
     return {
         "time_zero_hours_after_icu_admission": request.cohort_time_zero_hours,
         "already_applied": applied,
+        **({"host_population_grouping_resolution": request.population_grouping_note}
+           if request.population_grouping_note else {}),
         # Stated only when recorded: an unrecorded selection may hold more
         # than already_applied lists, and nothing is claimed about it.
         **({"source_selection_recorded": True} if request.source_selection_recorded else {}),

@@ -121,6 +121,7 @@ from .cohort_eligibility import (
 from .cohort_predicate_domain import (
     cohort_predicates_outside_column_domain,
     population_emptied_exposure_levels,
+    population_grouping_resolution,
 )
 from .figure_strategy import ArticleFigureStrategy
 from easyicu.outcome_availability import fixed_horizon_mortality_endpoint
@@ -5230,6 +5231,7 @@ def build_plan_scientific_review(
             ),
             "plan_population_requirements": population_requirements.model_dump(mode="json") if population_requirements else None,
             "population_scope_changes": population_changes,
+            "host_population_grouping_resolution": population_grouping_resolution(context).record(),
             "accepted_baseline_coverage": baseline_coverage,
             # Carry the exact host contract into a subsequent plan-revision
             # request; a failed first replan must not erase its own requirements.

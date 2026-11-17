@@ -40,7 +40,7 @@ from fractions import Fraction
 from typing import Any, Iterable, Literal, Mapping, Sequence
 
 from ..authority.declared_levels import closed_planning_levels_for, observed_levels_for
-from ..cohort.schema import CohortDefinition, ConceptPredicate, predicate_accepts_closed_level
+from ..cohort.schema import CohortDefinition, ConceptPredicate, TimeWindow, predicate_accepts_closed_level
 from ..contracts.exposure_group_rules import (
     EXPOSURE_GROUP_LABELS_KEY,
     EXPOSURE_GROUP_TRANSFORMS,
@@ -49,7 +49,8 @@ from ..contracts.exposure_group_rules import (
     read_grouping_rules,
 )
 from ..research_context.materialization_window import context_column_windows, window_anchor
-from ..research_context.stay_events import column_kind, stay_outcome_columns
+from ..research_context.concept_population import context_data_constraints
+from ..research_context.stay_events import ICU_LENGTH_OF_STAY_CONCEPT, column_kind, stay_outcome_columns
 from ..schema import AnalysisPlan, ResearchContext
 from .cohort_eligibility import predicate_context_column
 
@@ -226,14 +227,114 @@ def share_resolves_level_conflict(context: ResearchContext, conflict: PredicateE
     level in its denominator, so the restriction, not the grouping, yields.
     """
 
-    concepts = {
-        item.get("variable"): item.get("concept")
+    return population_grouping_resolution(context).absorbs(conflict)
+
+
+@dataclass(frozen=True)
+class PopulationGroupingResolution:
+    """Host decision from the study alone, shared by launch, planning and review."""
+
+    grouping_concepts: tuple[tuple[str, str], ...] = ()
+    absorbed_fields: tuple[str, ...] = ()
+    remaining_fields: tuple[str, ...] = ()
+    saved_conflicts: tuple[PredicateEmptiesExposureLevel, ...] = ()
+
+    def absorbs(self, conflict: PredicateEmptiesExposureLevel) -> bool:
+        return (conflict.grouping, conflict.predicate.concept_id) in self.grouping_concepts
+
+    def selection_mode(self, required: str | None) -> str | None:
+        if required == "predicate_filtered" and self.absorbed_fields and not self.remaining_fields:
+            return "all_input_rows"
+        return required
+
+    @property
+    def note(self) -> str:
+        if not self.saved_conflicts:
+            return ""
+        return (
+            "Host-decided population resolution: removed saved population restriction(s) "
+            "absorbed by the declared grouping: "
+            + "; ".join(dict.fromkeys(
+                f"{item.predicate.concept_id} {item.predicate.op} {item.predicate.value:g} "
+                f"would empty {item.grouping} level {item.level}"
+                for item in self.saved_conflicts
+            ))
+            + ". The question asks what share of the whole population a level is; "
+            "the denominator keeps every declared level, and the grouping retains the "
+            "level of interest. "
+            + ("The population is all input stays." if not self.remaining_fields else
+               "Keep the independent population restrictions on the input stays.")
+        )
+
+    def record(self) -> dict[str, Any]:
+        if not self.note:
+            return {}
+        return {
+            "owner": "easyicu.planning.cohort_predicate_domain_v1",
+            "decision": "host_decided",
+            "absorbed_study_fields": list(self.absorbed_fields),
+            "remaining_study_fields": list(self.remaining_fields),
+            "note": self.note,
+        }
+
+
+def population_grouping_resolution(context: ResearchContext) -> PopulationGroupingResolution:
+    """A share keeps every level; only a proven restriction on its own concept yields.
+
+    Saved typed bounds are tested separately, so a compatible bound on the same
+    concept survives. Unknown active cohort settings remain bound. Wording is
+    provenance, not an additional executable restriction and is never parsed.
+    """
+
+    groupings = tuple(
+        (str(item["variable"]), str(item["concept"]))
         for item in context.cohort.provenance.get(EXPOSURE_GROUP_LABELS_KEY, ())
-    }
-    return (
-        concepts.get(conflict.grouping) == conflict.predicate.concept_id
-        and question_asks_population_share(context.research_question)
-    )
+        if isinstance(item, Mapping) and item.get("variable") and item.get("concept")
+    ) if question_asks_population_share(context.research_question) else ()
+    raw = context_data_constraints(context).get("cohort")
+    raw = raw if isinstance(raw, Mapping) else {}
+    absorbed, remaining, conflicts = [], [], []
+    descriptive = {"label", "review", "exclusion_statement",
+                   "max_patients", "sample_size", "sampling", "sampling_seed"}
+    for field, value in sorted(raw.items()):
+        if field in descriptive or value is None or value is False or value == "" or value == []:
+            continue
+        if field in {"preset", "mode"} and value == "all_icu":
+            continue
+        # The minimum-stay owner treats zero as no bound. Explicit age
+        # bounds remain restrictions even when compatible with every level.
+        if field == "min_icu_los_hours" and value == 0:
+            continue
+        bound = {"age_min": ("age", ">="), "age_max": ("age", "<=")}.get(field)
+        threshold = value
+        numeric = isinstance(value, numbers.Real) and not isinstance(value, bool) and math.isfinite(value)
+        if groupings and field == "min_icu_los_hours" and numeric and value > 0:
+            variable = next((item for item in context.variables if item.name == ICU_LENGTH_OF_STAY_CONCEPT), None)
+            unit = str(getattr(variable, "unit", None) or "").strip().casefold()
+            # The template reads an unspecified ICU duration in days; explicit
+            # hour/day units are the same ones its typed bound can enforce.
+            hours_per_unit = {
+                **dict.fromkeys(("", "d", "day", "days"), 24.0),
+                **dict.fromkeys(("h", "hr", "hrs", "hour", "hours"), 1.0),
+            }.get(unit) if variable is not None else None
+            if hours_per_unit is not None:
+                bound = (ICU_LENGTH_OF_STAY_CONCEPT, ">=")
+                threshold = value / hours_per_unit
+        found = ()
+        if groupings and bound and numeric:
+            predicate = ConceptPredicate(
+                concept_id=bound[0], op=bound[1], value=float(threshold), aggregation="first",
+                time_window=TimeWindow(anchor="icu_admission", start_offset_hours=0, end_offset_hours=math.inf),
+            )
+            found = tuple(item for item in cohort_emptied_exposure_levels(
+                context, CohortDefinition(name="saved", inclusion=(predicate,)),
+            ) if (item.grouping, item.predicate.concept_id) in groupings)
+        if found:
+            absorbed.append(field)
+            conflicts.extend(found)
+        else:
+            remaining.append(field)
+    return PopulationGroupingResolution(groupings, tuple(absorbed), tuple(remaining), tuple(conflicts))
 
 
 def exposure_level_conflict_feedback(
@@ -419,6 +520,8 @@ def _scalar_intersection_empty(
 
 __all__ = [
     "PredicateOutsideColumnDomain",
+    "PopulationGroupingResolution",
+    "population_grouping_resolution",
     "cohort_predicates_outside_column_domain",
     "cohort_emptied_exposure_levels",
     "population_emptied_exposure_levels",

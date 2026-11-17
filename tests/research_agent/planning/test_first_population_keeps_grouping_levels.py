@@ -22,6 +22,7 @@ from easyicu.research_agent.planning.progressive_compiler import (
 )
 from easyicu.research_agent.planning.progressive_contract import (
     ProgressivePlanCompileError,
+    ProgressiveCohortPredicate,
     ProgressivePlanSkeleton,
 )
 from easyicu.research_agent.planning.progressive_resume import assemble_progressive_skeleton
@@ -288,6 +289,14 @@ def test_compiler_refuses_a_conflict_even_when_family_reconciliation_is_bypassed
                               "quote": "entry value at least 47", "source": "question"}],
             },
         })})
+    else:
+        # The request now resolves the saved bound before projecting it. Inject
+        # the conflict explicitly to exercise bypassing reconciliation.
+        skeleton = skeleton.model_copy(update={"cohort": skeleton.cohort.model_copy(update={
+            "selection_mode": "predicate_filtered", "inclusion": [
+                ProgressiveCohortPredicate.model_validate(_predicate("age"))
+            ],
+        })})
     with pytest.raises(ProgressivePlanCompileError) as caught:
         compile_progressive_plan(
             skeleton=skeleton, context=context, allowed_literature_citation_keys=ALLOWED_CITATIONS,
@@ -303,14 +312,38 @@ def test_compiler_refuses_a_conflict_even_when_family_reconciliation_is_bypassed
     ("lactate_x", 4, "乳酸 entry value at least 4 的患者占比是多少，死亡率如何？"),
 ])
 def test_a_share_question_keeps_every_declared_level_without_a_grouping_reading(measure, cut, question):
+    from easyicu.research_agent.agents.progressive_planner import FAMILY_SPEC_STRATEGY, ProgressivePlannerAgent
+    from easyicu.research_agent.providers.mocks import ScriptedMockLLMClient
+
     context = _study(question=question, measure=measure, cut=cut)
-    llm, result = _run(context, [json.dumps(_payload(context, reading=False, measure=measure, cut=cut))])
+    # These zero-row synthetic catalogs declare no patient clustering. Their
+    # requested counts and proportions therefore carry no interval inference.
+    constraints = json.loads(context.user_preferences.data_constraints)
+    constraints["analysis_design"] = {
+        "analysis_family": "descriptive_epidemiology", "analysis_unit": "icu_stay",
+        "variance_estimator": "none_counts_only",
+    }
+    context = context.model_copy(update={"user_preferences": context.user_preferences.model_copy(update={
+        "data_constraints": json.dumps(constraints),
+    })})
+    payload = _payload(context, reading=False, measure=measure, cut=cut)
+    payload["comparator_applications"] = []
+    payload["baseline_variables"] = []  # Only the requested share and outcome rates.
+    llm = ScriptedMockLLMClient([json.dumps(payload)])
+    result = ProgressivePlannerAgent(llm).run_attempt(
+        context, planner_strategy=FAMILY_SPEC_STRATEGY,
+        allowed_literature_citation_keys=[], direct_comparator_literature_keys=[],
+        comparison_literature_keys=[], required_primary_cohort_selection_mode="predicate_filtered",
+        enforce_article_contract=False,
+    )
     assert len(llm.calls) == 1  # decided by the host, not by another Planner attempt
     plan = result.output
     assert [(p.concept_id, p.value) for p in plan.cohort.inclusion] == [("age", 18)]
     assert not population_emptied_exposure_levels(context, plan)
     note = plan.design_selection.selected.reviewable_plan[0]
     assert "share of the whole population" in note and "removed" in note.lower()
+    review = build_plan_scientific_review(context=context, plan=plan)
+    assert review.approval_allowed, [(f.code, f.message) for f in review.findings if f.severity == "blocker"]
 
 
 def test_a_share_question_keeps_a_compatible_restriction_on_the_same_concept():
@@ -321,3 +354,259 @@ def test_a_share_question_keeps_a_compatible_restriction_on_the_same_concept():
     payload["population"]["criteria"][0]["criterion"] = "entry value at least 19"
     _, result = _run(context, [json.dumps(payload)])
     assert ("entry_measure", 19) in [(p.concept_id, p.value) for p in result.output.cohort.inclusion]
+
+
+def test_share_request_absorbs_saved_bound_before_projecting_typed_bounds():
+    context = _study(typed_bound=True)
+    request = _request(context)
+    assert request.age_min is None
+    assert request.cohort_selection_mode == "all_input_rows"
+    assert request.population_grouping_note
+    assert "entry_band" in request.population_grouping_note
+
+
+@pytest.mark.parametrize("remaining", [False, True])
+def test_caller_bound_mode_uses_the_same_absorbed_saved_restrictions(remaining):
+    from easyicu.research_agent.planning.family_spec import caller_bound_population_conflict
+    from easyicu.research_agent.cohort.schema import CohortDefinition
+    from types import SimpleNamespace
+
+    context = _study(typed_bound=True)
+    if remaining:
+        constraints = json.loads(context.user_preferences.data_constraints)
+        constraints["cohort"]["min_icu_los_hours"] = 6
+        context = context.model_copy(update={"user_preferences": context.user_preferences.model_copy(
+            update={"data_constraints": json.dumps(constraints)},
+        )})
+    plan = SimpleNamespace(cohort=CohortDefinition(name="all", selection_mode="all_input_rows"))
+    conflict = caller_bound_population_conflict(plan, context=context, required_selection_mode="predicate_filtered")
+    assert (conflict is not None) == remaining
+
+
+def test_share_reconciles_a_typed_spec_and_keeps_the_other_criterion_and_quote():
+    context = _study(typed_bound=True)
+    context = context.model_copy(update={"cohort": context.cohort.model_copy(update={
+        "inclusion_criteria": ["age at least 19"],
+    })})
+    payload = _payload(context, typed_bound=True, reading=False)
+    payload["population"] = {"population_spec": {"criteria": [
+        {"id": "c1", "kind": "age_years", "role": "include", "source": "question",
+         "quote": "entry value at least 47", "min_years": 47},
+        {"id": "c2", "kind": "age_years", "role": "include", "source": "study_wording",
+         "quote": "age at least 19", "min_years": 19},
+    ]}}
+    _, result = _run(context, [json.dumps(payload)])
+    assert [(p.concept_id, p.value) for p in result.output.cohort.inclusion] == [("age", 19)]
+    kept = result.facts.foundation.foundation.cohort.population_spec["criteria"]
+    assert [(c["id"], c["quote"]) for c in kept] == [("c2", "age at least 19")]
+    assert "47" in result.output.design_selection.selected.reviewable_plan[0]
+
+
+@pytest.mark.parametrize("sequence", [f"v24{letter}" for letter in "abcdefgh"])
+@pytest.mark.parametrize("caller_mode", ["predicate_filtered", "all_input_rows"])
+def test_recorded_public_demo_share_answers_reach_an_acceptable_plan(sequence, caller_mode, tmp_path):
+    from pathlib import Path
+
+    from easyicu.research_agent.agents.progressive_planner import FAMILY_SPEC_STRATEGY, ProgressivePlannerAgent
+    from easyicu.research_agent.planning.family_spec import caller_bound_population_conflict
+    from easyicu.research_agent.planning.population_shadow import population_cohort_audit
+    from easyicu.research_agent.planning.progressive_compiler import stated_population
+    from easyicu.research_agent.orchestration.progressive_planning import question_requirement_outcome
+    from easyicu.research_agent.planning.question_requirements import question_requirements_on_plan_under_review
+    from easyicu.research_agent.providers.mocks import ScriptedMockLLMClient
+    from easyicu.research_agent.research_context.typed import parse_research_context_json
+
+    fixture = json.loads((Path(__file__).parent / "fixtures/population_share_demo.json").read_text())
+    context = parse_research_context_json(json.dumps(fixture["context"]))
+    llm = ScriptedMockLLMClient(fixture["responses"][sequence])
+    result = ProgressivePlannerAgent(llm).run_attempt(
+        context, planner_strategy=FAMILY_SPEC_STRATEGY,
+        allowed_literature_citation_keys=[], direct_comparator_literature_keys=[],
+        comparison_literature_keys=[], required_primary_cohort_selection_mode=caller_mode,
+        enforce_article_contract=False, planning_contract_context="execution_tier=first_result",
+    )
+    plan = result.output
+    assert result.facts.compile_receipt is not None
+    prompt = "\n".join(message.content for message in llm.calls[0][0])
+    assert "The population is all input stays" in prompt
+    assert "grouping retains the level of interest" in prompt
+    assert plan.cohort.selection_mode == "all_input_rows"
+    assert not plan.cohort.inclusion and not plan.cohort.exclusion
+    assert caller_bound_population_conflict(
+        plan, context=context, required_selection_mode="predicate_filtered",
+    ) is None
+    assert not population_emptied_exposure_levels(context, plan)
+    distribution = next(s.exposure_outcome_distribution_spec for s in plan.steps
+                        if s.exposure_outcome_distribution_spec is not None)
+    assert distribution.exposure == "age_group_x1" and list(distribution.exposure_levels) == [1, 2]
+    note = plan.design_selection.selected.reviewable_plan[0]
+    assert "Host-decided" in note and "80" in note and "age_group_x1" in note
+    cohort = result.facts.foundation.foundation.cohort
+    compiled = stated_population(cohort, context=context, plan=plan)
+    assert compiled is None or not compiled.blocking
+    audit = population_cohort_audit(context=context, plan=plan, cohort=cohort)
+    assert audit["host_population_grouping_resolution"]["decision"] == "host_decided"
+    assert audit["host_population_grouping_resolution"]["absorbed_study_fields"] == ["age_min"]
+    review = build_plan_scientific_review(context=context, plan=plan)
+    assert review.approval_allowed
+    assert not {"POPULATION_EMPTIES_EXPOSURE_LEVEL", "POPULATION_CRITERION_NOT_APPLIED"}.intersection(
+        f.code for f in review.findings
+    )
+    assert review.facts["host_population_grouping_resolution"]["decision"] == "host_decided"
+    findings = question_requirement_outcome(context=context, plan=plan, facts=result.facts, run_dir=tmp_path)
+    reviewed = question_requirements_on_plan_under_review(findings, plan=plan, run_dir=tmp_path)
+    assert not [finding for finding in reviewed if finding.severity == "error"], reviewed
+
+
+@pytest.mark.parametrize("change", ["no_grouping", "compatible", "not_share"])
+def test_a_saved_bound_only_yields_to_a_share_and_a_conflicting_grouping(change):
+    from easyicu.research_agent.planning.cohort_predicate_domain import population_grouping_resolution
+
+    context = _study(typed_bound=True)
+    if change == "no_grouping":
+        context = context.model_copy(update={"cohort": context.cohort.model_copy(update={"provenance": {}})})
+    elif change == "compatible":
+        constraints = json.loads(context.user_preferences.data_constraints)
+        constraints["cohort"]["age_min"] = 19
+        context = context.model_copy(update={"user_preferences": context.user_preferences.model_copy(update={
+            "data_constraints": json.dumps(constraints),
+        })})
+    else:
+        context = context.model_copy(update={"research_question": _NOT_A_SHARE})
+    decision = population_grouping_resolution(context)
+    assert not decision.absorbed_fields
+    assert decision.selection_mode("predicate_filtered") == "predicate_filtered"
+    assert _request(context).age_min == (19 if change == "compatible" else 47)
+
+
+def test_a_nonshare_mode_conflict_reaches_the_failure_receipt_with_a_typed_code(tmp_path):
+    from types import SimpleNamespace
+
+    from easyicu.research_agent.cohort.schema import CohortAuthorityError, CohortDefinition
+    from easyicu.research_agent.planning.family_spec import caller_bound_population_conflict
+    from easyicu.webserver.agent_pipeline_runs import (
+        _pipeline_failure_code, _record_pipeline_failure, _safe_pipeline_typed_failure,
+    )
+
+    context = _study(typed_bound=True, question=_NOT_A_SHARE)
+    plan = SimpleNamespace(cohort=CohortDefinition(name="all", selection_mode="all_input_rows"))
+    conflict = caller_bound_population_conflict(plan, context=context, required_selection_mode="predicate_filtered")
+    assert conflict
+    error = CohortAuthorityError(conflict, reason_code="caller_bound_population_mode_conflict")
+    wrapper = RuntimeError("private exception text")
+    wrapper.__cause__ = error
+    code = _pipeline_failure_code(wrapper)
+    assert code == "caller_bound_population_mode_conflict"
+    _record_pipeline_failure(wrapper_dir=tmp_path, study={"id": "synthetic"}, provider={},
+                             exc=wrapper, code=code, execution_retry_id=None)
+    receipt = json.loads((tmp_path / "diagnostics/research_pipeline_failure.json").read_text())
+    assert receipt["typed_failure"] == _safe_pipeline_typed_failure(wrapper) == {
+        "owner": "easyicu.planning.cohort_authority_v1", "reason_code": code,
+    }
+    assert "private exception text" not in json.dumps(receipt["typed_failure"])
+
+
+def test_a_compatible_saved_upper_age_bound_survives_the_absorbed_lower_bound():
+    context = _study(typed_bound=True)
+    constraints = json.loads(context.user_preferences.data_constraints)
+    constraints["cohort"]["age_max"] = 120
+    context = context.model_copy(update={"user_preferences": context.user_preferences.model_copy(update={
+        "data_constraints": json.dumps(constraints),
+    })})
+    request = _request(context)
+    assert request.age_min is None and request.age_max == 120
+    assert request.cohort_selection_mode == "predicate_filtered"
+    payload = _payload(context, typed_bound=True)
+    _, result = _run(context, [json.dumps(payload)])
+    assert [(p.concept_id, p.op, p.value) for p in result.output.cohort.inclusion] == [("age", "<=", 120)]
+
+
+def test_an_additional_saved_population_setting_cannot_be_assumed_absorbed():
+    from easyicu.research_agent.planning.cohort_predicate_domain import population_grouping_resolution
+
+    context = _study(typed_bound=True)
+    constraints = json.loads(context.user_preferences.data_constraints)
+    constraints["cohort"]["preset"] = "adult_first"
+    context = context.model_copy(update={"user_preferences": context.user_preferences.model_copy(update={
+        "data_constraints": json.dumps(constraints),
+    })})
+    decision = population_grouping_resolution(context)
+    assert decision.absorbed_fields == ("age_min",)
+    assert decision.remaining_fields == ("preset",)
+    assert decision.selection_mode("predicate_filtered") == "predicate_filtered"
+
+
+def test_absorption_preserves_a_compatible_bound_in_the_same_typed_criterion():
+    context = _study(typed_bound=True)
+    constraints = json.loads(context.user_preferences.data_constraints)
+    constraints["cohort"]["age_max"] = 90
+    context = context.model_copy(update={"user_preferences": context.user_preferences.model_copy(update={
+        "data_constraints": json.dumps(constraints),
+    })})
+    payload = _payload(context, typed_bound=True)
+    payload["population"] = {"population_spec": {"criteria": [{
+        "id": "c1", "kind": "age_years", "role": "include", "source": "question",
+        "quote": "entry value at least 47", "min_years": 47, "max_years": 90,
+    }]}}
+    _, result = _run(context, [json.dumps(payload)])
+    criterion, = result.facts.foundation.foundation.cohort.population_spec["criteria"]
+    assert criterion["id"] == "c1" and criterion["quote"] == "entry value at least 47"
+    assert criterion["min_years"] is None and criterion["max_years"] == 90
+    assert [(p.concept_id, p.op, p.value) for p in result.output.cohort.inclusion] == [("age", "<=", 90)]
+
+
+def test_a_compound_typed_condition_keeps_its_other_concept_and_original_quote():
+    question = "What share of eligible stays has the phenotype and auxiliary condition, and what is their outcome?"
+    context = _study(measure="phenotype_flag", cut=0.5, question=question)
+    variables = [v for v in context.variables if v.name != "phenotype_flag"]
+    variables.extend(ConceptDescriptor(
+        name=name, source_concept=name, role=VariableRole.OTHER, dtype="int64",
+        observed_domain={"n_unique": 2, "is_binary": True, "levels": [0, 1]},
+        analysis_window="icu_admission[0,24]h", unit_normalization="window_presence_max",
+    ) for name in ("phenotype_flag", "auxiliary_flag"))
+    provenance = dict(context.cohort.provenance)
+    grouping = json.loads(json.dumps(provenance[EXPOSURE_GROUP_LABELS_KEY][0]))
+    grouping["parameters"]["window"] = {"start_hours": 0, "end_hours": 24}
+    grouping["parameters"]["source_columns"] = {"max": "phenotype_flag"}
+    for group in grouping["parameters"]["groups"]:
+        group["rule"]["summary"] = "max"
+    provenance[EXPOSURE_GROUP_LABELS_KEY] = [grouping]
+    context = context.model_copy(update={"variables": variables,
+        "cohort": context.cohort.model_copy(update={"provenance": provenance})})
+    payload = _payload(context, reading=False, measure="phenotype_flag", cut=0.5)
+    payload["population"] = {"population_spec": {"criteria": [
+        {"id": "c1", "kind": "age_years", "role": "include", "source": "preset",
+         "quote": "independent adult eligibility", "min_years": 18},
+        {"id": "c2", "kind": "condition_present", "role": "include", "source": "question",
+         "quote": "phenotype and auxiliary condition", "concepts_all_of": ["phenotype_flag", "auxiliary_flag"],
+         "window": {"start_hours": 0, "end_hours": 24}},
+    ]}}
+    _, result = _run(context, [json.dumps(payload)])
+    kept = result.facts.foundation.foundation.cohort.population_spec["criteria"]
+    assert kept[1]["concepts_all_of"] == ["auxiliary_flag"]
+    assert kept[1]["quote"] == "phenotype and auxiliary condition"
+    assert [(p.concept_id, p.value) for p in result.output.cohort.inclusion] == [("age", 18), ("auxiliary_flag", 1)]
+    assert not population_emptied_exposure_levels(context, result.output)
+
+
+@pytest.mark.parametrize("unit,cut", [("hours", 6), ("days", 0.25)])
+def test_a_saved_icu_duration_bound_is_absorbed_only_by_its_own_grouping(unit, cut):
+    from easyicu.research_agent.planning.family_spec import caller_bound_population_conflict
+
+    context = _study(measure="los_icu", cut=cut,
+        question="What proportion of stays last at least six ICU hours, and what is their mortality?")
+    constraints = json.loads(context.user_preferences.data_constraints)
+    constraints["cohort"] = {"min_icu_los_hours": 6}
+    context = context.model_copy(update={
+        "variables": [v.model_copy(update={"unit": unit}) if v.name == "los_icu" else v for v in context.variables],
+        "user_preferences": context.user_preferences.model_copy(update={"data_constraints": json.dumps(constraints)}),
+    })
+    request = _request(context)
+    assert request.minimum_icu_hours is None and request.cohort_selection_mode == "all_input_rows"
+    _, result = _run(context, [json.dumps(_payload(context, reading=False, measure="los_icu", cut=cut))])
+    assert result.output.cohort.selection_mode == "all_input_rows"
+    assert not result.output.cohort.inclusion
+    assert not population_emptied_exposure_levels(context, result.output)
+    assert caller_bound_population_conflict(
+        result.output, context=context, required_selection_mode="predicate_filtered",
+    ) is None

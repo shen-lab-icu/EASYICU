@@ -81,6 +81,7 @@ from __future__ import annotations
 import hashlib
 import json
 import re
+import unicodedata
 from dataclasses import dataclass
 from pathlib import Path
 from types import MappingProxyType
@@ -206,7 +207,7 @@ QUESTION_REQUIREMENTS_GUIDE = (
     " Split compound analysis requirements into clauses, each quoting a distinct part of "
     "the requirement's quote; use clauses=[] for an atomic requirement. "
     "Only kind=analysis may carry non-empty clauses; all other kinds use clauses=[]. "
-    "Non-empty clauses must quote distinct verbatim parts covering the whole requirement quote. "
+    "Non-empty clauses tile the complete quote in order, with only whitespace or CJK/ASCII punctuation between or after them. "
     "For an analysis of multiple question-named exposures, list every exposure "
     "in analysis_exposures and concepts, including the primary. A definition "
     "does not replace an exposure analysis. If this family cannot carry them "
@@ -487,12 +488,22 @@ class QuestionRequirement(BaseModel):
         ):
             invalid_clauses("analysis clauses must quote distinct parts of their requirement; use distinct verbatim parts of quote for kind=analysis, otherwise []")
         if self.clauses:
-            remainder = self.quote
+            cursor = 0
+            gaps = []
             for clause in self.clauses:
-                remainder = re.sub(re.escape(clause), " ", remainder, flags=re.IGNORECASE)
-            remainder = _METHOD_REQUEST.sub("", remainder.strip())
-            if re.sub(r"\b(?:and|or|the|also)\b|以及|及|与|并|[\s、,，;；。.:：]+", "", remainder, flags=re.IGNORECASE):
-                invalid_clauses("clauses must account for the complete requirement quote; use [] for an atomic analysis")
+                match = re.search(re.escape(clause), self.quote[cursor:], flags=re.IGNORECASE)
+                if match is None:
+                    invalid_clauses("clauses must account for the complete requirement quote in order; use [] for an atomic analysis")
+                gaps.append(self.quote[cursor:cursor + match.start()])
+                cursor += match.end()
+            gaps.append(self.quote[cursor:])
+            for index, gap in enumerate(gaps):
+                # Keep the established connective/method-request allowance;
+                # punctuation itself is Unicode-defined, not an incomplete list.
+                gap = _METHOD_REQUEST.sub("", gap.strip()) if index == 0 else gap
+                gap = re.sub(r"\b(?:and|or|the|also)\b|以及|及|与|并", "", gap, flags=re.IGNORECASE)
+                if any(not char.isspace() and not unicodedata.category(char).startswith("P") for char in gap):
+                    invalid_clauses("clauses must account for the complete requirement quote; use [] for an atomic analysis")
         if self.analysis_exposures and (
             self.kind != "analysis"
             or len(set(self.analysis_exposures)) != len(self.analysis_exposures)
@@ -2119,7 +2130,7 @@ def question_requirements_schema(
                 },
                 "clauses": {
                     "type": "array", "items": {"type": "string"},
-                    "description": "For kind=analysis only: distinct verbatim parts covering the whole quote; otherwise [].",
+                    "description": "For kind=analysis only: clauses tile the complete quote in order, with only whitespace or CJK/ASCII punctuation between or after them; otherwise [].",
                 },
                 "analysis_exposures": {"type": "array", "items": concept},
                 "coverage": {
@@ -2180,7 +2191,8 @@ def question_requirements_shape(
         "design_element_unsupported; kind definition goes with "
         "coverage definition_only and a note saying which element it defines; a benchmark "
         "or subgroup answered by the plan names its concept. "
-        "Only kind=analysis may carry non-empty clauses; otherwise clauses=[]"
+        "Only kind=analysis may carry non-empty clauses; otherwise clauses=[]. "
+        "Clauses tile the complete quote in order, with only whitespace or CJK/ASCII punctuation between or after them."
     )
 
 

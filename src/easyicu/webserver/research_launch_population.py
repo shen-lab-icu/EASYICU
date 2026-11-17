@@ -6,6 +6,32 @@ import math
 from typing import Any, Mapping
 
 
+def resolved_launch_population_mode(
+    *, required_mode: str | None, question: str, database: str,
+    acquisition: Any, declarations: Mapping[str, Any],
+) -> str | None:
+    """Resolve the saved mode against the same context the pipeline will build.
+
+    The input is the acquired universe (a zero-row catalog during planning),
+    so the context builder reads the host's verified grouping declarations.
+    No study prose is reinterpreted here and no plan is approved.
+    """
+    if required_mode != "predicate_filtered":
+        return required_mode
+    from easyicu.research_agent.planning.cohort_predicate_domain import (
+        population_grouping_resolution, question_asks_population_share,
+    )
+    if not question_asks_population_share(question):
+        return required_mode
+    from easyicu.research_agent.research_context.builder import build_research_context
+
+    context = build_research_context(
+        research_question=question, database=database,
+        cohort=acquisition.universe_path, **declarations,
+    )
+    return population_grouping_resolution(context).selection_mode(required_mode)
+
+
 def prepare_source_population(study: Mapping[str, Any]) -> dict[str, Any]:
     """Project a source proposal for preparation; preserve its original request.
 

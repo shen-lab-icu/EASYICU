@@ -48,6 +48,7 @@ from ..analysis_types import (
 )
 from ..baseline_requirements import baseline_requirement_projection
 from ..cohort_contract import event_status_reading
+from ..cohort_predicate_domain import population_grouping_resolution
 from ..exposure_group_compile import exposure_group_contrast
 from ..distribution_authority import distribution_missingness_facts
 from ..cohort_eligibility import (
@@ -566,12 +567,15 @@ def _typed_cohort_fields(
     written in, fails here instead of losing the criterion.
     Whether a caller-bound filtered cohort has anything to filter it by is
     decided once its population authority is bound.
+    The shared grouping resolution removes absorbed bounds before projection.
     """
 
     cohort = _typed_cohort_constraints(context)
-    age_min = _optional_number(cohort.get("age_min"))
-    age_max = _optional_number(cohort.get("age_max"))
-    minimum_icu_hours = minimum_icu_stay_hours(context)
+    resolution = population_grouping_resolution(context)
+    age_min = _optional_number(cohort.get("age_min")) if "age_min" not in resolution.absorbed_fields else None
+    age_max = _optional_number(cohort.get("age_max")) if "age_max" not in resolution.absorbed_fields else None
+    required_primary_cohort_selection_mode = resolution.selection_mode(required_primary_cohort_selection_mode)
+    minimum_icu_hours = minimum_icu_stay_hours(context) if "min_icu_los_hours" not in resolution.absorbed_fields else None
     typed = any(value is not None for value in (age_min, age_max, minimum_icu_hours))
     if required_primary_cohort_selection_mode in {"all_input_rows", "predicate_filtered"}:
         selection_mode = required_primary_cohort_selection_mode
@@ -588,6 +592,7 @@ def _typed_cohort_fields(
     )
     return {
         "cohort_selection_mode": selection_mode,
+        "population_grouping_note": resolution.note,
         "age_min": age_min,
         "age_max": age_max,
         "minimum_icu_hours": minimum_icu_hours,
@@ -736,7 +741,9 @@ def caller_bound_population_conflict(
 ) -> Optional[str]:
     """Why a plan's cohort does not keep the population its caller binds, or None.
 
-    It keeps it when its selection mode is the caller's.  A caller that binds
+    It keeps it when its selection mode is the caller's. A filtered binding
+    also admits every input row when the host absorbs all saved restrictions
+    into the declared grouping. A caller that binds
     every input row also admits a static prediction's cohort that adds only
     its risk set, the stays still in the ICU after the prediction time
     (``prediction_risk_set_predicates``): compared as typed predicates, with
@@ -747,6 +754,9 @@ def caller_bound_population_conflict(
     cohort = getattr(plan, "cohort", None)
     observed = str(getattr(cohort, "selection_mode", "") or "")
     if observed == required_selection_mode:
+        return None
+    if (observed == "all_input_rows" and required_selection_mode == "predicate_filtered"
+            and population_grouping_resolution(context).selection_mode(required_selection_mode) == observed):
         return None
     conflict = (
         "Planner primary cohort selection mode does not match the caller-bound "
@@ -1299,6 +1309,9 @@ def _bind_population_authority(
     cohort is its sealed suite's, or when the family decides nothing by a time
     zero.
 
+    A grouping-resolved all-input population still offers concepts so a model
+    can restate an older restriction; the host removes only its absorbed part.
+
     With them come the criteria the source export is known to have applied
     and whether its selection is recorded (``export_applied_selection``): a
     restriction already applied is not the Planner's to restate, and one
@@ -1316,7 +1329,8 @@ def _bind_population_authority(
     )
     if (
         not concepts
-        or required_primary_cohort_selection_mode == "all_input_rows"
+        or (required_primary_cohort_selection_mode == "all_input_rows"
+            and not population_grouping_resolution(context).absorbed_fields)
         or request.family_id not in POPULATION_FAMILY_IDS
         or request.sealed_survival_suite is not None
         or request.cohort_time_zero_hours is None

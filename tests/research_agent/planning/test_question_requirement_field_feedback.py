@@ -61,3 +61,24 @@ def test_transport_and_word_contract_state_the_cross_field_shapes():
     assert "analysis" in properties["clauses"]["description"]
     shape = question_requirements_shape(["age"], effect_measures=["odds_ratio"])
     assert "clauses=[]" in shape and "analysis" in shape
+
+
+@pytest.mark.parametrize("separator,ending", [("？", "？"), ("? ", "!"), ("；\n", "。"), (" — ", ":")])
+def test_analysis_clauses_tile_the_quote_across_punctuation(separator, ending):
+    clauses = ["入 ICU 时 80 岁及以上的患者占多大比例", "他们的院内死亡率是多少"]
+    item = QuestionRequirement(
+        id="r1", kind="analysis", coverage="plan", clauses=clauses,
+        quote=separator.join(clauses) + ending,
+    )
+    assert item.clauses == clauses
+
+
+@pytest.mark.parametrize("quote,clauses", [
+    ("Report age? Report mortality?", ["Report mortality", "Report age"]),
+    ("Report age and unmeasured severity? Report mortality?", ["Report age", "Report mortality"]),
+    ("Report age and mortality", ["Report age and", "and mortality"]),
+    ("Report age Estimate mortality", ["Report age", "mortality"]),
+])
+def test_clause_tiling_cannot_reorder_overlap_or_omit_content(quote, clauses):
+    with pytest.raises(ValidationError, match="complete requirement quote"):
+        QuestionRequirement(id="r1", kind="analysis", coverage="plan", quote=quote, clauses=clauses)

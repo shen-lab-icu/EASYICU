@@ -1,0 +1,605 @@
+{
+  "provenance": "Public eICU demo zero-row planning context and recorded model answer text only. Context changes: remove local cohort paths and creation timestamp; replace display cohort name. All population, source, grouping and missingness authority metadata are preserved. No patient rows, headers or credentials. Repeated transport requests with the same cassette key are represented once.",
+  "context": {
+    "schema_version": "easyicu.research_context/1",
+    "research_question": "eICU demo 中，入 ICU 时 80 岁及以上的患者占多大比例？他们的院内死亡率是多少？",
+    "cohort": {
+      "cohort_name": "public_demo_population_share",
+      "database": "eicu_demo",
+      "n_patients": null,
+      "n_stays": 0,
+      "inclusion_criteria": [],
+      "exclusion_criteria": [],
+      "id_columns": [
+        "patient_stay_id"
+      ],
+      "time_columns": [],
+      "outcome_columns": [
+        "death"
+      ],
+      "requested_outcome_columns": [
+        "death"
+      ],
+      "provenance": {
+        "database": "eicu_demo",
+        "n_rows": 0,
+        "n_columns": 5,
+        "id_columns": [
+          "patient_stay_id"
+        ],
+        "time_columns": [],
+        "outcome_columns": [
+          "death"
+        ],
+        "target_outcome": "death",
+        "resolver": "ICUEpisodeResolver",
+        "source_identity": {
+          "database": "eicu_demo",
+          "registration_id": "src_dfdc58bc4eb0"
+        },
+        "analysis_unit": "icu_stay",
+        "analysis_row_count": 0,
+        "stay_id_columns": [
+          "patient_stay_id"
+        ],
+        "patient_id_columns": [],
+        "patient_identity_available": false,
+        "n_patients_source": "patient_stay_id:prefix_before_:s",
+        "evidence_stage": "metadata_only_planning",
+        "patient_rows_read": false,
+        "exposure_groups": [
+          {
+            "variable": "age_group_x1",
+            "transform": "exposure_group_ordinal",
+            "levels": 2,
+            "concept": "age",
+            "window": null,
+            "description": "Ordinal groups of age stated by the study, as level codes: 1 = 80 岁以下; 2 = 80 岁及以上",
+            "compared": {
+              "reference": 1,
+              "contrast": 2,
+              "stated": []
+            },
+            "groupings_record_sha256": "5def0e7979fbd134e3511cf8d2a9933ef801328aae460ff07a86981953de2aa9",
+            "labels": [
+              {
+                "code": 1,
+                "group": "g1",
+                "label": "80 岁以下"
+              },
+              {
+                "code": 2,
+                "group": "g2",
+                "label": "80 岁及以上"
+              }
+            ],
+            "parameters": {
+              "concept": "age",
+              "window": null,
+              "scale": "ordinal",
+              "groups": [
+                {
+                  "id": "g1",
+                  "rule": {
+                    "summary": "value",
+                    "op": "<",
+                    "value": 80.0,
+                    "unit": "years"
+                  }
+                },
+                {
+                  "id": "g2",
+                  "rule": {
+                    "summary": "value",
+                    "op": ">=",
+                    "value": 80.0,
+                    "unit": "years"
+                  }
+                }
+              ],
+              "unmeasured": "exclude",
+              "source_columns": {
+                "value": "age"
+              }
+            }
+          }
+        ],
+        "patient_grouping_status": "bound",
+        "concepts_without_values": [
+          "aki_severe_source_native",
+          "aki_source_native",
+          "aki_source_native_reason",
+          "aki_stage_creat_source_native",
+          "aki_stage_crrt_source_native",
+          "aki_stage_source_native",
+          "aki_stage_source_native_smoothed",
+          "aki_stage_uo_source_native",
+          "apixaban",
+          "circ_event",
+          "circ_failure",
+          "cort",
+          "d_dimer",
+          "driving_pres_controlled",
+          "ecmo",
+          "ecmo_indication",
+          "epi60",
+          "epi_rate",
+          "followup_days_28d",
+          "followup_days_365d",
+          "followup_days_90d",
+          "ggt",
+          "hba1c",
+          "icu_free_days_28",
+          "icu_readmission",
+          "ketamine",
+          "mannitol",
+          "mort_28d",
+          "mort_365d",
+          "mort_90d",
+          "ntprobnp",
+          "pct",
+          "saps3",
+          "scvo2",
+          "sedated_gcs",
+          "svo2",
+          "vent_breath_seq",
+          "vent_free_days_28",
+          "vent_mode"
+        ],
+        "replacement_row_identity": {
+          "output_identity_column": "patient_stay_id",
+          "mapping_file_sha256": "8ce16718d6f25107325b009010e536fd67576f628ffdbdd2c241b52d32ca7cd1",
+          "mapped_cohort_rows": 0,
+          "patient_group_derivation": {
+            "algorithm": "prefix_before_:s",
+            "delimiter": ":s"
+          },
+          "authority_coordinates": {
+            "schema_version": "easyicu.patient_grouping_runtime_authority/1",
+            "authority_ref": "export_manifest_data_path/eicu/1/patient_grouping",
+            "database": "eicu_demo",
+            "export_manifest_file": "_manifest.json",
+            "export_manifest_sha256": "a59e2b0333a48704d961f19dd47d31005af3f7ed7a035d37a04d92524a0ef6eb",
+            "mapping_sha256": "8ce16718d6f25107325b009010e536fd67576f628ffdbdd2c241b52d32ca7cd1",
+            "grouping_derivation": "prefix_before_:s",
+            "provider_visible_values": false
+          }
+        },
+        "exposure_group_contrasts": [
+          {
+            "variable": "age_group_x1",
+            "reference": 1,
+            "contrast": 2,
+            "stated": []
+          }
+        ],
+        "exposure_group_labels": [
+          {
+            "variable": "age_group_x1",
+            "concept": "age",
+            "scale": "ordinal",
+            "levels": [
+              {
+                "code": 1,
+                "group": "g1",
+                "label": "80 岁以下"
+              },
+              {
+                "code": 2,
+                "group": "g2",
+                "label": "80 岁及以上"
+              }
+            ],
+            "parameters": {
+              "concept": "age",
+              "window": null,
+              "scale": "ordinal",
+              "groups": [
+                {
+                  "id": "g1",
+                  "rule": {
+                    "summary": "value",
+                    "op": "<",
+                    "value": 80.0,
+                    "unit": "years"
+                  }
+                },
+                {
+                  "id": "g2",
+                  "rule": {
+                    "summary": "value",
+                    "op": ">=",
+                    "value": 80.0,
+                    "unit": "years"
+                  }
+                }
+              ],
+              "unmeasured": "exclude",
+              "source_columns": {
+                "value": "age"
+              }
+            },
+            "rule_wording_version": 2
+          }
+        ],
+        "inclusion_criteria": [],
+        "exclusion_criteria": []
+      },
+      "notes": null
+    },
+    "variables": [
+      {
+        "name": "stay_id",
+        "description": null,
+        "role": "id",
+        "dtype": "int64",
+        "unit": null,
+        "valid_range": null,
+        "observed_domain": null,
+        "allowed_aggregations": [
+          "none",
+          "first_value"
+        ],
+        "aggregation_default": "any",
+        "is_ordinal": false,
+        "ordinal_levels": null,
+        "source_concept": null,
+        "derived_from_concepts": [],
+        "source_files": [],
+        "source_tables": [],
+        "item_ids": [],
+        "unit_normalization": null,
+        "analysis_window": null,
+        "analysis_window_role": null,
+        "clinical_definition": null,
+        "temporal_resolution": null,
+        "fixed_window_trajectory": null,
+        "source_databases": [],
+        "pitfalls": [],
+        "clinical_caveats": [],
+        "missingness_semantics": null,
+        "observation_semantics": null,
+        "forbidden_transformations": [],
+        "cross_database_notes": [],
+        "missingness": {
+          "fraction_missing": 0.0,
+          "n_missing": 0,
+          "n_total": 0,
+          "raw_n_missing": null,
+          "eligible_n": null,
+          "not_applicable_n": 0,
+          "missingness_severity": "low",
+          "missingness_kind": null,
+          "missingness_test": "not_run",
+          "missingness_test_p_value": null,
+          "notes": null
+        },
+        "concept_enrichment_degraded": true
+      },
+      {
+        "name": "patient_stay_id",
+        "description": "Host-verified unique ICU-stay identity. Derive the patient cluster only from the prefix before ':s'; never report identifier values.",
+        "role": "id",
+        "dtype": "string",
+        "unit": null,
+        "valid_range": null,
+        "observed_domain": null,
+        "allowed_aggregations": [
+          "first_value",
+          "none"
+        ],
+        "aggregation_default": "any",
+        "is_ordinal": false,
+        "ordinal_levels": null,
+        "source_concept": null,
+        "derived_from_concepts": [],
+        "source_files": [],
+        "source_tables": [],
+        "item_ids": [],
+        "unit_normalization": null,
+        "analysis_window": null,
+        "analysis_window_role": null,
+        "clinical_definition": null,
+        "temporal_resolution": null,
+        "fixed_window_trajectory": null,
+        "source_databases": [],
+        "pitfalls": [],
+        "clinical_caveats": [],
+        "missingness_semantics": null,
+        "observation_semantics": null,
+        "forbidden_transformations": [],
+        "cross_database_notes": [],
+        "missingness": {
+          "fraction_missing": 0.0,
+          "n_missing": 0,
+          "n_total": 0,
+          "raw_n_missing": null,
+          "eligible_n": null,
+          "not_applicable_n": 0,
+          "missingness_severity": "low",
+          "missingness_kind": null,
+          "missingness_test": "not_run",
+          "missingness_test_p_value": null,
+          "notes": null
+        },
+        "concept_enrichment_degraded": true
+      },
+      {
+        "name": "age",
+        "description": "patient age",
+        "role": "demographic",
+        "dtype": "float64",
+        "unit": "years",
+        "valid_range": [
+          0.0,
+          120.0
+        ],
+        "observed_domain": null,
+        "allowed_aggregations": [
+          "mean_or_median",
+          "median_only",
+          "max_or_last",
+          "first_value"
+        ],
+        "aggregation_default": "first_value",
+        "is_ordinal": false,
+        "ordinal_levels": null,
+        "source_concept": "age",
+        "derived_from_concepts": [],
+        "source_files": [],
+        "source_tables": [],
+        "item_ids": [],
+        "unit_normalization": null,
+        "analysis_window": null,
+        "analysis_window_role": null,
+        "clinical_definition": null,
+        "temporal_resolution": null,
+        "fixed_window_trajectory": null,
+        "source_databases": [
+          "aumc",
+          "eicu",
+          "eicu_demo",
+          "hirid",
+          "jinhua",
+          "miiv",
+          "mimic",
+          "mimic_demo",
+          "nwicu",
+          "sic",
+          "zhejiang_eicu",
+          "zigong"
+        ],
+        "pitfalls": [],
+        "clinical_caveats": [],
+        "missingness_semantics": null,
+        "observation_semantics": null,
+        "forbidden_transformations": [],
+        "cross_database_notes": [],
+        "missingness": {
+          "fraction_missing": 0.0,
+          "n_missing": 0,
+          "n_total": 0,
+          "raw_n_missing": null,
+          "eligible_n": null,
+          "not_applicable_n": 0,
+          "missingness_severity": "low",
+          "missingness_kind": null,
+          "missingness_test": "not_run",
+          "missingness_test_p_value": null,
+          "notes": null
+        },
+        "concept_enrichment_degraded": false
+      },
+      {
+        "name": "death",
+        "description": "in hospital mortality",
+        "role": "outcome",
+        "dtype": "float64",
+        "unit": null,
+        "valid_range": null,
+        "observed_domain": null,
+        "allowed_aggregations": [
+          "max_or_last",
+          "first_value",
+          "sum"
+        ],
+        "aggregation_default": "first_value",
+        "is_ordinal": false,
+        "ordinal_levels": null,
+        "source_concept": "death",
+        "derived_from_concepts": [],
+        "source_files": [],
+        "source_tables": [],
+        "item_ids": [],
+        "unit_normalization": null,
+        "analysis_window": null,
+        "analysis_window_role": null,
+        "clinical_definition": null,
+        "temporal_resolution": null,
+        "fixed_window_trajectory": null,
+        "source_databases": [
+          "aumc",
+          "eicu",
+          "eicu_demo",
+          "hirid",
+          "jinhua",
+          "miiv",
+          "mimic",
+          "mimic_demo",
+          "nwicu",
+          "sic",
+          "zhejiang_eicu"
+        ],
+        "pitfalls": [
+          "ICU mortality vs hospital mortality vs 28-day mortality are NOT interchangeable; record which one is in use."
+        ],
+        "clinical_caveats": [
+          "ICU mortality vs hospital mortality vs 28-day mortality are NOT interchangeable; record which one is in use.",
+          "For this analysis, 'death' retains its owner-issued clinical definition ('in hospital mortality'), which agrees with the requested hospital mortality."
+        ],
+        "missingness_semantics": null,
+        "observation_semantics": null,
+        "forbidden_transformations": [],
+        "cross_database_notes": [
+          "Do not silently substitute ICU, hospital, 28-day, or 30-day mortality for one another when using 'death'."
+        ],
+        "missingness": {
+          "fraction_missing": 0.0,
+          "n_missing": 0,
+          "n_total": 0,
+          "raw_n_missing": null,
+          "eligible_n": null,
+          "not_applicable_n": 0,
+          "missingness_severity": "low",
+          "missingness_kind": null,
+          "missingness_test": "not_run",
+          "missingness_test_p_value": null,
+          "notes": null
+        },
+        "concept_enrichment_degraded": false
+      },
+      {
+        "name": "age_group_x1",
+        "description": "Ordinal groups of age stated by the study, as level codes: 1 = 80 岁以下; 2 = 80 岁及以上",
+        "role": "other",
+        "dtype": "int64",
+        "unit": "category",
+        "valid_range": [
+          1.0,
+          2.0
+        ],
+        "observed_domain": null,
+        "allowed_aggregations": [
+          "max_or_last",
+          "first_value",
+          "median_only"
+        ],
+        "aggregation_default": "max_or_last",
+        "is_ordinal": true,
+        "ordinal_levels": [
+          1,
+          2
+        ],
+        "source_concept": "age_group_x1",
+        "derived_from_concepts": [
+          "age"
+        ],
+        "source_files": [],
+        "source_tables": [],
+        "item_ids": [],
+        "unit_normalization": "exposure_group_ordinal",
+        "analysis_window": null,
+        "analysis_window_role": null,
+        "clinical_definition": null,
+        "temporal_resolution": null,
+        "fixed_window_trajectory": null,
+        "source_databases": [],
+        "pitfalls": [],
+        "clinical_caveats": [],
+        "missingness_semantics": null,
+        "observation_semantics": null,
+        "forbidden_transformations": [],
+        "cross_database_notes": [],
+        "missingness": {
+          "fraction_missing": 0.0,
+          "n_missing": 0,
+          "n_total": 0,
+          "raw_n_missing": null,
+          "eligible_n": null,
+          "not_applicable_n": 0,
+          "missingness_severity": "low",
+          "missingness_kind": null,
+          "missingness_test": "not_run",
+          "missingness_test_p_value": null,
+          "notes": null
+        },
+        "concept_enrichment_degraded": true
+      }
+    ],
+    "time_windows": [
+      {
+        "name": "icu_admission_0_24h",
+        "anchor": "icu_admission",
+        "start_hours": 0.0,
+        "end_hours": 24.0,
+        "rationale": "Outer feature-materialization window bound by the host before this run; the cohort carries no observation outside it."
+      }
+    ],
+    "temporal_constraints": [],
+    "target_outcome": "death",
+    "endpoint": {
+      "name": "death",
+      "kind": "binary",
+      "absence_semantics": "no_absent_rows",
+      "levels": [
+        0,
+        1
+      ],
+      "event_column": null,
+      "time_column": null,
+      "time_origin": null,
+      "censoring_rule": null
+    },
+    "primary_exposure": "age_group_x1",
+    "cross_database_validation": [],
+    "user_preferences": {
+      "inferred_analysis_family": "descriptive_epidemiology",
+      "starter_template_key": null,
+      "preferred_methods": null,
+      "evaluation_focus": null,
+      "subgroup_sensitivity": null,
+      "timing_and_design": null,
+      "data_constraints": "{\"analysis_design\": {\"analysis_family\": \"descriptive_epidemiology\", \"analysis_unit\": \"icu_stay\", \"cluster_unit\": \"patient\", \"variance_estimator\": \"cluster_robust\"}, \"candidate_outcome_for_literature\": {\"label\": \"院内死亡率\", \"origin\": \"study_context.outcome\", \"source_binding\": \"unverified\"}, \"cohort\": {\"age_min\": 80, \"label\": \"入 ICU 时年龄 80 岁及以上的患者\", \"review\": \"按 ICU 入科时年龄筛选 80 岁及以上患者\"}, \"confirmations\": {\"extraction_completed\": true, \"plan_repeated_stays_clustered\": true, \"plan_repeated_stays_first\": false, \"plan_repeated_stays_system_default\": true}, \"database_study_requirements\": {\"analysis_unit\": \"icu_stay\", \"censoring_unit\": \"hospitalization\", \"concepts\": [\"death\"], \"family\": \"descriptive_epidemiology\", \"outcome\": \"hospital_death\", \"thresholds\": [{\"concept\": \"age\", \"operator\": \">=\", \"value\": 80.0}], \"treatment_concepts\": []}, \"event_time_semantics\": {\"death_time\": \"structurally_unavailable\"}, \"materialization_window\": {\"anchor\": \"icu_admission\", \"hours\": 24.0, \"role\": \"outer_observation_window\"}, \"source_identity\": {\"database\": \"eicu_demo\", \"registration_id\": \"src_dfdc58bc4eb0\"}, \"source_selection\": {\"basis\": \"unrecorded\", \"host_applied\": []}, \"verified_patient_grouping\": {\"authority_ref\": \"export_manifest_data_path/eicu/1/patient_grouping\", \"coordinate\": \"patient_stay_id\", \"group_derivation\": \"prefix_before_:s\", \"mapping_sha256\": \"8ce16718d6f25107325b009010e536fd67576f628ffdbdd2c241b52d32ca7cd1\", \"provider_visible_values\": false}}",
+      "must_have_outputs": null,
+      "covariates": [],
+      "covariate_selection": "planner_selectable",
+      "covariate_authority": null,
+      "covariate_rationales": {},
+      "covariate_temporal_roles": {},
+      "covariate_operationalizations": {},
+      "landmark_hours": null,
+      "sensitivity_specs": [],
+      "extra_notes": null
+    },
+    "notes": null
+  },
+  "responses": {
+    "v24a": [
+      "{\n  \"schema_version\": \"easyicu.family_plan_spec/1\",\n  \"family_id\": \"descriptive_exposure_outcome\",\n  \"adjustment_set\": [],\n  \"baseline_variables\": [],\n  \"distribution_missing_policies\": {\n    \"denominator_policy\": \"all_declared_rows\",\n    \"missing_exposure_policy\": \"exclude_from_denominator\",\n    \"missing_outcome_policy\": \"fail_closed\"\n  },\n  \"reader_display_labels\": [\n    {\n      \"key\": \"age_group_x1\",\n      \"value\": \"年龄组（入 ICU 时：<80 岁 vs ≥80 岁）\"\n    },\n    {\n      \"key\": \"death\",\n      \"value\": \"院内死亡\"\n    },\n    {\n      \"key\": \"age\",\n      \"value\": \"入 ICU 时患者年龄\"\n    }\n  ],\n  \"comparator_applications\": [],\n  \"roster_decision_note\": \"本描述性分析不拟合调整模型，因此保留空调整集。年龄仅作为研究暴露及人群描述变量使用，不增加或修改协变量清单。\",\n  \"population\": {\n    \"criteria\": [],\n    \"inclusion\": [],\n    \"exclusion\": [],\n    \"population_spec\": {\n      \"criteria\": [\n        {\n          \"id\": \"c1\",\n          \"quote\": \"入 ICU 时年龄 80 岁及以上的患者\",\n          \"source\": \"study_wording\",\n          \"role\": \"include\",\n          \"kind\": \"age_years\",\n          \"min_years\": 80.0,\n          \"max_years\": null\n        }\n      ]\n    }\n  },\n  \"question_requirements\": [\n    {\n      \"id\": \"r1\",\n      \"kind\": \"analysis\",\n      \"quote\": \"入 ICU 时 80 岁及以上的患者占多大比例？他们的院内死亡率是多少？\",\n      \"concepts\": [\n        \"age_group_x1\",\n        \"death\"\n      ],\n      \"deliverable_kinds\": [],\n      \"clauses\": [\n        \"入 ICU 时 80 岁及以上的患者占多大比例\",\n        \"他们的院内死亡率是多少\"\n      ],\n      \"analysis_exposures\": [\n        \"age_group_x1\"\n      ],\n      \"coverage\": \"plan\",\n      \"gap\": null,\n      \"note\": \"报告≥80岁年龄组在分析队列中的比例，并报告该组的院内死亡率；缺失结局不作为阴性结局。\"\n    }\n  ]\n}",
+      "{\n  \"schema_version\": \"easyicu.family_plan_spec/1\",\n  \"family_id\": \"descriptive_exposure_outcome\",\n  \"adjustment_set\": [],\n  \"baseline_variables\": [],\n  \"distribution_missing_policies\": {\n    \"denominator_policy\": \"all_declared_rows\",\n    \"missing_exposure_policy\": \"exclude_from_denominator\",\n    \"missing_outcome_policy\": \"fail_closed\"\n  },\n  \"reader_display_labels\": [\n    {\n      \"key\": \"age_group_x1\",\n      \"value\": \"年龄组（入 ICU 时：<80 岁 vs ≥80 岁）\"\n    },\n    {\n      \"key\": \"death\",\n      \"value\": \"院内死亡\"\n    },\n    {\n      \"key\": \"age\",\n      \"value\": \"入 ICU 时患者年龄\"\n    }\n  ],\n  \"comparator_applications\": [],\n  \"roster_decision_note\": \"本描述性分析不拟合调整模型，因此保留空调整集。年龄仅作为研究暴露及人群描述变量使用，不增加或修改协变量清单。\",\n  \"population\": {\n    \"criteria\": [],\n    \"inclusion\": [],\n    \"exclusion\": [],\n    \"population_spec\": {\n      \"criteria\": [\n        {\n          \"id\": \"c1\",\n          \"quote\": \"入 ICU 时年龄 80 岁及以上的患者\",\n          \"source\": \"study_wording\",\n          \"role\": \"include\",\n          \"kind\": \"age_years\",\n          \"min_years\": 80.0,\n          \"max_years\": null\n        }\n      ]\n    }\n  },\n  \"question_requirements\": [\n    {\n      \"id\": \"r1\",\n      \"kind\": \"analysis\",\n      \"quote\": \"入 ICU 时 80 岁及以上的患者占多大比例？他们的院内死亡率是多少？\",\n      \"concepts\": [\n        \"age_group_x1\",\n        \"death\"\n      ],\n      \"deliverable_kinds\": [],\n      \"clauses\": [],\n      \"analysis_exposures\": [\n        \"age_group_x1\"\n      ],\n      \"coverage\": \"plan\",\n      \"gap\": null,\n      \"note\": \"报告≥80岁年龄组在分析队列中的比例，并报告该组的院内死亡率；缺失结局不作为阴性结局。\"\n    }\n  ]\n}",
+      "{\n  \"schema_version\": \"easyicu.family_plan_spec/1\",\n  \"family_id\": \"descriptive_exposure_outcome\",\n  \"adjustment_set\": [],\n  \"baseline_variables\": [],\n  \"distribution_missing_policies\": {\n    \"denominator_policy\": \"all_declared_rows\",\n    \"missing_exposure_policy\": \"exclude_from_denominator\",\n    \"missing_outcome_policy\": \"fail_closed\"\n  },\n  \"reader_display_labels\": [\n    {\n      \"key\": \"age_group_x1\",\n      \"value\": \"年龄组（入 ICU 时：<80 岁 vs ≥80 岁）\"\n    },\n    {\n      \"key\": \"death\",\n      \"value\": \"院内死亡\"\n    },\n    {\n      \"key\": \"age\",\n      \"value\": \"入 ICU 时患者年龄\"\n    }\n  ],\n  \"comparator_applications\": [],\n  \"roster_decision_note\": \"本描述性分析不拟合调整模型，因此保留空调整集。年龄仅作为研究暴露及人群描述变量使用，不增加或修改协变量清单。\",\n  \"population\": {\n    \"criteria\": [],\n    \"inclusion\": [],\n    \"exclusion\": [],\n    \"population_spec\": {\n      \"criteria\": [\n        {\n          \"id\": \"c1\",\n          \"quote\": \"按 ICU 入科时年龄筛选 80 岁及以上患者\",\n          \"source\": \"study_wording\",\n          \"role\": \"include\",\n          \"kind\": \"age_years\",\n          \"min_years\": 80.0,\n          \"max_years\": null\n        }\n      ]\n    }\n  },\n  \"question_requirements\": [\n    {\n      \"id\": \"r1\",\n      \"kind\": \"analysis\",\n      \"quote\": \"入 ICU 时 80 岁及以上的患者占多大比例？他们的院内死亡率是多少？\",\n      \"concepts\": [\n        \"age_group_x1\",\n        \"death\"\n      ],\n      \"deliverable_kinds\": [],\n      \"clauses\": [],\n      \"analysis_exposures\": [\n        \"age_group_x1\"\n      ],\n      \"coverage\": \"plan\",\n      \"gap\": null,\n      \"note\": \"报告≥80岁年龄组在分析队列中的比例，并报告该组的院内死亡率；缺失结局不作为阴性结局。\"\n    }\n  ]\n}"
+    ],
+    "v24b": [
+      "{\"schema_version\":\"easyicu.family_plan_spec/1\",\"family_id\":\"descriptive_exposure_outcome\",\"adjustment_set\":[],\"baseline_variables\":[\"age\"],\"distribution_missing_policies\":{\"denominator_policy\":\"all_declared_rows\",\"missing_exposure_policy\":\"exclude_from_denominator\",\"missing_outcome_policy\":\"fail_closed\"},\"reader_display_labels\":[{\"key\":\"age_group_x1\",\"value\":\"Age at ICU admission: <80 years versus ≥80 years\"},{\"key\":\"death\",\"value\":\"In-hospital mortality\"},{\"key\":\"age\",\"value\":\"Age at ICU admission\"}],\"comparator_applications\":[],\"roster_decision_note\":\"The descriptive family uses no adjusted model, so the host-bound empty adjustment roster is preserved. Age is selected only for baseline descriptive summarization; no covariates are added or reordered.\",\"population\":null,\"question_requirements\":[{\"id\":\"r1\",\"kind\":\"analysis\",\"quote\":\"入 ICU 时 80 岁及以上的患者占多大比例？他们的院内死亡率是多少？\",\"concepts\":[\"age\",\"age_group_x1\",\"death\"],\"deliverable_kinds\":[],\"clauses\":[\"入 ICU 时 80 岁及以上的患者占多大比例？\",\"他们的院内死亡率是多少？\"],\"analysis_exposures\":[\"age_group_x1\"],\"coverage\":\"plan\",\"gap\":null,\"note\":\"描述入 ICU 时年龄分组的患者比例，并报告各年龄组的院内死亡率。\"}]}",
+      "{\"schema_version\":\"easyicu.family_plan_spec/1\",\"family_id\":\"descriptive_exposure_outcome\",\"adjustment_set\":[],\"baseline_variables\":[\"age\"],\"distribution_missing_policies\":{\"denominator_policy\":\"all_declared_rows\",\"missing_exposure_policy\":\"exclude_from_denominator\",\"missing_outcome_policy\":\"fail_closed\"},\"reader_display_labels\":[{\"key\":\"age_group_x1\",\"value\":\"Age at ICU admission: <80 years versus ≥80 years\"},{\"key\":\"death\",\"value\":\"In-hospital mortality\"},{\"key\":\"age\",\"value\":\"Age at ICU admission\"}],\"comparator_applications\":[],\"roster_decision_note\":\"The descriptive family uses no adjusted model, so the host-bound empty adjustment roster is preserved. Age is selected only for baseline descriptive summarization; no covariates are added or reordered.\",\"population\":null,\"question_requirements\":[{\"id\":\"r1\",\"kind\":\"estimand\",\"quote\":\"入 ICU 时 80 岁及以上的患者占多大比例？\",\"concepts\":[\"age\",\"age_group_x1\"],\"deliverable_kinds\":[],\"clauses\":[],\"analysis_exposures\":[],\"coverage\":\"plan\",\"gap\":null,\"note\":\"估计年龄分组中入 ICU 时年龄≥80岁的患者占全部研究人群的比例。\"},{\"id\":\"r2\",\"kind\":\"analysis\",\"quote\":\"他们的院内死亡率是多少？\",\"concepts\":[\"age_group_x1\",\"death\"],\"deliverable_kinds\":[],\"clauses\":[],\"analysis_exposures\":[\"age_group_x1\"],\"coverage\":\"plan\",\"gap\":null,\"note\":\"按入 ICU 时年龄分组报告院内死亡率，重点报告年龄≥80岁组。\"}]}"
+    ],
+    "v24c": [
+      "{\"schema_version\":\"easyicu.family_plan_spec/1\",\"family_id\":\"descriptive_exposure_outcome\",\"adjustment_set\":[],\"baseline_variables\":[\"age\"],\"distribution_missing_policies\":{\"denominator_policy\":\"all_declared_rows\",\"missing_exposure_policy\":\"exclude_from_denominator\",\"missing_outcome_policy\":\"fail_closed\"},\"reader_display_labels\":[{\"key\":\"age_group_x1\",\"value\":\"Age at ICU admission group\"},{\"key\":\"death\",\"value\":\"In-hospital mortality\"},{\"key\":\"age\",\"value\":\"Age at ICU admission\"}],\"comparator_applications\":[],\"roster_decision_note\":\"No adjusted model is planned for this descriptive analysis, so the host-bound empty adjustment roster is preserved. Age is selected only for baseline descriptive summarization; no covariates are added to the association model.\",\"population\":{\"criteria\":[],\"inclusion\":[],\"exclusion\":[],\"population_spec\":{\"criteria\":[{\"id\":\"c1\",\"quote\":\"入 ICU 时年龄 80 岁及以上的患者\",\"source\":\"study_wording\",\"role\":\"include\",\"kind\":\"age_years\",\"min_years\":80.0,\"max_years\":null}]}},\"question_requirements\":[]}\n",
+      "{\"schema_version\":\"easyicu.family_plan_spec/1\",\"family_id\":\"descriptive_exposure_outcome\",\"adjustment_set\":[],\"baseline_variables\":[\"age\"],\"distribution_missing_policies\":{\"denominator_policy\":\"all_declared_rows\",\"missing_exposure_policy\":\"exclude_from_denominator\",\"missing_outcome_policy\":\"fail_closed\"},\"reader_display_labels\":[{\"key\":\"age_group_x1\",\"value\":\"Age at ICU admission group\"},{\"key\":\"death\",\"value\":\"In-hospital mortality\"},{\"key\":\"age\",\"value\":\"Age at ICU admission\"}],\"comparator_applications\":[],\"roster_decision_note\":\"No adjusted model is planned for this descriptive analysis, so the host-bound empty adjustment roster is preserved. Age is selected only for baseline descriptive summarization; no covariates are added to the association model.\",\"population\":{\"criteria\":[],\"inclusion\":[],\"exclusion\":[],\"population_spec\":{\"criteria\":[{\"id\":\"c1\",\"quote\":\"按 ICU 入科时年龄筛选 80 岁及以上患者\",\"source\":\"study_wording\",\"role\":\"include\",\"kind\":\"age_years\",\"min_years\":80.0,\"max_years\":null}]}},\"question_requirements\":[]}",
+      "{\"schema_version\":\"easyicu.family_plan_spec/1\",\"family_id\":\"descriptive_exposure_outcome\",\"adjustment_set\":[],\"baseline_variables\":[\"age\"],\"distribution_missing_policies\":{\"denominator_policy\":\"all_declared_rows\",\"missing_exposure_policy\":\"exclude_from_denominator\",\"missing_outcome_policy\":\"fail_closed\"},\"reader_display_labels\":[{\"key\":\"age_group_x1\",\"value\":\"Age at ICU admission group\"},{\"key\":\"death\",\"value\":\"In-hospital mortality\"},{\"key\":\"age\",\"value\":\"Age at ICU admission\"}],\"comparator_applications\":[],\"roster_decision_note\":\"No adjusted model is planned for this descriptive analysis, so the host-bound empty adjustment roster is preserved. Age is selected only for baseline descriptive summarization. The requested population proportion and in-hospital mortality require retaining both age and the stated age grouping in the estimand so the full eligible population is available for the denominator.\",\"population\":{\"criteria\":[],\"inclusion\":[],\"exclusion\":[],\"population_spec\":{\"criteria\":[{\"id\":\"c1\",\"quote\":\"按 ICU 入科时年龄筛选 80 岁及以上患者\",\"source\":\"study_wording\",\"role\":\"include\",\"kind\":\"age_years\",\"min_years\":80.0,\"max_years\":null}]}},\"question_requirements\":[{\"id\":\"r1\",\"kind\":\"analysis\",\"quote\":\"eICU demo 中，入 ICU 时 80 岁及以上的患者占多大比例？他们的院内死亡率是多少？\",\"concepts\":[\"age\",\"age_group_x1\",\"death\"],\"deliverable_kinds\":[],\"clauses\":[\"入 ICU 时 80 岁及以上的患者占多大比例？\",\"他们的院内死亡率是多少？\"],\"analysis_exposures\":[\"age_group_x1\"],\"coverage\":\"plan\",\"gap\":null,\"note\":\"The analysis reports the proportion of patients aged 80 years or older among the full eligible cohort and their in-hospital mortality, using age, the stated age grouping, and death.\"}]}"
+    ],
+    "v24d": [
+      "{\n  \"schema_version\": \"easyicu.family_plan_spec/1\",\n  \"family_id\": \"descriptive_exposure_outcome\",\n  \"adjustment_set\": [],\n  \"baseline_variables\": [],\n  \"distribution_missing_policies\": {\n    \"denominator_policy\": \"all_declared_rows\",\n    \"missing_exposure_policy\": \"exclude_from_denominator\",\n    \"missing_outcome_policy\": \"fail_closed\"\n  },\n  \"reader_display_labels\": [\n    {\n      \"key\": \"age_group_x1\",\n      \"value\": \"入 ICU 时年龄分组（80 岁以下 vs 80 岁及以上）\"\n    },\n    {\n      \"key\": \"death\",\n      \"value\": \"院内死亡\"\n    },\n    {\n      \"key\": \"age\",\n      \"value\": \"患者年龄\"\n    }\n  ],\n  \"comparator_applications\": [],\n  \"roster_decision_note\": \"本描述性分析不建立调整模型，因此不选择协变量调整集；年龄仅作为研究暴露及资格判定变量使用，不增加其他变量。\",\n  \"population\": null,\n  \"question_requirements\": [\n    {\n      \"id\": \"r1\",\n      \"kind\": \"analysis\",\n      \"quote\": \"入 ICU 时 80 岁及以上的患者占多大比例？他们的院内死亡率是多少？\",\n      \"concepts\": [\n        \"age\",\n        \"age_group_x1\",\n        \"death\"\n      ],\n      \"deliverable_kinds\": [],\n      \"clauses\": [\n        \"入 ICU 时 80 岁及以上的患者占多大比例？\",\n        \"他们的院内死亡率是多少？\"\n      ],\n      \"analysis_exposures\": [\n        \"age_group_x1\"\n      ],\n      \"coverage\": \"plan\",\n      \"gap\": null,\n      \"note\": \"报告年龄分组分布及各年龄组的院内死亡率，并提供相应分母和缺失性审计。\"\n    }\n  ]\n}"
+    ],
+    "v24e": [
+      "{\n  \"schema_version\": \"easyicu.family_plan_spec/1\",\n  \"family_id\": \"descriptive_exposure_outcome\",\n  \"adjustment_set\": [],\n  \"baseline_variables\": [\n    \"age\"\n  ],\n  \"distribution_missing_policies\": {\n    \"denominator_policy\": \"all_declared_rows\",\n    \"missing_exposure_policy\": \"exclude_from_denominator\",\n    \"missing_outcome_policy\": \"fail_closed\"\n  },\n  \"reader_display_labels\": [\n    {\n      \"key\": \"age_group_x1\",\n      \"value\": \"Age at ICU admission: under 80 years versus 80 years or older\"\n    },\n    {\n      \"key\": \"death\",\n      \"value\": \"In-hospital mortality\"\n    },\n    {\n      \"key\": \"age\",\n      \"value\": \"Age at ICU admission, in years\"\n    }\n  ],\n  \"comparator_applications\": [],\n  \"roster_decision_note\": \"No adjustment set is used because this is a descriptive exposure-outcome distribution analysis. The baseline summary uses the host-approved selectable age variable only; no covariates are added, removed, or reordered.\",\n  \"population\": {\n    \"criteria\": [],\n    \"inclusion\": [],\n    \"exclusion\": [],\n    \"population_spec\": {\n      \"criteria\": [\n        {\n          \"id\": \"c1\",\n          \"quote\": \"入 ICU 时年龄 80 岁及以上的患者\",\n          \"source\": \"study_wording\",\n          \"role\": \"include\",\n          \"kind\": \"age_years\",\n          \"min_years\": 80.0,\n          \"max_years\": null\n        }\n      ]\n    }\n  },\n  \"question_requirements\": [\n    {\n      \"id\": \"r1\",\n      \"kind\": \"analysis\",\n      \"quote\": \"入 ICU 时 80 岁及以上的患者占多大比例？\",\n      \"concepts\": [\n        \"age_group_x1\"\n      ],\n      \"deliverable_kinds\": [],\n      \"clauses\": [],\n      \"analysis_exposures\": [\n        \"age_group_x1\"\n      ],\n      \"coverage\": \"plan\",\n      \"gap\": null,\n      \"note\": \"Report the proportion of patients aged 80 years or older at ICU admission with its descriptive denominator.\"\n    },\n    {\n      \"id\": \"r2\",\n      \"kind\": \"analysis\",\n      \"quote\": \"他们的院内死亡率是多少？\",\n      \"concepts\": [\n        \"age_group_x1\",\n        \"death\"\n      ],\n      \"deliverable_kinds\": [],\n      \"clauses\": [],\n      \"analysis_exposures\": [\n        \"age_group_x1\"\n      ],\n      \"coverage\": \"plan\",\n      \"gap\": null,\n      \"note\": \"Report in-hospital mortality for the 80-years-or-older group, with the applicable observed outcome denominator and missingness accounting.\"\n    }\n  ]\n}",
+      "{\n  \"schema_version\": \"easyicu.family_plan_spec/1\",\n  \"family_id\": \"descriptive_exposure_outcome\",\n  \"adjustment_set\": [],\n  \"baseline_variables\": [\n    \"age\"\n  ],\n  \"distribution_missing_policies\": {\n    \"denominator_policy\": \"all_declared_rows\",\n    \"missing_exposure_policy\": \"exclude_from_denominator\",\n    \"missing_outcome_policy\": \"fail_closed\"\n  },\n  \"reader_display_labels\": [\n    {\n      \"key\": \"age_group_x1\",\n      \"value\": \"Age at ICU admission: under 80 years versus 80 years or older\"\n    },\n    {\n      \"key\": \"death\",\n      \"value\": \"In-hospital mortality\"\n    },\n    {\n      \"key\": \"age\",\n      \"value\": \"Age at ICU admission, in years\"\n    }\n  ],\n  \"comparator_applications\": [],\n  \"roster_decision_note\": \"No adjustment set is used because this is a descriptive exposure-outcome distribution analysis. The baseline summary uses the host-approved selectable age variable only; no covariates are added, removed, or reordered.\",\n  \"population\": {\n    \"criteria\": [],\n    \"inclusion\": [],\n    \"exclusion\": [],\n    \"population_spec\": {\n      \"criteria\": [\n        {\n          \"id\": \"c1\",\n          \"quote\": \"按 ICU 入科时年龄筛选 80 岁及以上患者\",\n          \"source\": \"study_wording\",\n          \"role\": \"include\",\n          \"kind\": \"age_years\",\n          \"min_years\": 80.0,\n          \"max_years\": null\n        }\n      ]\n    }\n  },\n  \"question_requirements\": [\n    {\n      \"id\": \"r1\",\n      \"kind\": \"analysis\",\n      \"quote\": \"入 ICU 时 80 岁及以上的患者占多大比例？\",\n      \"concepts\": [\n        \"age_group_x1\"\n      ],\n      \"deliverable_kinds\": [],\n      \"clauses\": [],\n      \"analysis_exposures\": [\n        \"age_group_x1\"\n      ],\n      \"coverage\": \"plan\",\n      \"gap\": null,\n      \"note\": \"Report the proportion of patients aged 80 years or older at ICU admission with its descriptive denominator.\"\n    },\n    {\n      \"id\": \"r2\",\n      \"kind\": \"analysis\",\n      \"quote\": \"他们的院内死亡率是多少？\",\n      \"concepts\": [\n        \"age_group_x1\",\n        \"death\"\n      ],\n      \"deliverable_kinds\": [],\n      \"clauses\": [],\n      \"analysis_exposures\": [\n        \"age_group_x1\"\n      ],\n      \"coverage\": \"plan\",\n      \"gap\": null,\n      \"note\": \"Report in-hospital mortality for the 80-years-or-older group, with the applicable observed outcome denominator and missingness accounting.\"\n    }\n  ]\n}",
+      "{\n  \"schema_version\": \"easyicu.family_plan_spec/1\",\n  \"family_id\": \"descriptive_exposure_outcome\",\n  \"adjustment_set\": [],\n  \"baseline_variables\": [\n    \"age\"\n  ],\n  \"distribution_missing_policies\": {\n    \"denominator_policy\": \"all_declared_rows\",\n    \"missing_exposure_policy\": \"exclude_from_denominator\",\n    \"missing_outcome_policy\": \"fail_closed\"\n  },\n  \"reader_display_labels\": [\n    {\n      \"key\": \"age_group_x1\",\n      \"value\": \"Age at ICU admission: under 80 years versus 80 years or older\"\n    },\n    {\n      \"key\": \"death\",\n      \"value\": \"In-hospital mortality\"\n    },\n    {\n      \"key\": \"age\",\n      \"value\": \"Age at ICU admission, in years\"\n    }\n  ],\n  \"comparator_applications\": [],\n  \"roster_decision_note\": \"No adjustment set is used because this is a descriptive exposure-outcome distribution analysis. The baseline summary uses the host-approved selectable age variable only; no covariates are added, removed, or reordered. The complete typed cohort restriction is not restated because the question asks for the proportion across the retained population and requires both age-group levels.\",\n  \"population\": null,\n  \"question_requirements\": [\n    {\n      \"id\": \"r1\",\n      \"kind\": \"analysis\",\n      \"quote\": \"入 ICU 时 80 岁及以上的患者占多大比例？\",\n      \"concepts\": [\n        \"age\",\n        \"age_group_x1\"\n      ],\n      \"deliverable_kinds\": [],\n      \"clauses\": [],\n      \"analysis_exposures\": [\n        \"age_group_x1\"\n      ],\n      \"coverage\": \"plan\",\n      \"gap\": null,\n      \"note\": \"Report the proportion of patients aged 80 years or older at ICU admission against the retained cohort denominator.\"\n    },\n    {\n      \"id\": \"r2\",\n      \"kind\": \"analysis\",\n      \"quote\": \"他们的院内死亡率是多少？\",\n      \"concepts\": [\n        \"age_group_x1\",\n        \"death\"\n      ],\n      \"deliverable_kinds\": [],\n      \"clauses\": [],\n      \"analysis_exposures\": [\n        \"age_group_x1\"\n      ],\n      \"coverage\": \"plan\",\n      \"gap\": null,\n      \"note\": \"Report in-hospital mortality for the age-80-years-or-older group with the applicable outcome denominator and missingness accounting.\"\n    }\n  ]\n}"
+    ],
+    "v24f": [
+      "{\n  \"schema_version\": \"easyicu.family_plan_spec/1\",\n  \"family_id\": \"descriptive_exposure_outcome\",\n  \"adjustment_set\": [],\n  \"baseline_variables\": [],\n  \"distribution_missing_policies\": {\n    \"denominator_policy\": \"all_declared_rows\",\n    \"missing_exposure_policy\": \"exclude_from_denominator\",\n    \"missing_outcome_policy\": \"fail_closed\"\n  },\n  \"reader_display_labels\": [\n    {\n      \"key\": \"age_group_x1\",\n      \"value\": \"入 ICU 时年龄分组：80 岁以下 vs 80 岁及以上\"\n    },\n    {\n      \"key\": \"death\",\n      \"value\": \"院内死亡\"\n    },\n    {\n      \"key\": \"age\",\n      \"value\": \"患者年龄（岁）\"\n    }\n  ],\n  \"comparator_applications\": [],\n  \"roster_decision_note\": \"本描述性分析不拟合调整模型，因此保留空调整集，不新增或排序任何协变量。age 仅为年龄分组所依据的基线人口学变量，且当前问题未明确要求额外的基线表；年龄达到 80 岁的队列限制按主办方绑定的 typed population 执行。\",\n  \"population\": {\n    \"criteria\": [],\n    \"inclusion\": [],\n    \"exclusion\": [],\n    \"population_spec\": {\n      \"criteria\": [\n        {\n          \"id\": \"c1\",\n          \"quote\": \"入 ICU 时年龄 80 岁及以上的患者\",\n          \"source\": \"study_wording\",\n          \"role\": \"include\",\n          \"kind\": \"age_years\",\n          \"min_years\": 80.0,\n          \"max_years\": null\n        }\n      ]\n    }\n  },\n  \"question_requirements\": [\n    {\n      \"id\": \"r1\",\n      \"kind\": \"estimand\",\n      \"quote\": \"入 ICU 时 80 岁及以上的患者占多大比例？\",\n      \"concepts\": [\n        \"age_group_x1\"\n      ],\n      \"deliverable_kinds\": [],\n      \"clauses\": [],\n      \"analysis_exposures\": [],\n      \"coverage\": \"plan\",\n      \"gap\": null,\n      \"note\": \"报告 80 岁及以上患者在研究队列中的比例及其分母。\"\n    },\n    {\n      \"id\": \"r2\",\n      \"kind\": \"estimand\",\n      \"quote\": \"他们的院内死亡率是多少？\",\n      \"concepts\": [\n        \"age_group_x1\",\n        \"death\"\n      ],\n      \"deliverable_kinds\": [],\n      \"clauses\": [],\n      \"analysis_exposures\": [],\n      \"coverage\": \"plan\",\n      \"gap\": null,\n      \"note\": \"报告 80 岁及以上年龄组的院内死亡率，并明确死亡结局为院内死亡。\"\n    }\n  ]\n}",
+      "{\n  \"schema_version\": \"easyicu.family_plan_spec/1\",\n  \"family_id\": \"descriptive_exposure_outcome\",\n  \"adjustment_set\": [],\n  \"baseline_variables\": [],\n  \"distribution_missing_policies\": {\n    \"denominator_policy\": \"all_declared_rows\",\n    \"missing_exposure_policy\": \"exclude_from_denominator\",\n    \"missing_outcome_policy\": \"fail_closed\"\n  },\n  \"reader_display_labels\": [\n    {\n      \"key\": \"age_group_x1\",\n      \"value\": \"入 ICU 时年龄分组：80 岁以下 vs 80 岁及以上\"\n    },\n    {\n      \"key\": \"death\",\n      \"value\": \"院内死亡\"\n    },\n    {\n      \"key\": \"age\",\n      \"value\": \"患者年龄（岁）\"\n    }\n  ],\n  \"comparator_applications\": [],\n  \"roster_decision_note\": \"本描述性分析不拟合调整模型，因此保留空调整集，不新增或排序任何协变量。age 仅为年龄分组所依据的基线人口学变量，且当前问题未明确要求额外的基线表；年龄达到 80 岁的队列限制按主办方绑定的 typed population 执行。\",\n  \"population\": {\n    \"criteria\": [],\n    \"inclusion\": [],\n    \"exclusion\": [],\n    \"population_spec\": {\n      \"criteria\": [\n        {\n          \"id\": \"c1\",\n          \"quote\": \"按 ICU 入科时年龄筛选 80 岁及以上患者\",\n          \"source\": \"study_wording\",\n          \"role\": \"include\",\n          \"kind\": \"age_years\",\n          \"min_years\": 80.0,\n          \"max_years\": null\n        }\n      ]\n    }\n  },\n  \"question_requirements\": [\n    {\n      \"id\": \"r1\",\n      \"kind\": \"estimand\",\n      \"quote\": \"入 ICU 时 80 岁及以上的患者占多大比例？\",\n      \"concepts\": [\n        \"age_group_x1\"\n      ],\n      \"deliverable_kinds\": [],\n      \"clauses\": [],\n      \"analysis_exposures\": [],\n      \"coverage\": \"plan\",\n      \"gap\": null,\n      \"note\": \"报告 80 岁及以上患者在研究队列中的比例及其分母。\"\n    },\n    {\n      \"id\": \"r2\",\n      \"kind\": \"estimand\",\n      \"quote\": \"他们的院内死亡率是多少？\",\n      \"concepts\": [\n        \"age_group_x1\",\n        \"death\"\n      ],\n      \"deliverable_kinds\": [],\n      \"clauses\": [],\n      \"analysis_exposures\": [],\n      \"coverage\": \"plan\",\n      \"gap\": null,\n      \"note\": \"报告 80 岁及以上年龄组的院内死亡率，并明确死亡结局为院内死亡。\"\n    }\n  ]\n}",
+      "{\n  \"schema_version\": \"easyicu.family_plan_spec/1\",\n  \"family_id\": \"descriptive_exposure_outcome\",\n  \"adjustment_set\": [],\n  \"baseline_variables\": [],\n  \"distribution_missing_policies\": {\n    \"denominator_policy\": \"all_declared_rows\",\n    \"missing_exposure_policy\": \"exclude_from_denominator\",\n    \"missing_outcome_policy\": \"fail_closed\"\n  },\n  \"reader_display_labels\": [\n    {\n      \"key\": \"age_group_x1\",\n      \"value\": \"入 ICU 时年龄分组：80 岁以下 vs 80 岁及以上\"\n    },\n    {\n      \"key\": \"death\",\n      \"value\": \"院内死亡\"\n    },\n    {\n      \"key\": \"age\",\n      \"value\": \"患者年龄（岁）\"\n    }\n  ],\n  \"comparator_applications\": [],\n  \"roster_decision_note\": \"本描述性分析不拟合调整模型，因此保留空调整集，不新增或排序任何协变量。保留完整队列以同时显示 age_group_x1 的两个年龄层级；年龄分组用于描述入 ICU 时 80 岁及以上患者的比例及其院内死亡率，而不是将 80 岁及以上患者预先限制为唯一分析人群。\",\n  \"population\": null,\n  \"question_requirements\": [\n    {\n      \"id\": \"r1\",\n      \"kind\": \"estimand\",\n      \"quote\": \"入 ICU 时 80 岁及以上的患者占多大比例？\",\n      \"concepts\": [\n        \"age\",\n        \"age_group_x1\"\n      ],\n      \"deliverable_kinds\": [],\n      \"clauses\": [],\n      \"analysis_exposures\": [],\n      \"coverage\": \"plan\",\n      \"gap\": null,\n      \"note\": \"在完整研究队列中报告年龄分组的分布，包含 80 岁及以上患者所占比例。\"\n    },\n    {\n      \"id\": \"r2\",\n      \"kind\": \"estimand\",\n      \"quote\": \"他们的院内死亡率是多少？\",\n      \"concepts\": [\n        \"age_group_x1\",\n        \"death\"\n      ],\n      \"deliverable_kinds\": [],\n      \"clauses\": [],\n      \"analysis_exposures\": [],\n      \"coverage\": \"plan\",\n      \"gap\": null,\n      \"note\": \"报告 80 岁及以上年龄组的院内死亡率，并明确死亡结局为院内死亡。\"\n    }\n  ]\n}"
+    ],
+    "v24g": [
+      "{\n  \"schema_version\": \"easyicu.family_plan_spec/1\",\n  \"family_id\": \"descriptive_exposure_outcome\",\n  \"adjustment_set\": [],\n  \"baseline_variables\": [\n    \"age\"\n  ],\n  \"distribution_missing_policies\": {\n    \"denominator_policy\": \"all_declared_rows\",\n    \"missing_exposure_policy\": \"exclude_from_denominator\",\n    \"missing_outcome_policy\": \"fail_closed\"\n  },\n  \"reader_display_labels\": [\n    {\n      \"key\": \"age_group_x1\",\n      \"value\": \"Age at ICU admission: under 80 years versus 80 years or older\"\n    },\n    {\n      \"key\": \"death\",\n      \"value\": \"In-hospital mortality\"\n    },\n    {\n      \"key\": \"age\",\n      \"value\": \"Patient age at ICU admission\"\n    }\n  ],\n  \"comparator_applications\": [],\n  \"roster_decision_note\": \"This descriptive family fits no adjusted model, so the bound empty adjustment roster is preserved. Age is selected only for baseline descriptive summarization and is not an adjustment covariate. The primary summaries will report the proportion of patients aged 80 years or older at ICU admission and their in-hospital mortality, with missing exposure excluded from the relevant denominator and missing outcomes handled fail-closed.\",\n  \"population\": {\n    \"criteria\": [],\n    \"inclusion\": [],\n    \"exclusion\": [],\n    \"population_spec\": {\n      \"criteria\": [\n        {\n          \"id\": \"c1\",\n          \"quote\": \"入 ICU 时年龄 80 岁及以上的患者\",\n          \"source\": \"study_wording\",\n          \"role\": \"include\",\n          \"kind\": \"age_years\",\n          \"min_years\": 80.0,\n          \"max_years\": null\n        }\n      ]\n    }\n  },\n  \"question_requirements\": [\n    {\n      \"id\": \"r1\",\n      \"kind\": \"analysis\",\n      \"quote\": \"入 ICU 时 80 岁及以上的患者占多大比例？他们的院内死亡率是多少？\",\n      \"concepts\": [\n        \"age_group_x1\",\n        \"death\"\n      ],\n      \"deliverable_kinds\": [],\n      \"clauses\": [\n        \"入 ICU 时 80 岁及以上的患者占多大比例？\",\n        \"他们的院内死亡率是多少？\"\n      ],\n      \"analysis_exposures\": [\n        \"age_group_x1\"\n      ],\n      \"coverage\": \"plan\",\n      \"gap\": null,\n      \"note\": \"报告80岁及以上患者在研究人群中的比例，并报告该年龄组的院内死亡率。\"\n    }\n  ]\n}",
+      "{\n  \"schema_version\": \"easyicu.family_plan_spec/1\",\n  \"family_id\": \"descriptive_exposure_outcome\",\n  \"adjustment_set\": [],\n  \"baseline_variables\": [\n    \"age\"\n  ],\n  \"distribution_missing_policies\": {\n    \"denominator_policy\": \"all_declared_rows\",\n    \"missing_exposure_policy\": \"exclude_from_denominator\",\n    \"missing_outcome_policy\": \"fail_closed\"\n  },\n  \"reader_display_labels\": [\n    {\n      \"key\": \"age_group_x1\",\n      \"value\": \"Age at ICU admission: under 80 years versus 80 years or older\"\n    },\n    {\n      \"key\": \"death\",\n      \"value\": \"In-hospital mortality\"\n    },\n    {\n      \"key\": \"age\",\n      \"value\": \"Patient age at ICU admission\"\n    }\n  ],\n  \"comparator_applications\": [],\n  \"roster_decision_note\": \"This descriptive family fits no adjusted model, so the bound empty adjustment roster is preserved. Age is selected only for baseline descriptive summarization and is not an adjustment covariate. The primary summaries will report the proportion of patients aged 80 years or older at ICU admission and their in-hospital mortality, with missing exposure excluded from the relevant denominator and missing outcomes handled fail-closed.\",\n  \"population\": {\n    \"criteria\": [],\n    \"inclusion\": [],\n    \"exclusion\": [],\n    \"population_spec\": {\n      \"criteria\": [\n        {\n          \"id\": \"c1\",\n          \"quote\": \"按 ICU 入科时年龄筛选 80 岁及以上患者\",\n          \"source\": \"study_wording\",\n          \"role\": \"include\",\n          \"kind\": \"age_years\",\n          \"min_years\": 80.0,\n          \"max_years\": null\n        }\n      ]\n    }\n  },\n  \"question_requirements\": [\n    {\n      \"id\": \"r1\",\n      \"kind\": \"analysis\",\n      \"quote\": \"入 ICU 时 80 岁及以上的患者占多大比例？他们的院内死亡率是多少？\",\n      \"concepts\": [\n        \"age_group_x1\",\n        \"death\"\n      ],\n      \"deliverable_kinds\": [],\n      \"clauses\": [\n        \"入 ICU 时 80 岁及以上的患者占多大比例？\",\n        \"他们的院内死亡率是多少？\"\n      ],\n      \"analysis_exposures\": [\n        \"age_group_x1\"\n      ],\n      \"coverage\": \"plan\",\n      \"gap\": null,\n      \"note\": \"报告80岁及以上患者在研究人群中的比例，并报告该年龄组的院内死亡率。\"\n    }\n  ]\n}",
+      "{\n  \"schema_version\": \"easyicu.family_plan_spec/1\",\n  \"family_id\": \"descriptive_exposure_outcome\",\n  \"adjustment_set\": [],\n  \"baseline_variables\": [\n    \"age\"\n  ],\n  \"distribution_missing_policies\": {\n    \"denominator_policy\": \"all_declared_rows\",\n    \"missing_exposure_policy\": \"exclude_from_denominator\",\n    \"missing_outcome_policy\": \"fail_closed\"\n  },\n  \"reader_display_labels\": [\n    {\n      \"key\": \"age_group_x1\",\n      \"value\": \"Age at ICU admission: under 80 years versus 80 years or older\"\n    },\n    {\n      \"key\": \"death\",\n      \"value\": \"In-hospital mortality\"\n    },\n    {\n      \"key\": \"age\",\n      \"value\": \"Patient age at ICU admission\"\n    }\n  ],\n  \"comparator_applications\": [],\n  \"roster_decision_note\": \"This descriptive family fits no adjusted model, so the bound empty adjustment roster is preserved. Age is selected only for baseline descriptive summarization and is not an adjustment covariate. The primary summaries will report the proportion of patients aged 80 years or older at ICU admission and their in-hospital mortality across the whole eligible population, with missing exposure excluded from the relevant denominator and missing outcomes handled fail-closed.\",\n  \"population\": null,\n  \"question_requirements\": [\n    {\n      \"id\": \"r1\",\n      \"kind\": \"analysis\",\n      \"quote\": \"eICU demo 中，入 ICU 时 80 岁及以上的患者占多大比例？他们的院内死亡率是多少？\",\n      \"concepts\": [\n        \"age\",\n        \"age_group_x1\",\n        \"death\"\n      ],\n      \"deliverable_kinds\": [],\n      \"clauses\": [\n        \"入 ICU 时 80 岁及以上的患者占多大比例？\",\n        \"他们的院内死亡率是多少？\"\n      ],\n      \"analysis_exposures\": [\n        \"age_group_x1\"\n      ],\n      \"coverage\": \"plan\",\n      \"gap\": null,\n      \"note\": \"使用完整符合条件的人群，比较年龄分组的分布，并报告80岁及以上组的院内死亡率；年龄概念用于支持年龄阈值分组及其全人群分母。\"\n    }\n  ]\n}"
+    ],
+    "v24h": [
+      "{\n  \"schema_version\": \"easyicu.family_plan_spec/1\",\n  \"family_id\": \"descriptive_exposure_outcome\",\n  \"adjustment_set\": [],\n  \"baseline_variables\": [],\n  \"distribution_missing_policies\": {\n    \"denominator_policy\": \"all_declared_rows\",\n    \"missing_exposure_policy\": \"exclude_from_denominator\",\n    \"missing_outcome_policy\": \"fail_closed\"\n  },\n  \"reader_display_labels\": [\n    {\n      \"key\": \"age_group_x1\",\n      \"value\": \"入 ICU 时年龄分组：80 岁以下 vs 80 岁及以上\"\n    },\n    {\n      \"key\": \"death\",\n      \"value\": \"院内死亡\"\n    },\n    {\n      \"key\": \"age\",\n      \"value\": \"患者年龄（岁）\"\n    }\n  ],\n  \"comparator_applications\": [],\n  \"roster_decision_note\": \"本描述性分析不拟合调整模型，因此保留空调整集，不增加、删除或重排任何协变量。年龄仅作为研究对象分组和资格界定依据；院内死亡率按研究者指定的院内死亡定义描述。\",\n  \"population\": {\n    \"criteria\": [],\n    \"inclusion\": [],\n    \"exclusion\": [],\n    \"population_spec\": {\n      \"criteria\": [\n        {\n          \"id\": \"c1\",\n          \"quote\": \"入 ICU 时年龄 80 岁及以上的患者\",\n          \"source\": \"study_wording\",\n          \"role\": \"include\",\n          \"kind\": \"age_years\",\n          \"min_years\": 80.0,\n          \"max_years\": null\n        }\n      ]\n    }\n  },\n  \"question_requirements\": [\n    {\n      \"id\": \"r1\",\n      \"kind\": \"analysis\",\n      \"quote\": \"入 ICU 时 80 岁及以上的患者占多大比例？\",\n      \"concepts\": [\n        \"age_group_x1\"\n      ],\n      \"deliverable_kinds\": [],\n      \"clauses\": [],\n      \"analysis_exposures\": [\n        \"age_group_x1\"\n      ],\n      \"coverage\": \"plan\",\n      \"gap\": null,\n      \"note\": null\n    },\n    {\n      \"id\": \"r2\",\n      \"kind\": \"analysis\",\n      \"quote\": \"他们的院内死亡率是多少？\",\n      \"concepts\": [\n        \"age_group_x1\",\n        \"death\"\n      ],\n      \"deliverable_kinds\": [],\n      \"clauses\": [],\n      \"analysis_exposures\": [\n        \"age_group_x1\"\n      ],\n      \"coverage\": \"plan\",\n      \"gap\": null,\n      \"note\": null\n    }\n  ]\n}",
+      "{\n  \"schema_version\": \"easyicu.family_plan_spec/1\",\n  \"family_id\": \"descriptive_exposure_outcome\",\n  \"adjustment_set\": [],\n  \"baseline_variables\": [],\n  \"distribution_missing_policies\": {\n    \"denominator_policy\": \"all_declared_rows\",\n    \"missing_exposure_policy\": \"exclude_from_denominator\",\n    \"missing_outcome_policy\": \"fail_closed\"\n  },\n  \"reader_display_labels\": [\n    {\n      \"key\": \"age_group_x1\",\n      \"value\": \"入 ICU 时年龄分组：80 岁以下 vs 80 岁及以上\"\n    },\n    {\n      \"key\": \"death\",\n      \"value\": \"院内死亡\"\n    },\n    {\n      \"key\": \"age\",\n      \"value\": \"患者年龄（岁）\"\n    }\n  ],\n  \"comparator_applications\": [],\n  \"roster_decision_note\": \"本描述性分析不拟合调整模型，因此保留空调整集，不增加、删除或重排任何协变量。年龄仅作为研究对象分组和资格界定依据；院内死亡率按研究者指定的院内死亡定义描述。\",\n  \"population\": {\n    \"criteria\": [],\n    \"inclusion\": [],\n    \"exclusion\": [],\n    \"population_spec\": {\n      \"criteria\": [\n        {\n          \"id\": \"c1\",\n          \"quote\": \"按 ICU 入科时年龄筛选 80 岁及以上患者\",\n          \"source\": \"study_wording\",\n          \"role\": \"include\",\n          \"kind\": \"age_years\",\n          \"min_years\": 80.0,\n          \"max_years\": null\n        }\n      ]\n    }\n  },\n  \"question_requirements\": [\n    {\n      \"id\": \"r1\",\n      \"kind\": \"analysis\",\n      \"quote\": \"入 ICU 时 80 岁及以上的患者占多大比例？\",\n      \"concepts\": [\n        \"age_group_x1\"\n      ],\n      \"deliverable_kinds\": [],\n      \"clauses\": [],\n      \"analysis_exposures\": [\n        \"age_group_x1\"\n      ],\n      \"coverage\": \"plan\",\n      \"gap\": null,\n      \"note\": null\n    },\n    {\n      \"id\": \"r2\",\n      \"kind\": \"analysis\",\n      \"quote\": \"他们的院内死亡率是多少？\",\n      \"concepts\": [\n        \"age_group_x1\",\n        \"death\"\n      ],\n      \"deliverable_kinds\": [],\n      \"clauses\": [],\n      \"analysis_exposures\": [\n        \"age_group_x1\"\n      ],\n      \"coverage\": \"plan\",\n      \"gap\": null,\n      \"note\": null\n    }\n  ]\n}",
+      "{\n  \"schema_version\": \"easyicu.family_plan_spec/1\",\n  \"family_id\": \"descriptive_exposure_outcome\",\n  \"adjustment_set\": [],\n  \"baseline_variables\": [],\n  \"distribution_missing_policies\": {\n    \"denominator_policy\": \"all_declared_rows\",\n    \"missing_exposure_policy\": \"exclude_from_denominator\",\n    \"missing_outcome_policy\": \"fail_closed\"\n  },\n  \"reader_display_labels\": [\n    {\n      \"key\": \"age_group_x1\",\n      \"value\": \"入 ICU 时年龄分组：80 岁以下 vs 80 岁及以上\"\n    },\n    {\n      \"key\": \"death\",\n      \"value\": \"院内死亡\"\n    },\n    {\n      \"key\": \"age\",\n      \"value\": \"患者年龄（岁）\"\n    }\n  ],\n  \"comparator_applications\": [],\n  \"roster_decision_note\": \"本描述性分析不拟合调整模型，因此保留空调整集，不增加、删除或重排任何协变量。年龄作为研究对象分组依据和年龄分布概念保留；不将 80 岁及以上人群作为人口限制，以便估计其在完整研究人群中的比例并比较其院内死亡率。\",\n  \"population\": null,\n  \"question_requirements\": [\n    {\n      \"id\": \"r1\",\n      \"kind\": \"analysis\",\n      \"quote\": \"入 ICU 时 80 岁及以上的患者占多大比例？\",\n      \"concepts\": [\n        \"age\",\n        \"age_group_x1\"\n      ],\n      \"deliverable_kinds\": [],\n      \"clauses\": [],\n      \"analysis_exposures\": [\n        \"age_group_x1\"\n      ],\n      \"coverage\": \"plan\",\n      \"gap\": null,\n      \"note\": null\n    },\n    {\n      \"id\": \"r2\",\n      \"kind\": \"analysis\",\n      \"quote\": \"他们的院内死亡率是多少？\",\n      \"concepts\": [\n        \"age_group_x1\",\n        \"death\"\n      ],\n      \"deliverable_kinds\": [],\n      \"clauses\": [],\n      \"analysis_exposures\": [\n        \"age_group_x1\"\n      ],\n      \"coverage\": \"plan\",\n      \"gap\": null,\n      \"note\": null\n    }\n  ]\n}"
+    ]
+  }
+}

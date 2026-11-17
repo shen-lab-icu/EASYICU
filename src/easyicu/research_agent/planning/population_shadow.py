@@ -61,6 +61,7 @@ from .cohort_contract import (
 )
 from .cohort_eligibility import POPULATION_TIME_ZERO_ANCHORS, predicate_context_column
 from .population_compile import compile_population
+from .cohort_predicate_domain import population_grouping_resolution
 from .population_spec import (
     PopulationCriterion,
     PopulationSpec,
@@ -207,6 +208,9 @@ def population_cohort_audit(
             ),
         )
         audit["cohort_source"] = "population_spec" if stated else "planner_predicates"
+        resolution = population_grouping_resolution(context)
+        if resolution.note:
+            audit["host_population_grouping_resolution"] = resolution.record()
         if unreadable is not None:
             audit["planner_cohort_unreadable"] = unreadable
         if stated and "compiled_cohort" in audit:

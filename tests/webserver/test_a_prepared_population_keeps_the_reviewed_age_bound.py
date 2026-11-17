@@ -172,3 +172,32 @@ def test_age_proof_requires_a_consistent_stay_count_chain(field, value):
     target = source if field in {"source_total", "selected"} else source["demographic_steps"][0]
     target[field] = value
     assert mode(source=source) == "predicate_filtered"
+
+
+@pytest.mark.parametrize("share", [True, False])
+def test_launch_mode_uses_the_groupings_declared_by_its_acquired_catalog(tmp_path, share):
+    import json
+    from pathlib import Path
+    from types import SimpleNamespace
+
+    import pandas as pd
+
+    from easyicu.research_agent.research_context.typed import parse_research_context_json
+    from easyicu.webserver.research_launch_population import resolved_launch_population_mode
+
+    fixture = json.loads((Path(__file__).parents[1] / "research_agent/planning/fixtures/population_share_demo.json").read_text())
+    context = parse_research_context_json(json.dumps(fixture["context"]))
+    frame = pd.DataFrame({v.name: pd.Series(dtype=v.dtype) for v in context.variables})
+    frame.attrs["easyicu_planning_authority"] = {
+        "kind": "metadata_only_planning_catalog", "patient_rows_read": False,
+        "exposure_groups": context.cohort.provenance["exposure_groups"],
+    }
+    path = tmp_path / "catalog.parquet"
+    frame.to_parquet(path)
+    mode = resolved_launch_population_mode(
+        required_mode="predicate_filtered",
+        question=context.research_question if share else "Describe mortality among older ICU patients.",
+        database=context.cohort.database, acquisition=SimpleNamespace(universe_path=path),
+        declarations={"cohort_name": "synthetic", "user_preferences": context.user_preferences},
+    )
+    assert mode == ("all_input_rows" if share else "predicate_filtered")
