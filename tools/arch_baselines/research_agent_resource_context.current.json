@@ -1,8 +1,6 @@
 {
   "baseline_change_summary": {
     "source_digest_changes": [
-      "src/easyicu/data/concept-dict.json",
-      "src/easyicu/research_agent/agents/planner.py",
       "src/easyicu/research_agent/planning/cohort_contract.py"
     ],
     "summary_changes": {}
@@ -367,9 +365,16 @@
         "src/easyicu/research_agent/planning/cohort_contract.py"
       ],
       "summary_changes": {}
+    },
+    {
+      "reason": "sha2 (S732: s732d3 + s732bl2): cohort_contract.py source digest; planner prompt sizes unchanged",
+      "source_digest_changes": [
+        "src/easyicu/research_agent/planning/cohort_contract.py"
+      ],
+      "summary_changes": {}
     }
   ],
-  "baseline_reason": "thirteenth dictionary reseal (S907+TB1+nativevent+haemo_native+fluid_events, 408 concepts); the Planner's no-sealed-columns menu omits opt-in-only concepts",
+  "baseline_reason": "sha2 (S732: s732d3 + s732bl2): cohort_contract.py source digest; planner prompt sizes unchanged",
   "online_runtime_metrics": {
     "reason": "Bundle 0 freezes the offline resource/context envelope only; provider latency and repair counts remain run-artifact metrics.",
     "status": "not_measured_no_provider_calls"
@@ -394,7 +399,7 @@
     "src/easyicu/research_agent/planning/analysis_blueprint.py": "5330a604f9894c879ba400bee3b3ac1b617de1ce24425506139a5a29bb4020b2",
     "src/easyicu/research_agent/planning/analysis_method_suite.py": "2b4eaed80f523388c75a6b8d9636819941e63febb84bd84d7c646fd99bee10dd",
     "src/easyicu/research_agent/planning/analysis_types.py": "019e3fd4bc15c78efc1679d3d9c316d6c97035d591772df0b7e0a43605fa6aa4",
-    "src/easyicu/research_agent/planning/cohort_contract.py": "495e4a6d6ec55a44130ce9421817ef467e50d2e3ea6b368552fc4c91afc4aebe",
+    "src/easyicu/research_agent/planning/cohort_contract.py": "5f084cb050bfb83a6614dfec40e766b8707f624ea7ff4c3754f6c6c5fcf88831",
     "src/easyicu/research_agent/planning/figure_strategy.py": "42b617ad40d993c585df27598613731ceedc2e4645f197a2cb96c54645f7cec2",
     "src/easyicu/research_agent/planning/method_adapter_catalog.py": "31ce210bede1f221cfd5f2eaac20fb20320639d9f52411bd08013067871bbbbd",
     "src/easyicu/research_agent/planning/scientific_action_catalog.py": "7efa6f31cdaae0fecc03f02483ae651eaf2010fe4fd43fa84fbf340a088df102",

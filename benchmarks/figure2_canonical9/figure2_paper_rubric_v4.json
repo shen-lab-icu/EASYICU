@@ -282,6 +282,7 @@
     "src/easyicu/research_agent/agents/planner.py",
     "src/easyicu/research_agent/agents/population_spec_transport.py",
     "src/easyicu/research_agent/agents/progressive_attempt.py",
+    "src/easyicu/research_agent/agents/progressive_foundation_repair.py",
     "src/easyicu/research_agent/agents/progressive_literature_repair.py",
     "src/easyicu/research_agent/agents/progressive_payload.py",
     "src/easyicu/research_agent/agents/progressive_planner.py",
@@ -1570,7 +1571,7 @@
     "src/easyicu/webserver/zotero_probe.py"
   ],
   "scorer_tree_root": "benchmarks/figure2_canonical9/successor_v4",
-  "scorer_tree_sha256": "ac9c6950426c13d0d459811005adb6c718c96693012e2fdfe515b72e4407c948",
+  "scorer_tree_sha256": "4ab7db27ef931d18711d52e320ad3d27be8688f7bf158721ac9ccda5299f35a8",
   "suite_projection_sha256": "11c39afac69c9a0b560c6aa92be19f05725f04c66b9d2c499cfdb353c40295ab",
   "suite_ref": "easyicu_evaluation_protocol_suite/v2",
   "tasks": [
