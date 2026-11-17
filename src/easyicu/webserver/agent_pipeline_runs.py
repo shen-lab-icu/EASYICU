@@ -1116,6 +1116,7 @@ def _safe_pipeline_typed_failure(exc: BaseException) -> Dict[str, Any]:
     """Project one allowlisted owner diagnostic without exception text."""
 
     from easyicu.databases.research_approval import CapabilityApprovalError
+    from easyicu.research_agent.authority.analysis_cohort import ExecutionCohortSchemaError
     from easyicu.research_agent.authority.baseline_association_runtime import BaselineAssociationAuthorityError
     from easyicu.research_agent.authority.current_case_scientific_runtime import (
         CurrentCaseScientificAuthorityError,
@@ -1151,6 +1152,8 @@ def _safe_pipeline_typed_failure(exc: BaseException) -> Dict[str, Any]:
         }
 
     for item in _pipeline_exception_chain(exc):
+        if isinstance(item, ExecutionCohortSchemaError):
+            return item.diagnostic()
         if isinstance(item, (CurrentCaseScientificAuthorityError, BaselineAssociationAuthorityError)):
             return {
                 "owner": "easyicu.current_case_scientific_authority_v1",

@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Optional
+from typing import Any, Optional, Sequence
 
 from ..cohort.schema import analysis_cohort_authority_coordinates
 from ..intake.materialized_metadata import (
@@ -15,6 +15,21 @@ from ..intake.materialized_metadata import (
     load_verified_materialized_cohort_authority,
     read_verified_materialized_cohort_table,
 )
+from ..planning.cohort_contract import CohortSchemaError, cohort_concept_id_scope
+
+
+class ExecutionCohortSchemaError(CohortSchemaError):
+    """The locked cohort cannot be replayed under this run's concept authority."""
+
+    def diagnostic(self) -> dict[str, str]:
+        return {
+            "owner": "easyicu.execution.cohort_authority_v1",
+            "reason_code": "execution_cohort_schema_invalid",
+            "phase": "execution_input_binding",
+            "step_id": "cohort_definition",
+            "runner_kind": "not_started",
+            "exception_type": "ExecutionCohortSchemaError",
+        }
 
 
 @dataclass(frozen=True, slots=True)
@@ -43,6 +58,7 @@ def bind_execution_cohort_authority(
     analysis_path: Path,
     plan: Any,
     context: Any,
+    cohort_concept_ids: Sequence[str] = (),
     approved_case_duration_binding: Any = None,
 ) -> ExecutionCohortAuthority:
     """Verify and select the exact cohort bytes available to step execution."""
@@ -76,15 +92,19 @@ def bind_execution_cohort_authority(
                     selected_path=analysis_path, universe_path=universe_path,
                     universe_authority=universe, analysis_authority=analysis,
                 )
-            expected = analysis_cohort_authority_coordinates(
-                plan=plan,
-                context=context,
-                columns=universe.authority.cohort_columns,
-                data=read_verified_materialized_cohort_table(
-                    universe_path,
-                    verified=universe,
-                ).to_pandas(),
-            )
+            data = read_verified_materialized_cohort_table(
+                universe_path, verified=universe,
+            ).to_pandas()
+            try:
+                with cohort_concept_id_scope(cohort_concept_ids):
+                    expected = analysis_cohort_authority_coordinates(
+                        plan=plan,
+                        context=context,
+                        columns=universe.authority.cohort_columns,
+                        data=data,
+                    )
+            except CohortSchemaError as exc:
+                raise ExecutionCohortSchemaError(str(exc)) from exc
             actual = {
                 "cohort_definition_sha256": (
                     analysis.authority.producer_parameters.get(
@@ -177,5 +197,6 @@ def _verify_case_duration_landmark_cohort(*, universe_path, universe, analysis, 
 
 __all__ = [
     "ExecutionCohortAuthority",
+    "ExecutionCohortSchemaError",
     "bind_execution_cohort_authority",
 ]

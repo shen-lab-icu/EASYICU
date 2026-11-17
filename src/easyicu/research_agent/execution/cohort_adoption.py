@@ -225,5 +225,6 @@ def bind_approved_execution_inputs(*, pipeline, preparation, plan_result, plan, 
         universe_path=universe_path, analysis_path=analysis_path,
         trajectory_binding=trajectory_binding, run_dir=run_dir,
         legacy_trajectory_verifier=legacy_trajectory_verifier, plan=plan, context=context,
+        cohort_concept_ids=plan_result.cohort_concept_ids,
         approved_case_duration_binding=case_duration,
     )
