@@ -4793,6 +4793,17 @@ def _special_dependency_batch_policy(
     }
 
 
+def _special_dependency_modules(special_modules: Sequence[str]) -> List[str]:
+    if not special_modules:
+        return []
+    dependencies = ["sepsis_shared"]
+    if any("sep3_sofa1" in EXTRACT_MODULES.get(m, []) for m in special_modules):
+        dependencies.append("sofa1_score")
+    if any("sep3_sofa2" in EXTRACT_MODULES.get(m, []) for m in special_modules):
+        dependencies.append("sofa2_score")
+    return dependencies
+
+
 def _stage_special_dependencies(
     modules: Sequence[str],
     *,
@@ -4912,11 +4923,8 @@ def _run_special_extraction(
     if failure_context is not None:
         failure_context["stage"] = "special_dependency_discovery"
     dependency_root = Path(published_output_dir or output_dir)
-    required_dependency_modules = ["sepsis_shared"]
-    if any("sep3_sofa1" in EXTRACT_MODULES.get(m, []) for m in special_modules):
-        required_dependency_modules.append("sofa1_score")
-    if any("sep3_sofa2" in EXTRACT_MODULES.get(m, []) for m in special_modules):
-        required_dependency_modules.append("sofa2_score")
+    required_dependency_modules = _special_dependency_modules(special_modules)
+
     def _published(module: str) -> bool:
         # Published as a parquet, or as the empty-success manifest the
         # streamed reader accepts for a module that completed with zero rows.
@@ -9491,12 +9499,16 @@ def extract_database(
             label = " + ".join(group_mods + group_special)
             print(f"\n⏳ {label} ... RSS={rss:.0f}MB")
 
+        # Private special dependencies always use streamed batches.
         requires_batch_process_isolation = (
             group_stream_output_batches
             and any(
                 _requires_isolated_stream_batch(database, module)
                 for module in group_mods
             )
+        ) or any(
+            _requires_isolated_stream_batch(database, module)
+            for module in _special_dependency_modules(group_special)
         )
         proc = mp_ctx.Process(
             target=_extract_module_group_worker,
