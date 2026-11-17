@@ -444,6 +444,16 @@ def build_export_file_metadata_binding(
                 None,
                 None,
             )
+            from .catalog import PAO2_ARTERIAL_HOURLY_MIN
+
+            if module == PAO2_ARTERIAL_HOURLY_MIN and concept == "po2":
+                binding_specs[concept] = (
+                    concept, ConceptColumnRole.NUMERIC_AGGREGATE, None, "aggregate:min", "min",
+                )
+            elif module == "imv_first_episode" and concept in {"imv_start_hours", "imv_end_hours"}:
+                binding_specs[concept] = (
+                    concept, ConceptColumnRole.EVENT_TIME, None, None, None,
+                )
             unresolved_columns.remove(concept)
 
     for concept in concept_ids:
@@ -545,6 +555,7 @@ def missing_primary_metadata_concepts(
     """Return selected concepts without one unambiguous typed primary column."""
 
     from easyicu.concept.metadata_projection import ConceptColumnRole
+    from .catalog import PAO2_ARTERIAL_HOURLY_MIN
 
     primary_roles = {ConceptColumnRole.VALUE, ConceptColumnRole.EVENT_STATUS}
     missing: List[str] = []
@@ -556,7 +567,13 @@ def missing_primary_metadata_concepts(
                 for file_binding in module_bindings
                 for column, binding in file_binding.columns.items()
                 if binding.metadata.source_concept == concept
-                and binding.metadata.role in primary_roles
+                and (
+                    binding.metadata.role in primary_roles
+                    or (column == concept and module == PAO2_ARTERIAL_HOURLY_MIN
+                        and binding.metadata.role == ConceptColumnRole.NUMERIC_AGGREGATE)
+                    or (column == concept and module == "imv_first_episode"
+                        and binding.metadata.role == ConceptColumnRole.EVENT_TIME)
+                )
             ]
             exact = [column for column, _binding in owned if column == concept]
             if len(exact) != 1 and len(owned) != 1:

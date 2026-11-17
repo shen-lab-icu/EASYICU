@@ -60,6 +60,22 @@ CONCEPT_DICTIONARY = {
     'po2': ('Partial Pressure of O2', '氧分压', 'mmHg'),
     'tco2': ('Total CO2', '总二氧化碳', 'mEq/L'),
 
+    # Thesis support modules. These fields are derived during export.
+    'person_id': ('Source Person ID', '源数据库人员标识', 'category'),
+    'hospital_admission_id': ('Source Hospital Admission ID', '源数据库住院标识', 'category'),
+    'person_linkage_available': ('Longitudinal Person Linkage Available', '可纵向关联同一人员', 'boolean'),
+    'stay_order': ('ICU Stay Order Within Person', '同一人员的ICU入住顺序', ''),
+    'is_first_icu_stay': ('First ICU Stay Within Person', '人员首次ICU入住', 'boolean'),
+    'is_first_icu_stay_of_hospital_admission': (
+        'First ICU Stay Within Hospital Admission', '本次住院首次ICU入住', 'boolean',
+    ),
+    'order_evidence': ('Source Fields Used for ICU Stay Order', 'ICU入住顺序的源字段', 'category'),
+    'imv_start_hours': ('First Invasive Ventilation Episode Start', '首次有创通气开始时间', 'h'),
+    'imv_end_hours': ('First Invasive Ventilation Episode End', '首次有创通气结束时间', 'h'),
+    'imv_duration_hours': ('First Invasive Ventilation Episode Duration', '首次有创通气持续时间', 'h'),
+    'episode_status': ('First Invasive Ventilation Episode Status', '首次有创通气判定状态', 'category'),
+    'episode_evidence': ('First Invasive Ventilation Episode Evidence', '首次有创通气证据', 'category'),
+
     # 实验室检查
     'alb': ('Albumin', '白蛋白', 'g/dL'),
     'alp': ('Alkaline Phosphatase', '碱性磷酸酶', 'IU/L'),
@@ -1337,6 +1353,17 @@ PHYSIOLOGIC_RANGES = {
 # Explicitly selected export modules -> their scalar concepts (owner of the
 # opt-in roster; api.extraction registers these modules from here, after the
 # default EXTRACT_MODULE_ORDER is fixed, so none enters a default export).
+STAY_LEVEL_SUPPORT_MODULES = {
+    'stay_identity': (
+        'person_id', 'hospital_admission_id', 'person_linkage_available', 'stay_order',
+        'is_first_icu_stay', 'is_first_icu_stay_of_hospital_admission', 'order_evidence',
+    ),
+    'imv_first_episode': (
+        'imv_start_hours', 'imv_end_hours', 'imv_duration_hours', 'episode_status', 'episode_evidence',
+    ),
+}
+PAO2_ARTERIAL_HOURLY_MIN = 'pao2_arterial_hourly_min'
+
 OPT_IN_MODULE_CONCEPTS = {
     'sic_case_landmark': (
         'care_unit_to_case_closure_days', 'death_time_during_case_hours', 'death_during_case',
@@ -1357,6 +1384,8 @@ OPT_IN_MODULE_CONCEPTS = {
     'vent_mechanics': VENT_MECHANICS_CONCEPTS,
     'haemo_advanced': HAEMO_ADVANCED_CONCEPTS,
     'rrt_detail': RRT_DETAIL_CONCEPTS,
+    **STAY_LEVEL_SUPPORT_MODULES,
+    PAO2_ARTERIAL_HOURLY_MIN: ('po2',),
 }
 
 # Concepts that only an explicitly selected module exports. Without sealed

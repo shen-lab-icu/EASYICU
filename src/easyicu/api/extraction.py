@@ -31,6 +31,8 @@ from ..source_bounds import (
 from ..concept.catalog import (
     CONCEPT_GROUPS_INTERNAL,
     OPT_IN_MODULE_CONCEPTS,
+    PAO2_ARTERIAL_HOURLY_MIN,
+    STAY_LEVEL_SUPPORT_MODULES,
 )
 from ..concept.minute_resolution import (
     SUBHOUR_MODULE_INTERVALS,
@@ -2338,6 +2340,8 @@ def _module_arrow_null_type(concept: str, pyarrow_module):
         return pyarrow_module.bool_()
     if kind == "string":
         return pyarrow_module.string()
+    if kind == "int64":
+        return pyarrow_module.int64()
     # Use float64 for a concept whose first observed batch is empty.  A later
     # float32 value can widen losslessly; choosing float32 here could silently
     # downcast a later high-precision producer.
@@ -2401,7 +2405,7 @@ def _module_arrow_table(
     # and their real timestamps were silently discarded.  Establish the time
     # field before the first writer schema is frozen and keep it float64 in all
     # batches, including an all-null first batch.
-    if module != "demographics":
+    if module != "demographics" and module not in STAY_LEVEL_SUPPORT_MODULES:
         if "charttime" not in table.column_names:
             identity_positions = [
                 table.column_names.index(column)
@@ -2765,6 +2769,28 @@ def _load_module_concepts(load_concepts_fn, *, module_name: str, load_kwargs: Di
     """
     kwargs = dict(load_kwargs)
     concepts = list(kwargs["concepts"])
+    if module_name in STAY_LEVEL_SUPPORT_MODULES:
+        from ..concept.support_exports import load_imv_first_episode, load_stay_identity
+
+        kwargs.pop("concepts")
+        if module_name == "stay_identity":
+            return load_stay_identity(
+                database=kwargs["database"], data_path=kwargs["data_path"],
+                patient_ids=kwargs.get("patient_ids"),
+            )
+        kwargs.pop("merge", None)
+        return load_imv_first_episode(load_concepts_fn, **kwargs)
+    if module_name == PAO2_ARTERIAL_HOURLY_MIN:
+        result = _native_charttime_axis(load_concepts_fn(**{
+            **kwargs, "interval": "1h", "aggregate": {"po2": "min"}, "r_compatible": False,
+        }))
+        if result.empty:
+            return result
+        from ..concept_output_sources import SPECIMEN_STATUS_OUTPUT_COLUMNS
+
+        status, = SPECIMEN_STATUS_OUTPUT_COLUMNS["po2"]
+        identity = next(column for column in _NATIVE_EXPORT_ID_COLUMNS if column in result)
+        return result.loc[result.po2.notna(), [identity, "charttime", "po2", status]]
     if module_name == "renal_urine_chem":
         # Native lab rows are observations, never a display grid. In SICdb
         # only the id_tbl flag is mapped; the display merge would fill an
@@ -5675,6 +5701,8 @@ def _native_export_storage_kind(concept_id: str, dictionary) -> str:
 
     if any(concept_id in columns for columns in SPECIMEN_STATUS_OUTPUT_COLUMNS.values()):
         return "string"
+    if concept_id == "stay_order":
+        return "int64"
     if concept_id == SOFA2_ALL_COMPONENTS_MISSING or any(
         str(concept_id).endswith(suffix)
         for suffix in _NATIVE_EXPORT_OWNER_RECEIPT_SUFFIXES
@@ -5744,7 +5772,7 @@ def _canonicalise_native_export_frame(
         raise ValueError(f"native export identity '{identity}' is not integer-valued")
     canonical["stay_id"] = identity_float.astype("int64")
 
-    if module != "demographics":
+    if module != "demographics" and module not in STAY_LEVEL_SUPPORT_MODULES:
         if "charttime" in frame:
             charttime = pd.to_numeric(frame["charttime"], errors="coerce")
             invalid = frame["charttime"].notna() & charttime.isna()
@@ -5787,6 +5815,8 @@ def _canonicalise_native_export_frame(
                 )
             elif kind == "string":
                 canonical[concept] = pd.Series(pd.NA, index=frame.index, dtype="string")
+            elif kind == "int64":
+                canonical[concept] = pd.Series(pd.NA, index=frame.index, dtype="Int64")
             else:
                 canonical[concept] = pd.Series(
                     np.nan, index=frame.index, dtype="float64"
@@ -5809,6 +5839,8 @@ def _canonicalise_native_export_frame(
             canonical[concept] = numeric.astype("boolean")
         elif kind == "string":
             canonical[concept] = source.astype("string")
+        elif kind == "int64":
+            canonical[concept] = source.astype("Int64")
         else:
             numeric = pd.to_numeric(source, errors="coerce")
             invalid = source.notna() & numeric.isna()
@@ -6090,6 +6122,8 @@ def _native_longitudinal_aggregation_policy(module: str) -> Dict[str, str]:
         policy["aggregate_availability_receipt"] = (
             "all_six_owner_available_for_complete_case_sensitivity"
         )
+    if module == PAO2_ARTERIAL_HOURLY_MIN:
+        return {"po2": "min_at_load_time", "duplicate_stay_hours": "reject"}
     return policy
 
 
@@ -6131,6 +6165,20 @@ def _consolidate_native_export_row_grain(
         working.index.start != 0 or working.index.step != 1
     ):
         working = working.reset_index(drop=True)
+
+    if module in STAY_LEVEL_SUPPORT_MODULES:
+        from ..io.identity import require_unique_keys
+
+        require_unique_keys(working, ["stay_id"], table=module)
+        return working, {
+            "row_grain": "one_row_per_icu_stay",
+            "primary_key": ["stay_id"],
+            "null_key_equality": "not_applicable",
+            "source_rows": len(working),
+            "published_rows": len(working),
+            "duplicate_excess_rows_after": 0,
+            "rows_consolidated": 0,
+        }
 
     if module == "demographics":
         primary_key = ["stay_id"]
@@ -6267,6 +6315,8 @@ def _consolidate_native_export_row_grain(
         )
     duplicate_mask = working.duplicated(primary_key, keep=False)
     duplicate_excess = int(working.duplicated(primary_key, keep="first").sum())
+    if duplicate_excess and module == PAO2_ARTERIAL_HOURLY_MIN:
+        raise ValueError("arterial PaO2 minimum contains duplicate stay-hours")
     duplicate_rows = int(duplicate_mask.sum())
     records = []
     if duplicate_rows:
@@ -6398,7 +6448,7 @@ def _native_export_empty_schema_frame(
     import pandas as pd
 
     columns = {"stay_id": pd.Series([], dtype="int64")}
-    if module != "demographics":
+    if module != "demographics" and module not in STAY_LEVEL_SUPPORT_MODULES:
         columns["charttime"] = pd.Series([], dtype="float64")
     for concept in _native_export_physical_value_columns(requested_concepts):
         kind = _native_export_storage_kind(concept, dictionary)
@@ -6406,6 +6456,8 @@ def _native_export_empty_schema_frame(
             columns[concept] = pd.Series([], dtype="boolean")
         elif kind == "string":
             columns[concept] = pd.Series([], dtype="string")
+        elif kind == "int64":
+            columns[concept] = pd.Series([], dtype="Int64")
         else:
             columns[concept] = pd.Series([], dtype="float64")
     return pd.DataFrame(columns)
@@ -6630,6 +6682,8 @@ def _native_export_arrow_row_grain_audit(
     source_rows, null_rows, duplicate_rows, duplicate_groups, duplicate_excess = (
         int(value) for value in row
     )
+    if duplicate_excess and module == PAO2_ARTERIAL_HOURLY_MIN:
+        raise ValueError("arterial PaO2 minimum contains duplicate stay-hours")
     return {
         "row_grain": "one_row_per_icu_stay_relative_hour",
         "primary_key": ["stay_id", "charttime"],
@@ -7245,7 +7299,7 @@ def _try_publish_native_export_arrow_fast_path(
     import pyarrow as pa
     import pyarrow.parquet as pq
 
-    if module == "demographics":
+    if module == "demographics" or module in STAY_LEVEL_SUPPORT_MODULES:
         return None
     source_file = pq.ParquetFile(source_parquet)
     if source_file.metadata.num_rows == 0:
@@ -7487,7 +7541,10 @@ def _native_export_time_window_authority(
     required: bool,
 ) -> Dict[str, object]:
     """Describe the shared publication policy, refusing an unbounded claim."""
-    longitudinal = [m for m in modules if m not in {"demographics", "outcome", "sic_case_landmark"}]
+    longitudinal = [
+        m for m in modules
+        if m not in {"demographics", "outcome", "sic_case_landmark"} and m not in STAY_LEVEL_SUPPORT_MODULES
+    ]
     if required and longitudinal and not stay_time_upper_bounds:
         raise ValueError(
             "native_export_v2 requires outcome.los_icu time bounds before "
@@ -8209,13 +8266,13 @@ def _publish_native_export_v2(
                 if physical_output_missing:
                     frame = pd.DataFrame({"stay_id": pd.Series([], dtype="int64")})
                 else:
-                    if module == "demographics":
+                    if module == "demographics" or module in STAY_LEVEL_SUPPORT_MODULES:
                         fallback_size = _native_export_pandas_fallback_size(
                             source_parquet
                         )
                         if not _native_export_pandas_fallback_is_bounded(fallback_size):
                             raise ValueError(
-                                "native export demographics consolidation exceeds "
+                                f"native export {module} consolidation exceeds "
                                 "the bounded pandas fallback "
                                 f"({fallback_size=})"
                             )
@@ -8569,6 +8626,8 @@ def _publish_native_export_v2(
                     "primary_key": ["stay_id", "charttime"],
                     "null_key_equality": "nulls_equal",
                 },
+                **{module: {"row_grain": "one_row_per_icu_stay", "primary_key": ["stay_id"]}
+                   for module in modules if module in STAY_LEVEL_SUPPORT_MODULES},
                 **{module: {"row_grain": NATIVE_EVENT_MODULES[module].row_grain,
                             "primary_key": list(NATIVE_EVENT_MODULES[module].primary_key)}
                    for module in modules if module in NATIVE_EVENT_MODULES},
