@@ -12,6 +12,11 @@
       }
     }
 
+    function reset(keepSource) {
+      if (state?.ready && keepSource && state.path === keepSource.path && state.database === keepSource.database) return;
+      state = null;
+    }
+
     function load(current) {
       current.failed = false;
       current.pending = true;
@@ -102,7 +107,7 @@
     }
 
     return {
-      render, markup, bind, resultDetail,
+      render, markup, bind, resultDetail, reset,
       clear: () => state?.selected.clear(),
       keys: () => choices().map(row => row.id),
       count: () => choices().reduce((count, row) => count + row.signals.length, 0),

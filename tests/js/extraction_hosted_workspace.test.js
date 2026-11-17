@@ -270,7 +270,11 @@ function minuteScreen(getOptions = async () => coverage) {
   const render = () => screen.render();
   let markup;
   let paints = 0;
-  c.window.__euRender = () => { markup = render(); paints++; };
+  c.window.__euRender = () => {
+    if (c.location.hash === '#guided') return;
+    markup = render();
+    paints++;
+  };
 
   // Bind each interaction to a control actually rendered by the page.
   function interact(attribute, value, event = 'click', properties = {}) {
@@ -480,16 +484,39 @@ test('removing the calibration source disconnects the screen and drops its pendi
   await screen.connect(study.data_source.path);
   assert.match(screen.markup, /Checking database coverage/);
 
+  screen.c.location.hash = '#guided';
   bridge.hydrate({ ...study, revision: 2, data_source: null }, 'sic');
-  const disconnected = screen.markup;
   const paints = screen.paints;
+  screen.c.location.hash = '#extraction';
   finishPending(coverage);
   await settle();
+  assert.equal(screen.paints, paints, 'An unbound calibration lookup must never repaint the workspace');
   const rendered = screen.render();
   assert.equal(screen.requests.length, 1, 'Rendering after unbinding must not repeat the old lookup');
-  assert.match(disconnected, /id="exPathInput"/);
+  assert.match(rendered, /id="exPathInput"/);
   assert.doesNotMatch(rendered, /Checking database coverage|data-ex-minute-module/);
-  assert.equal(screen.paints, paints, 'An unbound calibration lookup must never repaint the workspace');
+});
+
+test('a source change in Copilot drops minute choices from the handoff before extraction renders', async () => {
+  const screen = minuteScreen();
+  const { EU_EXTRACTION_STUDY_CONTEXT: bridge, EU_EXTRACTION_CONTEXT: context } = screen.c.window;
+  const study = {
+    id: 'calibration-review', revision: 1,
+    data_source: { path: '/fixture/calibration/ward-copy', database: 'sic' },
+  };
+  bridge.hydrate(study);
+  await screen.connect(study.data_source.path);
+  screen.interact('data-ex-minute-module', 'subhour_signals', 'change', { checked: true });
+  assert.ok(context.snapshot().modules.includes('subhour_signals'));
+
+  screen.c.location.hash = '#guided';
+  const paints = screen.paints;
+  const replacement = { path: '/fixture/calibration/verified', database: 'sic' };
+  assert.ok(bridge.hydrate({ ...study, revision: 2, data_source: replacement }));
+  const snapshot = context.snapshot();
+  assert.equal(snapshot.data_source, null);
+  assert.ok(!snapshot.modules.includes('subhour_signals'), 'The handoff must drop signals from the former folder');
+  assert.equal(screen.paints, paints);
 });
 
 test('a running bedside export defers a source-only correction until the job ends', async () => {
@@ -529,14 +556,16 @@ test('reattaching an active archive conversion drops coverage from before conver
   assert.match(screen.markup, /Checking database coverage/);
   const jobs = screen.c.window.EU_EXTRACTION_JOB_CONTINUITY;
   const conversion = jobs.prepare({ kind: 'convert', source: study.data_source });
-  jobs.attach(conversion, 'archive-convert');
-  assert.doesNotMatch(screen.markup, /exMinuteHeading/);
+  screen.c.location.hash = '#guided';
   const paints = screen.paints;
+  jobs.attach(conversion, 'archive-convert');
 
   const deferred = bridge.hydrate({ ...study, revision: 2, data_source: null }, 'sic');
+  screen.c.location.hash = '#extraction';
   finishPending(coverage);
   await settle();
   assert.equal(screen.paints, paints, 'A running conversion must discard the earlier coverage response');
+  assert.doesNotMatch(screen.render(), /exMinuteHeading/);
   assert.equal(deferred, null);
   assert.equal(screen.requests.length, 1);
 });
@@ -569,14 +598,19 @@ test('a replacement observations folder removes stale Retry and waits for a new 
   assert.equal(attempts, 2);
 });
 
-test('starting source binding discards an in-flight coverage response', async () => {
-  let finishPending;
-  const screen = minuteScreen(() => new Promise(resolve => { finishPending = resolve; }));
-  await screen.connect();
-  screen.c.window.EU_EXTRACTION_NATIVE_OWNER.beginSourceBinding();
-  assert.match(screen.render(), /id="exPathInput"/);
-  const paints = screen.paints;
-  finishPending(coverage);
-  await settle();
-  assert.equal(screen.paints, paints, 'A disconnected lookup must not publish coverage');
-});
+for (const [transition, disconnect] of [
+  ['starting source binding', win => win.EU_EXTRACTION_NATIVE_OWNER.beginSourceBinding()],
+  ['resetting after a workspace source switch', win => win.__euExtractReset()],
+]) {
+  test(`${transition} discards an in-flight coverage response`, async () => {
+    let finishPending;
+    const screen = minuteScreen(() => new Promise(resolve => { finishPending = resolve; }));
+    await screen.connect('/fixture/telemetry/ward-transfer');
+    const paints = screen.paints;
+    disconnect(screen.c.window);
+    finishPending(coverage);
+    await settle();
+    assert.equal(screen.paints, paints, 'A disconnected lookup must not publish coverage');
+    assert.match(screen.render(), /id="exPathInput"/);
+  });
+}

@@ -64,7 +64,6 @@
   let exMinLosHours = 0;
   let exWindowHours = DEFAULT_OBSERVATION_WINDOW_HOURS;
   let exExcludeReadmissions = false;
-  let convFail = false;     // demo: conversion hit a recoverable error
 
   const COHORT_PRESETS = [
     ['all_icu', 'All ICU stays', '全部 ICU 住院', 'Broad denominator; no diagnosis filter is applied.', '宽队列;不预设诊断筛选。'],
@@ -353,6 +352,7 @@
       exportRunMode = 'custom'; exportRunModules = null;
     }
     if (disconnect) {
+      minuteModules?.reset();
       exReal = 'connect'; exPath = ''; exSource = null; exSetupStep = 'modules';
       exScanResult = null; exScanError = null; exDatabaseMismatch = null;
       convJobId = null; convProg = null; convResult = null; convErr = null;
@@ -465,6 +465,7 @@
      screen never shows a stale "Extraction complete" for the new source. */
   window.__euExtractReset = function () {
     abandonExtractionContinuity();
+    minuteModules?.reset();
     exView = 'home';
     exReal = 'connect';
   };
@@ -821,8 +822,9 @@
   }
   function startConvert() {
     abandonExtractionContinuity();
+    minuteModules?.reset();
     convProg = null; convResult = null; convErr = null; convJobId = null;
-    exReal = 'converting'; convFail = false; repaint();
+    exReal = 'converting'; repaint();
     const database = (exScanResult && exScanResult.db_key) || 'miiv';
     const continuity = window.EU_EXTRACTION_JOB_CONTINUITY;
     // Live path: submit a convert job, stream progress over SSE.
@@ -858,12 +860,9 @@
       repaint();
     }
   }
-  function openFolderPicker(startPath, onPick, title, options) {
-    return window.EU_EXTRACTION_FOLDER_PICKER.open(startPath, onPick, title, options);
-  }
-
   function startScan(src) {
     abandonExtractionContinuity();
+    minuteModules?.reset();
     if (!String(exPath || '').trim()) {
       exSource = src || null;
       exScanResult = null;
@@ -1055,6 +1054,7 @@
     begin(record) {
       const source = record.source || {};
       const config = record.config || {};
+      minuteModules?.reset(record.kind === 'extract' ? source : null);
       exPath = source.path || '';
       exScanResult = Object.assign({}, exScanResult || {}, { ok: true, db_key: source.database || '' });
       if (record.kind === 'extract') {
@@ -1879,9 +1879,8 @@
       if (pathInput) pathInput.addEventListener('input', () => { exPath = pathInput.value; });
       const chooseDataFolder = () => {
         if (window.EU_API && window.EU_API.listDir) {
-          openFolderPicker(exPath, picked => {
+          window.EU_EXTRACTION_FOLDER_PICKER.open(exPath, picked => {
             exPath = picked;
-            exReal = 'connect'; exScanError = null; exScanResult = null;
             startScan(null);
           }, t('Select the ICU data folder', '选择 ICU 数据文件夹'));
         } else if (pathInput) {
@@ -1912,7 +1911,7 @@
       root.querySelectorAll('[data-ex-browse]').forEach(browseBtn => browseBtn.addEventListener('click', chooseDataFolder));
       const openExportDestinationPicker = () => {
         if (window.EU_API && window.EU_API.listDir) {
-          openFolderPicker(currentExportDir(), picked => {
+          window.EU_EXTRACTION_FOLDER_PICKER.open(currentExportDir(), picked => {
             setExportDir(picked);
             repaint();
           }, t('Choose or create export destination', '选择或创建导出目录'), { allowCreate: true, pickCreated: true });
@@ -1939,7 +1938,7 @@
         });
       });
       const startConvBtn = root.querySelector('[data-ex-startconv]'); if (startConvBtn) startConvBtn.addEventListener('click', () => { startConvert(); });
-      root.querySelectorAll('[data-ex-rescan]').forEach(b => b.addEventListener('click', () => { abandonExtractionContinuity(); exReal = 'connect'; exSource = null; exScanResult = null; exScanError = null; convProg = null; convResult = null; convErr = null; repaint(); }));
+      root.querySelectorAll('[data-ex-rescan]').forEach(b => b.addEventListener('click', () => { abandonExtractionContinuity(); minuteModules?.reset(); exReal = 'connect'; exSource = null; exScanResult = null; exScanError = null; convProg = null; convResult = null; convErr = null; repaint(); }));
       const convDoneBtn = root.querySelector('[data-ex-convdone]'); if (convDoneBtn) convDoneBtn.addEventListener('click', () => { abandonExtractionContinuity(); exReal = 'ready'; repaint(); });
       // run
       root.querySelectorAll('[data-ex-run]').forEach(b => b.addEventListener('click', () => runExtract(b.dataset.exRun || 'custom')));
@@ -2086,6 +2085,7 @@
     beginSourceBinding() {
       if (extractionTaskRunning()) return false;
       abandonExtractionContinuity();
+      minuteModules?.reset();
       exView = 'home';
       exSetupStep = 'modules';
       exReal = 'connect';
