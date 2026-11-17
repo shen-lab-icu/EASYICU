@@ -117,6 +117,98 @@ def _plan_actions(body: str, *, refusal: str = "", after: str = "starting") -> d
     return json.loads(run_node(_node(), script, check=True).stdout)
 
 
+def test_refused_prepare_reclicks_only_on_another_explicit_click() -> None:
+    result = _plan_actions("""
+      (async () => {
+        const confirmation = {code: 'plan_execution_upgrade_required', grants: ['provider_run']};
+        await actions.confirmWorkflow(confirmation);
+        for (let poll = 0; poll < 12; poll += 1) {
+          host.render();
+          await actions.continueSystemOwnedPlanProgression({passive: true});
+        }
+        const beforeReclick = calls.filter(row => row[0] === 'plan').length;
+        await actions.confirmWorkflow(confirmation);
+        process.stdout.write(JSON.stringify({beforeReclick, calls}));
+      })().catch(error => { console.error(error); process.exit(1); });
+    """, refusal="research_pipeline_execution_runtime_unavailable")
+    assert result["beforeReclick"] == 1
+    posts = [row[1] for row in result["calls"] if row[0] == "plan"]
+    assert len(posts) == 2
+    assert posts[0] == posts[1]
+    assert posts[0]["host_action"]["action_code"] == "prepare_analysis_data"
+    assert posts[0]["plan_revision_source_run_id"] == "run_candidate"
+    assert posts[0]["credential_source"] == "pi_verified"
+    assert "report_only" not in posts[0]
+
+
+def test_run_readiness_is_at_the_card_and_the_action_boundary() -> None:
+    source = _read("js/screens-guided-pi-run-readiness.js")
+    body = """
+      eval(__READINESS__);
+      eval(__DATA__);
+      eval(__CONFIRMATION__);
+      (async () => {
+        const state = {
+          session: {...host.session(), research_provider: {
+            provider: 'codex', model: 'synthetic-model', credential_source: 'codex_user_auth',
+          }}, workflow, runtime: {status: 'ready'}, codexAuth: null,
+        };
+        const readiness = window.EasyICU.guidedPi.require('runReadiness').create({state, tr: host.tr});
+        host.session = () => state.session;
+        host.runReadiness = readiness.forAction;
+        const confirmation = window.EU_GUIDED_PI_CONFIRMATION.create({
+          ...host, esc: value => String(value), iconHtml: () => '', resourceButton: () => '',
+        });
+        const blocked = confirmation.workflowConfirmationHtml();
+        await actions.confirmWorkflow(confirmation.workflowConfirmation());
+        const noPost = !calls.some(row => row[0] === 'plan');
+        state.codexAuth = {authentication_verified: true};
+        const ready = confirmation.workflowConfirmationHtml();
+        state.workflow.plan_review_summary = {run_id: 'another_plan'};
+        const mismatch = confirmation.workflowConfirmationHtml();
+        const mismatchState = readiness.forAction('plan_execution_upgrade_required');
+        state.workflow.plan_review_summary = {run_id: 'run_candidate'};
+        state.session.research_provider = {provider: 'openai', model: 'synthetic', credential_source: 'pi_verified'};
+        state.runtime = {status: 'unavailable'};
+        const providerMissing = readiness.forAction('plan_execution_upgrade_required');
+        state.runtime = {status: 'ready', api_transport: 'openai-completions'};
+        const providerReady = readiness.forAction('plan_execution_upgrade_required');
+        const handled = readiness.noteRefusal({code: 'pi_provider_research_inference_unverified'});
+        const providerRefused = readiness.forAction('plan_execution_upgrade_required');
+        window.EasyICU.guidedPi.declare('hosted', {active: () => true});
+        const hostedBlocked = confirmation.workflowConfirmationHtml();
+        process.stdout.write(JSON.stringify({blocked, ready, mismatch, mismatchState, providerMissing, providerReady, handled, providerRefused, hostedBlocked, noPost, calls}));
+      })().catch(error => { console.error(error); process.exit(1); });
+    """.replace("__READINESS__", json.dumps(source)).replace(
+        "__DATA__", json.dumps(_read("js/screens-guided-pi-confirmation-data.js"))
+    ).replace("__CONFIRMATION__", json.dumps(_read("js/screens-guided-pi-confirmation.js")))
+    result = _plan_actions(body)
+    assert result["noPost"] is True
+    assert "此浏览器登录账户" in result["blocked"]
+    assert "data-gpi-config" in result["blocked"]
+    assert "data-gpi-confirm-action" not in result["blocked"]
+    assert "data-gpi-confirm-action" in result["ready"]
+    assert "data-gpi-confirm-action disabled" in result["mismatch"]
+    assert result["mismatchState"]["connect"] is False
+    assert result["providerMissing"]["connect"] is True
+    assert result["providerReady"] is None
+    assert result["handled"] is True
+    assert result["providerRefused"]["connect"] is True
+    assert "管理员处理" in result["hostedBlocked"]
+    assert "data-gpi-config" not in result["hostedBlocked"]
+    assert "data-gpi-confirm-action disabled" in result["hostedBlocked"]
+    assert not any(row[0] == "error" and row[1] for row in result["calls"])
+
+
+def test_run_readiness_sibling_is_loaded_before_the_screen() -> None:
+    index = _read("index.html")
+    readiness = "js/screens-guided-pi-run-readiness.js?v=20261117-run1"
+    assert index.index(readiness) < index.index('src="js/screens-guided-pi.js?')
+    screen = _read("js/screens-guided-pi.js")
+    assert "runReadiness: RUN_READINESS.forAction" in screen
+    assert "noteRunRefusal: RUN_READINESS.noteRefusal" in screen
+
+
 def test_a_repeat_the_host_says_is_starting_shows_no_banner_and_follows_it() -> None:
     result = _plan_actions(
         """

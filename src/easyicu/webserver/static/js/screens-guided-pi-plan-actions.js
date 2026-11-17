@@ -231,6 +231,7 @@
 
     async function startFormalPlanGeneration(reasonCode, options = {}) {
       if (unavailable()) return false;
+      if (host.runReadiness && host.runReadiness(reasonCode)) { host.render(); return false; }
       const automatic = Boolean(options && options.automatic);
       const retryingStoppedPlan = reasonCode === 'agent_plan_revision_nonconvergent';
       if (retryingStoppedPlan && (automatic || !canRetryStoppedPlan(host.workflow()))) return false;
@@ -397,6 +398,7 @@
         if (guardedTransition) startedTransitions.delete(guardKey);
         endStarting();
         host.setBusy(false);
+        if (host.noteRunRefusal && host.noteRunRefusal(error)) { host.render(); return false; }
         if (followHostDecisionRefusal(error)) return false;
         host.setError(host.errorText(error));
         host.render();
@@ -735,6 +737,7 @@
 
     async function retryFailedExecution(reason) {
       if (unavailable()) return;
+      if (host.runReadiness && host.runReadiness('failed_pipeline_execution_retry_available')) { host.render(); return; }
       if (!replay || typeof replay.retryFailedExecution !== 'function') {
         host.setError(tr(
           'The failed run coordinates are unavailable. Refresh this project and try again.',
@@ -811,6 +814,7 @@
         );
       } catch (error) {
         host.setBusy(false);
+        if (host.noteRunRefusal && host.noteRunRefusal(error)) { host.render(); return; }
         if (followHostDecisionRefusal(error)) return;
         host.setError(host.errorText(error));
         host.render();

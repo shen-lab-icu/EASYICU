@@ -224,11 +224,12 @@
     agentMode,
     publicText: publicAssistantText,
   });
+  const RUN_READINESS = MODULES.require('runReadiness').create({ state, tr });
   const CONFIRMATION = MODULES.require('confirmation').create({
     tr, esc, iconHtml, resourceButton, sessionIsStale, runFailureText, studyFamilyGapText,
     workflow: () => state.workflow,
     session: () => state.session,
-    busy: () => state.busy || Boolean(state.childJobId),
+    busy: () => state.busy || Boolean(state.childJobId), runReadiness: RUN_READINESS.forAction,
     planConfigurationError: () => state.planConfigurationError,
     cohortEligibilityDecisionHtml: copies => COHORT_ELIGIBILITY.repeatedStayDecisionHtml(copies),
   });
@@ -366,9 +367,7 @@
     session: () => state.session,
     selectionRevision: () => state.sessionSelectionRevision,
     workflow: () => state.workflow,
-    // The run the host's own projection treats as authoritative. A governed
-    // action must name the run the offer was computed from, not the run id the
-    // session last happened to bind.
+    runReadiness: RUN_READINESS.forAction, noteRunRefusal: RUN_READINESS.noteRefusal,
     latestRun: () => state.latestRun,
     busy: () => state.busy || Boolean(state.childJobId),
     sessionIsStale,
@@ -382,7 +381,7 @@
     setError: value => { state.error = String(value || ''); },
     // The host compiler may refuse the automatic configuration (for example
     // an all-stay analysis without source-owned patient grouping). The
-    // confirmation and cohort owners read this to offer the researcher's
+    // Card owners read this to offer the researcher's
     // decision instead of leaving a bare error banner.
     setPlanConfigurationError: value => { state.planConfigurationError = String(value || ''); },
     setDraft: value => { state.draft = String(value || ''); state.followUpDraft = null; },

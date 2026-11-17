@@ -307,7 +307,9 @@ def record_unset_family_design(
             proposed_design.pop("cluster_unit", None)
         patch["analysis_design"] = {**proposed_design, **existing_design}
     try:
-        saved = study_contexts.upsert_context(
+        from easyicu.webserver.launch_study_updates import upsert_launch_context
+
+        saved = upsert_launch_context(study,
             {"id": str(study.get("id") or ""), **patch},
             active=True,
             expected_revision=int(study.get("revision") or 0),

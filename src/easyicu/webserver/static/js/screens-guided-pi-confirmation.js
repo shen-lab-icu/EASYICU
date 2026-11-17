@@ -42,6 +42,13 @@
     const SYSTEM_DEFAULT_CARDS = new Set(['operator_plan_approval_required', 'plan_execution_upgrade_required']);
 
     function workflowConfirmation() {
+      const confirmation = currentWorkflowConfirmation();
+      const readiness = confirmation && host.runReadiness && host.runReadiness(confirmation.code);
+      return readiness ? { ...confirmation, readiness, approveDisabled: true,
+        nonApprovable: readiness.connect || confirmation.nonApprovable } : confirmation;
+    }
+
+    function currentWorkflowConfirmation() {
       const workflow = host.workflow() || {};
       // The reviewed plan may predate a failed child run. Resource authority
       // belongs to that exact plan, not the session's latest run binding.
@@ -947,7 +954,8 @@
           ${decisionActions && icdSourceFinding ? `<button class="btn sm" type="button" data-gpi-confirm-edit>${esc(tr('Change cohort', '修改人群'))}</button>` : ''}
           ${decisionActions && !icdSourceFinding && firstDecisionCopy && firstDecisionCopy.allowEdit ? `<button class="btn sm" type="button" data-gpi-confirm-edit>${esc(String(firstDecisionItem && firstDecisionItem.code || '') === 'ADJUSTMENT_SET_NOT_USER_CONFIRMED' ? tr('Request plan changes', '提出计划修改') : tr('Choose another approach', '选择其他方案'))}</button>` : ''}
           ${confirmation.rejectMessage && !confirmation.compactApproval ? `<button class="btn sm" type="button" data-gpi-confirm-reject>${esc(confirmation.reject)}</button>` : ''}
-          ${confirmation.retryPlanRevision ? `<button class="btn primary sm" type="button" data-gpi-confirm-action>${esc(confirmation.retryLabel)}</button>` : confirmation.nonApprovable ? '' : `<button class="btn primary sm" type="button" data-gpi-confirm-action${confirmation.approveDisabled || deferredScopeRejected ? ' disabled' : ''}>${esc(confirmation.approve)}</button>`}
+          ${confirmation.readiness ? `<small role="status">${esc(confirmation.readiness.reason)}</small>${confirmation.readiness.connect ? `<button class="btn sm" type="button" data-gpi-config>${esc(tr('Check connection', '检查连接'))}</button>` : ''}` : ''}
+          ${confirmation.retryPlanRevision && !confirmation.readiness ? `<button class="btn primary sm" type="button" data-gpi-confirm-action>${esc(confirmation.retryLabel)}</button>` : confirmation.nonApprovable ? '' : `<button class="btn primary sm" type="button" data-gpi-confirm-action${confirmation.approveDisabled || deferredScopeRejected ? ' disabled' : ''}>${esc(confirmation.approve)}</button>`}
         </div>
       </section>`;
     }

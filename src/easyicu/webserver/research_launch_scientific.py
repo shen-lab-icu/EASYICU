@@ -1216,7 +1216,9 @@ def record_without_exposure_subgroups(study: Mapping[str, Any]) -> Mapping[str, 
     if cleared.get("stated_subgroups") == study.get("stated_subgroups"):
         return study
     try:
-        saved = study_contexts.upsert_context(
+        from easyicu.webserver.launch_study_updates import upsert_launch_context
+
+        saved = upsert_launch_context(study,
             {"id": str(study.get("id") or ""), "stated_subgroups": cleared["stated_subgroups"]},
             active=True,
             expected_revision=int(study.get("revision") or 0),

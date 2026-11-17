@@ -74,7 +74,9 @@ def launch(tmp_path, monkeypatch):
 def test_system_landmark_revision_starts_on_the_first_click(launch):
     receipt = launch.submit()
     prepared = launch.captured["scientific"].study
-    assert prepared["revision"] == launch.study["revision"] + 1
+    # Defaults stay private during validation. They are committed with the
+    # active job in one CAS, so a refusal cannot invalidate the original card.
+    assert prepared["revision"] == launch.study["revision"]
     assert prepared["confirmations"]["plan_timing_landmark_24h"] is True
     assert prepared["sensitivity_specs"][0]["spec_id"] == "agent_post_baseline_landmark_24h"
     assert receipt.study_context_revision == prepared["revision"] + 1
@@ -97,6 +99,29 @@ def test_recovery_binds_the_system_prepared_scientific_state(launch):
     assert launch.study["sensitivity_specs"] == []
 
 
+def test_refused_preparation_does_not_persist_its_landmark_or_consume_the_study(launch, monkeypatch):
+    original = agent_pipeline_runs.prepare_research_pipeline_run
+
+    def unavailable(request):
+        original(request)
+        raise preparation.ResearchPipelineRunError(
+            "research_pipeline_execution_runtime_unavailable", "Synthetic unavailable runtime",
+        )
+
+    monkeypatch.setattr(agent_pipeline_runs, "prepare_research_pipeline_run", unavailable)
+    for _ in range(2):
+        with pytest.raises(submission.ResearchRunSubmissionError) as refused:
+            launch.submit()
+        assert refused.value.status_code == 400
+        assert study_contexts.get_context(launch.study["id"]) == launch.study
+        assert "runner" not in launch.captured
+    monkeypatch.setattr(agent_pipeline_runs, "prepare_research_pipeline_run", original)
+    receipt = launch.submit()
+    stored = study_contexts.get_context(launch.study["id"])
+    assert stored["active_job_id"] == receipt.job_id
+    assert stored["confirmations"]["plan_timing_landmark_24h"] is True
+
+
 @pytest.mark.parametrize("edit", [{"question": "A different synthetic research question."}, {"title": "A concurrent edit"}])
 def test_a_concurrent_edit_after_preparation_still_refuses_the_handoff(launch, monkeypatch, edit):
     def wrap(runner, request):
@@ -112,6 +137,7 @@ def test_a_concurrent_edit_after_preparation_still_refuses_the_handoff(launch, m
     with pytest.raises(RuntimeError, match="agent_run_start_blocked"):
         launch.captured["runner"](launch.job)
     assert study_contexts.get_context(launch.study["id"])["active_job_id"] is None
+    assert study_contexts.get_context(launch.study["id"])["sensitivity_specs"] == []
 
 
 def test_a_concurrent_edit_during_scientific_preparation_is_not_adopted(launch, monkeypatch):

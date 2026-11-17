@@ -19,6 +19,7 @@ from easyicu.webserver import agent_pipeline_runs
 from easyicu.webserver import capabilities
 from easyicu.webserver import dataio
 from easyicu.webserver import host_action_jobs
+from easyicu.webserver.agent_run_refusals import logged_refusal
 from easyicu.webserver import provider_adapter
 from easyicu.webserver import research_run_submission
 from easyicu.webserver import run_refs
@@ -487,6 +488,16 @@ def _submit_host_decision(
 
 @control_router.post("/api/jobs/agent-run")
 def jobs_agent_run(body: Dict[str, Any], request: Request) -> dict:
+    """Log typed refusals at the HTTP owner, once for every admission path."""
+    try:
+        return _jobs_agent_run(body, request)
+    except HTTPException as exc:
+        if exc.status_code not in {400, 409}:
+            raise
+        raise logged_refusal(exc, body) from exc
+
+
+def _jobs_agent_run(body: Dict[str, Any], request: Request) -> dict:
     """HTTP adapter that resolves only the current browser's account authority."""
 
     host_action = _host_action(body)

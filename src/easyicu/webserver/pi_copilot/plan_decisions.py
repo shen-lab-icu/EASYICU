@@ -506,7 +506,9 @@ def record_post_baseline_landmark(
         return {**dict(study), **patch}
     # A concurrent researcher edit wins. Propagate the revision conflict so
     # this launch cannot continue on stale scientific coordinates.
-    return study_contexts.upsert_context(
+    from easyicu.webserver.launch_study_updates import upsert_launch_context
+
+    return upsert_launch_context(study,
         {"id": study["id"], **patch}, active=True,
         expected_revision=int(study["revision"]), require_revision=True,
         lifecycle_write=False, _server_agent_landmark_decision=True,

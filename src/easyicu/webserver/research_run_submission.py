@@ -26,6 +26,9 @@ from easyicu.webserver import provider_adapter
 from easyicu.webserver import settings as settings_store
 from easyicu.webserver import study_contexts as context_store
 from easyicu.webserver.plan_change_request import PlanChangeRequest
+from easyicu.webserver.launch_study_updates import (
+    handoff_launch_context, stage_launch_updates, upsert_launch_context,
+)
 from easyicu.webserver.pi_copilot.contracts import PiCopilotError
 from easyicu.webserver.pi_copilot.provider_config import PiProviderConfigStore
 from easyicu.webserver.pi_copilot.run_authority import (
@@ -334,7 +337,7 @@ def _with_planning_default(
     if patch is None:
         return study
     try:
-        return context_store.upsert_context(
+        return upsert_launch_context(study,
             {"id": study["id"], **patch},
             expected_revision=int(study.get("revision") or 0),
             require_revision=True,
@@ -345,6 +348,7 @@ def _with_planning_default(
         return study
 
 
+@stage_launch_updates
 def submit_research_run(
     request: ResearchRunSubmissionRequest,
     *,
@@ -772,7 +776,7 @@ def submit_research_run(
             authorize()
         start_error_code = "study_context_active_job_sync_failed"
         clock.mark("authorize")
-        synced_context = context_store.handoff_context(
+        synced_context = handoff_launch_context(
             study_context_id,
             current_stage="analyze",
             last_route="agent",

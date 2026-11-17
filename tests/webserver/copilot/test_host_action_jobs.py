@@ -426,6 +426,177 @@ def test_a_refused_start_leaves_the_decision_free_to_ask_again(study: Study) -> 
     assert study.submitted == [receipt["job_id"]]
 
 
+def test_agent_run_refusal_then_same_reviewed_decision_starts_once(
+    study: Study, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, caplog,
+) -> None:
+    """A late start refusal must not turn the original card into a stale one."""
+    from types import SimpleNamespace
+
+    from fastapi.testclient import TestClient
+
+    from easyicu.webserver import research_run_submission as submission
+    from easyicu.webserver.app import app
+    from easyicu.webserver.research_launch_scientific import record_without_exposure_subgroups
+    from easyicu.webserver.research_pipeline_run_errors import ResearchPipelineRunError
+    from easyicu.webserver.routes import agent
+
+    saved = context_store.upsert_context({
+        "id": study.study_id, "question": "Compare outcomes by sex", "primary_exposure": "sex",
+        "data_source": {"path": str(tmp_path / "synthetic-source"), "database": "miiv"},
+        "stated_subgroups": [{"variable": "sex", "words": "by sex", "concept": "sex",
+                              "source_status": "available"}],
+    }, _server_question_wording_write=True)
+    decision = PREPARE.model_copy(update={
+        "scientific_configuration_sha256": context_store.scientific_configuration_sha256(saved),
+    })
+    def projection(**_kwargs):
+        current = context_store.get_context(study.study_id)
+        offered = decision.model_copy(update={
+            "scientific_configuration_sha256": context_store.scientific_configuration_sha256(current),
+        })
+        return SimpleNamespace(host_decisions=HostDecisionOffers(plan_transition=offered))
+
+    monkeypatch.setattr(host_action_jobs, "get_pi_copilot_service", lambda: study.service)
+    monkeypatch.setattr(host_action_jobs, "build_project_workflow_projection", projection)
+    monkeypatch.setattr(submission.dataio, "describe_source_tables", lambda *a, **k: {"ok": True})
+    monkeypatch.setattr(submission.dataio, "prepared_export_manifest_path", lambda _path: None)
+    monkeypatch.setattr(submission, "build_research_workflow_snapshot", lambda **kw:
+                        SimpleNamespace(planning_prerequisites_missing=[]))
+    monkeypatch.setattr(submission, "provider_environment_for_agent_run", lambda **kw: {})
+    monkeypatch.setattr(submission.agent_runs, "resolve_agent_provider_config", lambda **kw: {})
+    monkeypatch.setattr(context_store, "build_agent_context_binding", lambda *a, **kw: {})
+    monkeypatch.setattr(submission, "research_pipeline_workspace", lambda:
+                        SimpleNamespace(project_root=lambda _id: tmp_path / "runs"))
+    monkeypatch.setattr(submission, "load_prepared_plan_revision", lambda **kw: None)
+    attempts = []
+    blocked = True
+
+    def prepare(**kwargs):
+        attempts.append(kwargs)
+        # This real normalizer runs before provider/runtime validation in
+        # _prepare_scientific_launch. The scripted late check reads no rows.
+        prepared = record_without_exposure_subgroups(kwargs["study_context"])
+        if blocked:
+            raise ResearchPipelineRunError("research_pipeline_execution_runtime_unavailable", "synthetic refusal")
+        kwargs["on_prepared_study"](prepared)
+        return lambda job: (study.release.wait(10), {})[1]
+
+    monkeypatch.setattr(submission.agent_pipeline_runs, "make_research_pipeline_run_runner", prepare)
+    body = {
+        "path": saved["data_source"]["path"], "study_id": study.study_id, "question": saved["question"],
+        "study_context_id": study.study_id, "engine": "research_agent_pipeline", "run_type": "full",
+        "llm_provider": "mock", "credential_source": "pi_verified", "external_llm_opt_in": True,
+        "literature_search_authorized": True,
+        "planner_start_mode": "auto", "plan_revision_source_run_id": decision.source_run_id,
+        "host_action": study.ask(decision=decision).model_dump(mode="json"),
+    }
+    client = TestClient(app)
+    caplog.set_level("WARNING")
+    first = client.post("/api/jobs/agent-run", json=body)
+    assert first.status_code == 400
+    assert first.json()["detail"]["error"] == "research_pipeline_execution_runtime_unavailable"
+    assert host_action_starting.starting_for(study.study_id) is None
+    assert study.rows() == []
+    assert host_action_jobs._STARTED == {}
+    assert context_store.get_context(study.study_id) == saved
+    blocked = False
+    second = client.post("/api/jobs/agent-run", json=body)
+    # Before the fix this is 409 host_action_decision_stale: the refused
+    # preparation persisted its subgroup normalization without starting a job.
+    assert second.status_code == 200, second.json()
+    duplicate = client.post("/api/jobs/agent-run", json=body)
+    assert duplicate.status_code == 200
+    assert duplicate.json()["reused"] is True
+    assert duplicate.json()["job_id"] == second.json()["job_id"]
+    assert len(attempts) == 2
+    assert len(study.rows()) == 1
+    changed = {**body, "host_action": study.ask(decision=decision.model_copy(update={
+        "scientific_configuration_sha256": "f" * 64,
+    })).model_dump(mode="json")}
+    assert client.post("/api/jobs/agent-run", json=changed).status_code == 409
+    mismatch = {**body, "plan_revision_source_run_id": "different_plan"}
+    response = client.post("/api/jobs/agent-run", json=mismatch)
+    assert response.status_code == 400
+    assert response.json()["detail"]["error"] == "host_action_request_mismatch"
+    refusals = [row for row in caplog.records if row.name == "easyicu.webserver.agent_run_refusals"]
+    assert len(refusals) == 3
+    assert [row.error for row in refusals] == ["research_pipeline_execution_runtime_unavailable",
+                                              "study_job_running", "host_action_request_mismatch"]
+    assert all(row.host_action == "prepare_analysis_data" for row in refusals)
+    assert all(study.study_id not in row.getMessage() for row in refusals)
+
+
+def test_unbound_browser_account_refusal_does_not_occupy_the_decision(
+    study: Study, monkeypatch: pytest.MonkeyPatch, caplog,
+) -> None:
+    from types import SimpleNamespace
+
+    from fastapi.testclient import TestClient
+
+    from easyicu.webserver.app import app
+    from easyicu.webserver.routes import agent
+
+    monkeypatch.setattr(host_action_jobs, "get_pi_copilot_service", lambda: study.service)
+    monkeypatch.setattr(host_action_jobs, "build_project_workflow_projection", lambda **kw:
+                        SimpleNamespace(host_decisions=study.offers))
+    start = study.submit()
+    monkeypatch.setattr(agent, "submit_agent_run", lambda *a, **kw: start())
+    body = {"engine": "research_agent_pipeline", "study_context_id": study.study_id,
+            "llm_provider": "codex", "credential_source": "codex_user_auth",
+            "plan_revision_source_run_id": PREPARE.source_run_id,
+            "host_action": study.ask().model_dump(mode="json")}
+    client = TestClient(app)
+    caplog.set_level("WARNING")
+    for _ in range(2):
+        refused = client.post("/api/jobs/agent-run", json=body)
+        assert refused.status_code == 400
+        assert refused.json()["detail"]["error"] == "codex_auth_login_required"
+        assert host_action_starting.starting_for(study.study_id) is None
+        assert study.rows() == []
+        assert host_action_jobs._STARTED == {}
+    monkeypatch.setattr(agent.codex_account_sessions, "environment_for_request", lambda _request: {})
+    first = client.post("/api/jobs/agent-run", json=body)
+    second = client.post("/api/jobs/agent-run", json=body)
+    assert first.status_code == second.status_code == 200
+    assert first.json()["job_id"] == second.json()["job_id"]
+    assert study.submitted == [first.json()["job_id"]]
+    assert len([row for row in caplog.records if row.name == "easyicu.webserver.agent_run_refusals"]) == 2
+
+
+@pytest.mark.parametrize("status,detail", [(400, {"ok": False}), (409, "unsafe detail"),
+                                         (400, {"error": "typed_rejection", "token": "secret-value"})])
+def test_every_agent_run_refusal_has_one_safe_typed_log(
+    status, detail, monkeypatch: pytest.MonkeyPatch, caplog,
+) -> None:
+    import hashlib
+    import json
+
+    from fastapi import HTTPException
+    from fastapi.testclient import TestClient
+
+    from easyicu.webserver.app import app
+    from easyicu.webserver.routes import agent
+
+    def refuse(*args, **kwargs):
+        raise HTTPException(status_code=status, detail=detail)
+
+    monkeypatch.setattr(agent, "submit_agent_run", refuse)
+    caplog.set_level("WARNING")
+    study_id = "synthetic-private-study"
+    response = TestClient(app).post("/api/jobs/agent-run", json={
+        "study_context_id": study_id, "token": "secret-value", "path": "/home/private/synthetic",
+    })
+    assert response.status_code == status
+    code = response.json()["detail"]["error"]
+    assert code == (detail.get("error", "agent_run_request_refused") if isinstance(detail, dict)
+                    else "agent_run_request_refused")
+    [record] = [row for row in caplog.records if row.name == "easyicu.webserver.agent_run_refusals"]
+    logged = json.loads(record.getMessage())
+    assert logged == {"event": "agent_run_refused", "status": status, "error": code,
+                      "host_action": "none", "study_context_hash": hashlib.sha256(study_id.encode()).hexdigest()[:12]}
+    assert all(value not in record.getMessage() for value in (study_id, "secret-value", "/home/"))
+
+
 def test_after_a_restart_a_lost_job_no_longer_holds_its_decision(
     study: Study, monkeypatch: pytest.MonkeyPatch
 ) -> None:

@@ -118,7 +118,7 @@ def test_pi_shell_assets_are_explicitly_wired_before_guided_owner() -> None:
         < index.index("js/screens-guided-pi-confirmation.js")
     )
     assert "js/screens-guided-pi-confirmation-data.js?v=20261102-population1" in index
-    assert "js/screens-guided-pi-confirmation.js?v=20261117-sha2" in index
+    assert "js/screens-guided-pi-confirmation.js?v=20261117-run1" in index
     assert index.index("js/screens-guided-pi-confirmation-data.js") < index.index("js/screens-guided-pi-confirmation.js")
     # The plan-approval card renders the database capability review through this owner.
     assert "js/screens-guided-pi-source-adjustments.js?v=20261026-quick2" in index
@@ -137,11 +137,11 @@ def test_pi_shell_assets_are_explicitly_wired_before_guided_owner() -> None:
     assert "js/screens-guided-pi-review-items.js?v=20261026-review1" in index
     assert index.index("js/screens-guided-pi-review-items.js") < index.index("js/screens-guided-pi-run-outcome.js")
     assert "css/guided-pi-source-adjustments.css?v=20261026-six1" in index
-    assert "js/screens-guided-pi-plan-actions.js?v=20261030-preparation1" in index
+    assert "js/screens-guided-pi-plan-actions.js?v=20261117-run1" in index
     assert "js/screens-guided-pi-quick-answers.js?v=20261117-fix1" in index
     assert "js/screens-guided-pi-childjob.js?v=20261026-recovered1" in index
     assert "js/screens-guided-pi-error-text.js?v=20261111-s872" in index
-    assert "js/screens-guided-pi.js?v=20261102-ui1" in index
+    assert "js/screens-guided-pi.js?v=20261117-run1" in index
     assert "js/screens-guided.js?v=20261117-startup1" in index
     assert (
         "js/screens-guided-project-continuity.js?v=20260813-project-continuity1"
@@ -6668,7 +6668,7 @@ def test_latest_idea_exploration_turn_hides_unrelated_project_continuation_cards
     assert "return { transcriptMessages, latestTurnCompletedIdeaExploration," in transcript
     index = _read("index.html")
     assert "screens-guided-pi-transcript.js?v=20261030-preparation1" in index
-    assert "screens-guided-pi.js?v=20261102-ui1" in index
+    assert "screens-guided-pi.js?v=20261117-run1" in index
 
 
 def test_idea_mining_receipt_is_presented_in_the_conversation_without_a_card() -> None:
