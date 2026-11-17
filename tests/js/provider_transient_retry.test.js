@@ -7,6 +7,7 @@ const { pathToFileURL } = require('node:url');
 const { test } = require('node:test');
 const { setTimeout: sleep } = require('node:timers/promises');
 
+const DELAYS = [2000, 4000, 8000, 16000, 30000, 30000, 29000];
 const files = process.argv.slice(2);
 assert.equal(files.length, 4, 'Run through tools/run_js_contracts.py with all four owners');
 const [mainFile, budgetFile, projectionFile, retryFile] = files;
@@ -97,6 +98,7 @@ async function harness(attempts, config = {}) {
   const egressReceipts = [];
   const calls = [];
   const waits = [];
+  let elapsed = 0;
   const order = [];
   const notices = [];
   const retryStarts = [];
@@ -121,6 +123,7 @@ async function harness(attempts, config = {}) {
     assert.equal(suppliedContext, context);
     assert.equal(options.maxRetries, 0, 'SDK retries stay disabled for each attempt');
     calls.push(options);
+    elapsed += config.callDuration || 0;
     const call = calls.length;
     const attempt = attempts[Math.min(calls.length - 1, attempts.length - 1)];
     if (attempt instanceof Error) throw attempt;
@@ -139,12 +142,14 @@ async function harness(attempts, config = {}) {
   };
   const retryWithFastSleep = (openAttempt, options) => retry.retryTransientProviderStream(openAttempt, {
       ...options,
+      now: () => elapsed,
       onRetry: event => {
         retryStarts.push(event);
         options.onRetry?.(event);
       },
       sleep: async (ms, value, sleepOptions) => {
         waits.push(ms);
+        elapsed += ms;
         await config.onWait?.(sleepOptions?.signal, waits.length);
         sleepOptions?.signal?.throwIfAborted();
       },
@@ -183,7 +188,7 @@ async function harness(attempts, config = {}) {
   };
 }
 
-for (const attempt of [2, 3, 4]) {
+for (const attempt of [2, 3, 4, 7, 8]) {
   test(`empty relay failure succeeds on attempt ${attempt} through the guard with private failed prefixes`, async () => {
     const failures = Array.from({ length: attempt - 1 }, (_, i) => [opened(i + 1), failed(relayFailure)]);
     const result = await harness([...failures, success(attempt)]);
@@ -198,19 +203,19 @@ for (const attempt of [2, 3, 4]) {
       ...Array.from({ length: attempt - 1 }, () => ['authorize', 'receipt', 'provider', 'retry']).flat(),
       'authorize', 'receipt', 'provider',
     ]);
-    assert.deepEqual(result.waits, [1500, 4000, 10000].slice(0, attempt - 1));
+    assert.deepEqual(result.waits, DELAYS.slice(0, attempt - 1));
     assert.deepEqual(result.closed, Array.from({ length: attempt }, (_, i) => i + 1));
     assert.equal(result.guard.state().message_provider_calls, attempt);
     assert.equal(result.projected.error_code, undefined);
     assert.match(source, /retry: \{ enabled: false, maxRetries: 0 \}/);
     assert.deepEqual(result.retryStarts, Array.from({ length: attempt - 1 }, (_, i) => ({
-      type: 'auto_retry_start', attempt: i + 1, maxAttempts: 3,
+      type: 'auto_retry_start', attempt: i + 1, maxAttempts: 7,
     })));
     assert.equal(result.notices.length, attempt - 1);
     for (const [i, notice] of result.notices.entries()) {
       assert.deepEqual(JSON.parse(JSON.stringify(notice)), {
         kind: 'event', request_id: 'synthetic-request', session_id: 'synthetic-session',
-        event: { type: 'retry', at: notice.event.at, attempt: i + 1, max_attempts: 3 },
+        event: { type: 'retry', at: notice.event.at, attempt: i + 1, max_attempts: 7 },
       });
       assert.ok(Number.isFinite(Date.parse(notice.event.at)));
     }
@@ -232,7 +237,7 @@ test('the retry event publisher still forwards ordinary session lifecycle events
 });
 
 for (const detail of ['HTTP 502: bad gateway', 'HTTP 503: unavailable', 'HTTP 504: gateway timeout',
-  'connection reset by peer', 'request timeout', 'request timed out', 'read ECONNRESET', 'connect ETIMEDOUT',
+  'HTTP 408: request timeout', 'HTTP 429: rate limit', 'connect ECONNREFUSED', 'fetch failed', 'connection reset by peer', 'request timeout', 'request timed out', 'read ECONNRESET', 'connect ETIMEDOUT',
   'dial tcp 203.0.113.1:443: connect: operation timed out', relayFailure,
   'proxy CONNECT failed', 'upstream connection failure', 'upstream connect error or disconnect/reset before headers']) {
   test(`${detail} before content retries`, async () => {
@@ -310,8 +315,6 @@ test('an SDK aborted terminal message is never retried', async () => {
 });
 
 for (const [detail, code] of [
-  ['HTTP 429', 'pi_model_rate_limited'],
-  ['HTTP 429: rate limit', 'pi_model_rate_limited'],
   ['HTTP 500: rate_limit_exceeded', 'pi_model_rate_limited'],
   ['HTTP 500: insufficient_quota', 'pi_model_rate_limited'],
   ['HTTP 500: budget_exhausted', 'pi_model_provider_error'],
@@ -320,7 +323,6 @@ for (const [detail, code] of [
   ['HTTP 401: authentication failed', 'pi_model_provider_error'],
   ['HTTP 403: permission denied', 'pi_model_provider_error'],
   ['HTTP 404: model missing', 'pi_model_provider_error'],
-  ['HTTP 408: request timeout', 'pi_model_provider_error'],
   ['HTTP 422: server_error', 'pi_model_provider_error'],
   ['HTTP 400: prior request returned 500', 'pi_model_provider_error'],
   ['unsupported model configuration', 'pi_model_provider_error'],
@@ -357,15 +359,15 @@ for (const [detail, code] of [
   });
 }
 
-test('four transient failures exhaust retries and expose only the final stream and result', async () => {
-  const attempts = Array.from({ length: 4 }, (_, i) => [opened(i + 1), failed(`HTTP 500: request ${i + 1} failed`)]);
-  const result = await harness([...attempts, success(5)]);
-  assert.equal(result.calls.length, 4);
-  assert.deepEqual(result.events, attempts[3]);
+test('eight transient failures exhaust retries and expose only the final stream and result', async () => {
+  const attempts = Array.from({ length: 8 }, (_, i) => [opened(i + 1), failed(`HTTP 500: request ${i + 1} failed`)]);
+  const result = await harness([...attempts, success(9)]);
+  assert.equal(result.calls.length, 8);
+  assert.deepEqual(result.events, attempts[7]);
   assert.equal(result.projected.error_code, 'pi_model_provider_unavailable');
-  assert.equal(result.result, attempts[3].at(-1).error);
-  assert.deepEqual(result.waits, [1500, 4000, 10000]);
-  assert.equal(result.notices.length, 3);
+  assert.equal(result.result, attempts[7].at(-1).error);
+  assert.deepEqual(result.waits, DELAYS);
+  assert.equal(result.notices.length, 7);
 });
 
 test('a permanent failure on a later attempt stops immediately', async () => {
@@ -373,7 +375,7 @@ test('a permanent failure on a later attempt stops immediately', async () => {
   const result = await harness([[failed()], second, success(3)]);
   assert.equal(result.calls.length, 2);
   assert.deepEqual(result.events, second);
-  assert.deepEqual(result.waits, [1500]);
+  assert.deepEqual(result.waits, [2000]);
   assert.equal(result.projected.error_code, 'pi_model_provider_error');
 });
 
@@ -387,7 +389,7 @@ for (const event of [
     const result = await harness([[failed()], second, success(3)]);
     assert.equal(result.calls.length, 2);
     assert.deepEqual(result.events, second);
-    assert.deepEqual(result.waits, [1500]);
+    assert.deepEqual(result.waits, [2000]);
   });
 }
 
@@ -399,20 +401,20 @@ for (const stage of ['open', 'iterate']) {
     assert.equal(result.calls.length, 4);
     assert.deepEqual(result.events, success(4));
     assert.equal(result.receipts.length, 4);
-    assert.deepEqual(result.waits, [1500, 4000, 10000]);
+    assert.deepEqual(result.waits, DELAYS.slice(0, 3));
   });
-  test(`transient exceptions during ${stage} give up after the fourth attempt`, async () => {
+  test(`transient exceptions during ${stage} give up after the eighth attempt`, async () => {
     const error = new Error('HTTP 500: transient request failure');
     const result = await harness([stage === 'open' ? error : [opened(1), error]]);
-    assert.equal(result.calls.length, 4);
+    assert.equal(result.calls.length, 8);
     assert.equal(result.projected.error_code, 'pi_model_provider_unavailable');
-    assert.deepEqual(result.waits, [1500, 4000, 10000]);
+    assert.deepEqual(result.waits, DELAYS);
   });
   test(`a nontransient exception during ${stage} is never retried`, async () => {
-    const error = new Error('HTTP 429: too many requests');
+    const error = new Error('HTTP 401: authentication failed');
     const result = await harness([stage === 'open' ? error : [opened(1), error], success(2)]);
     assert.equal(result.calls.length, 1);
-    assert.equal(result.projected.error_code, 'pi_model_rate_limited');
+    assert.equal(result.projected.error_code, 'pi_model_provider_error');
     assert.deepEqual(result.waits, []);
   });
 }
@@ -472,18 +474,7 @@ test('a later retry still cannot exceed the host provider-call budget', async ()
   assert.equal(result.calls.length, 3);
   assert.deepEqual(result.receipts.map(row => row.provider_calls), [1, 2, 3]);
   assert.equal(result.projected.error_code, 'pi_shell_message_provider_call_budget_exhausted');
-  assert.deepEqual(result.waits, [1500, 4000, 10000]);
-});
-
-test('each call within a message has its own retry allowance', async () => {
-  const result = await harness([[failed()], [failed()], [failed()], success(4), [failed()], success(6)]);
-  const events = [];
-  for await (const event of result.openCall()) events.push(event);
-  assert.equal(result.calls.length, 6);
-  assert.deepEqual(events, success(6));
-  assert.deepEqual(result.receipts.map(row => row.provider_calls), [1, 2, 3, 4, 5, 6]);
-  assert.deepEqual(result.waits, [1500, 4000, 10000, 1500]);
-  assert.deepEqual(result.retryStarts.map(event => event.attempt), [1, 2, 3, 1]);
+  assert.deepEqual(result.waits, DELAYS.slice(0, 3));
 });
 
 test('the retry reserves provider cost in its own durable receipt', async () => {
@@ -546,7 +537,7 @@ for (const stopAt of [1, 2, 3]) {
     assert.equal(result.calls.length, stopAt);
     assert.equal(result.receipts.length, stopAt);
     assert.equal(result.notices.length, stopAt);
-    assert.deepEqual(result.waits, [1500, 4000, 10000].slice(0, stopAt));
+    assert.deepEqual(result.waits, DELAYS.slice(0, stopAt));
     assert.ok(result.events.every(event => event.type === 'error'), 'failed prefixes stay private on abort');
   });
 }
@@ -591,7 +582,7 @@ for (const stage of ['cleanup', 'wait completion']) {
     }), { name: 'AbortError' });
     assert.equal(calls, 1);
     assert.equal(notices.length, stage === 'cleanup' ? 0 : 1);
-    assert.deepEqual(waits, stage === 'cleanup' ? [] : [1500]);
+    assert.deepEqual(waits, stage === 'cleanup' ? [] : [2000]);
   });
 }
 
@@ -657,3 +648,73 @@ test('a failed or aborted quick-answer decision keeps the transition safe', need
   assert.equal(aborted.result.stopReason, 'aborted');
   assert.deepEqual(aborted.events.map(event => event.type), ['error']);
 });
+
+
+test('provider latency counts against the 120 second retry window', async () => {
+  const result = await harness([[failed('HTTP 503')]], { callDuration: 61000 });
+  assert.equal(result.calls.length, 2);
+  assert.deepEqual(result.waits, [2000]);
+  assert.equal(result.projected.error_code, 'pi_model_provider_unavailable');
+});
+
+test('a later provider call in a committed turn cannot retry', async () => {
+  const result = await harness([success(1), [failed('HTTP 503')], success(3)]);
+  const later = result.openCall();
+  const events = [];
+  for await (const event of later) events.push(event);
+  assert.equal(result.calls.length, 2);
+  assert.equal(events.at(-1).type, 'error');
+});
+
+for (const thrown of [false, true]) {
+  test(`a delayed wakeup after the deadline keeps the final ${thrown ? 'exception' : 'stream'}`, async () => {
+    const [, , retry] = await imports;
+    let elapsed = 0;
+    let calls = 0;
+    const failure = new Error('HTTP 503');
+    const attempt = async () => {
+      calls += 1;
+      if (thrown) throw failure;
+      return { async *[Symbol.asyncIterator]() { yield failed('HTTP 503'); } };
+    };
+    const pending = retry.retryTransientProviderStream(attempt, {
+      now: () => elapsed, sleep: async () => { elapsed = 121000; },
+    });
+    if (thrown) await assert.rejects(pending, error => error === failure);
+    else {
+      const events = [];
+      for await (const event of await pending) events.push(event);
+      assert.equal(events.at(-1).type, 'error');
+    }
+    assert.equal(calls, 1);
+  });
+}
+
+test('a small timer overrun still permits the final cooldown probe', async () => {
+  const [, , retry] = await imports;
+  let elapsed = 0;
+  let calls = 0;
+  const stream = await retry.retryTransientProviderStream(async () => {
+    calls += 1;
+    const events = elapsed < 110000 ? [failed('HTTP 503')] : success(calls);
+    return { async *[Symbol.asyncIterator]() { yield* events; } };
+  }, {
+    now: () => elapsed,
+    sleep: async ms => { elapsed += ms + 5; },
+  });
+  const events = [];
+  for await (const event of stream) events.push(event);
+  assert.equal(calls, 8);
+  assert.equal(events.at(-1).type, 'done');
+  assert.ok(elapsed < 120000);
+});
+
+for (const failure of [
+  Object.assign(new Error('The endpoint could not be reached'), { code: 'ENETUNREACH' }),
+  Object.assign(new Error('Provider unavailable'), { status: 503 }),
+]) {
+  test(`structured transient ${failure.code || failure.status} retries before content`, async () => {
+    const result = await harness([failure, success(2)]);
+    assert.equal(result.calls.length, 2);
+  });
+}

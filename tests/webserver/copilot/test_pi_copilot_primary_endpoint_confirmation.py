@@ -262,6 +262,37 @@ def test_model_proposal_without_click_keeps_confirmation_pending(outcome_route, 
     assert saved["unconfirmed_outcome"] == _COMPOUND
 
 
+def test_first_message_outage_recovery_keeps_the_required_outcome_confirmation(outcome_route, monkeypatch):
+    send, gateway, service, study = outcome_route
+    original = gateway.request
+    failed = False
+
+    def request(method, params, **kwargs):
+        nonlocal failed
+        if method == "session.prompt" and not failed:
+            failed = True
+            state = FakeGateway.request(gateway, method, params, **kwargs)
+            state["transcript"] = [{"role": "assistant", "content": [], "stop_reason": "error",
+                                    "error_code": "pi_model_provider_unavailable"}]
+            return state
+        return original(method, params, **kwargs)
+
+    monkeypatch.setattr(gateway, "request", request)
+    session = service._read_records()[0]
+    submitted = service.send_message(session.session_id, project_id=session.project_id,
+                                     message="继续", message_origin="typed")
+    job = jobs.MANAGER.get(submitted["job_id"])
+    deadline = time.monotonic() + 5
+    while job.status in {"queued", "running"} and time.monotonic() < deadline:
+        time.sleep(0.01)
+    assert job.status == "failed" and job.error == "pi_model_provider_unavailable"
+    assert study_contexts.get_context(study["id"])["unconfirmed_outcome"] == _COMPOUND
+    recovered = send("继续", actions=(), origin="typed")
+    assert recovered["unconfirmed_outcome"] == _COMPOUND and not recovered["outcome"]
+    workflow = gateway.receipts[-1]["details"]["workflow"]
+    assert workflow["next_action_code"] == "study_primary_outcome_confirmation_required"
+
+
 def test_confirming_compound_does_not_select_a_model_substitution(outcome_route):
     send, gateway, _, _ = outcome_route
     gateway.proposed = "院内死亡"

@@ -1452,7 +1452,11 @@ async function createSession(params) {
             ...options,
             maxRetries: 0,
           }), reservation, record.budgetGuard.pricing);
-        }, { signal: options.signal, onRetry: emitSessionEvent });
+        }, {
+          signal: options.signal, onRetry: emitSessionEvent,
+          retryAllowed: () => !record.providerTurnCommitted,
+          onCommit: () => { record.providerTurnCommitted = true; },
+        });
         // The data-source transition's quick-answer offer: the model decides
         // whether to submit a reading; the host writes the reply.
         const offerReply = record.draftRepairActive ? null : quickAnswerOfferReply(context, record.language);
@@ -1496,6 +1500,7 @@ async function promptSession(requestId, params) {
   sessionLifecycle.admit({ excludeSessionId: sessionId });
   sessionLifecycle.touch(sessionId);
   record.budgetGuard.beginMessage();
+  record.providerTurnCommitted = false;
   record.draftRepairAttempted = false;
   activeRequestBySession.set(sessionId, requestId);
   const cancellationRevision = record.abortRevision;
@@ -1607,6 +1612,7 @@ async function regenerateSession(requestId, params) {
     throw Object.assign(new Error("regenerate message does not match the active transcript"), { code: "pi_regenerate_message_mismatch" });
   }
   record.budgetGuard.beginMessage();
+  record.providerTurnCommitted = false;
   record.draftRepairAttempted = false;
   activeRequestBySession.set(sessionId, requestId);
   const cancellationRevision = record.abortRevision;
