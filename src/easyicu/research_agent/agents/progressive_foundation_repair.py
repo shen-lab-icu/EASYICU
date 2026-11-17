@@ -213,6 +213,10 @@ def repair_foundation_display_labels(
         })
         return amended
     # Exhaustion does not replace the validator's typed refusal or coordinates.
+    # The spent-revision count tells a reader the label owner was reached.
+    spent = {"foundation_label_repair_revisions": remaining_revisions}
+    finding.details.setdefault("metrics", {}).update(spent)
+    finding.easyicu_safe_diagnostic.setdefault("metrics", {}).update(spent)
     if last_failure is finding:
         raise finding
     raise finding from last_failure

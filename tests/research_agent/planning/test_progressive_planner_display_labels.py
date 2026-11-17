@@ -156,6 +156,7 @@ def test_family_label_repair_spends_each_invalid_answer_and_keeps_original_code(
     error = caught.value
     assert error.reason_code == f"progressive_required_{missing}_display_labels_missing"
     assert error.path == "display_labels"
+    assert error.easyicu_safe_diagnostic["metrics"]["foundation_label_repair_revisions"] == 2
     facts = progressive_planner_failure_facts(error)
     assert facts.prompt_metrics["compile_revision_count"] == 2
     assert facts.materializations == () and facts.compile_receipt is None
@@ -172,6 +173,8 @@ def test_family_label_repair_uses_the_route_configured_revision_limit(monkeypatc
         _run_electrolyte_family(context, [json.dumps(payload), *(["{"] * budget)])
     assert caught.value.reason_code == "progressive_required_binary_display_labels_missing"
     assert progressive_planner_failure_facts(caught.value).prompt_metrics["compile_revision_count"] == budget
+    spent = caught.value.easyicu_safe_diagnostic.get("metrics", {}).get("foundation_label_repair_revisions", 0)
+    assert spent == budget
 
 
 def _assert_only_requested_labels_changed(before, after, repair):
