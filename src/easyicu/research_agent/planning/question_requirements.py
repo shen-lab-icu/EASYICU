@@ -205,6 +205,8 @@ QUESTION_REQUIREMENTS_GUIDE = (
     "For other requirements use deliverable_kinds=[]."
     " Split compound analysis requirements into clauses, each quoting a distinct part of "
     "the requirement's quote; use clauses=[] for an atomic requirement. "
+    "Only kind=analysis may carry non-empty clauses; all other kinds use clauses=[]. "
+    "Non-empty clauses must quote distinct verbatim parts covering the whole requirement quote. "
     "For an analysis of multiple question-named exposures, list every exposure "
     "in analysis_exposures and concepts, including the primary. A definition "
     "does not replace an exposure analysis. If this family cannot carry them "
@@ -440,6 +442,14 @@ class QuestionRequirement(BaseModel):
 
     @model_validator(mode="after")
     def _consistent(self) -> "QuestionRequirement":
+        def invalid_clauses(shape: str) -> None:
+            # A model-level ValueError located only the entire requirement.
+            # Keep the scientific rule and locate the field the Planner can fix.
+            raise ValidationError.from_exception_data(type(self).__name__, [{
+                "type": "value_error", "loc": ("clauses",), "input": self.clauses,
+                "ctx": {"error": ValueError(shape)},
+            }])
+
         concepts = [str(item).strip() for item in self.concepts]
         if any(not item for item in concepts) or len(set(concepts)) != len(concepts):
             raise ValueError("a question requirement names distinct concepts")
@@ -475,14 +485,14 @@ class QuestionRequirement(BaseModel):
             or any(not clause.strip() or not quote_written_in(clause, "question", (self.quote,))
                    for clause in self.clauses)
         ):
-            raise ValueError("analysis clauses must quote distinct parts of their requirement")
+            invalid_clauses("analysis clauses must quote distinct parts of their requirement; use distinct verbatim parts of quote for kind=analysis, otherwise []")
         if self.clauses:
             remainder = self.quote
             for clause in self.clauses:
                 remainder = re.sub(re.escape(clause), " ", remainder, flags=re.IGNORECASE)
             remainder = _METHOD_REQUEST.sub("", remainder.strip())
             if re.sub(r"\b(?:and|or|the|also)\b|以及|及|与|并|[\s、,，;；。.:：]+", "", remainder, flags=re.IGNORECASE):
-                raise ValueError("clauses must account for the complete requirement quote")
+                invalid_clauses("clauses must account for the complete requirement quote; use [] for an atomic analysis")
         if self.analysis_exposures and (
             self.kind != "analysis"
             or len(set(self.analysis_exposures)) != len(self.analysis_exposures)
@@ -2107,7 +2117,10 @@ def question_requirements_schema(
                 "deliverable_kinds": {
                     "type": "array", "items": {"type": "string", "enum": list(get_args(DeliverableKind))},
                 },
-                "clauses": {"type": "array", "items": {"type": "string"}},
+                "clauses": {
+                    "type": "array", "items": {"type": "string"},
+                    "description": "For kind=analysis only: distinct verbatim parts covering the whole quote; otherwise [].",
+                },
                 "analysis_exposures": {"type": "array", "items": concept},
                 "coverage": {
                     "type": "string",
@@ -2166,7 +2179,8 @@ def question_requirements_shape(
         "its concept only for levels_from_thresholds_unavailable or a stated adjustment's "
         "design_element_unsupported; kind definition goes with "
         "coverage definition_only and a note saying which element it defines; a benchmark "
-        "or subgroup answered by the plan names its concept"
+        "or subgroup answered by the plan names its concept. "
+        "Only kind=analysis may carry non-empty clauses; otherwise clauses=[]"
     )
 
 

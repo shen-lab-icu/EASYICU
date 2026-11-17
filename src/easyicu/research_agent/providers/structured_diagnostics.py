@@ -223,6 +223,7 @@ _SAFE_VALIDATION_FIELDS = frozenset(
         "kind",
         "concepts",
         "effect_measure",
+        "clauses",
         # Owned outcome definitions and the compact external-validation field.
         "outcome_definition",
         "free_days",
