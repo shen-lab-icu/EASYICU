@@ -163,6 +163,14 @@ sources and unit conversions remain unchanged. Minute opt-in paths retain their 
 representation; ordinary hourly loads use the same exact
 start/stop spans directly, without materialising a parallel minute table.
 
+HiRID per-kg dose bounds retain dev9's hourly mass/weight validation mask.
+Exact amount spans are clipped to those accepted hours before integration;
+the active-time mean and maximum are not bounded again using the old hourly
+denominator. A short, valid hourly dose can therefore have an active-time
+rate above the hourly validation threshold while retaining the same hour.
+Legacy-invalid hours remain excluded. This preserves coverage without
+changing dictionary thresholds or the minute/*60 source representation.
+
 The nine vasopressor/inotrope concepts additionally declare opt-in/internal
 `<concept>_max` companions. They share all source declarations with their mean
 counterparts and take the maximum of the concurrent summed active dose.

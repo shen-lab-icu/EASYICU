@@ -432,12 +432,12 @@ def test_r5_eicu_034_later_same_hour_invasive_anchor_restarts_support(tmp_path):
     ("phn_rate", "Phenylephrine (mcg/kg/min)"), ("propofol_rate", "Propofol (mcg/kg/min)"),
     ("fentanyl_rate", "Fentanyl (mcg/hr)"), ("midazolam_rate", "Midazolam (mg/hr)"),
 ])
-def test_r5_eicu_026_dose_rates_break_long_gaps_and_stops_have_no_row(tmp_path, name, drug):
+def test_r5_eicu_026_dose_rates_keep_dev9_carry_and_stops_have_no_row(tmp_path, name, drug):
     infusion = pd.DataFrame({"infusionoffset": [0, 600, 660], "drugname": [drug] * 3, "drugrate": [1.0, 2.0, 0.0]})
     ds = _eicu_source(tmp_path, "eicu", infusiondrug=infusion)
     out = _hourly(ds, name)
-    # The setting before the 10-hour gap keeps only its one-hour episode tail.
-    assert out == {0.0: 1.0, 10.0: 2.0}
+    # Preserve the six legacy hours through the inclusive five-hour boundary.
+    assert out == {**{float(hour): 1.0 for hour in range(6)}, 10.0: 2.0}
 
 
 def test_r5_eicu_036_conflicting_unit_labelled_weights_are_not_arbitrarily_prioritized():

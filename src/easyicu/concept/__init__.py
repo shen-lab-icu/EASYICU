@@ -5534,7 +5534,9 @@ class ConceptResolver:
             ]
             ordered_cols.extend(extra_time)
             ordered_cols.append(concept_name)
-            ordered_cols.extend(c for c in ('_dose_start', '_dose_end', '_dose_point', '_dose_channel') if c in frame)
+            from .dose_rate import SPAN_COLUMNS
+
+            ordered_cols.extend(c for c in SPAN_COLUMNS if c in frame)
             ordered_cols.extend(c for c in ('_urine_source_lag_h', '_urine_first_lag_h', '_urine_availability_lag_h', 'vent_mode_interface') if c in frame)
             if source_unit_column and source_unit_column not in ordered_cols:
                 ordered_cols.append(source_unit_column)
@@ -6078,7 +6080,7 @@ class ConceptResolver:
                             )
                             combined[key] = numeric_vals
         combined = combined.reset_index(drop=True)
-        from .dose_rate import resolver_summary
+        from .dose_rate import HOURLY_BOUNDED, resolver_summary
 
         combined = resolver_summary(combined, id_columns, index_column, concept_name, definition, database=db_name)
         agg_value = self._coerce_final_aggregator(aggregator)
@@ -6158,7 +6160,7 @@ class ConceptResolver:
         )
         if not _hourly_branch:
             # The SQL row-bounded marker only informs the hourly bound step.
-            combined = combined.drop(columns=[_SQL_ROW_BOUNDED_COLUMN], errors="ignore")
+            combined = combined.drop(columns=[_SQL_ROW_BOUNDED_COLUMN, HOURLY_BOUNDED], errors="ignore")
         if _hourly_branch:
             # DEBUG
             from ..io.ts_utils import change_interval
@@ -6559,6 +6561,11 @@ class ConceptResolver:
                 if _SQL_ROW_BOUNDED_COLUMN in combined.columns
                 else pd.Series(False, index=combined.index)
             )
+            if HOURLY_BOUNDED in combined:
+                # HiRID source bounds retain dev9's hourly dose mask. The
+                # active-time mean has a different denominator and must not
+                # remove an already accepted source hour.
+                _sql_bounded_rows |= combined[HOURLY_BOUNDED].eq(True)
             if concept_name in combined.columns and not signed_sum_bounds:
                 if definition.minimum is not None or definition.maximum is not None:
                     combined[concept_name] = pd.to_numeric(combined[concept_name], errors='coerce')
@@ -6606,7 +6613,7 @@ class ConceptResolver:
                         print(f"   🔍 DEBUG: filter_bounds(pre-agg) max={definition.maximum}: {before_len} -> {len(combined)}")
                 if definition.minimum is not None or definition.maximum is not None:
                     combined = combined.dropna(subset=[concept_name])
-            combined = combined.drop(columns=[_SQL_ROW_BOUNDED_COLUMN], errors="ignore")
+            combined = combined.drop(columns=[_SQL_ROW_BOUNDED_COLUMN, HOURLY_BOUNDED], errors="ignore")
 
             if _select_channels:
                 from .source_channel import select_preferred_channel

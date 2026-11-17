@@ -23,7 +23,8 @@ RATE_MAX_CONCEPTS = tuple(f'{name}_max' for name in sorted(DOSE_RATE_CONCEPTS)
                                           'fentanyl_rate', 'remifentanil_rate'})
 START, END, POINT = '_dose_start', '_dose_end', '_dose_point'
 CHANNEL = '_dose_channel'
-SPAN_COLUMNS = (START, END, POINT, CHANNEL)
+HOURLY_BOUNDED = '_dose_hourly_bounds_checked'
+SPAN_COLUMNS = (START, END, POINT, CHANNEL, HOURLY_BOUNDED)
 # None: direct utility caller; False: legacy minute/*60 path; True: capture
 # spans until all sources are combined; str: the direct source concept name.
 _CAPTURE: ContextVar[bool | str | None] = ContextVar('easyicu_dose_spans', default=None)
@@ -160,10 +161,11 @@ def collapse_spans(frame, *, ids, index, value, native_scale=None, minimum=None,
     work = _supersede_intervals(_point_spans(frame, ids, value), ids, value)
     valid = np.isfinite(work[START]) & np.isfinite(work[END]) & work[END].gt(work[START])
     valid &= pd.to_numeric(work[value], errors='coerce').gt(0)
+    bounded = work[HOURLY_BOUNDED].eq(True) if HOURLY_BOUNDED in work else pd.Series(False, index=work.index)
     if minimum is not None:
-        valid &= work[value].ge(minimum)
+        valid &= bounded | work[value].ge(minimum)
     if maximum is not None:
-        valid &= work[value].le(maximum)
+        valid &= bounded | work[value].le(maximum)
     work = work.loc[valid]
     if work.empty:
         return frame[columns].iloc[:0].copy()
@@ -201,6 +203,12 @@ def collapse_spans(frame, *, ids, index, value, native_scale=None, minimum=None,
         out[value] = out.pop('_area') / out.pop('_dt')
     for unit in units:
         out[unit] = _anchor_values(out, anchor, ids, unit)
+    if HOURLY_BOUNDED in work and work[HOURLY_BOUNDED].eq(True).all():
+        # These spans have already been clipped to the source's accepted
+        # legacy hourly grid. Bounding their new active-time mean again would
+        # change coverage solely because its denominator changed.
+        out[HOURLY_BOUNDED] = True
+        columns.append(HOURLY_BOUNDED)
     if native_scale is not None:
         original = _anchor_values(out, anchor, ids, index)
         origin_h = _anchor_values(out, anchor, ids, START)
@@ -230,6 +238,47 @@ def datetime_hours(frame, index, ids, admission_times):
     return (pd.to_datetime(frame[index], errors='coerce', utc=True) - origins).dt.total_seconds() / 3600.
 
 
+def _hirid_hourly_bounds(frame, *, id_col, index, value, output, weights, minimum, maximum):
+    """Keep dev9's hourly mass/weight bound mask before changing denominators."""
+    from ..utils.callback_utils import _hirid_apportion_hourly
+
+    legacy = _hirid_apportion_hourly(frame, index, value)
+    legacy = legacy.groupby([id_col, '_time_bin'], as_index=False)[value].sum()
+    legacy[value] /= 60. * legacy[id_col].map(weights)
+    valid = legacy[value].gt(0)
+    if minimum is not None:
+        valid &= legacy[value].ge(minimum)
+    if maximum is not None:
+        valid &= legacy[value].le(maximum)
+    from ..source_bounds import record_read_counts, scope_active
+
+    if scope_active():
+        record_read_counts(database='hirid', concept=output, table='pharma', stays=legacy[id_col].unique(),
+                           frame=pd.DataFrame({'stay': legacy[id_col],
+                                               'raw': legacy[value].notna().astype('int64'),
+                                               'bounded': valid.astype('int64')}),
+                           id_column='stay', raw_column='raw', bounded_column='bounded')
+    return legacy.loc[valid, [id_col, '_time_bin']].rename(columns={'_time_bin': '_dose_hour'})
+
+
+def _clip_hirid_to_bounded_hours(frame, allowed, *, id_col, index):
+    """Clip exact spans to accepted hours, retaining their active rate."""
+    valid = np.isfinite(frame[index]) & np.isfinite(frame[END]) & frame[END].gt(frame[index])
+    frame = frame.loc[valid]
+    starts, ends = frame[index].to_numpy(), frame[END].to_numpy()
+    counts = (np.ceil(ends) - np.floor(starts)).astype(int)
+    rows = np.repeat(np.arange(len(frame)), counts)
+    offset = np.arange(len(rows)) - np.repeat(np.cumsum(counts) - counts, counts)
+    hours = np.floor(starts)[rows] + offset
+    out = frame.iloc[rows].reset_index(drop=True).copy()
+    out[index] = np.maximum(starts[rows], hours)
+    out[END] = np.minimum(ends[rows], hours + 1.)
+    out['_dose_hour'] = hours
+    out = out.merge(allowed, on=[id_col, '_dose_hour'], how='inner', validate='many_to_one')
+    out[HOURLY_BOUNDED] = True
+    return out.drop(columns='_dose_hour')
+
+
 def hirid_amount_spans(frame, *, id_col, index, value, output, unit_col, per_kg=False, output_unit=None, minimum=None, maximum=None):
     """Reuse HiRID's preceding-interval dose representation (DEV-RICUC-04).
 
@@ -245,18 +294,28 @@ def hirid_amount_spans(frame, *, id_col, index, value, output, unit_col, per_kg=
     timed = length.gt(0) & length.le(HIRID_APPORTION_MAX_HOURS)
     start = start.where(timed, np.floor(end))
     end = end.where(timed, np.floor(end) + 1.)
+    allowed = None
+    if per_kg:
+        weights = out.dropna(subset=['weight']).groupby(id_col)['weight'].first()
+        if minimum is not None or maximum is not None:
+            allowed = _hirid_hourly_bounds(out, id_col=id_col, index=index, value=value,
+                                          output=output, weights=weights, minimum=minimum, maximum=maximum)
     out[output] = out[value] / ((end - start) * 60.)
     if per_kg:
         # Preserve the existing first usable stay weight in this callback.
-        weights = out.dropna(subset=['weight']).groupby(id_col)['weight'].first()
         out[output] /= out[id_col].map(weights)
     if unit_col:
         out[unit_col] = output_unit or ('mcg/kg/min' if per_kg else f'{out[unit_col].iloc[0]}/min')
     out[index] = start
-    if minimum is not None:
-        out = out.loc[out[output].ge(minimum)]
-    if maximum is not None:
-        out = out.loc[out[output].le(maximum)]
+    if allowed is not None:
+        out[END] = end
+        out = _clip_hirid_to_bounded_hours(out, allowed, id_col=id_col, index=index)
+        start, end = out[index], out[END]
+    else:
+        if minimum is not None:
+            out = out.loc[out[output].ge(minimum)]
+        if maximum is not None:
+            out = out.loc[out[output].le(maximum)]
     return interval_rates(out, ids=[id_col], index=index, value=output, starts=start.loc[out.index], ends=end.loc[out.index])
 
 

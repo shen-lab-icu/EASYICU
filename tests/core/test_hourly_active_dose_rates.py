@@ -307,15 +307,16 @@ def test_point_ties_and_source_order_do_not_select_different_doses():
     assert stopped.norepi_rate.tolist() == pytest.approx([.1])
 
 
-def test_raw_public_request_never_exposes_span_metadata(tmp_path):
+@pytest.mark.parametrize('database', ['aumc', 'hirid'])
+def test_raw_public_request_never_exposes_span_metadata(tmp_path, database):
     from easyicu import load_concepts
     from easyicu.api.concepts import clear_global_loader
     from easyicu.synthetic_sources import generate_source
 
     root = tmp_path / 'source'
-    generate_source(root, 'aumc', stays=3)
+    generate_source(root, database, stays=3)
     try:
-        out = load_concepts(['norepi_rate'], database='aumc', data_path=str(root), interval=None, verbose=False)
+        out = load_concepts(['norepi_rate'], database=database, data_path=str(root), interval=None, verbose=False)
     finally:
         clear_global_loader()
     assert out.norepi_rate.notna().any()
@@ -461,3 +462,35 @@ def test_sic_propofol_hourly_summary_retains_its_grid_and_converted_dose():
     assert out.Offset.tolist() == frame.Offset.tolist()
     assert out.propofol_rate.tolist() == pytest.approx(frame.propofol_rate * 16666.6667)
     assert not any(c.startswith('_dose_') for c in out)
+
+
+def test_hirid_legacy_hourly_bounds_preserve_coverage_before_active_time_mean(tmp_path):
+    from easyicu.resources import load_dictionary
+    from easyicu.source_bounds import collect_bounds_drops
+    from tests.support.hirid_source import hirid_load, hirid_source_root
+
+    definition = load_dictionary()['norepi_rate']
+    ceiling = definition.maximum
+    item = definition.sources['hirid'][0].ids[0]
+    # A quarter-hour dose is valid on dev9's hourly denominator but its active
+    # mean exceeds that hourly ceiling. A separate invalid legacy hour stays out.
+    rows = [{'patientid': 1, 'givenat': t, 'pharmaid': item, 'givendose': dose,
+             'doseunit': 'µg', 'route': 'iv-inf', 'infusionid': infusion, 'recordstatus': 0}
+            for infusion, begin, dose in [(7, 0., ceiling * .5 * 60 * 80),
+                                           (8, 2., ceiling * 2 * 60 * 80)]
+            for t, dose in [(begin, 0.), (begin + .25, dose)]]
+    root = hirid_source_root(tmp_path, 'pharma', rows)
+    weight = pd.read_parquet(root / 'observations/1.parquet').iloc[[0]].copy()
+    weight = weight.assign(patientid=1, variableid=10000400, value=80.)
+    weight['datetime'] = pd.read_parquet(root / 'general.parquet').iloc[0].admissiontime
+    weight.to_parquet(root / 'observations/1.parquet', index=False)
+    with collect_bounds_drops() as drops:
+        result = hirid_load(root, ['norepi_rate', 'norepi_rate_max', 'norepi_equiv'], patient_ids={'patientid': [1]})
+    assert drops['norepi_rate']['pharma']['dropped_values'] == 1
+    for name, data in result.items():
+        values = data.dropna(subset=[name])
+        assert not values.empty
+        clock = next(c for c in ('charttime', 'givenat', 'datetime') if c in values)
+        assert values[clock].tolist() == [0.]
+        assert values[name].tolist() == pytest.approx([ceiling * 2])
+        assert not any(c.startswith('_dose_') for c in data)
