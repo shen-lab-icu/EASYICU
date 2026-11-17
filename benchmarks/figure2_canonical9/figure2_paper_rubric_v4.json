@@ -1253,6 +1253,7 @@
     "src/easyicu/webserver/agent_outputs.py",
     "src/easyicu/webserver/agent_pipeline_runs.py",
     "src/easyicu/webserver/agent_review_recovery.py",
+    "src/easyicu/webserver/agent_run_refusals.py",
     "src/easyicu/webserver/agent_runs.py",
     "src/easyicu/webserver/app.py",
     "src/easyicu/webserver/attention_projection.py",
@@ -1322,6 +1323,7 @@
     "src/easyicu/webserver/jobs.py",
     "src/easyicu/webserver/landmark_continuous_survival_runtime_projection.py",
     "src/easyicu/webserver/landmark_survival_runtime_projection.py",
+    "src/easyicu/webserver/launch_study_updates.py",
     "src/easyicu/webserver/literature_authority.py",
     "src/easyicu/webserver/literature_projection.py",
     "src/easyicu/webserver/literature_search_transaction.py",
@@ -1581,7 +1583,7 @@
     "src/easyicu/webserver/zotero_probe.py"
   ],
   "scorer_tree_root": "benchmarks/figure2_canonical9/successor_v4",
-  "scorer_tree_sha256": "be2d6f3d088664dc5f10abbef54a4d3aaa21c29bb1412e948d13e27d0c505fc3",
+  "scorer_tree_sha256": "b39c07d9ff786e157061790c7e0b0381f012cedd49ae1df9168da3b274b2ac48",
   "suite_projection_sha256": "11c39afac69c9a0b560c6aa92be19f05725f04c66b9d2c499cfdb353c40295ab",
   "suite_ref": "easyicu_evaluation_protocol_suite/v2",
   "tasks": [
