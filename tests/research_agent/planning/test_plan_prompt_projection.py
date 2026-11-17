@@ -26,6 +26,18 @@ from easyicu.research_agent.schema import AnalysisPlan, AnalysisStep
 from .progressive_planner_fixtures import _context
 
 
+from .family_spec_fixtures import (
+    ALLOWED_CITATIONS as _FAMILY_CITATIONS,
+    DIRECT_COMPARATORS as _FAMILY_COMPARATORS,
+    _descriptive_context as _family_context,
+    _descriptive_payload as _family_payload,
+    _request as _family_request,
+)
+from .progressive_planner_fixtures import (
+    _foundation_payload, _materialization_payloads, _outline_payload,
+)
+
+
 def _plan():
     return AnalysisPlan(
         research_question="Preserve every outcome, source and sensitivity analysis.",
@@ -1022,3 +1034,584 @@ def test_ancestor_elision_preserves_intervening_requirements_and_seeds():
     assert any(row["status"] == "superseded_elided" for row in receipts)
     assert requirement.strip() in projected
     assert "retain landmark" in projected
+
+
+# Initial-request advisory projections belong to this prompt-projection owner.
+# The progressive owner test module is already at its 7,393-line ratchet.
+
+
+def _scripted_projection_run(
+    *, family=False, strict=False, limit=200_000, know_how="", contract="", context=None
+):
+    context = context or (_family_context() if family else _context())
+    # Clinical definitions are authority even when optional guidance dominates.
+    context = context.model_copy(
+        update={
+            "variables": [
+                item.model_copy(
+                    update={
+                        "description": f"Definition of {item.name}: sealed clinical meaning."
+                    }
+                )
+                for item in context.variables
+            ]
+        }
+    )
+    if family and know_how:
+        context.variable("score_first").description += " " + know_how
+    options = {"planning_contract_context": contract}
+    if know_how and not family:
+        claims = [
+            {
+                "claim_id": "guidance",
+                "field": "method",
+                "text": "Consider the estimand.",
+                "citation_ids": ["clinical_source"],
+                "evidence_scope": "methods",
+            },
+            *[
+                {
+                    "claim_id": f"extended_{index}",
+                    "field": "method",
+                    "text": know_how[index : index + 600],
+                    "citation_ids": ["clinical_source"],
+                    "evidence_scope": "methods",
+                }
+                for index in range(0, len(know_how), 600)
+            ],
+            {
+                "claim_id": "stop",
+                "field": "stop_condition",
+                "text": "Stop if the source cannot support the requested endpoint.",
+                "citation_ids": ["clinical_source"],
+                "evidence_scope": "methods",
+            },
+        ]
+        options["know_how_context"] = (
+            "# Retrieved Research Know-How (STRUCTURED ADVISORY DATA)\n"
+            + json.dumps(
+                {
+                    "schema_version": "easyicu.research_know_how_prompt/2",
+                    "cards": [{"card_id": "clinical_protocol", "claims": claims}],
+                }
+            )
+        )
+        options["allowed_know_how_decisions"] = {
+            "clinical_protocol": {
+                "version": "1.0.0",
+                "file_sha256": "a" * 64,
+                "claims": {item["claim_id"]: ("clinical_source",) for item in claims},
+            }
+        }
+    if family:
+        options.update(
+            planner_strategy=progressive.FAMILY_SPEC_STRATEGY,
+            allowed_literature_citation_keys=_FAMILY_CITATIONS,
+            direct_comparator_literature_keys=_FAMILY_COMPARATORS,
+            comparison_literature_keys=_FAMILY_COMPARATORS,
+            required_primary_cohort_selection_mode="all_input_rows",
+            enforce_article_contract=True,
+            article_contract_context=context,
+        )
+        responses = [
+            _family_payload(
+                _family_request(context, cohort_mode="all_input_rows"),
+                baseline_variables=["age", "sex", "score_first"],
+            )
+        ]
+    else:
+        foundation = _foundation_payload()
+        if know_how:
+            foundation["foundation"]["know_how_decisions"] = [
+                {
+                    "card_id": "clinical_protocol",
+                    "card_version": "1.0.0",
+                    "card_sha256": "a" * 64,
+                    "claim_id": "stop",
+                    "disposition": "adopted",
+                    "reason_code": "fits_estimand",
+                    "rationale": "This guidance fits the declared clinical estimand.",
+                    "citation_ids": ["clinical_source"],
+                }
+            ]
+        responses = [_outline_payload(), foundation, *_materialization_payloads()]
+    client = ScriptedMockLLMClient([json.dumps(item) for item in responses])
+    client.supports_strict_json_schema = strict
+    client.budget = PROMPT_TRANSPORT_BUDGETS[
+        "planner_plan_generation"
+    ].with_limit_tokens(limit)
+    agent = progressive.ProgressivePlannerAgent(client)
+    result = agent.run_attempt(context, **options)
+    return client, result, context
+
+
+@pytest.mark.parametrize("family", [False, True], ids=["progressive", "family_spec"])
+@pytest.mark.parametrize("strict", [False, True], ids=["text_shape", "strict_schema"])
+def test_advisory_overflow_compiles_with_receipts_and_all_authority(family, strict):
+    guidance = "Optional protocol discussion about uncertainty. " * 100
+    requirement = "Reviewed requirement: preserve the requested outcomes and every sensitivity analysis."
+    full_client, full, _ = _scripted_projection_run(
+        family=family,
+        strict=strict,
+        know_how=guidance,
+        contract=requirement,
+    )
+    limit = int(full.facts.prompt_metrics["total_bytes"] / 1.02) // 3
+    client, result, context = _scripted_projection_run(
+        family=family,
+        strict=strict,
+        know_how=guidance,
+        contract=requirement,
+        limit=limit,
+    )
+    metrics = result.facts.prompt_metrics
+    assert 1.019 <= full.facts.prompt_metrics["total_bytes"] / (limit * 3) <= 1.022
+    assert result.output.steps
+    assert metrics["total_bytes"] <= limit * 3
+    assert metrics["prompt_projection_receipts"]
+    receipt = next(
+        item
+        for item in metrics["prompt_projection_receipts"]
+        if item["block"] == ("variables" if family else "know_how")
+    )
+    for key in ("source_sha256", "projected_sha256"):
+        assert len(receipt[key]) == 64
+    assert receipt["source_bytes"] > receipt["projected_bytes"]
+    assert receipt["reason"] == (
+        "optional_variable_descriptions_omitted"
+        if family
+        else "advisory_guidance_projected"
+    )
+    assert metrics["projections_tried"]
+    prompt = "\n".join(message.content for message in client.calls[0][0])
+    assert requirement in prompt
+    assert context.research_question in prompt
+    for name in (context.primary_exposure, context.target_outcome):
+        assert name in prompt
+        assert context.variable(name).description in prompt
+    if family:
+        for name in _family_request(context, cohort_mode="all_input_rows").exact_roster:
+            assert name in prompt
+            assert context.variable(name).description in prompt
+    else:
+        for name in ("age_years", "sex_code"):
+            assert name in prompt
+            assert context.variable(name).description in prompt
+    assert guidance[:200] in full_client.calls[0][0][1].content
+    assert guidance[:200] not in prompt
+
+
+@pytest.mark.parametrize("family", [False, True], ids=["progressive", "family_spec"])
+@pytest.mark.parametrize("strict", [False, True], ids=["text_shape", "strict_schema"])
+def test_authority_overflow_refuses_with_complete_private_safe_breakdown(
+    family, strict
+):
+    authority = "Reviewed requirement: keep all requested endpoints. " * 3000
+    with pytest.raises(ProgressivePlanCompileError) as caught:
+        _scripted_projection_run(
+            family=family, strict=strict, contract=authority, limit=40_000
+        )
+    error = caught.value
+    assert error.code == "progressive_prompt_budget_exceeded"
+    assert error.path == "planner_request"
+    metrics = error.details["metrics"]
+    blocks = {
+        key.removeprefix("block_").removesuffix("_bytes"): value
+        for key, value in metrics.items()
+        if key.startswith("block_") and key.endswith("_bytes")
+    }
+    assert set(blocks) == {
+        "system_guide",
+        "article_question_context",
+        "variables",
+        "action_rows",
+        "design_evidence_cards",
+        "know_how",
+        "planning_contract",
+        "response_shape",
+        "schema",
+    }
+    assert all(isinstance(value, int) and value >= 0 for value in blocks.values())
+    assert sum(blocks.values()) == metrics["request_bytes"]
+    assert (
+        metrics["request_bytes"] == metrics["message_bytes"] + metrics["schema_bytes"]
+    )
+    assert blocks["schema"] == metrics["schema_bytes"]
+    assert metrics["request_bytes"] > metrics["byte_limit"] == 120_000
+    assert any(
+        key.startswith("projection_") and key.endswith("_attempts") for key in metrics
+    )
+    assert "Reviewed requirement" not in json.dumps(metrics)
+
+
+@pytest.mark.parametrize("family", [False, True], ids=["progressive", "family_spec"])
+def test_budget_projection_builds_identical_bytes_and_receipts(family):
+    options = dict(family=family, know_how="Advisory clinical discussion. " * 100)
+    _, full, _ = _scripted_projection_run(**options)
+    options["limit"] = int(full.facts.prompt_metrics["total_bytes"] / 1.02) // 3
+    left_client, left, _ = _scripted_projection_run(**options)
+    right_client, right, _ = _scripted_projection_run(**options)
+    assert left_client.calls[0][0] == right_client.calls[0][0]
+    for key in ("block_bytes", "projections_tried", "prompt_projection_receipts"):
+        assert left.facts.prompt_metrics[key] == right.facts.prompt_metrics[key]
+
+
+def test_advisory_ladder_stops_at_first_fit_and_receipts_bind_exact_blocks():
+    from easyicu.research_agent.planning.prompt_projection import (
+        PlannerPromptBlock,
+        project_planner_request,
+    )
+
+    blocks = [
+        PlannerPromptBlock(
+            "article_question_context",
+            "Required endpoint and adjustment: preserve verbatim.",
+        ),
+        PlannerPromptBlock(
+            "variables",
+            "Optional definition: " + "long " * 100,
+            (("optional_variable_descriptions_omitted", "Named clinical variable"),),
+        ),
+        PlannerPromptBlock(
+            "know_how",
+            "Optional guidance. " * 100,
+            (("advisory_guidance_projected", "Required stop claim."),),
+        ),
+    ]
+    messages = [
+        LLMMessage(role="system", content="System authority"),
+        LLMMessage(role="user", content="\n\n".join(block.text for block in blocks)),
+    ]
+    initial = _request_bytes(messages)
+    result = project_planner_request(messages, blocks, byte_limit=initial - 1)
+    assert result.metrics["request_bytes"] <= initial - 1
+    assert (
+        result.metrics["projections_tried"][-1]
+        == "optional_variable_descriptions_omitted"
+    )
+    assert result.blocks[2].text == blocks[2].text
+    (receipt,) = result.metrics["prompt_projection_receipts"]
+    assert receipt == {
+        "block": "variables",
+        "reason": "optional_variable_descriptions_omitted",
+        "source_bytes": len(blocks[1].text.encode()),
+        "source_sha256": sha256_bytes(blocks[1].text.encode()),
+        "projected_bytes": len(result.blocks[1].text.encode()),
+        "projected_sha256": sha256_bytes(result.blocks[1].text.encode()),
+    }
+    assert sum(result.metrics["block_bytes"].values()) == _request_bytes(
+        result.messages
+    )
+    assert messages[1].content == "\n\n".join(block.text for block in blocks)
+
+
+def test_know_how_projection_preserves_mandatory_and_unknown_claims_and_bindings():
+    from easyicu.research_agent.planning.prompt_projection import (
+        project_know_how_guidance,
+    )
+
+    claims = [
+        {
+            "claim_id": "short",
+            "field": "method",
+            "text": "Consider this estimand.",
+            "citation_ids": ["source_a"],
+        },
+        {
+            "claim_id": "long",
+            "field": "method",
+            "text": "Optional discussion. " * 30,
+            "citation_ids": ["source_b"],
+        },
+        {
+            "claim_id": "stop",
+            "field": "stop_condition",
+            "text": "Refuse an unsupported endpoint.",
+            "citation_ids": ["source_a"],
+        },
+        {
+            "claim_id": "confirm",
+            "field": "requires_confirmation",
+            "text": "Confirm the exposure definition.",
+            "citation_ids": ["source_a"],
+        },
+        {
+            "claim_id": "future",
+            "field": "new_claim_kind",
+            "text": "Retain an unknown claim intact.",
+            "citation_ids": ["source_b"],
+        },
+    ]
+    card = {
+        "card_id": "clinical_guidance",
+        "version": "1.0.0",
+        "file_sha256": "a" * 64,
+        "claims": claims,
+        "required_concepts": ["clinical_marker"],
+        "citations": {"source_a": "a", "source_b": "b"},
+    }
+    payload = {"schema_version": "easyicu.research_know_how_prompt/2", "cards": [card]}
+    source = "Structured advisory data:\n" + json.dumps(payload)
+    projected = project_know_how_guidance(source)
+    result = json.loads(projected.split("\n", 1)[1])["cards"][0]
+    assert result["claims"] == sorted(claims[2:], key=canonical_json_bytes)
+    for field in (
+        "card_id",
+        "version",
+        "file_sha256",
+        "required_concepts",
+        "citations",
+    ):
+        assert result[field] == card[field]
+    assert result["omitted_claim_count"] == 2
+    reverse = {key: value for key, value in reversed(list(payload.items()))}
+    reverse["cards"] = [{key: value for key, value in reversed(list(card.items()))}]
+    assert (
+        project_know_how_guidance("Structured advisory data:\n" + json.dumps(reverse))
+        == projected
+    )
+    assert (
+        project_know_how_guidance("Unknown guidance format: preserve everything.")
+        == "Unknown guidance format: preserve everything."
+    )
+    assert (
+        project_know_how_guidance('Structured data:\n{"schema_version":"unknown"}')
+        == 'Structured data:\n{"schema_version":"unknown"}'
+    )
+
+
+def test_literature_projection_keeps_every_reviewed_fact_and_shape_rule():
+    from easyicu.research_agent.planning.prompt_projection import (
+        PlannerPromptBlocks,
+        project_planner_request,
+    )
+    from easyicu.research_agent.planning.literature_design_authority import (
+        LITERATURE_DESIGN_DIMENSIONS,
+        LiteratureDesignEvidenceCard,
+        render_literature_design_cards_for_prompt,
+    )
+
+    card = LiteratureDesignEvidenceCard(
+        citation_key="synthetic_comparator",
+        evidence_role="direct_comparator",
+        access_mode="user_supplied_fulltext",
+        full_text_locator="synthetic-fulltext",
+        full_text_sha256="a" * 64,
+        supplement_status="published_unreviewed",
+        reviewed_at="2026-10-01T00:00:00Z",
+        evidence=[
+            {
+                "dimension": dimension,
+                "source_backed_summary": f"The reviewed {dimension} choice is recorded here.",
+            }
+            for dimension in LITERATURE_DESIGN_DIMENSIONS
+        ],
+    )
+    blocks = PlannerPromptBlocks()
+    blocks.append("Keep the declared output shape.")
+    blocks.append(
+        render_literature_design_cards_for_prompt([card]), block="design_evidence_cards"
+    )
+    messages = [
+        LLMMessage(role="system", content="Authority"),
+        LLMMessage(role="user", content=blocks.render()),
+    ]
+    result = project_planner_request(
+        messages, blocks.blocks, byte_limit=_request_bytes(messages) - 1
+    )
+    prompt = result.messages[1].content
+    for evidence in card.evidence:
+        assert evidence.source_backed_summary in prompt
+    assert "supplement=published_unreviewed" in prompt
+    assert "synthetic_comparator" in prompt
+    assert "Keep the declared output shape." in prompt
+    assert (
+        result.metrics["prompt_projection_receipts"][-1]["reason"]
+        == "literature_provenance_projected"
+    )
+    assert result.metrics["request_bytes"] < _request_bytes(messages)
+
+
+def test_variable_projection_protects_question_plan_and_exact_covariates_verbatim():
+    from easyicu.research_agent.planning.prompt_projection import (
+        project_planner_request,
+        PlannerPromptBlock,
+    )
+    from easyicu.research_agent.schema import ConceptDescriptor, VariableRole
+
+    context = _context()
+    extra = [
+        ConceptDescriptor(
+            name="creatinine_first",
+            description="First serum creatinine before the index time.",
+            role=VariableRole.LAB,
+            dtype="float64",
+        ),
+        ConceptDescriptor(
+            name="bilirubin_peak",
+            description="Peak bilirubin during the declared baseline window.",
+            role=VariableRole.LAB,
+            dtype="float64",
+        ),
+        ConceptDescriptor(
+            name="albumin_first",
+            description="Optional albumin description. " * 100,
+            role=VariableRole.LAB,
+            dtype="float64",
+        ),
+    ]
+    context = context.model_copy(
+        update={
+            "research_question": context.research_question
+            + " Include creatinine_first as a required target.",
+            "variables": [
+                item.model_copy(
+                    update={"description": f"Prespecified definition of {item.name}."}
+                )
+                for item in context.variables
+            ]
+            + extra,
+        }
+    )
+    contract = (
+        "Reviewed plan requirement: include bilirubin_peak in the required analysis."
+    )
+    types, names, _, actions = progressive.ProgressivePlannerAgent._request_authorities(
+        context
+    )
+    names = (*names, *(item.name for item in extra if item.name not in names))
+    blocks: list[PlannerPromptBlock] = []
+    prompt = progressive.ProgressivePlannerAgent._user_prompt(
+        context,
+        analysis_types=types,
+        variables=names,
+        action_rows=actions,
+        planning_contract_context=contract,
+        prompt_blocks=blocks,
+    )
+    messages = [
+        LLMMessage(role="system", content="system"),
+        LLMMessage(role="user", content=prompt),
+    ]
+    projected = project_planner_request(
+        messages, blocks, byte_limit=_request_bytes(messages) - 1
+    )
+    text = projected.messages[1].content
+    assert projected.metrics["request_bytes"] < _request_bytes(messages)
+    for variable in [*context.variables[:-1]]:
+        assert variable.name in text
+        assert variable.description in text
+    assert extra[-1].name in text  # The candidate identity is never projected away.
+    assert extra[-1].description not in text
+    assert contract in text
+    assert context.research_question in text
+
+
+def test_exact_family_covariate_definitions_are_authority_even_without_article_context():
+    from .family_spec_fixtures import (
+        _context as landmark_context,
+        _request as landmark_request,
+    )
+    from easyicu.research_agent.agents.family_spec_planner import (
+        family_spec_user_prompt,
+    )
+    from easyicu.research_agent.planning.prompt_projection import (
+        PlannerPromptBlock,
+        project_planner_request,
+    )
+
+    request = landmark_request(landmark_context())
+    definitions = {
+        name: f"Declared clinical definition of {name}."
+        for name in request.required_reader_label_keys
+    }
+    blocks: list[PlannerPromptBlock] = []
+    prompt = family_spec_user_prompt(
+        request, variable_descriptions=definitions, prompt_blocks=blocks
+    )
+    messages = [
+        LLMMessage(role="system", content="system"),
+        LLMMessage(role="user", content=prompt),
+    ]
+    projected = project_planner_request(messages, blocks, byte_limit=1)
+    for name in request.exact_roster:
+        assert definitions[name] in projected.messages[1].content
+    assert projected.metrics["request_bytes"] > 1
+
+
+def test_progressive_prompt_bytes_do_not_depend_on_mapping_insertion_order():
+    context = _context()
+    rationales = {
+        "age_years": "Prespecified age adjustment.",
+        "sex_code": "Prespecified sex adjustment.",
+    }
+    first = context.model_copy(
+        update={
+            "user_preferences": context.user_preferences.model_copy(
+                update={"covariate_rationales": rationales}
+            )
+        }
+    )
+    second = context.model_copy(
+        update={
+            "user_preferences": context.user_preferences.model_copy(
+                update={
+                    "covariate_rationales": dict(reversed(list(rationales.items())))
+                }
+            )
+        }
+    )
+    types, names, _, actions = progressive.ProgressivePlannerAgent._request_authorities(
+        context
+    )
+    reversed_actions = [dict(reversed(list(row.items()))) for row in actions]
+    left = progressive.ProgressivePlannerAgent._user_prompt(
+        first, analysis_types=types, variables=names, action_rows=actions
+    )
+    right = progressive.ProgressivePlannerAgent._user_prompt(
+        second, analysis_types=types, variables=names, action_rows=reversed_actions
+    )
+    assert left.encode() == right.encode()
+
+
+@pytest.mark.parametrize(
+    "raw",
+    ["[]", '{"schema_version":"easyicu.research_know_how_prompt/2","cards":[null]}'],
+)
+def test_malformed_advisory_data_is_kept_intact(raw):
+    from easyicu.research_agent.planning.prompt_projection import (
+        project_know_how_guidance,
+    )
+
+    text = "Structured advisory context:\n" + raw
+    assert project_know_how_guidance(text) == text
+
+
+def test_optional_only_know_how_keeps_a_complete_claim_for_each_card_disposition():
+    from easyicu.research_agent.planning.prompt_projection import (
+        project_know_how_guidance,
+    )
+
+    claims = [
+        {
+            "claim_id": "long",
+            "field": "method",
+            "text": "Optional scientific guidance. " * 20,
+            "citation_ids": ["source_a"],
+        },
+        {
+            "claim_id": "short",
+            "field": "method",
+            "text": "A complete advisory design claim.",
+            "citation_ids": ["source_b"],
+        },
+    ]
+    payload = {
+        "schema_version": "easyicu.research_know_how_prompt/2",
+        "cards": [{"card_id": "clinical_guidance", "claims": claims}],
+    }
+    projected = project_know_how_guidance("Advisory context:\n" + json.dumps(payload))
+    (card,) = json.loads(projected.split("\n", 1)[1])["cards"]
+    assert card["card_id"] == "clinical_guidance"
+    assert card["claims"] == [claims[1]]
+    assert card["omitted_claim_count"] == 1

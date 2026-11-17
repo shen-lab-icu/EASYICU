@@ -1,8 +1,9 @@
-"""Lossless prompt views of sealed plans; never rewrite the source authority."""
+"""Receipted planner prompt views; never rewrite the source authority."""
 
 from __future__ import annotations
 
 import copy
+from dataclasses import dataclass, replace
 import json
 import re
 from typing import Any, Literal, Sequence
@@ -14,7 +15,7 @@ from ..providers.prompt_budget import (
     PromptConsumerBudget,
 )
 from ..providers.protocol import LLMMessage
-from ..schema import AnalysisPlan
+from ..schema import AnalysisPlan, ResearchContext
 
 
 def _unique_object(pairs: list[tuple[str, Any]]) -> dict[str, Any]:
@@ -284,6 +285,7 @@ def _elide_superseded_replan_sections(
         source_text = lines[plan_at].encode("utf-8")
         pointer_text = pointer.encode("utf-8")
         receipts.append({
+            "block": "planning_contract",
             "line": plan_at + 1,
             "status": "superseded_elided",
             "reason": "ancestor_replan_superseded",
@@ -486,6 +488,7 @@ def project_plan_revision_prompt(
                 status, reason = "retained", "no_byte_saving"
         lines[index] = emitted_prefix + projected.decode("utf-8") + line[len(body):]
         receipts.append({
+            "block": "planning_contract",
             "line": index + 1, "status": status, "reason": reason,
             "stage": stage,
             "step_id": step_id,
@@ -516,3 +519,326 @@ def retry_shape_reminder(messages: Sequence[LLMMessage], shape: str) -> str:
     if shape and any(shape in message.content for message in messages):
         return "Follow the complete output shape and constraints in the initial request."
     return shape
+
+
+# These are transport accounting coordinates, never input-derived labels.
+PLANNER_PROMPT_BLOCK_NAMES = (
+    "system_guide",
+    "article_question_context",
+    "variables",
+    "action_rows",
+    "design_evidence_cards",
+    "know_how",
+    "planning_contract",
+    "response_shape",
+    "schema",
+)
+_PLANNER_PROJECTION_LADDER = (
+    "ancestor_replan_superseded",
+    "optional_variable_descriptions_omitted",
+    "advisory_guidance_projected",
+    "literature_provenance_projected",
+)
+
+
+@dataclass(frozen=True)
+class PlannerPromptBlock:
+    """An assembly boundary and owner-supplied, semantically safe alternatives.
+
+    Unannotated text is authority. Alternatives are whole advisory projections,
+    never slices of binding text. The plan-revision alternative is provided by
+    project_plan_revision_prompt, which verifies the surviving requirements.
+    """
+
+    name: str
+    text: str
+    projections: tuple[tuple[str, str], ...] = ()
+
+
+class PlannerPromptBlocks:
+    """Keep prompt assembly and accounting on the same explicit boundaries."""
+
+    def __init__(self, blocks: Sequence[str | PlannerPromptBlock] = ()) -> None:
+        self.blocks: list[PlannerPromptBlock] = []
+        for block in blocks:
+            self.append(block)
+
+    def append(
+        self,
+        text: str | PlannerPromptBlock,
+        *,
+        block: str = "response_shape",
+        projections: tuple[tuple[str, str], ...] = (),
+    ) -> None:
+        if isinstance(text, str):
+            if block == "know_how":
+                projections += (
+                    ("advisory_guidance_projected", project_know_how_guidance(text)),
+                )
+            elif block == "design_evidence_cards":
+                projections += (
+                    (
+                        "literature_provenance_projected",
+                        project_literature_card_provenance(text),
+                    ),
+                )
+        item = (
+            text
+            if isinstance(text, PlannerPromptBlock)
+            else PlannerPromptBlock(block, text, projections)
+        )
+        if item.name not in PLANNER_PROMPT_BLOCK_NAMES:
+            raise ValueError("unknown planner prompt block")
+        self.blocks.append(item)
+
+    def render(self, capture: list[PlannerPromptBlock] | None = None) -> str:
+        if capture is not None:
+            capture.extend(self.blocks)
+        return "\n\n".join(item.text for item in self.blocks if item.text)
+
+
+def protected_planner_variable_names(
+    context: ResearchContext, contract: str
+) -> frozenset[str]:
+    """Protect question/plan names, definitions, anchors and all typed choices.
+
+    Matching is deliberately conservative: an alias anywhere in the binding
+    question, preferences or reviewed contract makes its complete description
+    authority. A false positive retains extra context; it cannot erase intent.
+    The candidate roster itself is always authority, even for unnamed columns.
+    """
+    authority = (
+        canonical_json_bytes(
+            {
+                "study": context.model_dump(mode="json", exclude={"variables"}),
+                "contract": contract,
+            }
+        )
+        .decode("utf-8")
+        .casefold()
+    )
+    protected = {context.primary_exposure, context.target_outcome}
+    for variable in context.variables:
+        aliases = (
+            variable.name,
+            variable.source_concept,
+            variable.description,
+            *(variable.derived_from_concepts or ()),
+        )
+        if any(
+            str(alias).strip().casefold() in authority
+            for alias in aliases
+            if str(alias or "").strip()
+        ):
+            protected.add(variable.name)
+    return frozenset(name for name in protected if name)
+
+
+def project_know_how_guidance(text: str) -> str:
+    """Project only the known structured advisory format; unknown text stays.
+
+    Keep every stop/confirmation claim byte-for-byte, card identity, readiness,
+    concept/citation bindings and at least one complete claim per card. An
+    optional claim is needed only for cards without mandatory claims; other
+    optional claims may be withheld, as in the retrieval owner's projection.
+    Never withhold a whole card: the compiler requires its claim disposition.
+    """
+    header, separator, raw = text.partition("\n{")
+    if not separator:
+        return text
+    try:
+        payload = json.loads("{" + raw, object_pairs_hook=_unique_object)
+        if (
+            not isinstance(payload, dict)
+            or payload.get("schema_version") != "easyicu.research_know_how_prompt/2"
+        ):
+            return text
+        cards = payload["cards"]
+        if not isinstance(cards, list):
+            return text
+        projected_cards = []
+        for card in cards:
+            claims = card["claims"]
+            if (
+                not isinstance(claims, list)
+                or not claims
+                or any(
+                    not isinstance(claim, dict)
+                    or not all(
+                        key in claim
+                        for key in ("claim_id", "field", "text", "citation_ids")
+                    )
+                    for claim in claims
+                )
+            ):
+                return text
+            optional_fields = {
+                "population",
+                "time_zero",
+                "observation_window",
+                "followup_window",
+                "eligibility",
+                "exposure",
+                "outcome",
+                "estimand",
+                "method",
+                "sensitivity",
+            }
+            # Future/unknown claim kinds cannot silently become optional.
+            mandatory = [
+                claim for claim in claims if claim["field"] not in optional_fields
+            ]
+            optional = [claim for claim in claims if claim["field"] in optional_fields]
+            kept = (
+                mandatory
+                or sorted(
+                    optional,
+                    key=lambda claim: (
+                        len(canonical_json_bytes(claim)),
+                        canonical_json_bytes(claim),
+                    ),
+                )[:1]
+            )
+            projected_cards.append(
+                {
+                    **card,
+                    "claims": sorted(kept, key=canonical_json_bytes),
+                    "omitted_claim_count": int(card.get("omitted_claim_count", 0))
+                    + len(claims)
+                    - len(kept),
+                }
+            )
+        projected = {
+            **payload,
+            "cards": sorted(projected_cards, key=canonical_json_bytes),
+        }
+        return header + "\n" + canonical_json_bytes(projected).decode("utf-8") + "\n"
+    except (KeyError, TypeError, ValueError):
+        return text
+
+
+def project_literature_card_provenance(text: str) -> str:
+    """The source evidence retains its digests; keep all prompt facts verbatim."""
+    return re.sub(
+        r"^(- \[[A-Za-z0-9_.:-]+\] role=[a-z_]+; supplement=[a-z_]+); full_text_sha256=[0-9a-f]{64}$",
+        r"\1",
+        text,
+        flags=re.MULTILINE,
+    )
+
+
+@dataclass(frozen=True)
+class PlannerPromptRequest:
+    messages: list[LLMMessage]
+    blocks: tuple[PlannerPromptBlock, ...]
+    metrics: dict[str, Any]
+
+
+def _planner_block_bytes(
+    system: str,
+    blocks: Sequence[PlannerPromptBlock],
+    schema_bytes: int,
+) -> dict[str, int]:
+    counts = dict.fromkeys(PLANNER_PROMPT_BLOCK_NAMES, 0)
+    counts["system_guide"] = len(system.encode("utf-8"))
+    counts["schema"] = schema_bytes
+    previous = False
+    for block in blocks:
+        if block.text:
+            # Charge each separator to the following block, exactly once.
+            counts[block.name] += len(block.text.encode("utf-8")) + (
+                2 if previous else 0
+            )
+            previous = True
+    return counts
+
+
+def project_planner_request(
+    messages: Sequence[LLMMessage],
+    blocks: Sequence[PlannerPromptBlock],
+    *,
+    byte_limit: int,
+    schema_bytes: int = 0,
+) -> PlannerPromptRequest:
+    """Measure the complete request, then take ordered advisory rungs as needed.
+
+    Neither limit nor schema is projected. Receipts expose sizes and hashes,
+    never prompt text or input-derived names. Original sources and checkpoint
+    authorities stay untouched. A request that still overflows is returned for
+    the caller's typed refusal with the same complete accounting.
+    """
+    system, user = messages[0].content, messages[1].content
+    current = tuple(blocks)
+    if "\n\n".join(block.text for block in current if block.text) != user:
+        # An unannotated/custom renderer has no proven advisory boundaries.
+        current = (PlannerPromptBlock("response_shape", user),)
+    source_counts = _planner_block_bytes(system, current, schema_bytes)
+    counts = source_counts
+    tried = ["plan_revision_lossless", "complete"]
+    receipts: list[dict[str, Any]] = []
+    for reason in _PLANNER_PROJECTION_LADDER:
+        if sum(counts.values()) <= byte_limit:
+            break
+        tried.append(reason)
+        for index, block in enumerate(current):
+            candidate = dict(block.projections).get(reason)
+            if candidate is None or len(candidate.encode("utf-8")) >= len(
+                block.text.encode("utf-8")
+            ):
+                continue
+            source, projected = block.text.encode("utf-8"), candidate.encode("utf-8")
+            receipts.append(
+                {
+                    "block": block.name,
+                    "reason": reason,
+                    "source_bytes": len(source),
+                    "source_sha256": sha256_bytes(source),
+                    "projected_bytes": len(projected),
+                    "projected_sha256": sha256_bytes(projected),
+                }
+            )
+            current = (
+                *current[:index],
+                replace(block, text=candidate),
+                *current[index + 1 :],
+            )
+            counts = _planner_block_bytes(system, current, schema_bytes)
+            if sum(counts.values()) <= byte_limit:
+                break
+    total = sum(counts.values())
+    return PlannerPromptRequest(
+        messages=[
+            LLMMessage(role="system", content=system),
+            LLMMessage(
+                role="user",
+                content="\n\n".join(block.text for block in current if block.text),
+            ),
+        ],
+        blocks=current,
+        metrics={
+            "request_bytes": total,
+            "source_request_bytes": sum(source_counts.values()),
+            "byte_limit": byte_limit,
+            "message_bytes": total - schema_bytes,
+            "schema_bytes": schema_bytes,
+            "block_bytes": counts,
+            "source_block_bytes": source_counts,
+            # The compiler's public diagnostics permit host-authored integers
+            # only. Flat coordinates retain the breakdown at that boundary.
+            **{f"block_{name}_bytes": count for name, count in counts.items()},
+            **{
+                f"source_block_{name}_bytes": count
+                for name, count in source_counts.items()
+            },
+            **{f"projection_{name}_attempts": 1 for name in tried},
+            "projections_tried": tried,
+            "prompt_projection_receipts": receipts,
+            "without_know_how_total_bytes": sum(
+                _planner_block_bytes(
+                    system,
+                    [block for block in current if block.name != "know_how"],
+                    schema_bytes,
+                ).values()
+            ),
+        },
+    )

@@ -25,6 +25,11 @@ from .population_spec_transport import (
 )
 
 from ..canonical_json import canonical_sha256
+from ..planning.prompt_projection import (
+    PlannerPromptBlock, PlannerPromptBlocks,
+    project_planner_request, protected_planner_variable_names,
+    project_plan_revision_prompt,
+)
 from ..planning.family_spec import (
     BASELINE_ASSOCIATION_FAMILY_ID,
     LANDMARK_CATEGORICAL_FAMILY_ID,
@@ -225,6 +230,9 @@ def family_spec_user_prompt(
     know_how_context: str = "",
     planning_contract_context: str = "",
     response_shape: str = "",
+    elided_planning_contract_context: str | None = None,
+    prompt_blocks: list[PlannerPromptBlock] | None = None,
+    variable_description_authority: frozenset[str] = frozenset(),
 ) -> str:
     """Build the single user prompt for one family-spec attempt.
 
@@ -232,10 +240,15 @@ def family_spec_user_prompt(
     cannot enforce the strict schema; a strict route leaves it empty.
     """
 
-    sections: list[str] = []
-    sections.append("Research question:\n" + request.research_question)
+    sections = PlannerPromptBlocks()
+    sections.append(
+        "Research question:\n" + request.research_question,
+        block="article_question_context",
+    )
     if context is not None:
-        sections.append(render_required_plan_shape(context))
+        sections.append(
+            render_required_plan_shape(context), block="article_question_context"
+        )
     host_design: dict[str, Any] = {
         "family_id": request.family_id,
         "primary_exposure": request.primary_exposure,
@@ -258,7 +271,9 @@ def family_spec_user_prompt(
         "observation_duration_column": request.observation_duration_column,
         "cluster_unit": request.cluster_unit,
         "secondary_continuous_outcome": request.secondary_continuous_outcome,
-        "alternate_exposures": [item.execution_variables[0] for item in request.alternate_exposures],
+        "alternate_exposures": [
+            item.execution_variables[0] for item in request.alternate_exposures
+        ],
         "first_stay_column": (
             request.first_stay.execution_variables[0] if request.first_stay else None
         ),
@@ -292,8 +307,8 @@ def family_spec_user_prompt(
             mode="json", exclude={"adjustment_columns"}
         )
     if request.sealed_continuous_suite is not None:
-        host_design["sealed_continuous_suite"] = request.sealed_continuous_suite.model_dump(
-            mode="json"
+        host_design["sealed_continuous_suite"] = (
+            request.sealed_continuous_suite.model_dump(mode="json")
         )
     if request.proposed_continuous_suite is not None:
         host_design["proposed_continuous_suite"] = (
@@ -303,22 +318,27 @@ def family_spec_user_prompt(
         )
     sections.append(
         "Host-fixed design (binding, not editable):\n"
-        + json.dumps(host_design, ensure_ascii=False, sort_keys=True)
+        + json.dumps(host_design, ensure_ascii=False, sort_keys=True),
+        block="article_question_context",
     )
     if request.family_id == DESCRIPTIVE_FAMILY_ID:
         sections.append(
             "Descriptive missingness authority (binding before review):\n"
-            + json.dumps({
-                "missingness_unobserved": request.distribution_missingness_unobserved,
-                "host_default": (
-                    request.distribution_missing_policies.model_dump(mode="json")
-                    if request.distribution_missing_policies is not None else None
-                ),
-                "bound_complete_case_facts": {
-                    name: facts.model_dump(mode="json")
-                    for name, facts in request.distribution_missingness.items()
+            + json.dumps(
+                {
+                    "missingness_unobserved": request.distribution_missingness_unobserved,
+                    "host_default": (
+                        request.distribution_missing_policies.model_dump(mode="json")
+                        if request.distribution_missing_policies is not None
+                        else None
+                    ),
+                    "bound_complete_case_facts": {
+                        name: facts.model_dump(mode="json")
+                        for name, facts in request.distribution_missingness.items()
+                    },
                 },
-            }, sort_keys=True)
+                sort_keys=True,
+            )
             + "\nDeclare distribution_missing_policies in the candidate for review. "
             "Known missing values and declared grouping exclusions bind exclude_from_denominator "
             "for that exact variable; choose policies for other roles only. "
@@ -330,7 +350,8 @@ def family_spec_user_prompt(
             if request.family_id in {DESCRIPTIVE_FAMILY_ID, PHENOTYPING_FAMILY_ID}
             else "Adjustment candidates (host timing authority is binding; select only selectable=true):\n"
         )
-        + json.dumps(_candidate_rows(request), ensure_ascii=False)
+        + json.dumps(_candidate_rows(request), ensure_ascii=False, sort_keys=True),
+        block="variables",
     )
     if keeps_unmeasured_covariate_rows(request):
         sections.append(
@@ -357,12 +378,13 @@ def family_spec_user_prompt(
                     for item in request.feature_candidates
                 ],
                 ensure_ascii=False,
-            )
+             sort_keys=True),
+            block="variables",
         )
         if request.benchmark_omissions:
             sections.append(
                 "Unavailable benchmark comparators (omit with these source reasons; do not substitute):\n"
-                + json.dumps(request.benchmark_omissions, ensure_ascii=False)
+                + json.dumps(request.benchmark_omissions, ensure_ascii=False, sort_keys=True)
             )
         if request.benchmark_candidates:
             sections.append(
@@ -379,22 +401,34 @@ def family_spec_user_prompt(
                         for item in request.benchmark_candidates
                     ],
                     ensure_ascii=False,
-                )
+                 sort_keys=True),
+                block="variables",
             )
         if request.accepted_feature_groups:
             sections.append(
                 "Accepted primary inputs (the reviewed design keeps every one; choose at least "
                 "one of each input's columns as a feature):\n"
                 + json.dumps(
-                    {group.concept: group.columns for group in request.accepted_feature_groups},
+                    {
+                        group.concept: group.columns
+                        for group in request.accepted_feature_groups
+                    },
                     ensure_ascii=False,
-                )
+                 sort_keys=True),
+                block="variables",
             )
         if request.family_id == PHENOTYPING_FAMILY_ID:
             sections.append(
                 "Cohort membership flags (optional; choose at most one):\n"
-                + json.dumps(request.membership_candidates)
+                + json.dumps(request.membership_candidates, sort_keys=True),
+                block="variables",
             )
+    protected = (
+        protected_planner_variable_names(context, planning_contract_context)
+        if context is not None
+        else frozenset(variable_descriptions)
+    )
+    protected |= variable_description_authority | frozenset(request.exact_roster)
     described_keys = [
         *request.required_reader_label_keys,
         *(item.name for item in request.feature_candidates if item.selectable),
@@ -403,14 +437,33 @@ def family_spec_user_prompt(
     sections.append(
         "Sealed variable descriptions:\n"
         + json.dumps(
-            {key: variable_descriptions.get(key, "") for key in dict.fromkeys(described_keys)},
+            {
+                key: variable_descriptions.get(key, "")
+                for key in dict.fromkeys(described_keys)
+            },
             ensure_ascii=False,
             sort_keys=True,
-        )
+        ),
+        block="variables",
+        projections=(
+            (
+                "optional_variable_descriptions_omitted",
+                "Sealed variable descriptions:\n"
+                + json.dumps(
+                    {
+                        key: variable_descriptions.get(key, "")
+                        for key in dict.fromkeys(described_keys)
+                        if key in protected
+                    },
+                    ensure_ascii=False,
+                    sort_keys=True,
+                ),
+            ),
+        ),
     )
     sections.append(
         "Required reader label keys:\n"
-        + json.dumps([*request.required_reader_label_keys, *request.level_label_keys])
+        + json.dumps([*request.required_reader_label_keys, *request.level_label_keys], sort_keys=True)
     )
     measure_section = _effect_measure_section(request)
     if measure_section:
@@ -430,23 +483,27 @@ def family_spec_user_prompt(
         sections.append(
             "\n".join(
                 [
-                    *render_literature_design_card_facts(request.literature_design_cards),
+                    *render_literature_design_card_facts(
+                        request.literature_design_cards
+                    ),
                     "Design decisions: one literature_design_decisions entry for each of "
-                    + json.dumps(list(LITERATURE_DESIGN_DIMENSIONS))
+                    + json.dumps(list(LITERATURE_DESIGN_DIMENSIONS), sort_keys=True)
                     + ". State whether this study adopts, adapts, diverges from, or finds "
                     "not applicable the reviewed choice, cite only cards that state that "
                     "dimension "
-                    + json.dumps(literature_design_card_keys_by_dimension(request))
+                    + json.dumps(literature_design_card_keys_by_dimension(request), sort_keys=True)
                     + ", and give a rationale specific to this question and the sealed "
                     "design without copying card text.",
                 ]
-            )
+            ),
+            block="design_evidence_cards",
         )
     if request.population_concepts:
         sections.append(
             "Population authority (the host applies only what already_applied lists; a "
             "population stated beyond it is applied only by the population you write):\n"
-            + json.dumps(_population_authority(request), ensure_ascii=False)
+            + json.dumps(_population_authority(request), ensure_ascii=False, sort_keys=True),
+            block="article_question_context",
         )
         if request.prediction_time_hours is None:
             from ..acquisition.first_icu_stay import SELECTION_POLICY
@@ -480,17 +537,36 @@ def family_spec_user_prompt(
                     for item in request.question_named_concepts
                 ],
                 ensure_ascii=False,
-            )
+             sort_keys=True),
+            block="article_question_context",
         )
     if know_how_context:
-        sections.append("Know-how context:\n" + know_how_context)
+        sections.append("Know-how context:\n" + know_how_context, block="know_how")
     if planning_contract_context:
-        sections.append("Planning contract context:\n" + planning_contract_context)
+        sections.append(
+            "Planning contract context:\n" + planning_contract_context,
+            block="planning_contract",
+            projections=(
+                (
+                    (
+                        "ancestor_replan_superseded",
+                        "Planning contract context:\n"
+                        + elided_planning_contract_context,
+                    ),
+                )
+                if elided_planning_contract_context is not None
+                else ()
+            ),
+        )
     if response_shape:
-        sections.append("Response shape (no schema is attached on this route):\n" + response_shape)
+        sections.append(
+            "Response shape (no schema is attached on this route):\n" + response_shape
+        )
     # Retain the complete request identity in cassette lookup, without an echo.
-    sections.append("Host request identity (bound by caller): " + request.request_sha256)
-    return "\n\n".join(sections)
+    sections.append(
+        "Host request identity (bound by caller): " + request.request_sha256
+    )
+    return sections.render(prompt_blocks)
 
 
 def family_spec_messages(
@@ -501,6 +577,9 @@ def family_spec_messages(
     know_how_context: str = "",
     planning_contract_context: str = "",
     response_shape: str = "",
+    elided_planning_contract_context: str | None = None,
+    prompt_blocks: list[PlannerPromptBlock] | None = None,
+    variable_description_authority: frozenset[str] = frozenset(),
 ) -> list[LLMMessage]:
     return [
         LLMMessage(role="system", content=FAMILY_SPEC_GUIDE),
@@ -508,10 +587,14 @@ def family_spec_messages(
             role="user",
             content=family_spec_user_prompt(
                 request,
-                context=context, variable_descriptions=variable_descriptions,
+                context=context,
+                variable_descriptions=variable_descriptions,
                 know_how_context=know_how_context,
                 planning_contract_context=planning_contract_context,
                 response_shape=response_shape,
+                elided_planning_contract_context=elided_planning_contract_context,
+                prompt_blocks=prompt_blocks,
+                variable_description_authority=variable_description_authority,
             ),
         ),
     ]
@@ -1209,7 +1292,7 @@ def run_family_spec_attempt(
                 str(getattr(descriptor, "description", "") or ""),
                 *(
                     str(item)
-                    for item in (getattr(descriptor, "clinical_caveats", None) or ())[:2]
+                    for item in (getattr(descriptor, "clinical_caveats", None) or ())
                 ),
             )
             if part
@@ -1223,25 +1306,43 @@ def run_family_spec_attempt(
         if llm_supports_strict_json_schema(llm)
         else None
     )
+    resolved_contract, revision_projection = project_plan_revision_prompt(planning_contract_context)
+    elided_contract, elided_revision_projection = project_plan_revision_prompt(
+        planning_contract_context, elide_superseded_replans=True,
+    )
+    prompt_blocks: list[PlannerPromptBlock] = []
     messages = family_spec_messages(
         request, context=article_context,
         variable_descriptions=descriptions,
         know_how_context=know_how_context,
-        planning_contract_context=planning_contract_context,
-        # An enforced schema already carries the shape; a route without one
-        # would otherwise answer the first request blind.
+        planning_contract_context=resolved_contract,
+        elided_planning_contract_context=elided_contract,
+        prompt_blocks=prompt_blocks,
+        variable_description_authority=protected_planner_variable_names(context, planning_contract_context),
+        # The written shape remains authority when no schema is attached.
         response_shape="" if schema is not None else response_shape,
     )
-    message_bytes = sum(len(item.content.encode("utf-8")) for item in messages)
     schema_bytes = schema.payload_bytes if schema is not None else 0
-    total_bytes = message_bytes + schema_bytes
+    prompt_request = project_planner_request(
+        messages, prompt_blocks, byte_limit=prompt_byte_limit, schema_bytes=schema_bytes,
+    )
+    messages = prompt_request.messages
+    message_bytes = prompt_request.metrics["message_bytes"]
+    total_bytes = prompt_request.metrics["request_bytes"]
+    if any(receipt["reason"] == "ancestor_replan_superseded"
+           for receipt in prompt_request.metrics["prompt_projection_receipts"]):
+        revision_projection = elided_revision_projection
+    attempt.prompt_metrics.update(prompt_request.metrics)
+    attempt.prompt_metrics["plan_revision_projection"] = revision_projection
     if total_bytes > prompt_byte_limit:
         raise ProgressivePlanCompileError(
             "progressive_prompt_budget_exceeded",
             f"family spec request uses {total_bytes} bytes; limit={prompt_byte_limit}",
             path="planner_request",
+            metrics=prompt_request.metrics,
         )
     attempt.prompt_metrics = {
+        **prompt_request.metrics,
         "planner_strategy": FAMILY_SPEC_STRATEGY,
         "requested_planner_strategy": FAMILY_SPEC_STRATEGY,
         "family_spec_fallback_reason": None,
@@ -1261,7 +1362,6 @@ def run_family_spec_attempt(
         "foundation_request_payload_bytes": 0,
         "foundation_schema_bytes": 0,
         "foundation_structured_output_authority_sha256": None,
-        "without_know_how_total_bytes": total_bytes,
         "selected_variable_count": len(variables),
         "selected_variable_roster": list(variables),
         "selected_variable_roster_sha256": canonical_sha256(list(variables)),
@@ -1281,7 +1381,7 @@ def run_family_spec_attempt(
         "suffix_revision_count": 0,
         "full_revision_count": 0,
         "suffix_request_payload_bytes": [],
-        "plan_revision_projection": [],
+        "plan_revision_projection": revision_projection,
         "foundation_plan_revision_projection": [],
     }
 
