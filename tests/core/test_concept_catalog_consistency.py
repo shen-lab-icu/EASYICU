@@ -264,6 +264,8 @@ def test_extract_database_modules_use_the_shared_catalog() -> None:
         VENT_NATIVE_CONCEPTS,
         HAEMO_NATIVE_CONCEPTS,
         WEIGHT_STRICT_CONCEPTS,
+        VENT_SETTINGS_CONCEPTS,
+        C565_RENAL_HISTORY_CONCEPTS,
     )
 
     assert EXTRACT_MODULES == {
@@ -272,6 +274,7 @@ def test_extract_database_modules_use_the_shared_catalog() -> None:
     } | {"sic_case_landmark": [
         "care_unit_to_case_closure_days", "death_time_during_case_hours", "death_during_case",
     ], "bounds_audit": list(BOUNDS_AUDIT_CONCEPTS), "weight_strict": list(WEIGHT_STRICT_CONCEPTS),
+       "vent_settings": list(VENT_SETTINGS_CONCEPTS), "c565_renal_history": list(C565_RENAL_HISTORY_CONCEPTS),
        "cardiac_markers": list(CARDIAC_MARKERS_CONCEPTS),
        "inflam_detail": list(INFLAM_DETAIL_CONCEPTS),
        "renal_detail": list(RENAL_DETAIL_CONCEPTS),
@@ -513,7 +516,8 @@ def test_miiv_integer_itemids_exist_in_packaged_source_catalog() -> None:
 def test_mimic_demo_sources_mirror_mimic_sources() -> None:
     missing: list[tuple[str, str]] = []
     different: list[tuple[str, str]] = []
-    allowed_missing = {"samp"}
+    # The sealed CareVue view is outside the MIMIC-III demo source contract.
+    allowed_missing = {"samp", "fio2_set"}
     allowed_different = {"samp"}
 
     for filename in ("concept-dict.json", "sofa2-dict.json"):

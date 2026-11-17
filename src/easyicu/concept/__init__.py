@@ -42,7 +42,10 @@ from .availability_signal import (
     set_table_availability,
     table_availability,
 )
+from .c565_renal_history import FIELDS as _C565_RENAL_HISTORY_FIELDS
+from .c565_renal_history import load_renal_history_field, renal_history_absence
 from .data_source_contract import ConceptDataSourceStorage
+from .fio2_set import load_fio2_set
 from .merge_time_index import (
     batch_time_axis,
     declare_resolved_time_index,
@@ -3050,6 +3053,8 @@ class ConceptResolver:
                 data_source, concept_name=concept_name, patient_ids=patient_ids, verbose=verbose
             )
         if not sources:
+            if concept_name in _C565_RENAL_HISTORY_FIELDS:
+                return renal_history_absence(concept_name, data_source)
             # 🔧 FIX: 当数据源未配置时，返回空表而不是报错
             # 这样用户可以继续提取其他概念，并在结果中看到哪些概念没有数据
             db_name = config.name if hasattr(config, 'name') else 'unknown'
@@ -9093,6 +9098,11 @@ class ConceptResolver:
         **kwargs,  # Additional parameters (not used in fun_item but accepted for consistency)
     ) -> ICUTable:
         callback = (source.callback or "").strip()
+
+        if callback == "fio2_set_hourly":
+            return load_fio2_set(definition, source, data_source, patient_ids)
+        if callback == "c565_renal_history_fields":
+            return load_renal_history_field(concept_name, data_source, patient_ids)
 
         if callback == "los_callback":
             # 🚀 性能优化：传递 target 类型，对于 id_tbl 不生成时间网格

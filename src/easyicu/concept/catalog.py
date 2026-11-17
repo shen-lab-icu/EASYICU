@@ -688,6 +688,8 @@ BOUNDS_AUDIT_CONCEPTS = tuple(
 # S740 (2026-11-11): leakage-free stay weight with its source and time, beside
 # the unchanged ``weight``. Exported only by the opt-in ``weight_strict`` module.
 WEIGHT_STRICT_CONCEPTS = ('weight_admit_strict', 'weight_admit_strict_source', 'weight_admit_strict_time_h')
+VENT_SETTINGS_CONCEPTS = ('fio2_set',)
+C565_RENAL_HISTORY_CONCEPTS = ('esrd_dialysis', 'kidney_tx', 'ph_dialysis', 'ph_kidney_tx', 'renal_excl')
 
 # S853/S863 (2026-11-12): public signals at a one-minute grid, exported only by
 # the opt-in ``subhour_signals`` module (owner: concept/minute_resolution.py).
@@ -981,6 +983,8 @@ HIDDEN_DICTIONARY_CONCEPTS = {
     # Non-urine output; surfaced through fluid_balance (2026-11-04 audit round 3).
     'other_output_ml',
     *WEIGHT_STRICT_CONCEPTS,
+    *VENT_SETTINGS_CONCEPTS,
+    *C565_RENAL_HISTORY_CONCEPTS,
 }
 
 # R5 urine receipts remain in extraction modules and the data catalog, but are
@@ -1238,6 +1242,7 @@ TIME_SERIES_COMPATIBLE_MODULES = {
     'vitals',           # 生命体征（心率、血压等）
     'respiratory',      # 呼吸系统
     'ventilator',       # 呼吸机参数
+    'vent_settings',
     'blood_gas',        # 血气分析
     'chemistry',        # 生化检验
     'hematology',       # 血液学
@@ -1367,6 +1372,8 @@ OPT_IN_MODULE_CONCEPTS = {
     ),
     'bounds_audit': BOUNDS_AUDIT_CONCEPTS,
     'weight_strict': WEIGHT_STRICT_CONCEPTS,
+    'vent_settings': VENT_SETTINGS_CONCEPTS,
+    'c565_renal_history': C565_RENAL_HISTORY_CONCEPTS,
     'subhour_signals': SUBHOUR_SIGNAL_CONCEPTS,
     'vent_native': VENT_NATIVE_CONCEPTS,
     'haemo_native': HAEMO_NATIVE_CONCEPTS,

@@ -99,6 +99,7 @@ def test_all_twenty_modules_publish_from_synthetic_aumc(aumc_source, tmp_path):
         "haemo_advanced", "vent_mechanics", "sedation_analgesia", "diuretic_nephrotoxin",
         "vis_inputs", "gas_specimen", "fluid_io", "fluid_events",
         "stay_identity", "imv_first_episode", "pao2_arterial_hourly_min",
+        "vent_settings", "c565_renal_history",
     }
     assert published_modules == set(api.EXTRACT_MODULE_ORDER)
     assert "sic_case_landmark" not in result["modules"]

@@ -1,5 +1,5 @@
 {
-  "concept_count": 436,
+  "concept_count": 442,
   "concepts": {
     "abdominal_circumference": {
       "category": "ventilator",
@@ -3446,6 +3446,28 @@
       },
       "description": "erythrocyte sedimentation rate"
     },
+    "esrd_dialysis": {
+      "category": "renal",
+      "databases": {
+        "jinhua": {
+          "reason": "no validated native field/event in this release",
+          "status": "unavailable"
+        },
+        "nwicu": {
+          "reason": "no validated native field/event in this release",
+          "status": "unavailable"
+        },
+        "zhejiang_eicu": {
+          "reason": "no validated native field/event in this release",
+          "status": "unavailable"
+        },
+        "zigong": {
+          "reason": "no validated native field/event in this release",
+          "status": "unavailable"
+        }
+      },
+      "description": "C565 V2 ESRD or dialysis diagnosis or status code in the eligible admission history."
+    },
     "etco2": {
       "category": "ventilator",
       "databases": {
@@ -3915,6 +3937,28 @@
         }
       },
       "description": "Inspired oxygen fraction documented with blood gas laboratory records"
+    },
+    "fio2_set": {
+      "category": "respiratory",
+      "databases": {
+        "jinhua": {
+          "reason": "no validated native field/event in this release",
+          "status": "unavailable"
+        },
+        "nwicu": {
+          "reason": "no validated native field/event in this release",
+          "status": "unavailable"
+        },
+        "zhejiang_eicu": {
+          "reason": "no validated native field/event in this release",
+          "status": "unavailable"
+        },
+        "zigong": {
+          "reason": "no validated native field/event in this release",
+          "status": "unavailable"
+        }
+      },
+      "description": "Set inspired oxygen in percent, pooled as one median of in-range source records per stay and ICU hour."
     },
     "fluid_balance": {
       "category": "output",
@@ -5152,6 +5196,28 @@
         }
       },
       "description": "ketamine administration (incl. S-ketamine)"
+    },
+    "kidney_tx": {
+      "category": "renal",
+      "databases": {
+        "jinhua": {
+          "reason": "no validated native field/event in this release",
+          "status": "unavailable"
+        },
+        "nwicu": {
+          "reason": "no validated native field/event in this release",
+          "status": "unavailable"
+        },
+        "zhejiang_eicu": {
+          "reason": "no validated native field/event in this release",
+          "status": "unavailable"
+        },
+        "zigong": {
+          "reason": "no validated native field/event in this release",
+          "status": "unavailable"
+        }
+      },
+      "description": "C565 kidney-transplant diagnosis or status code in the eligible admission history."
     },
     "labetalol": {
       "category": "medications",
@@ -7766,6 +7832,50 @@
       },
       "description": "pH of blood"
     },
+    "ph_dialysis": {
+      "category": "renal",
+      "databases": {
+        "jinhua": {
+          "reason": "no validated native field/event in this release",
+          "status": "unavailable"
+        },
+        "nwicu": {
+          "reason": "no validated native field/event in this release",
+          "status": "unavailable"
+        },
+        "zhejiang_eicu": {
+          "reason": "no validated native field/event in this release",
+          "status": "unavailable"
+        },
+        "zigong": {
+          "reason": "no validated native field/event in this release",
+          "status": "unavailable"
+        }
+      },
+      "description": "C565 eICU past-history path for hemodialysis or peritoneal dialysis. False in the MIIV diagnosis-only method."
+    },
+    "ph_kidney_tx": {
+      "category": "renal",
+      "databases": {
+        "jinhua": {
+          "reason": "no validated native field/event in this release",
+          "status": "unavailable"
+        },
+        "nwicu": {
+          "reason": "no validated native field/event in this release",
+          "status": "unavailable"
+        },
+        "zhejiang_eicu": {
+          "reason": "no validated native field/event in this release",
+          "status": "unavailable"
+        },
+        "zigong": {
+          "reason": "no validated native field/event in this release",
+          "status": "unavailable"
+        }
+      },
+      "description": "C565 eICU past-history path for renal transplant. False in the MIIV diagnosis-only method."
+    },
     "ph_mixed_venous": {
       "category": "blood gas",
       "databases": {
@@ -8801,6 +8911,28 @@
         }
       },
       "description": "Continuous intravenous remifentanil infusion rate"
+    },
+    "renal_excl": {
+      "category": "renal",
+      "databases": {
+        "jinhua": {
+          "reason": "no validated native field/event in this release",
+          "status": "unavailable"
+        },
+        "nwicu": {
+          "reason": "no validated native field/event in this release",
+          "status": "unavailable"
+        },
+        "zhejiang_eicu": {
+          "reason": "no validated native field/event in this release",
+          "status": "unavailable"
+        },
+        "zigong": {
+          "reason": "no validated native field/event in this release",
+          "status": "unavailable"
+        }
+      },
+      "description": "C565 V2 renal-history exclusion. True when any of the ESRD or dialysis, kidney transplant, or two past-history flags is true."
     },
     "renal_resistive_index": {
       "category": "renal",
@@ -13066,25 +13198,25 @@
       "derived": 19,
       "direct": 135,
       "partial": 34,
-      "unavailable": 248
+      "unavailable": 254
     },
     "nwicu": {
       "derived": 19,
       "direct": 137,
       "partial": 37,
-      "unavailable": 243
+      "unavailable": 249
     },
     "zhejiang_eicu": {
       "derived": 39,
       "direct": 128,
       "partial": 25,
-      "unavailable": 244
+      "unavailable": 250
     },
     "zigong": {
       "derived": 27,
       "direct": 125,
       "partial": 41,
-      "unavailable": 243
+      "unavailable": 249
     }
   },
   "databases": [

@@ -27,6 +27,10 @@ ConceptEvaluationReason = Literal[
     "antibiotic_time_index_missing",
     "component_time_index_missing",
     "producer_returned_no_physical_output",
+    "no_icd_diagnosis_source",
+    "single_principal_diagnosis_only",
+    "carevue_diagnosis_history_not_guaranteed",
+    "carevue_view_required",
 ]
 
 

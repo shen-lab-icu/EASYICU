@@ -7544,9 +7544,10 @@ def _native_export_time_window_authority(
     required: bool,
 ) -> Dict[str, object]:
     """Describe the shared publication policy, refusing an unbounded claim."""
+    static_modules = {"demographics", "outcome", "sic_case_landmark", "c565_renal_history"}
     longitudinal = [
         m for m in modules
-        if m not in {"demographics", "outcome", "sic_case_landmark"} and m not in STAY_LEVEL_SUPPORT_MODULES
+        if m not in static_modules and m not in STAY_LEVEL_SUPPORT_MODULES
     ]
     if required and longitudinal and not stay_time_upper_bounds:
         raise ValueError(

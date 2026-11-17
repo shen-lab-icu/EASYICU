@@ -656,6 +656,8 @@ _LOAD_SINGLE_CONCEPT_HANDLED = {  # plus any fwd_concept(*)
     "los_callback",
     "service_at_admission",
     "weight_admit_strict_fields",
+    "fio2_set_hourly",
+    "c565_renal_history_fields",
 }
 
 

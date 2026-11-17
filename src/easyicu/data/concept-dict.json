@@ -1,4 +1,209 @@
 {
+ "fio2_set": {
+  "class_name": "num_cncpt",
+  "target": "ts_tbl",
+  "unit": "%",
+  "min": 21,
+  "max": 100,
+  "interval": "1h",
+  "aggregate": "median",
+  "category": "respiratory",
+  "requires_explicit_opt_in": true,
+  "description": "Set inspired oxygen in percent, pooled as one median of in-range source records per stay and ICU hour.",
+  "_comment": "Frozen L-COMMON settings channels. eICU offsets are restricted to 0 to less than 86400 minutes. MIMIC-III requires the existing CareVue view.",
+  "sources": {
+   "miiv": [
+    {
+     "table": "chartevents",
+     "ids": 223835,
+     "sub_var": "itemid",
+     "value_var": "valuenum",
+     "index_var": "charttime",
+     "class_name": "fun_itm",
+     "callback": "fio2_set_hourly"
+    }
+   ],
+   "aumc": [
+    {
+     "table": "numericitems",
+     "ids": [
+      12282,
+      12329,
+      12369,
+      6699
+     ],
+     "sub_var": "itemid",
+     "value_var": "value",
+     "index_var": "measuredat",
+     "class_name": "fun_itm",
+     "callback": "fio2_set_hourly"
+    }
+   ],
+   "hirid": [
+    {
+     "table": "observations",
+     "ids": 2010,
+     "sub_var": "variableid",
+     "value_var": "value",
+     "index_var": "datetime",
+     "class_name": "fun_itm",
+     "callback": "fio2_set_hourly"
+    }
+   ],
+   "sic": [
+    {
+     "table": "data_float_h",
+     "ids": 2283,
+     "sub_var": "DataID",
+     "value_var": "Val",
+     "index_var": "Offset",
+     "class_name": "fun_itm",
+     "callback": "fio2_set_hourly"
+    }
+   ],
+   "mimic": [
+    {
+     "table": "chartevents",
+     "ids": [
+      190,
+      7570
+     ],
+     "sub_var": "itemid",
+     "value_var": "valuenum",
+     "index_var": "charttime",
+     "class_name": "fun_itm",
+     "callback": "fio2_set_hourly"
+    }
+   ],
+   "eicu": [
+    {
+     "table": "respiratorycharting",
+     "ids": "FiO2",
+     "sub_var": "respchartvaluelabel",
+     "value_var": "respchartvalue",
+     "index_var": "respchartoffset",
+     "class_name": "fun_itm",
+     "callback": "fio2_set_hourly",
+     "extra_vars": [
+      "respcharttypecat"
+     ],
+     "require_regex": {
+      "respcharttypecat": "^respFlowSettings$"
+     }
+    }
+   ]
+  }
+ },
+ "esrd_dialysis": {
+  "class_name": "lgl_cncpt",
+  "target": "id_tbl",
+  "unit": "boolean",
+  "category": "renal",
+  "requires_explicit_opt_in": true,
+  "description": "C565 V2 ESRD or dialysis diagnosis or status code in the eligible admission history.",
+  "sources": {
+   "miiv": [
+    {
+     "class_name": "fun_itm",
+     "callback": "c565_renal_history_fields"
+    }
+   ],
+   "eicu": [
+    {
+     "class_name": "fun_itm",
+     "callback": "c565_renal_history_fields"
+    }
+   ]
+  }
+ },
+ "kidney_tx": {
+  "class_name": "lgl_cncpt",
+  "target": "id_tbl",
+  "unit": "boolean",
+  "category": "renal",
+  "requires_explicit_opt_in": true,
+  "description": "C565 kidney-transplant diagnosis or status code in the eligible admission history.",
+  "sources": {
+   "miiv": [
+    {
+     "class_name": "fun_itm",
+     "callback": "c565_renal_history_fields"
+    }
+   ],
+   "eicu": [
+    {
+     "class_name": "fun_itm",
+     "callback": "c565_renal_history_fields"
+    }
+   ]
+  }
+ },
+ "ph_dialysis": {
+  "class_name": "lgl_cncpt",
+  "target": "id_tbl",
+  "unit": "boolean",
+  "category": "renal",
+  "requires_explicit_opt_in": true,
+  "description": "C565 eICU past-history path for hemodialysis or peritoneal dialysis. False in the MIIV diagnosis-only method.",
+  "sources": {
+   "miiv": [
+    {
+     "class_name": "fun_itm",
+     "callback": "c565_renal_history_fields"
+    }
+   ],
+   "eicu": [
+    {
+     "class_name": "fun_itm",
+     "callback": "c565_renal_history_fields"
+    }
+   ]
+  }
+ },
+ "ph_kidney_tx": {
+  "class_name": "lgl_cncpt",
+  "target": "id_tbl",
+  "unit": "boolean",
+  "category": "renal",
+  "requires_explicit_opt_in": true,
+  "description": "C565 eICU past-history path for renal transplant. False in the MIIV diagnosis-only method.",
+  "sources": {
+   "miiv": [
+    {
+     "class_name": "fun_itm",
+     "callback": "c565_renal_history_fields"
+    }
+   ],
+   "eicu": [
+    {
+     "class_name": "fun_itm",
+     "callback": "c565_renal_history_fields"
+    }
+   ]
+  }
+ },
+ "renal_excl": {
+  "class_name": "lgl_cncpt",
+  "target": "id_tbl",
+  "unit": "boolean",
+  "category": "renal",
+  "requires_explicit_opt_in": true,
+  "description": "C565 V2 renal-history exclusion. True when any of the ESRD or dialysis, kidney transplant, or two past-history flags is true.",
+  "sources": {
+   "miiv": [
+    {
+     "class_name": "fun_itm",
+     "callback": "c565_renal_history_fields"
+    }
+   ],
+   "eicu": [
+    {
+     "class_name": "fun_itm",
+     "callback": "c565_renal_history_fields"
+    }
+   ]
+  }
+ },
  "abx": {
   "class_name": "lgl_cncpt",
   "description": "antibiotics",

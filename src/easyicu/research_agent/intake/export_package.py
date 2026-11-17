@@ -1520,6 +1520,8 @@ def require_export_time_window_authority(
     temporal extent of their measurements. Intake never repairs older exports.
     """
     static_modules = {"demographics", "outcome"}
+    selection = manifest.get("concept_selection")
+    selected_modules = selection.get("modules") if isinstance(selection, Mapping) else None
     # The opt-in SIC landmark module contains only three fixed case-level
     # concepts. An arbitrary module cannot opt out of time bounds merely by
     # using this name: its declared concept selection must match exactly.
@@ -1527,11 +1529,17 @@ def require_export_time_window_authority(
     if landmark in modules and str(manifest.get("database", "")).lower() == "sic":
         from easyicu.concept.sic_landmark import SIC_CASE_LANDMARK_COLUMNS
 
-        selection = manifest.get("concept_selection")
-        selected_modules = selection.get("modules") if isinstance(selection, Mapping) else None
         selected = selected_modules.get(landmark) if isinstance(selected_modules, Mapping) else None
         if isinstance(selected, list) and set(selected) == SIC_CASE_LANDMARK_COLUMNS:
             static_modules.add(landmark)
+    if "c565_renal_history" in modules and isinstance(selected_modules, Mapping):
+        from easyicu.concept.catalog import C565_RENAL_HISTORY_CONCEPTS
+
+        selected = selected_modules.get("c565_renal_history")
+        if isinstance(selected, list) and selected and all(
+            concept in C565_RENAL_HISTORY_CONCEPTS for concept in selected
+        ):
+            static_modules.add("c565_renal_history")
     if not any(module not in static_modules for module in modules):
         return
     authority = manifest.get("time_window_authority")

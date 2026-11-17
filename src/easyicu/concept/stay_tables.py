@@ -26,6 +26,7 @@ and derived vitals (``drop_stay_table_frames``). It goes with its unit.
 from __future__ import annotations
 
 import threading
+from collections.abc import Mapping
 from typing import Callable
 
 import pandas as pd
@@ -64,6 +65,20 @@ class StayTableUnbound(StorageIntegrityError):
 
 _LOCK = threading.RLock()
 _READS = {"count": 0}
+
+
+def selected_stay_ids(patient_ids, stay_column):
+    """Read an explicit stay scope supplied as IDs or a keyed ID collection."""
+    if patient_ids is None:
+        return None
+    if isinstance(patient_ids, Mapping):
+        keys = [key for key in patient_ids if str(key).casefold() == stay_column.casefold()]
+        if len(keys) != 1:
+            raise ValueError(f"Expected one {stay_column} identifier list")
+        patient_ids = patient_ids[keys[0]]
+    if patient_ids is None or isinstance(patient_ids, (str, bytes, Mapping)):
+        raise ValueError(f"Expected one {stay_column} identifier list")
+    return list(patient_ids)
 
 
 def _bound(data_source, table: str) -> tuple:

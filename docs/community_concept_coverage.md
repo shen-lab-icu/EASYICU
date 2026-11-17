@@ -1,7 +1,7 @@
 # Community database concept coverage
 
 Generated from `tools/build_community_concept_registry.py`. The matrix covers every standard
-concept (base dictionary plus SOFA-2 overlay): **436 concepts × 4 databases**.
+concept (base dictionary plus SOFA-2 overlay): **442 concepts × 4 databases**.
 
 `partial` is deliberately not advertised as extractable: it records useful ingredients while preventing an incomplete score or phenotype from being mistaken for a complete definition.
 
@@ -9,10 +9,10 @@ concept (base dictionary plus SOFA-2 overlay): **436 concepts × 4 databases**.
 
 | Database | Direct | Derived | Partial | Unavailable |
 |---|---:|---:|---:|---:|
-| nwicu | 137 | 19 | 37 | 243 |
-| zhejiang_eicu | 128 | 39 | 25 | 244 |
-| jinhua | 135 | 19 | 34 | 248 |
-| zigong | 125 | 27 | 41 | 243 |
+| nwicu | 137 | 19 | 37 | 249 |
+| zhejiang_eicu | 128 | 39 | 25 | 250 |
+| jinhua | 135 | 19 | 34 | 254 |
+| zigong | 125 | 27 | 41 | 249 |
 
 ## Complete matrix
 
@@ -146,6 +146,7 @@ concept (base dictionary plus SOFA-2 overlay): **436 concepts × 4 databases**.
 | `esketamine` | medications | unavailable | unavailable | unavailable | unavailable |
 | `esmolol` | medications | direct | direct | direct | direct |
 | `esr` | hematology | unavailable | direct | unavailable | direct |
+| `esrd_dialysis` | renal | unavailable | unavailable | unavailable | unavailable |
 | `etco2` | ventilator | unavailable | unavailable | unavailable | unavailable |
 | `etco2_qc` | ventilator | unavailable | unavailable | unavailable | unavailable |
 | `etco2_raw` | ventilator | unavailable | unavailable | unavailable | unavailable |
@@ -162,6 +163,7 @@ concept (base dictionary plus SOFA-2 overlay): **436 concepts × 4 databases**.
 | `fio2` | blood gas | direct | direct | direct | unavailable |
 | `fio2_chart` | respiratory | unavailable | unavailable | unavailable | unavailable |
 | `fio2_lab` | respiratory | unavailable | unavailable | unavailable | unavailable |
+| `fio2_set` | respiratory | unavailable | unavailable | unavailable | unavailable |
 | `fluid_balance` | output | unavailable | partial | unavailable | partial |
 | `fluid_balance_cumulative` | output | unavailable | partial | unavailable | partial |
 | `ft4` | chemistry | direct | direct | direct | unavailable |
@@ -203,6 +205,7 @@ concept (base dictionary plus SOFA-2 overlay): **436 concepts × 4 databases**.
 | `kdigo_uo` | renal | partial | derived | partial | partial |
 | `kdigo_urine_input` | renal | unavailable | derived | unavailable | derived |
 | `ketamine` | medications | direct | direct | unavailable | direct |
+| `kidney_tx` | renal | unavailable | unavailable | unavailable | unavailable |
 | `labetalol` | medications | direct | direct | unavailable | unavailable |
 | `lact` | blood gas | direct | direct | direct | direct |
 | `lact_venous` | cardiovascular | unavailable | unavailable | unavailable | unavailable |
@@ -300,6 +303,8 @@ concept (base dictionary plus SOFA-2 overlay): **436 concepts × 4 databases**.
 | `peep_total` | ventilator | unavailable | unavailable | unavailable | unavailable |
 | `persistent_critical_illness` | outcome | derived | unavailable | derived | derived |
 | `ph` | blood gas | direct | direct | direct | direct |
+| `ph_dialysis` | renal | unavailable | unavailable | unavailable | unavailable |
+| `ph_kidney_tx` | renal | unavailable | unavailable | unavailable | unavailable |
 | `ph_mixed_venous` | blood gas | unavailable | unavailable | unavailable | unavailable |
 | `ph_qc` | blood gas | unavailable | unavailable | unavailable | unavailable |
 | `ph_raw` | blood gas | unavailable | unavailable | unavailable | unavailable |
@@ -339,6 +344,7 @@ concept (base dictionary plus SOFA-2 overlay): **436 concepts × 4 databases**.
 | `rdw` | hematology | direct | direct | direct | direct |
 | `remifentanil` | medications | unavailable | unavailable | unavailable | unavailable |
 | `remifentanil_rate` | neurological | unavailable | unavailable | unavailable | unavailable |
+| `renal_excl` | renal | unavailable | unavailable | unavailable | unavailable |
 | `renal_resistive_index` | renal | unavailable | unavailable | unavailable | unavailable |
 | `resp` | respiratory | direct | direct | direct | direct |
 | `resp_spont` | ventilator | unavailable | unavailable | unavailable | unavailable |
