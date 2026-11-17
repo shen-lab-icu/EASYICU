@@ -76,8 +76,9 @@ from .progressive_literature_repair import (
     preserve_non_targeted_coordinates_across_literature_repair as _preserve_non_targeted_coordinates_across_literature_repair,
 )
 from .progressive_foundation_repair import (
-    foundation_label_repair_keys,
-    repair_foundation_display_labels,
+    binding_repair_response_failure,
+    run_with_foundation_label_repair,
+    spend_host_candidate_repair,
 )
 from ..planning.progressive_contract import (
     PROGRESSIVE_ARTICLE_ROLES,
@@ -3397,33 +3398,25 @@ class ProgressivePlannerAgent:
             outline_step = outline.steps[step_index]
             revision_base = self._attempt.prompt_metrics.get("compile_revision_count", 0)
 
-            def compile_candidate(
-                materialization: ProgressiveStepMaterialization,
-            ) -> ProgressivePrefixState:
+            def compile_candidate(materialization: ProgressiveStepMaterialization) -> ProgressivePrefixState:
+                return run_with_foundation_label_repair(
+                    lambda current: compile_progressive_prefix(
+                        prefix_state, materialization, outline=outline, foundation=current, context=context,
+                        allowed_literature_citation_keys=allowed_literature_citation_keys,
+                        allowed_know_how_decisions=allowed_know_how_decisions,
+                        reporting_method_source_keys=reporting_method_source_keys,
+                    ),
+                    self.llm, materialization=foundation_materialization, context=context,
+                    analysis_type=outline.analysis_type, retained=prefix_state.materializations,
+                    prompt_metrics=self._attempt.prompt_metrics, revision_base=revision_base,
+                    revision_limit=automatic_retry_limit(_MAX_COMPILE_REVISIONS),
+                    progress_callback=progress_callback, resumed=resumed, on_repaired=foundation_repaired,
+                )
+
+            def foundation_repaired(item: ProgressiveFoundationMaterialization) -> None:
                 nonlocal foundation, foundation_materialization
-                while True:
-                    try:
-                        return compile_progressive_prefix(
-                            prefix_state, materialization, outline=outline,
-                            foundation=foundation, context=context,
-                            allowed_literature_citation_keys=allowed_literature_citation_keys,
-                            allowed_know_how_decisions=allowed_know_how_decisions,
-                            reporting_method_source_keys=reporting_method_source_keys,
-                        )
-                    except ProgressivePlanCompileError as exc:
-                        if not foundation_label_repair_keys(exc):
-                            raise
-                        spent = self._attempt.prompt_metrics.get("compile_revision_count", 0) - revision_base
-                        foundation_materialization = repair_foundation_display_labels(
-                            self.llm, finding=exc, materialization=foundation_materialization,
-                            context=context, analysis_type=outline.analysis_type,
-                            retained=prefix_state.materializations,
-                            prompt_metrics=self._attempt.prompt_metrics,
-                            remaining_revisions=automatic_retry_limit(_MAX_COMPILE_REVISIONS) - spent,
-                            progress_callback=progress_callback, resumed=resumed,
-                        )
-                        foundation = foundation_materialization.foundation
-                        self._attempt.foundation = foundation_materialization
+                foundation_materialization, foundation = item, item.foundation
+                self._attempt.foundation = item
 
             step_planning_contract_context, step_revision_projection = (
                 project_plan_revision_prompt(
@@ -3524,21 +3517,13 @@ class ProgressivePlannerAgent:
                     # Template candidates enter the same bounded current-step
                     # lane as a rejected Planner answer, with its typed finding.
                     if host_materializations is not None:
-                        if (exc.reason_code in _NON_REPAIRABLE_COORDINATE_FINDINGS
-                                or exc.details.get("repair_scope") == "outline_required"):
+                        compiler_observation = spend_host_candidate_repair(
+                            exc, candidate=host_materialization, prompt_metrics=self._attempt.prompt_metrics,
+                            revision_base=revision_base, revision_limit=automatic_retry_limit(_MAX_COMPILE_REVISIONS),
+                            resumed=resumed, non_repairable=_NON_REPAIRABLE_COORDINATE_FINDINGS,
+                        )
+                        if compiler_observation is None:
                             raise
-                        if (
-                            self._attempt.prompt_metrics["compile_revision_count"] - revision_base
-                            >= automatic_retry_limit(_MAX_COMPILE_REVISIONS)
-                        ):
-                            raise
-                        self._attempt.prompt_metrics["compile_revision_count"] += 1
-                        if resumed:
-                            self._attempt.prompt_metrics["current_run_compile_revision_count"] += 1
-                        compiler_observation = {
-                            **exc.details,
-                            "previous_materialization": host_materialization.model_dump(mode="json"),
-                        }
                     # Other host projections retain the usual Planner fallback.
                 else:
                     prefix_state = candidate_state
@@ -3651,23 +3636,12 @@ class ProgressivePlannerAgent:
                         "return other steps or flatten step fields into the root.",
                     )
                 except StructuredResponseFailure as exc:
-                    if not compiler_observation or compiler_observation.get("path") not in {
-                        "context_bindings", "raw_inputs", "product_inputs",
-                    }:
+                    failure = binding_repair_response_failure(
+                        compiler_observation, step_id=outline_step.step_id, step_index=step_index,
+                    )
+                    if failure is None:
                         raise
-                    # A malformed repair answer must not erase the binding
-                    # owner and send a prepared run back to data preparation.
-                    # The existing response budget is already exhausted here.
-                    owner_index = compiler_observation.get("step_index")
-                    raise ProgressivePlanCompileError(
-                        str(compiler_observation["reason_code"]),
-                        str(compiler_observation.get("message") or "The prepared-input binding remains invalid."),
-                        step_id=compiler_observation.get("step_id") or outline_step.step_id,
-                        step_index=owner_index if type(owner_index) is int else step_index,
-                        path=str(compiler_observation["path"]),
-                        cause_code="progressive_step_response_repair_exhausted",
-                        findings=compiler_observation.get("findings") or [],
-                    ) from exc
+                    raise failure from exc
                 materialization = normalize_progressive_cohort_identity(
                     materialization,
                     context=context,
@@ -3926,36 +3900,28 @@ class ProgressivePlannerAgent:
 
         def materialize_and_accept(draft):
             # A family template owns the initial typed declarations. Rejections
-            # belong to the existing step/suffix repair lanes, with the same
-            # sealed outline, foundation, and bounded compiler budget.
+            # use the existing step/suffix repair lanes and compiler budget.
             actions, rows = _action_catalog((draft.outline.analysis_type,))
-            reporting = _article_reporting_source_keys(
-                article_context=article_context, analysis_type=draft.outline.analysis_type,
-                enforce_article_contract=enforce_article_contract,
-            )
-            prefix = self._materialize_remaining_steps(
-                ProgressivePrefixState(), context=context, outline=draft.outline,
-                foundation_materialization=draft.foundation,
-                scientific_action_ids=actions, action_rows=rows,
-                allowed_literature_citation_keys=allowed_citations,
-                allowed_know_how_decisions=allowed_know_how_decisions,
-                reporting_method_source_keys=reporting,
+            shared = dict(
+                context=context, outline=draft.outline, allowed_literature_citation_keys=allowed_citations,
+                allowed_know_how_decisions=allowed_know_how_decisions, resumed=False,
                 planning_contract_context=planning_contract_context,
                 progress_callback=progress_callback, checkpoint_emitter=checkpoint_emitter,
-                resumed=False,
+            )
+            prefix = self._materialize_remaining_steps(
+                ProgressivePrefixState(), foundation_materialization=draft.foundation,
+                scientific_action_ids=actions, action_rows=rows, **shared,
+                reporting_method_source_keys=_article_reporting_source_keys(
+                    article_context=article_context, analysis_type=draft.outline.analysis_type,
+                    enforce_article_contract=enforce_article_contract,
+                ),
                 host_materializations={item.step.step_id: item for item in draft.materializations},
             )
             return self._accept_materialized_plan(
-                prefix, context=context, article_context=article_context,
-                outline=draft.outline,
+                prefix, article_context=article_context, direct_comparator_literature_keys=direct_keys,
                 foundation_materialization=self._attempt.foundation or draft.foundation,
-                allowed_literature_citation_keys=allowed_citations,
-                direct_comparator_literature_keys=direct_keys,
-                allowed_know_how_decisions=allowed_know_how_decisions,
                 enforce_article_contract=enforce_article_contract,
-                planning_contract_context=planning_contract_context,
-                progress_callback=progress_callback, checkpoint_emitter=checkpoint_emitter,
-                resumed=False, adjustment_proposal=draft.adjustment_proposal,
+                adjustment_proposal=draft.adjustment_proposal, **shared,
             )
 
         family_llm = self.llm
@@ -4911,35 +4877,28 @@ class ProgressivePlannerAgent:
         resume_label_scopes = required_binary_display_label_scopes(
             context, [item.step for item in resume_checkpoint.materializations],
         ) if resume_checkpoint is not None else ()
-        foundation_revision_base = self._attempt.prompt_metrics["compile_revision_count"]
-        while True:
-            try:
-                validate_progressive_foundation(
-                    foundation,
-                    context=context,
-                    analysis_type=outline.analysis_type,
-                    require_robustness_intent=require_robustness_intent,
-                    robustness_replay_required=any(
-                        step.module_id == "robustness_replay" for step in outline.steps
-                    ),
-                    required_binary_display_label_scopes=(*required_label_scopes, *resume_label_scopes),
-                    required_reader_display_label_keys=required_label_keys,
-                )
-                break
-            except ProgressivePlanCompileError as exc:
-                if resume_checkpoint is None or not foundation_label_repair_keys(exc):
-                    raise
-                foundation_materialization = repair_foundation_display_labels(
-                    self.llm, finding=exc, materialization=foundation_materialization,
-                    context=context, analysis_type=outline.analysis_type,
-                    retained=resume_checkpoint.materializations,
-                    prompt_metrics=self._attempt.prompt_metrics,
-                    remaining_revisions=(automatic_retry_limit(_MAX_COMPILE_REVISIONS)
-                        - self._attempt.prompt_metrics["compile_revision_count"] + foundation_revision_base),
-                    progress_callback=progress_callback, resumed=True,
-                )
-                foundation = foundation_materialization.foundation
-                self._attempt.foundation = foundation_materialization
+
+        def foundation_repaired(item: ProgressiveFoundationMaterialization) -> None:
+            nonlocal foundation, foundation_materialization
+            foundation_materialization, foundation = item, item.foundation
+            self._attempt.foundation = item
+
+        run_with_foundation_label_repair(
+            lambda current: validate_progressive_foundation(
+                current, context=context, analysis_type=outline.analysis_type,
+                require_robustness_intent=require_robustness_intent,
+                robustness_replay_required=any(step.module_id == "robustness_replay" for step in outline.steps),
+                required_binary_display_label_scopes=(*required_label_scopes, *resume_label_scopes),
+                required_reader_display_label_keys=required_label_keys,
+            ),
+            self.llm, materialization=foundation_materialization, context=context,
+            analysis_type=outline.analysis_type,
+            retained=resume_checkpoint.materializations if resume_checkpoint is not None else (),
+            prompt_metrics=self._attempt.prompt_metrics,
+            revision_base=self._attempt.prompt_metrics["compile_revision_count"],
+            revision_limit=automatic_retry_limit(_MAX_COMPILE_REVISIONS), progress_callback=progress_callback,
+            resumed=True, on_repaired=foundation_repaired, repairable=resume_checkpoint is not None,
+        )
         self._attempt.foundation = foundation_materialization
         if not resume_foundation_reused:
             checkpoint_emitter.emit(

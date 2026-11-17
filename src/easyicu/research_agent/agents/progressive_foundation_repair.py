@@ -156,3 +156,91 @@ def repair_foundation_display_labels(
         findings=[{"required_display_label_keys": list(keys),
                    "repair_scope": "foundation_display_labels_only"}],
     ) from last_failure
+
+
+def run_with_foundation_label_repair(
+    check: Callable[[ProgressivePlanFoundation], Any],
+    llm: Any,
+    *,
+    materialization: ProgressiveFoundationMaterialization,
+    context: ResearchContext,
+    analysis_type: str,
+    retained: Sequence[ProgressiveStepMaterialization],
+    prompt_metrics: dict[str, Any],
+    revision_limit: int,
+    revision_base: int,
+    progress_callback: Callable[[Any], None] | None,
+    resumed: bool,
+    on_repaired: Callable[[ProgressiveFoundationMaterialization], None],
+    repairable: bool = True,
+) -> Any:
+    """Run a foundation-bound check; amend only the display labels it rejects.
+
+    Each amendment spends the caller's current-step compiler budget
+    (``revision_limit`` counted from ``revision_base``) and is reported through
+    ``on_repaired`` before the check runs again on the amended foundation.
+    """
+    while True:
+        try:
+            return check(materialization.foundation)
+        except ProgressivePlanCompileError as exc:
+            if not repairable or not foundation_label_repair_keys(exc):
+                raise
+            spent = prompt_metrics.get("compile_revision_count", 0) - revision_base
+            materialization = repair_foundation_display_labels(
+                llm, finding=exc, materialization=materialization, context=context,
+                analysis_type=analysis_type, retained=retained, prompt_metrics=prompt_metrics,
+                remaining_revisions=revision_limit - spent,
+                progress_callback=progress_callback, resumed=resumed,
+            )
+            on_repaired(materialization)
+
+
+def binding_repair_response_failure(
+    observation: Mapping[str, Any] | None, *, step_id: str, step_index: int,
+) -> ProgressivePlanCompileError | None:
+    """Keep a prepared-input binding owner when its repair answer is malformed.
+
+    The response budget is already spent; returning the binding finding stops a
+    prepared run from being sent back to data preparation.
+    """
+    if not observation or observation.get("path") not in {
+        "context_bindings", "raw_inputs", "product_inputs",
+    }:
+        return None
+    owner_index = observation.get("step_index")
+    return ProgressivePlanCompileError(
+        str(observation["reason_code"]),
+        str(observation.get("message") or "The prepared-input binding remains invalid."),
+        step_id=observation.get("step_id") or step_id,
+        step_index=owner_index if type(owner_index) is int else step_index,
+        path=str(observation["path"]),
+        cause_code="progressive_step_response_repair_exhausted",
+        findings=observation.get("findings") or [],
+    )
+
+
+def spend_host_candidate_repair(
+    error: ProgressivePlanCompileError,
+    *,
+    candidate: ProgressiveStepMaterialization,
+    prompt_metrics: dict[str, Any],
+    revision_base: int,
+    revision_limit: int,
+    resumed: bool,
+    non_repairable: frozenset[str] | set[str],
+) -> dict[str, Any] | None:
+    """Admit a rejected template candidate to the current-step repair lane.
+
+    Returns the compiler observation for the Planner's repair call and spends
+    one revision, or ``None`` when the finding needs the outline or the shared
+    current-step budget is spent (the caller then re-raises the finding).
+    """
+    if error.reason_code in non_repairable or error.details.get("repair_scope") == "outline_required":
+        return None
+    if prompt_metrics["compile_revision_count"] - revision_base >= revision_limit:
+        return None
+    prompt_metrics["compile_revision_count"] += 1
+    if resumed:
+        prompt_metrics["current_run_compile_revision_count"] += 1
+    return {**error.details, "previous_materialization": candidate.model_dump(mode="json")}
