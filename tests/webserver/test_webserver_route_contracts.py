@@ -500,6 +500,7 @@ EXPECTED_REVIEW_ROUTES = [
 ]
 
 EXPECTED_EXTRACTION_ROUTES = [
+    ("GET", "/api/extraction/module-options", "extraction_modules"),
     (
         "POST",
         "/api/extraction/filter-options",
