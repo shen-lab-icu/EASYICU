@@ -11,6 +11,12 @@ import easyicu
 from easyicu.api import extraction as api
 
 
+@pytest.fixture
+def stream_input(tmp_path_factory):
+    # Ledger publication checks require source and output roots to be disjoint.
+    return tmp_path_factory.mktemp("stream_input")
+
+
 def _write_complete_score_dependencies(source: Path, time) -> None:
     """Write component-complete producer artifacts for streamed Sepsis tests."""
 
@@ -248,7 +254,7 @@ def test_module_extraction_sanitises_mixed_object_columns(monkeypatch, tmp_path)
 
 
 def test_module_extraction_streams_patient_batches_directly_to_parquet(
-    monkeypatch, tmp_path
+    monkeypatch, tmp_path, stream_input
 ):
     calls = []
 
@@ -269,7 +275,7 @@ def test_module_extraction_streams_patient_batches_directly_to_parquet(
         "test_module",
         ["test_signal"],
         "miiv",
-        str(tmp_path),
+        str(stream_input),
         {"stay_id": [1, 2, 3, 4, 5]},
         2,
         str(tmp_path),
@@ -289,7 +295,7 @@ def test_module_extraction_streams_patient_batches_directly_to_parquet(
 
 
 def test_streamed_module_rejects_rows_outside_the_requested_patient_batch(
-    monkeypatch, tmp_path
+    monkeypatch, tmp_path, stream_input
 ):
     def fake_load_concepts(**kwargs):
         ids = list(kwargs["patient_ids"]["stay_id"])
@@ -307,7 +313,7 @@ def test_streamed_module_rejects_rows_outside_the_requested_patient_batch(
         "test_module",
         ["test_signal"],
         "miiv",
-        str(tmp_path),
+        str(stream_input),
         {"stay_id": [1, 2]},
         2,
         str(tmp_path),
@@ -326,6 +332,7 @@ def test_streamed_module_rejects_rows_outside_the_requested_patient_batch(
 def test_streamed_module_grows_later_batches_from_first_measured_peak(
     monkeypatch,
     tmp_path,
+    stream_input,
 ):
     calls = []
 
@@ -359,7 +366,7 @@ def test_streamed_module_grows_later_batches_from_first_measured_peak(
         "test_module",
         ["test_signal"],
         "eicu",
-        str(tmp_path),
+        str(stream_input),
         {"stay_id": list(range(120_000))},
         40_000,
         str(tmp_path),
@@ -387,7 +394,7 @@ def test_streamed_module_grows_later_batches_from_first_measured_peak(
 
 
 def test_streamed_module_preserves_first_schema_without_pandas_reindex(
-    monkeypatch, tmp_path
+    monkeypatch, tmp_path, stream_input
 ):
     def fake_load_concepts(**kwargs):
         ids = list(kwargs["patient_ids"]["stay_id"])
@@ -408,7 +415,7 @@ def test_streamed_module_preserves_first_schema_without_pandas_reindex(
         "test_module",
         ["test_signal", "optional_signal"],
         "miiv",
-        str(tmp_path),
+        str(stream_input),
         {"stay_id": [1, 2, 3]},
         2,
         str(tmp_path),
@@ -429,7 +436,7 @@ def test_streamed_module_preserves_first_schema_without_pandas_reindex(
 
 
 def test_streamed_module_keeps_later_charttime_when_first_batch_has_none(
-    monkeypatch, tmp_path
+    monkeypatch, tmp_path, stream_input
 ) -> None:
     def fake_load_concepts(**kwargs):
         ids = list(kwargs["patient_ids"]["stay_id"])
@@ -456,7 +463,7 @@ def test_streamed_module_keeps_later_charttime_when_first_batch_has_none(
         "sepsis_shared",
         ["susp_inf"],
         "eicu",
-        str(tmp_path),
+        str(stream_input),
         {"stay_id": [1, 2, 3]},
         2,
         str(tmp_path),
@@ -477,6 +484,7 @@ def test_isolated_stream_batches_preserve_output_and_remove_parts(
     monkeypatch,
     tmp_path,
     database,
+    stream_input,
 ) -> None:
     calls = []
     daemon_flags = []
@@ -531,7 +539,7 @@ def test_isolated_stream_batches_preserve_output_and_remove_parts(
         "test_module",
         ["test_signal"],
         database,
-        str(tmp_path),
+        str(stream_input),
         {"stay_id": [1, 2, 3, 4]},
         2,
         str(tmp_path),
@@ -658,6 +666,7 @@ def test_append_isolated_stream_batch_aligns_to_frozen_schema(tmp_path) -> None:
 def test_isolated_stream_batch_failure_removes_atomic_outputs(
     monkeypatch,
     tmp_path,
+    stream_input,
 ) -> None:
     class FailedProcess:
         def __init__(self, *, target, args, daemon):
@@ -685,7 +694,7 @@ def test_isolated_stream_batch_failure_removes_atomic_outputs(
         "test_module",
         ["test_signal"],
         "eicu",
-        str(tmp_path),
+        str(stream_input),
         {"stay_id": [1, 2]},
         2,
         str(tmp_path),

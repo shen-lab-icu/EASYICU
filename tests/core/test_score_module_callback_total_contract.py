@@ -85,7 +85,15 @@ def _cases():
 
 
 @pytest.fixture
-def synthetic_loader(monkeypatch, tmp_path):
+def synthetic_source(tmp_path_factory):
+    # Source identity scans must not traverse the module export directory.
+    # Keep the in-memory source path absent: an empty real installation would
+    # correctly contradict the fixture's nonempty renal component tables.
+    return tmp_path_factory.mktemp("synthetic-source") / "in-memory"
+
+
+@pytest.fixture
+def synthetic_loader(monkeypatch, synthetic_source):
     """Bind the public API to in-memory source tables, never a data directory."""
     dictionary = copy.deepcopy(load_dictionary(include_sofa2=True))
     frames = []
@@ -180,7 +188,7 @@ def synthetic_loader(monkeypatch, tmp_path):
 
     class Loader:
         database = "miiv"
-        data_path = tmp_path / "synthetic-source"
+        data_path = synthetic_source
 
         def load_concepts(self, concepts, **kwargs):
             result = ConceptResolver(dictionary).load_concepts(
@@ -242,11 +250,11 @@ def synthetic_loader(monkeypatch, tmp_path):
     (False, "pandas"), (True, "arrow"), (True, "duckdb"),
 ])
 def test_every_score_module_exports_its_callback_total(
-    synthetic_loader, monkeypatch, tmp_path, module, total, streamed, backend,
+    synthetic_loader, synthetic_source, monkeypatch, tmp_path, module, total, streamed, backend,
 ):
     requested = list(CONCEPT_GROUPS_INTERNAL[module])
     load_kwargs = {
-        "database": "miiv", "data_path": str(tmp_path / "synthetic-source"),
+        "database": "miiv", "data_path": str(synthetic_source),
         "patient_ids": {"stay_id": [11, 12]}, "verbose": False,
         "parallel_workers": 1, "concept_workers": 1,
     }
