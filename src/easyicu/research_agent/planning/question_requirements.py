@@ -20,7 +20,7 @@ What the host can verify, it verifies:
 * typed delivery requirements are covered by the same product-file contract
   the browser downloads read, independently of statistical plan steps. Old
   untyped records use a conservative reader for complete delivery clauses;
-* the quote is written in the question (``population_spec.quote_written_in``);
+* the quote matches a contiguous span of the question (``planning.question_quote``);
 * every concept is one the run offers;
 * a benchmark is answered only by a step whose action compares models on the
   same rows (``BENCHMARK_ACTIONS``) and reads the benchmark's concept.  A
@@ -82,7 +82,7 @@ import hashlib
 import json
 import re
 import unicodedata
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from pathlib import Path
 from types import MappingProxyType
 from typing import (
@@ -119,6 +119,12 @@ from .progressive_contract import (
     CapabilityGapElement,
     CapabilityGapRequirement,
     ProgressiveCapabilityGap,
+)
+from .question_quote import (
+    QUOTE_NOT_IN_QUESTION,
+    QuestionQuoteMatcher,
+    QuestionQuoteSpan,
+    normalize_question_quote,
 )
 from .requirement_coverage import (
     ANALYSIS_ROLES,
@@ -197,7 +203,7 @@ QUESTION_REQUIREMENTS_GUIDE = (
     "never a predictor: do not add the benchmark's concept to the model. Every concept "
     "the question names (question_named_concepts) must appear in some entry, unless it "
     "is the sealed exposure or outcome. Return [] when the question asks for nothing "
-    "beyond the sealed design."
+    "beyond the sealed design. Copy one contiguous span from the question for each quote."
     " Delivery-only requests use kind delivery and deliverable_kinds from the host "
     "delivery contract: " + ", ".join(RUN_DELIVERABLES) + ". "
     "Quote only the requested outputs, keeping scientific requirements "
@@ -577,7 +583,7 @@ def question_requirement_problems(
             )
         )
     ids = [item.id for item in requirements]
-    quotes = [_words(item.quote).casefold() for item in requirements]
+    quotes = [normalize_question_quote(item.quote) for item in requirements]
     if len(set(ids)) != len(ids) or len(set(quotes)) != len(quotes):
         problems.append(
             RequirementProblem(
@@ -587,15 +593,15 @@ def question_requirement_problems(
             )
         )
     offered = set(roster)
+    matcher = QuestionQuoteMatcher(question) if requirements else None
     for index, item in enumerate(requirements):
         path = f"question_requirements[{index}]"
-        if not quote_written_in(item.quote, "question", (question,)):
+        if matcher is not None and matcher.find(item.quote) is None:
             problems.append(
                 RequirementProblem(
-                    "question_requirement_quote_not_in_question",
+                    QUOTE_NOT_IN_QUESTION,
                     f"{path}.quote",
-                    f"{item.id} quotes {item.quote!r}, which the research question does "
-                    "not say: quote its own words.",
+                    f"{path}.quote: {item.quote!r} does not match a question span.",
                 )
             )
         # A gap's concept is the host check's (``planning.capability_gap``).
@@ -732,6 +738,11 @@ class JudgedRequirement:
     delivery: Optional[Mapping[str, Any]] = None
     clauses: tuple[Mapping[str, Any], ...] = ()
     exposure_choice: Optional[Mapping[str, Any]] = None
+    quote_span: QuestionQuoteSpan | None = None
+
+    @property
+    def quoted_text(self) -> str:
+        return self.quote_span.text if self.quote_span is not None else self.requirement.quote
 
     @property
     def verified_by_host(self) -> bool:
@@ -746,7 +757,9 @@ class JudgedRequirement:
         return {
             "id": item.id,
             "kind": item.kind,
-            "quote": item.quote,
+            "quote": self.quoted_text,
+            **({"quote_span": {"start": self.quote_span.start, "end": self.quote_span.end}}
+               if self.quote_span is not None else {}),
             "concepts": list(item.concepts),
             "claimed_coverage": item.coverage,
             "disposition": self.disposition,
@@ -1078,6 +1091,7 @@ def judge_question_requirements(
     sealed_owner_concepts: Mapping[str, Collection[str]] | None = None,
     host_facts: Sequence[Mapping[str, Any]] = (),
     sealed: Sequence[str] = (),
+    question: str | None = None,
 ) -> tuple[JudgedRequirement, ...]:
     """Decide how the compiled plan answers each stated requirement.
 
@@ -1088,7 +1102,7 @@ def judge_question_requirements(
     """
 
     requirements = tuple(requirements)
-    return tuple(
+    judged = tuple(
         _judge(
             item,
             plan=plan,
@@ -1099,6 +1113,12 @@ def judge_question_requirements(
             requirements=requirements, host_facts=host_facts, sealed=sealed,
         )
         for item in requirements
+    )
+    if question is None or not judged:
+        return judged
+    matcher = QuestionQuoteMatcher(question)
+    return tuple(
+        replace(entry, quote_span=matcher.find(entry.requirement.quote)) for entry in judged
     )
 
 
@@ -1673,7 +1693,7 @@ def question_requirement_findings(
                     "The plan states that it answers what the question asks, which the "
                     "host cannot verify: "
                     + "; ".join(
-                        f"{entry.requirement.id} {entry.requirement.quote!r} "
+                        f"{entry.requirement.id} {entry.quoted_text!r} "
                         + (
                             f"(read by {', '.join(entry.reading_step_ids)})"
                             if entry.reading_step_ids
@@ -1701,7 +1721,7 @@ def question_requirement_findings(
                     "The plan states that the question names these only to define "
                     "another element, which the host cannot verify: "
                     + "; ".join(
-                        f"{entry.requirement.id} {entry.requirement.quote!r} "
+                        f"{entry.requirement.id} {entry.quoted_text!r} "
                         f"({', '.join(entry.requirement.concepts)}): "
                         f"{entry.requirement.note}"
                         for entry in defined
@@ -1755,7 +1775,7 @@ def _stated(entry: JudgedRequirement) -> str:
         )
     if entry.exposure_choice:
         choice = entry.exposure_choice
-        return (f"{item.id} {item.quote!r}: {choice['question']} "
+        return (f"{item.id} {entry.quoted_text!r}: {choice['question']} "
                 f"Primary: {choice['primary_exposure']}; additional: "
                 + ", ".join(choice["additional_exposures"]) + ".")
     why = (
@@ -1774,14 +1794,16 @@ def _stated(entry: JudgedRequirement) -> str:
         )
     )
     # A gap's detail is a sentence of its own: the line ends with one full stop.
-    return f"{item.id} {item.quote!r} ({item.kind}): {why.rstrip(' .。')}."
+    return f"{item.id} {entry.quoted_text!r} ({item.kind}): {why.rstrip(' .。')}."
 
 
 def _unanswered_rows(entry: JudgedRequirement | EffectMeasureJudgment) -> list[dict[str, Any]]:
     row = entry.row()
     if isinstance(entry, JudgedRequirement) and entry.clauses:
+        if "quote_span" in row:
+            row["parent_quote_span"] = row.pop("quote_span")
         return [
-            {**row, "quote": clause["quote"], "parent_quote": entry.requirement.quote}
+            {**row, "quote": clause["quote"], "parent_quote": entry.quoted_text}
             for clause in entry.clauses if clause["disposition"] != "covered"
         ]
     return [row]
@@ -1917,6 +1939,10 @@ def judge_recorded_requirements(
             str(row["id"]): (row["gap_verification"], row["gap_fact"])
             for row in record["judged"]
         }
+        quote_spans = {
+            row["id"]: QuestionQuoteSpan(text=row["quote"], **row["quote_span"])
+            for row in record["judged"] if "quote_span" in row
+        }
         read_measures = record.get("question_effect_measures")
         stated_measures = (
             None
@@ -1961,6 +1987,10 @@ def judge_recorded_requirements(
         sealed_owner_concepts=sealed_owner_concepts,
         host_facts=host_facts, sealed=sealed,
     )
+    if quote_spans:
+        judged = tuple(
+            replace(entry, quote_span=quote_spans.get(entry.requirement.id)) for entry in judged
+        )
     unstated = (
         ()
         if route == "family_template"

@@ -20,6 +20,8 @@ import json
 from dataclasses import replace
 from typing import Any, Callable, Mapping, Optional, Sequence, get_args
 
+from pydantic import ValidationError
+
 from .population_spec_transport import (
     bind_population_spec_transport, population_spec_contract, population_spec_shape,
 )
@@ -1000,6 +1002,37 @@ def parse_family_plan_spec(raw: str, request: FamilySpecRequest) -> FamilyPlanSp
     return spec
 
 
+class _QuestionRequirementSchemaRefusal(ValueError):
+    """Schema errors with the family route's allowed keys for the retry."""
+
+    def __init__(self, records: list[dict[str, Any]]) -> None:
+        super().__init__("Question requirement schema validation failed.")
+        self._records = records
+
+    def errors(self) -> list[dict[str, Any]]:
+        return self._records
+
+
+def _question_requirement_schema_feedback(
+    exc: ValidationError, request: FamilySpecRequest
+) -> list[dict[str, Any]]:
+    records = exc.errors(include_url=False)
+    extras = [
+        record for record in records
+        if record["type"] == "extra_forbidden" and record["loc"][:1] == ("question_requirements",)
+    ]
+    if not extras:
+        return []
+    properties = question_requirements_schema(
+        request.variable_roster, effect_measures=_requirement_effect_measures(request),
+    )["items"]["properties"]
+    for record in extras:
+        parent = record["loc"][2:-1]
+        keys = properties["gap"]["anyOf"][0]["properties"] if parent == ("gap",) else properties
+        record["msg"] = f"Remove the extra key. Allowed keys: {', '.join(sorted(keys))}."
+    return records
+
+
 def check_question_requirement_gaps(
     spec: FamilyPlanSpec,
     *,
@@ -1540,6 +1573,10 @@ def run_family_spec_attempt(
                 f"{rejection}\n\nRejected response:\n{raw}",
                 "family_spec_rejected",
             )
+            if isinstance(exc, ValidationError) and (
+                feedback := _question_requirement_schema_feedback(exc, request)
+            ):
+                raise _QuestionRequirementSchemaRefusal(feedback) from exc
             raise
 
     spec, draft = call_llm_with_structured_retry(

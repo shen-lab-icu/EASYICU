@@ -272,6 +272,91 @@ def test_a_requirement_is_held_to_the_question_and_the_run(
     assert refused.value.reason_code == code
 
 
+@pytest.mark.parametrize(("original", "quote"), [
+    ("比较 ABC 指标（１２分），再报告结果。", "比较abc指标(12分),再报告结果."),
+    ("Compare “Cafe\u0301 Index”\n  （１２ points）…", 'compare "Café Index" (12 points)...'),
+])
+def test_normalized_quote_keeps_exact_question_text_and_offsets(tmp_path, original, quote):
+    question = f"  {_QUESTION}\n{original} Confirm the result.  "
+    context = _context(named=False).model_copy(update={"research_question": question})
+    claim = {**_BENCHMARK, "kind": "analysis", "concepts": [], "quote": quote}
+    result = _planned(context, [claim])
+
+    question_requirement_outcome(
+        context=context, plan=result.output, facts=result.facts, run_dir=tmp_path,
+    )
+
+    record = json.loads((tmp_path / QUESTION_REQUIREMENTS_FILENAME).read_text())
+    (row,) = record["judged"]
+    assert record["stated"][0]["quote"] == quote
+    assert row["quote"] == original
+    start = question.index(original)
+    assert row["quote_span"] == {"start": start, "end": start + len(original)}
+    replayed = judge_recorded_requirements(record, plan=result.output)
+    assert replayed.record["judged"] == [row]
+
+
+@pytest.mark.parametrize(("question", "quote"), [
+    ("比较 ABC 指标（１２分）与观察时长。", "比较 ABC 得分（１２分）"),
+    ("比较 ABC 指标（１２分）与观察时长。", "观察时长与 ABC 指标"),
+    ("Compare North Bay and South Bay (１２ points).", "North Bay and South Bay (13 points)"),
+    ("Compare North Bay and South Bay (１２ points).", "NorthBay and South Bay"),
+    ("Compare North Bay and South Bay (１２ points).", "North Bay ... South Bay"),
+    ("Compare the scores…", "the scores."),
+    ("Compare North Bay and South Bay.", '"North Bay"'),
+    ("Compare North Bay and South Bay.", "   "),
+])
+def test_quote_must_be_one_contiguous_source_span(question, quote):
+    context = _context(named=False).model_copy(update={"research_question": question})
+    request = _request(context, cohort_mode=None)
+    claim = {**_BENCHMARK, "kind": "analysis", "concepts": [], "quote": quote}
+    spec = spec_from_mapping(_payload(request, [claim]))
+
+    with pytest.raises(FamilySpecError) as refused:
+        validate_family_plan_spec(spec, request)
+    assert refused.value.reason_code == "question_requirement_quote_not_in_question"
+    assert refused.value.path == "question_requirements[0].quote"
+
+
+def test_family_retry_names_allowed_keys_and_all_rejected_quote_paths():
+    context = _context(named=False)
+    request = _request(context, cohort_mode=None)
+    first = _BENCHMARK
+    second = {
+        **_BENCHMARK, "id": "r2", "kind": "analysis", "concepts": [],
+        "quote": "first-24-hour vitals and labs",
+    }
+    wrong_first = "compare to another score"
+    wrong_second = "labs and vitals across two days"
+    llm, result = _run(
+        context,
+        [
+            json.dumps(_payload(request, [{**first, "quote_span": {"start": 1, "end": 2}}, second])),
+            json.dumps(_payload(request, [{**first, "quote": wrong_first}, {**second, "quote": wrong_second}])),
+            json.dumps(_payload(request, [first, second])),
+        ],
+        required_primary_cohort_selection_mode=None,
+    )
+
+    assert len(llm.calls) == 3
+    schema = json.loads(family_spec_structured_output_request(request).schema_json)
+    item_schema = schema["properties"]["question_requirements"]["items"]
+    assert item_schema["additionalProperties"] is False
+    assert "quote_span" not in item_schema["properties"]
+    extra_feedback = llm.calls[1][0][-1].content
+    assert "question_requirements.0.quote_span" in extra_feedback
+    allowed_keys = ", ".join(item_schema["properties"])
+    assert f"Allowed keys: {allowed_keys}." in extra_feedback
+    quote_feedback = llm.calls[2][0][-1].content
+    assert "question_requirement_quote_not_in_question" in quote_feedback
+    assert "Copy one contiguous span from the research question" in quote_feedback
+    assert f"question_requirements[0].quote: {wrong_first!r}" in quote_feedback
+    assert f"question_requirements[1].quote: {wrong_second!r}" in quote_feedback
+    assert [item.quote for item in result.facts.question_requirements] == [
+        first["quote"], second["quote"],
+    ]
+
+
 def test_a_named_concept_no_requirement_reads_refuses_the_spec() -> None:
     request = _request(_context(), cohort_mode=None)
     spec = spec_from_mapping(_payload(request, []))

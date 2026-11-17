@@ -38,6 +38,7 @@ from ..literature_design_authority import (
     CandidateLiteratureDesignDecision,
     LiteratureDesignEvidenceCard,
 )
+from ..question_quote import QUESTION_QUOTE_RULE, QUOTE_NOT_IN_QUESTION
 from ..question_requirements import (
     MAX_NAMED_QUESTION_CONCEPTS,
     MAX_QUESTION_REQUIREMENTS,
@@ -1965,7 +1966,13 @@ def _validate_question_requirements(
     )
     if problems:
         first = problems[0]
-        raise FamilySpecError(first.code, first.message, path=first.path)
+        message = first.message
+        if first.code == QUOTE_NOT_IN_QUESTION:
+            message = " ".join((
+                *(problem.message for problem in problems if problem.code == first.code),
+                QUESTION_QUOTE_RULE,
+            ))
+        raise FamilySpecError(first.code, message, path=first.path)
 
 
 def _validate_effect_measure(spec: FamilyPlanSpec, request: FamilySpecRequest) -> None:
