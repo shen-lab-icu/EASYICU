@@ -11,6 +11,7 @@ from time import monotonic
 import pandas as pd
 import pytest
 
+from easyicu.concept.catalog import CONCEPT_DICTIONARY
 from easyicu.research_agent.research_context.export_selection import SourceIdentity
 from easyicu.research_agent.schema import (
     CohortDescriptor, ConceptDescriptor, ResearchContext, UserPreferences, VariableRole,
@@ -19,6 +20,7 @@ from easyicu.webserver.quick_answer import (
     QuickApproval, QuickReading, QuickStop, bind_prepared_source, execute_quick_answer,
     prepare_quick_answer,
 )
+from easyicu.webserver.quick_answer.planning import bind_concept_names, qualification_stop
 
 
 @pytest.fixture
@@ -228,6 +230,74 @@ def test_an_icu_type_name_binds_to_the_unit_type_concept(name):
 
     assert concept_named_by(name) == "icu_unit_type"
     assert concept_named_by("icu") is None and concept_named_by("ICU patients") is None
+
+
+def with_group(prepared, concept, levels):
+    frame = pd.read_parquet(prepared.path)
+    frame[concept] = [levels[0]] * 30 + [levels[1]] * 30
+    variable = ConceptDescriptor(
+        name=concept, dtype=str(frame[concept].dtype), observed_domain={"levels": list(levels)},
+    )
+    variables = [v for v in prepared.context.variables if v.name != concept] + [variable]
+    return rebound(prepared, frame=frame, context=prepared.context.model_copy(update={"variables": variables}))
+
+
+@pytest.mark.parametrize(("concept", "language", "levels"), [
+    ("sex", 1, ("Male", "Female")),
+    ("adm", 0, ("med", "surg")),
+    ("adm", 1, ("med", "surg")),
+    ("loop_diuretic", 1, (0, 1)),
+])
+def test_a_registered_display_label_binds_the_prepared_group(prepared, concept, language, levels):
+    label = CONCEPT_DICTIONARY[concept][language]
+    question = f"What is the median age by {label}?"
+    request = reading(question, grouping=[label], measure={"concept": "age", "statistic": "median"})
+    source = with_group(prepared, concept, levels)
+
+    assert bind_concept_names(request).grouping == (concept,)
+    proposal = prepare_quick_answer(request, source=source, provider=None, question=question)
+    assert (proposal.status, proposal.reason) == ("approval_required", "quick_qualified")
+    assert proposal.card.plan.group_column == concept
+    assert proposal.card.plan.group_levels == levels
+
+
+@pytest.mark.parametrize("label", ["local triage category", CONCEPT_DICTIONARY["o2sat"][1]])
+def test_an_unknown_or_ambiguous_group_name_stops_with_a_typed_reason(prepared, label):
+    request = reading(grouping=[label], measure={"concept": "age", "statistic": "median"})
+
+    assert bind_concept_names(request).grouping == (label,)
+    proposal = prepare_quick_answer(request, source=prepared, provider=None)
+    assert (proposal.status, proposal.reason) == ("stopped", "quick_capability_unassessed")
+    assert proposal.card is None
+
+
+@pytest.mark.parametrize(("replay", "update_distribution", "stop"), [
+    ("r2", False, None),
+    ("r3", False, "quick_reading_ambiguous"),
+    ("r3", True, None),
+])
+def test_demo_icu_type_replays_use_the_canonical_group(prepared, replay, update_distribution, stop):
+    path = Path(__file__).with_name("fixtures") / "quick_answer" / f"dH5_{replay}.reading.json"
+    request = QuickReading.model_validate(json.loads(path.read_text(encoding="utf-8"))["reading"])
+    if update_distribution:
+        # Replay the recorded label with the distribution contract landed after this reading.
+        request = request.model_copy(update={
+            "measure": request.measure.model_copy(update={"statistic": "distribution"}),
+            "ambiguities": (),
+        })
+    source = with_group(prepared, "icu_unit_type", ("MICU", "Med-Surg ICU"))
+
+    bound = bind_concept_names(request)
+    assert bound.grouping == ("icu_unit_type",)
+    assert qualification_stop(bound) == stop
+    proposal = prepare_quick_answer(request, source=source, provider=None, question=request.question)
+    if stop:
+        assert (proposal.status, proposal.reason) == ("full_study", stop)
+        assert proposal.card is None
+    else:
+        assert (proposal.status, proposal.reason) == ("approval_required", "quick_qualified")
+        assert (proposal.card.plan.measure_column, proposal.card.plan.group_column) == ("lact_max", "icu_unit_type")
+        assert proposal.card.plan.reading.measure.statistic == request.measure.statistic
 
 
 def test_icu_stay_by_icu_type_is_answered_not_left_unassessed(tmp_path):

@@ -1857,13 +1857,15 @@ def catalog_named_concepts(text: str) -> Tuple[str, ...]:
     return tuple(found)
 
 
-def concept_named_by(name: str) -> Optional[str]:
+def concept_named_by(name: str, *, include_catalog_labels: bool = False) -> Optional[str]:
     """The one concept a bare clinical name denotes, or ``None``.
 
     Reads ``name`` ("lactate", "heart_rate", "gender") with the same phrase
     table as a question, so a typed reader that names a measurement in words
-    binds to the concept the question's own words would. A name that reads as
-    no concept, or as more than one, denotes none.
+    binds to the concept the question's own words would. When
+    ``include_catalog_labels`` is set, a label spanning the entire name is
+    also a candidate. A name that reads as no concept, or as more than one,
+    denotes none.
     """
 
     try:
@@ -1871,6 +1873,11 @@ def concept_named_by(name: str) -> Optional[str]:
     except StudyIntentError:
         return None
     readings = {concept for concept, _phrase in _match_concept(text.lower())}
+    if include_catalog_labels:
+        readings.update(
+            concept for concept, start, end in _catalog_name_readings(text)
+            if start == 0 and end == len(text)
+        )
     concept = next(iter(readings)) if len(readings) == 1 else None
     return concept if isinstance(concept, str) else None
 

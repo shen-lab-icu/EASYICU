@@ -1,0 +1,28 @@
+{
+ "source_session_log": "2026-11-17T09-05-38-016Z",
+ "tool": "easyicu_quick_answer",
+ "reading": {
+  "question": "请描述 eICU demo 中不同 ICU 类型患者入 ICU 首日最高乳酸的分布。",
+  "intent": "describe",
+  "population": {
+   "criteria": []
+  },
+  "measure": {
+   "concept": "lactate",
+   "statistic": "median",
+   "summary": "max",
+   "window": {
+    "start_hours": 0,
+    "end_hours": 24
+   }
+  },
+  "grouping": [
+   "ICU 类型"
+  ],
+  "analysis_unit": "icu_stay",
+  "endpoint_kind": "observed",
+  "ambiguities": [
+   "“分布”可能需要同时报告多个分位数、离散程度或图形，而不仅是单一统计量；当前问题未明确所需的分布呈现方式。"
+  ]
+ }
+}

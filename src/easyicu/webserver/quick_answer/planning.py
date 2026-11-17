@@ -46,19 +46,22 @@ def bind_concept_names(reading: QuickReading) -> QuickReading:
     ("lactate", "gender") where the materializer and the prepared source take
     an id (``lact``, ``sex``); pilot1 10-26 stopped a fully typed reading that
     way. An id stays as typed. Any other name binds only when the question
-    reader reads it as exactly one concept (``concept_named_by``); otherwise it
-    stays as typed and the source lookup refuses it, as before.
+    reader reads it as exactly one concept (``concept_named_by``). For
+    grouping, that includes the catalog's display labels. Unresolved names
+    stay as typed for the normal qualification and source checks.
     """
     from easyicu.concept.loader import load_concept_dict_cached
     from easyicu.webserver.study_intent import concept_named_by
 
     known = load_concept_dict_cached().keys() | _OUTCOMES
 
-    def bind(name: str) -> str:
-        return name if not name or name in known else concept_named_by(name) or name
+    def bind(name: str, *, include_catalog_labels: bool = False) -> str:
+        if not name or name in known:
+            return name
+        return concept_named_by(name, include_catalog_labels=include_catalog_labels) or name
 
     concept = bind(reading.measure.concept)
-    grouping = tuple(bind(name) for name in reading.grouping)
+    grouping = tuple(bind(name, include_catalog_labels=True) for name in reading.grouping)
     if concept == reading.measure.concept and grouping == reading.grouping:
         return reading
     return reading.model_copy(update={
