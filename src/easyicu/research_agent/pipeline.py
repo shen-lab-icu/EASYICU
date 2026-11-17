@@ -191,7 +191,7 @@ from .planning.dependence_authority import (
     DependenceAuthorityError,
 )
 from .planning.family_spec import caller_bound_population_conflict
-from .planning.cohort_predicate_domain import population_grouping_resolution
+from .planning.cohort_predicate_domain import authorized_population_mode, population_grouping_resolution
 from .reporting.article_contract import (
     build_article_analysis_contract,
     validate_plan_against_article_contract,
@@ -3444,7 +3444,7 @@ class ResearchAgentPipeline:
             findings=len(findings),
         )
 
-        self._required_primary_cohort_selection_mode = population_grouping_resolution(context).selection_mode(self._config.required_primary_cohort_selection_mode)
+        self._required_primary_cohort_selection_mode = authorized_population_mode(self._config.required_primary_cohort_selection_mode, context)
         agent_context = context
         if self._context_top_k and skill_obj is None:
             agent_context = build_retrieved_research_context(

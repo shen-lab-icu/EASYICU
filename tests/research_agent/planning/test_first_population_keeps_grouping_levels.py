@@ -633,3 +633,30 @@ def test_materialization_resolves_the_stated_mode_with_the_sealed_candidate_cont
     stated = "all_input_rows" if case == "other_mode" else "predicate_filtered"
     resolved = sealed_candidate_population_mode(inner_run=tmp_path, capsule=capsule, stated_mode=stated)
     assert resolved == ("all_input_rows" if case in {"share", "other_mode"} else "predicate_filtered")
+
+
+def test_every_stage_asks_the_one_population_mode_judge():
+    """Planning, launch, materialization and execution share one judge.
+
+    Live dH4 s3: planning absorbed the bound while materialization re-derived
+    the saved mode on its own. Only the owner may apply a grouping resolution
+    to a mode, and only the stated-mode reader may read the saved cohort's mode.
+    """
+    import re
+    from pathlib import Path
+
+    import easyicu
+
+    root = Path(easyicu.__file__).resolve().parent
+    judge = re.compile(r"\.selection_mode\(")
+    stated = re.compile(r"planning_selection_mode\(\s*(?:primary_cohort\.)?planner_selectable_cohort\(")
+    judges, readers = set(), set()
+    for path in root.rglob("*.py"):
+        text = path.read_text(encoding="utf-8")
+        relative = path.relative_to(root).as_posix()
+        if judge.search(text):
+            judges.add(relative)
+        if stated.search(text):
+            readers.add(relative)
+    assert judges == {"research_agent/planning/cohort_predicate_domain.py"}
+    assert readers == {"webserver/research_launch_population.py"}

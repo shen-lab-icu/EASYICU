@@ -278,6 +278,18 @@ class PopulationGroupingResolution:
         }
 
 
+def authorized_population_mode(stated_mode: str | None, context: ResearchContext | None) -> str | None:
+    """The one judge of which population mode a stated restriction authorizes.
+
+    Planning, launch, candidate materialization and execution all ask this
+    function; none re-derives the absorption from the saved study. Without a
+    verified context the stated mode stands.
+    """
+    if context is None:
+        return stated_mode
+    return population_grouping_resolution(context).selection_mode(stated_mode)
+
+
 def population_grouping_resolution(context: ResearchContext) -> PopulationGroupingResolution:
     """A share keeps every level; only a proven restriction on its own concept yields.
 

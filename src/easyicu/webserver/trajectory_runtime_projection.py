@@ -45,7 +45,6 @@ from easyicu.research_agent.trajectory.scientific_runtime_authority import (
     build_trajectory_scientific_runtime_authority,
 )
 
-from . import primary_cohort
 from .scientific_runtime_projection import (
     WebScientificRuntimeProjection,
     WebScientificRuntimeProjectionError,
@@ -157,9 +156,9 @@ def _require_supported_population(
     # The same stated scope the candidate and package-bound runs are held to
     # (``agent_pipeline_runs``); the first-ICU-stay restriction is applied to
     # the source universe itself and is not a stated filter.
-    stated_mode = primary_cohort.planning_selection_mode(
-        primary_cohort.planner_selectable_cohort(study.get("cohort"))
-    )
+    from .research_launch_population import stated_population_mode
+
+    stated_mode = stated_population_mode(study)
     supported_mode = SIGNED_TRAJECTORY_POPULATION["selection_mode"]
     if stated_mode is None or stated_mode == supported_mode:
         return

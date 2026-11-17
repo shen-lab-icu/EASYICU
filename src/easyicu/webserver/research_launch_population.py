@@ -6,6 +6,16 @@ import math
 from typing import Any, Mapping
 
 
+
+def stated_population_mode(study: Mapping[str, Any]) -> str | None:
+    """The population mode the saved study states for rows a Planner selects.
+
+    Read only here; every stage then asks ``authorized_population_mode``.
+    """
+    from easyicu.webserver import primary_cohort
+
+    return primary_cohort.planning_selection_mode(primary_cohort.planner_selectable_cohort(study.get("cohort")))
+
 def resolved_launch_population_mode(
     *, required_mode: str | None, question: str, database: str,
     acquisition: Any, declarations: Mapping[str, Any],
@@ -19,7 +29,7 @@ def resolved_launch_population_mode(
     if required_mode != "predicate_filtered":
         return required_mode
     from easyicu.research_agent.planning.cohort_predicate_domain import (
-        population_grouping_resolution, question_asks_population_share,
+        authorized_population_mode, question_asks_population_share,
     )
     if not question_asks_population_share(question):
         return required_mode
@@ -29,7 +39,7 @@ def resolved_launch_population_mode(
         research_question=question, database=database,
         cohort=acquisition.universe_path, **declarations,
     )
-    return population_grouping_resolution(context).selection_mode(required_mode)
+    return authorized_population_mode(required_mode, context)
 
 
 
@@ -48,7 +58,7 @@ def sealed_candidate_population_mode(
     import hashlib
     from pathlib import Path
 
-    from easyicu.research_agent.planning.cohort_predicate_domain import population_grouping_resolution
+    from easyicu.research_agent.planning.cohort_predicate_domain import authorized_population_mode
     from easyicu.research_agent.schema import ResearchContext
 
     relative = str(capsule.get("context_relative_path") or "")
@@ -62,7 +72,7 @@ def sealed_candidate_population_mode(
     if hashlib.sha256(raw).hexdigest() != str(capsule.get("context_sha256") or ""):
         return stated_mode
     context = ResearchContext.model_validate_json(raw)
-    return population_grouping_resolution(context).selection_mode(stated_mode)
+    return authorized_population_mode(stated_mode, context)
 
 def prepare_source_population(study: Mapping[str, Any]) -> dict[str, Any]:
     """Project a source proposal for preparation; preserve its original request.

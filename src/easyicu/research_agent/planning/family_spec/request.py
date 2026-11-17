@@ -48,7 +48,7 @@ from ..analysis_types import (
 )
 from ..baseline_requirements import baseline_requirement_projection
 from ..cohort_contract import event_status_reading
-from ..cohort_predicate_domain import population_grouping_resolution
+from ..cohort_predicate_domain import authorized_population_mode, population_grouping_resolution
 from ..exposure_group_compile import exposure_group_contrast
 from ..distribution_authority import distribution_missingness_facts
 from ..cohort_eligibility import (
@@ -574,7 +574,7 @@ def _typed_cohort_fields(
     resolution = population_grouping_resolution(context)
     age_min = _optional_number(cohort.get("age_min")) if "age_min" not in resolution.absorbed_fields else None
     age_max = _optional_number(cohort.get("age_max")) if "age_max" not in resolution.absorbed_fields else None
-    required_primary_cohort_selection_mode = resolution.selection_mode(required_primary_cohort_selection_mode)
+    required_primary_cohort_selection_mode = authorized_population_mode(required_primary_cohort_selection_mode, context)
     minimum_icu_hours = minimum_icu_stay_hours(context) if "min_icu_los_hours" not in resolution.absorbed_fields else None
     typed = any(value is not None for value in (age_min, age_max, minimum_icu_hours))
     if required_primary_cohort_selection_mode in {"all_input_rows", "predicate_filtered"}:
@@ -756,7 +756,7 @@ def caller_bound_population_conflict(
     if observed == required_selection_mode:
         return None
     if (observed == "all_input_rows" and required_selection_mode == "predicate_filtered"
-            and population_grouping_resolution(context).selection_mode(required_selection_mode) == observed):
+            and authorized_population_mode(required_selection_mode, context) == observed):
         return None
     conflict = (
         "Planner primary cohort selection mode does not match the caller-bound "

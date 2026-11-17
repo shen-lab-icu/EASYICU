@@ -6279,11 +6279,10 @@ def _load_candidate_plan_materialization_authority(
             candidate_cohort
         ):
             raise ValueError("The candidate has no explicit population selection.")
-        stated_mode = primary_cohort.planning_selection_mode(
-            primary_cohort.planner_selectable_cohort(study.get("cohort"))
-        )
+        from .research_launch_population import sealed_candidate_population_mode, stated_population_mode
+
+        stated_mode = stated_population_mode(study)
         if stated_mode is not None and candidate_cohort.selection_mode != stated_mode:
-            from .research_launch_population import sealed_candidate_population_mode
 
             stated_mode = sealed_candidate_population_mode(inner_run=inner_run, capsule=capsule, stated_mode=stated_mode)
         if stated_mode is not None and candidate_cohort.selection_mode != stated_mode:
@@ -8209,9 +8208,9 @@ def make_research_pipeline_run_runner(
                         database=database,
                     )
             elif metadata_only_planning:
-                required_cohort_mode = primary_cohort.planning_selection_mode(
-                    primary_cohort.planner_selectable_cohort(study.get("cohort"))
-                )
+                from .research_launch_population import stated_population_mode
+
+                required_cohort_mode = stated_population_mode(study)
             else:
                 required_cohort_mode = _planner_cohort_selection_mode(study)
             declarations = research_context_declarations(
