@@ -179,6 +179,12 @@ stops and exact-clock stop-wins ties still determine the actual spans. This
 preserves valid ADH hours and their norepinephrine equivalents without
 changing dictionary bounds or introducing a second clinical input source.
 
+Hourly integration can round a result infinitesimally outside an unchanged
+bound. Numerical spill within 1e-12 relative to that bound is snapped back to
+the bound before validation; larger excursions keep their normal bounds
+handling. This prevents constant, valid ceiling doses losing an hour solely
+through floating-point multiplication and division.
+
 The nine vasopressor/inotrope concepts additionally declare opt-in/internal
 `<concept>_max` companions. They share all source declarations with their mean
 counterparts and take the maximum of the concurrent summed active dose.

@@ -255,6 +255,14 @@ def collapse_spans(frame, *, ids, index, value, native_scale=None, minimum=None,
     else:
         out = grouped[['_area', '_dt']].sum()
         out[value] = out.pop('_area') / out.pop('_dt')
+    # Integrating a constant dose at the ceiling can round just above it
+    # (e.g. rate * 49/60 / (49/60)). Do not lose an accepted hour to that
+    # numerical spill. Genuine excursions remain available to normal bounds.
+    for bound, direction in ((minimum, -1), (maximum, 1)):
+        if bound is not None:
+            delta = out[value] - bound
+            spill = delta.mul(direction).gt(0) & delta.abs().le(abs(bound) * 1e-12)
+            out.loc[spill, value] = bound
     for unit in units:
         out[unit] = _anchor_values(out, anchor, ids, unit)
     if HOURLY_BOUNDED in work and work[HOURLY_BOUNDED].eq(True).all():

@@ -519,3 +519,14 @@ def test_eicu_units_legacy_hourly_median_bounds_do_not_erase_active_dose(tmp_pat
         assert data[name].tolist() == pytest.approx([2 * ceiling])
         assert not any(c.startswith('_dose_') for c in data)
     assert result['norepi_equiv'].data.norepi_equiv.tolist() == pytest.approx([2 * ceiling / .4])
+
+
+@pytest.mark.parametrize('minutes', [7, 13, 17, 23, 31, 49, 59])
+def test_constant_active_rate_at_ceiling_survives_fractional_hour_roundoff(minutes):
+    from easyicu.concept.dose_rate import collapse_spans, START, END, POINT, CHANNEL
+
+    frame = pd.DataFrame({'stay_id': [1], 'charttime': [0.], 'propofol_rate': [200.],
+                          START: [0.], END: [minutes / 60.], POINT: [False], CHANNEL: ['']})
+    out = collapse_spans(frame, ids=['stay_id'], index='charttime', value='propofol_rate', minimum=0, maximum=200)
+    assert out.propofol_rate.between(0., 200.).all()
+    assert out.propofol_rate.tolist() == pytest.approx([200.])
