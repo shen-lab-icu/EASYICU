@@ -6,6 +6,10 @@ from types import SimpleNamespace
 import pytest
 
 from easyicu.research_agent.agents import progressive_planner as owner
+from easyicu.research_agent.authority.baseline_association_runtime import (
+    BASELINE_STEPS,
+    BaselineAssociationAuthorityError,
+)
 from easyicu.research_agent.authority.current_case_scientific_runtime import (
     CurrentCaseScientificAuthorityError,
     build_current_case_scientific_runtime_authority,
@@ -13,12 +17,17 @@ from easyicu.research_agent.authority.current_case_scientific_runtime import (
 from easyicu.research_agent.contracts.association_execution import (
     ASSOCIATION_BINARY_SENSITIVITY_CAPABILITY_ID,
 )
-from easyicu.research_agent.orchestration.scientific_runtime import ScientificRuntimeAuthorities
+from easyicu.research_agent.orchestration.scientific_runtime import (
+    ScientificAuthorityRepairError,
+    ScientificRuntimeAuthorities,
+)
 from easyicu.research_agent.planning.progressive_contract import ProgressivePlanCompileError
-from easyicu.research_agent.providers.mocks import ScriptedMockLLMClient
+from easyicu.research_agent.planning.progressive_resume import final_acceptance_repair_start
+from easyicu.research_agent.providers.mocks import PatternScriptedMockLLMClient, ScriptedMockLLMClient
 from easyicu.research_agent.providers.structured_retry import call_llm_with_structured_retry, StructuredResponseFailure
 from easyicu.research_agent.contracts.functional_form import FunctionalFormSpec
 from easyicu.research_agent.schema import AnalysisPlan, AnalysisStep
+from tests.support.baseline_association import baseline_context, baseline_plan_attempt, baseline_runtime
 
 from .progressive_planner_fixtures import _context, _outline_payload
 
@@ -140,8 +149,6 @@ def test_supported_sensitivity_is_kept_without_spending_a_retry():
 
 
 def test_authority_refusal_exhaustion_records_every_attempt(tmp_path):
-    from easyicu.research_agent.orchestration.scientific_runtime import ScientificAuthorityRepairError
-
     authorities, plan = _authorities(), _plan()
     llm = ScriptedMockLLMClient([plan.model_dump_json()] * 4)
     with pytest.raises(StructuredResponseFailure) as caught:
@@ -244,7 +251,6 @@ def test_progressive_outline_refusal_stops_at_existing_budget():
 
 def _baseline_plan_and_authorities():
     from easyicu.research_agent.authority.baseline_association_runtime import build_baseline_authority
-    from tests.support.baseline_association import baseline_context, baseline_plan_attempt, baseline_runtime
 
     context = baseline_context(covariates=("age",))
     attempt, _ = baseline_plan_attempt(context)
@@ -258,8 +264,6 @@ def _baseline_plan_and_authorities():
 
 
 def test_baseline_contrast_feedback_names_the_signed_values():
-    from easyicu.research_agent.orchestration.scientific_runtime import ScientificAuthorityRepairError
-
     plan, authorities = _baseline_plan_and_authorities()
     with pytest.raises(ScientificAuthorityRepairError) as caught:
         authorities.check_planner_plan(plan)
@@ -276,8 +280,6 @@ def test_baseline_contrast_feedback_names_the_signed_values():
 
 
 def test_contrast_repair_cannot_hide_an_adjustment_roster_change():
-    from easyicu.research_agent.authority.baseline_association_runtime import BaselineAssociationAuthorityError
-
     plan, authorities = _baseline_plan_and_authorities()
     requirement = plan.steps[3].model_requirements[0]
     plan.steps[3].model_requirements = [requirement.model_copy(update={"covariates": []})]
@@ -287,9 +289,6 @@ def test_contrast_repair_cannot_hide_an_adjustment_roster_change():
 
 
 def test_baseline_outline_retries_the_checkpoint_shaped_roster_before_sealing():
-    from easyicu.research_agent.authority.baseline_association_runtime import BASELINE_STEPS
-    from tests.support.baseline_association import baseline_context, baseline_plan_attempt, baseline_runtime
-
     context = baseline_context(covariates=("age",))
     attempt, _ = baseline_plan_attempt(context)
     authorities = baseline_runtime(context, attempt.output)
@@ -328,40 +327,105 @@ def test_baseline_outline_retries_the_checkpoint_shaped_roster_before_sealing():
     assert "baseline_association_step_roster_mismatch" in feedback
 
 
-def test_baseline_compiled_roster_retry_preserves_the_signed_model_and_legitimate_display():
-    from easyicu.research_agent.authority.baseline_association_runtime import BASELINE_STEPS, BaselineAssociationAuthorityError
-    from tests.support.baseline_association import baseline_context, baseline_plan_attempt, baseline_runtime
-
-    context = baseline_context()
+@pytest.fixture
+def covariate_baseline():
+    context = baseline_context(covariates=("age",)).model_copy(update={
+        "research_question": "How does in-hospital survival differ across sex categories at comparable ages?",
+    })
     attempt, _ = baseline_plan_attempt(context)
-    plan = attempt.output
-    authorities = baseline_runtime(context, plan)
-    display = plan.steps[-1]
-    assert display.expected_outputs == ["figure:cohort_flow"]
-    drift = plan.model_copy(update={"steps": [
-        *plan.steps[:-1], display.model_copy(update={"planned_analysis_role": "secondary"}),
-    ]})
-    assert AnalysisPlan.model_validate_json(drift.model_dump_json()) == drift
+    return context, attempt, baseline_runtime(context, attempt.output)
 
-    with pytest.raises(BaselineAssociationAuthorityError) as refused:
-        authorities.bind_plan(drift)
-    assert refused.value.reason_code == "baseline_association_step_roster_mismatch"
 
-    llm = ScriptedMockLLMClient([drift.model_dump_json(), plan.model_dump_json()])
-    events = []
-    repaired = call_llm_with_structured_retry(
-        llm, [], parser=lambda raw: authorities.check_planner_plan(AnalysisPlan.model_validate_json(raw), context),
-        retryable_parse_error=authorities.planner_retryable_error, max_retries=1, progress_callback=events.append,
+def test_baseline_compiled_roster_retry_preserves_the_signed_model_and_legitimate_display(covariate_baseline):
+    context, attempt, authorities = covariate_baseline
+    facts = attempt.facts
+    *prefix, display = facts.materializations
+    assert any(item.step.step_id == "age_functional_form" for item in prefix)
+    rejected = display.model_dump(mode="json")
+    rejected["step"]["sensitivity_spec_ids"] = ["enrollment_balance_followup"]
+
+    # The extra prefix replies let the test inspect an incorrectly targeted retry.
+    llm = PatternScriptedMockLLMClient([
+        ("Return only a concise ProgressivePlanOutline", [facts.outline.model_dump_json()]),
+        ("Return one ProgressiveFoundationMaterialization only", [facts.foundation.model_dump_json()]),
+        *((item.outline_step_sha256, [item.model_dump_json()] * 2) for item in prefix),
+        (display.outline_step_sha256, [json.dumps(rejected), display.model_dump_json()]),
+    ])
+    agent = owner.ProgressivePlannerAgent(llm, scientific_authorities=authorities)
+    checkpoints = []
+    repaired = agent.run_attempt(
+        context, required_primary_cohort_selection_mode="all_input_rows",
+        checkpoint_callback=checkpoints.append,
     )
-    assert repaired == plan
-    assert len(llm.calls) == 2
-    feedback = llm.calls[1][0][-1].content
-    assert json.dumps(list(BASELINE_STEPS)) in feedback
-    assert display.step_id in feedback
-    assert [event.phase for event in events] == ["started", "rejected", "started", "accepted"]
-    sealed = authorities.seal_for_plan(repaired)
-    bound, _ = sealed.bind_plan(repaired)
+    first_retry = llm.calls[2 + len(facts.materializations)][0][-1].content
+    observation = json.JSONDecoder().raw_decode(
+        first_retry.split("HOST COMPILER OBSERVATION FOR THIS CURRENT STEP:\n", 1)[1]
+    )[0]
+    detail = observation["findings"][0]
+    assert detail["refused_step_id"] == display.step.step_id
+    assert observation["current_step_id"] == display.step.step_id
+    assert observation["step_index"] == len(prefix)
+    assert detail["sensitivity_spec_ids"] == ["enrollment_balance_followup"]
+    assert detail["supported_repair"]["expected_core_step_ids"] == list(BASELINE_STEPS)
+    assert len(llm.calls) == 2 + len(facts.materializations) + 1
+    assert repaired.output == attempt.output
+    assert repaired.facts.materializations == facts.materializations
+    initial = next(point for point in checkpoints if len(point.materializations) == len(facts.materializations))
+    assert initial.materializations[:-1] == tuple(prefix)
+    assert initial.materializations[-1].step.sensitivity_spec_ids == ["enrollment_balance_followup"]
+    assert checkpoints[-1].materializations == facts.materializations
+    assert all(point.outline == facts.outline for point in checkpoints)
+    assert all(point.foundation == facts.foundation for point in checkpoints if point.foundation)
+    repair, = repaired.facts.prompt_metrics["final_acceptance_repairs"]
+    assert repair["retained_step_count"] == len(prefix)
+    sealed = authorities.seal_for_plan(repaired.output)
+    bound, _ = sealed.bind_plan(repaired.output)
     sealed.validate_plan(bound)
+
+
+@pytest.mark.parametrize("fault", ["display-before-report", "check-after-visualization", "core-step"])
+def test_baseline_compiled_roster_stops_without_a_suffix_target(covariate_baseline, fault):
+    context, attempt, authorities = covariate_baseline
+    steps = list(attempt.output.steps)
+    check_index = next(i for i, step in enumerate(steps) if step.step_id == "age_functional_form")
+    if fault == "display-before-report":
+        steps.insert(-1, steps.pop())
+    elif fault == "check-after-visualization":
+        steps.insert(check_index + 1, steps.pop(check_index))
+    else:
+        steps[-2] = steps[check_index].model_copy(update={
+            "step_id": "report", "intent": "Refit the model in place of the written cohort report.",
+            "expected_outputs": ["table:unexpected_age_refit"],
+        })
+    candidate = AnalysisPlan.model_validate({
+        **attempt.output.model_dump(mode="python"), "steps": [step.model_dump(mode="python") for step in steps],
+    })
+
+    with pytest.raises(ScientificAuthorityRepairError) as caught:
+        authorities.check_planner_plan(candidate, context)
+    assert caught.value.details["cause_code"] == "baseline_association_step_roster_mismatch"
+    assert caught.value.step_index is None
+    assert caught.value.details["findings"][0]["refused_step_id"] is None
+    assert final_acceptance_repair_start(caught.value, attempt.facts.outline) is None
+
+
+def test_baseline_outline_feedback_identifies_the_disallowed_addition(covariate_baseline):
+    _, attempt, authorities = covariate_baseline
+    outline = attempt.facts.outline
+    check_index = next(i for i, step in enumerate(outline.steps) if step.step_id == "age_functional_form")
+    rejected_index = check_index + 1
+    disallowed = outline.steps[check_index].model_copy(update={
+        "step_id": "alternate_enrollment_replay", "module_id": "robustness_replay",
+        "objective": "Replay enrollment under a newly proposed eligibility definition.",
+    })
+    candidate = outline.model_copy(update={
+        "steps": [*outline.steps[:rejected_index], disallowed, *outline.steps[rejected_index:]],
+    })
+
+    with pytest.raises(ScientificAuthorityRepairError) as caught:
+        authorities.check_planner_outline(candidate)
+    assert caught.value.step_index == rejected_index
+    assert caught.value.details["findings"][0]["refused_step_id"] == disallowed.step_id
 
 
 def test_later_design_stop_preserves_prior_retry_history():

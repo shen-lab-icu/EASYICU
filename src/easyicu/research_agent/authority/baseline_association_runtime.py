@@ -66,7 +66,10 @@ class BaselineAssociationAuthorityError(ValueError):
         super().__init__(message)
         self.reason_code = reason_code
         self._mismatch_fields = tuple(mismatch_fields)
-        self.step_id = step_id if step_id in (*BASELINE_STEPS, "plan") else "plan"
+        self.step_id = (
+            step_id if reason_code == "baseline_association_step_roster_mismatch"
+            or step_id in (*BASELINE_STEPS, "plan") else "plan"
+        )
 
     @property
     def mismatch_fields(self) -> tuple[str, ...]:
@@ -76,6 +79,13 @@ class BaselineAssociationAuthorityError(ValueError):
 
 def _refusal(message, *, reason_code="baseline_association_design_mismatch", mismatch_fields=(), step_id="adjusted_association"):
     return BaselineAssociationAuthorityError(message, reason_code=reason_code, mismatch_fields=mismatch_fields, step_id=step_id)
+
+
+def _step_roster_refusal(step: AnalysisStep | None = None) -> BaselineAssociationAuthorityError:
+    return _refusal(
+        "baseline template step roster drifted", reason_code="baseline_association_step_roster_mismatch",
+        mismatch_fields=("step_roster",), step_id=step.step_id if step is not None else "plan",
+    )
 
 
 def _article_display_profile(step, core):
@@ -297,8 +307,7 @@ class BaselineAssociationRuntimeAuthority(BaseModel):
     def validate_plan(self, plan: AnalysisPlan):
         # Append runs inherit results, not this authority's baseline step roster.
         if tuple(step.step_id for step in plan.steps[:5]) != BASELINE_STEPS[:5]:
-            raise _refusal("baseline template step roster drifted", reason_code="baseline_association_step_roster_mismatch",
-                           mismatch_fields=("step_roster",), step_id="plan")
+            raise _step_roster_refusal()
         primary = self.governed_primary_step(plan)
         required_steps = baseline_core_step_ids(
             getattr(plan.design_selection, "execution_tier", None),
@@ -307,16 +316,22 @@ class BaselineAssociationRuntimeAuthority(BaseModel):
         checks = [step for step in plan.steps if self._prespecified_check(step, plan)]
         remaining = [step for step in plan.steps if step not in checks]
         core, companions = remaining[:len(required_steps)], remaining[len(required_steps):]
-        profiles = [_article_display_profile(step, core) for step in companions]
-        if (tuple(step.step_id for step in core) != required_steps
-            or (companions and required_steps != BASELINE_STEPS and profiles != ["figure:cohort_flow"])
-            or None in profiles or len(profiles) != len(set(profiles))
-            or any(plan.steps.index(step) <= plan.steps.index(next(s for s in plan.steps if s.step_id == "absolute_risk_context"))
-                   or any(plan.steps.index(step) > plan.steps.index(s) for s in core if s.step_id in {"visualization", "report"})
-                   for step in checks)
-            or len({step.step_id for step in plan.steps}) != len(plan.steps)):
-            raise _refusal("baseline template step roster drifted", reason_code="baseline_association_step_roster_mismatch",
-                           mismatch_fields=("step_roster",), step_id="plan")
+        if len({step.step_id for step in plan.steps}) != len(plan.steps):
+            raise _step_roster_refusal()
+        if tuple(step.step_id for step in core) != required_steps:
+            core_check = next((step for step in checks if step.step_id in required_steps), None)
+            unexpected = next((step for step in core if step.step_id not in required_steps), None)
+            raise _step_roster_refusal(core_check or unexpected)
+        if any(plan.steps.index(step) <= 4
+               or any(plan.steps.index(step) > plan.steps.index(s) for s in core if s.step_id in {"visualization", "report"})
+               for step in checks):
+            raise _step_roster_refusal()
+        profiles: set[str] = set()
+        for step in companions:
+            profile = _article_display_profile(step, core)
+            if profile is None or profile in profiles or (required_steps != BASELINE_STEPS and profile != "figure:cohort_flow"):
+                raise _step_roster_refusal(step)
+            profiles.add(profile)
         if sole_typed_cohort_input(primary) != "artifact:analysis_cohort" or primary.expected_outputs != ["table:adjusted_association_estimates"]:
             raise _refusal("baseline primary product or cohort drifted", mismatch_fields=("expected_outputs", "inputs"))
         if primary.inputs != ["artifact:analysis_cohort", *self.required_columns]:

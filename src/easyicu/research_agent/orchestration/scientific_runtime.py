@@ -22,6 +22,7 @@ from ..authority.current_case_scientific_runtime import (
 from ..contracts.endpoint import EndpointSpec
 from ..contracts.association_execution import ASSOCIATION_BINARY_SENSITIVITY_CAPABILITY_ID
 from ..contracts.functional_form import RCS_LINEAR_SENSITIVITY_METHODS
+from ..planning.progressive_compiler import _METHOD_BY_MODULE
 from ..planning.progressive_contract import ProgressiveOutlineStep, ProgressivePlanCompileError, ProgressivePlanOutline
 from ..contracts.phenotype_comparison import (
     COMPARISON_ACTION,
@@ -818,8 +819,57 @@ def retryable_planner_error(error: Exception) -> bool:
 
 def _baseline_core_matches(step_ids: tuple[str, ...], expected: tuple[str, ...]) -> bool:
     return (
-        step_ids[:5] == expected[:5]
+        len(step_ids) == len(set(step_ids))
+        and step_ids[:5] == expected[:5]
         and tuple(step_id for step_id in step_ids if step_id in expected) == expected
+    )
+
+
+def _baseline_first_display(step_ids: tuple[str, ...], modules: tuple[str, ...]) -> int:
+    display_modules = {"visualization", "report"}
+    return next(
+        (index for index, (step_id, module) in enumerate(zip(step_ids, modules))
+         if step_id in display_modules or module in display_modules),
+        len(step_ids),
+    )
+
+
+def _baseline_invalid_addition_index(
+    step_ids: tuple[str, ...], modules: tuple[str, ...], expected: tuple[str, ...],
+) -> int | None:
+    last_core = step_ids.index(expected[-1])
+    first_display = _baseline_first_display(step_ids, modules)
+    for index, (step_id, module) in enumerate(zip(step_ids, modules)):
+        if step_id in expected:
+            continue
+        if module == "visualization" and index > last_core:
+            continue
+        if module == "custom_analysis" and index < first_display:
+            continue
+        return index
+    return None
+
+
+def _baseline_roster_repair_index(
+    authority: BaselineAssociationRuntimeAuthority, plan: AnalysisPlan, step_ids: tuple[str, ...],
+    expected: tuple[str, ...], error: BaselineAssociationAuthorityError,
+) -> int | None:
+    """Locate executable detail that a sealed outline can still change."""
+    if error.step_id in expected or not _baseline_core_matches(step_ids, expected):
+        return None
+    # Compiled steps carry methods instead of outline module IDs. Fixed
+    # methods keep their module identity; other methods can be custom checks.
+    module_by_method = {method: module for module, method in _METHOD_BY_MODULE.items()}
+    modules = tuple(module_by_method.get(step.method, "custom_analysis") for step in plan.steps)
+    if _baseline_invalid_addition_index(step_ids, modules, expected) is not None:
+        return None
+    if error.step_id != "plan":
+        return next((index for index, step_id in enumerate(step_ids) if step_id == error.step_id), None)
+    first_display = _baseline_first_display(step_ids, modules)
+    return next(
+        (index for index, step in enumerate(plan.steps[:first_display])
+         if step.step_id not in expected and not authority._prespecified_check(step, plan)),
+        None,
     )
 
 
@@ -855,18 +905,9 @@ def _check_baseline_outline(
     expected = baseline_core_step_ids(execution_tier, has_visualization="visualization" in step_ids)
     if not _baseline_core_matches(step_ids, expected):
         raise _baseline_roster_feedback(authority, steps, expected)
-    last_core = step_ids.index(expected[-1])
-    first_display = next(
-        (index for index, step in enumerate(steps) if step.module_id in {"visualization", "report"}), len(steps),
-    )
-    for index, step in enumerate(steps):
-        if step.step_id in expected:
-            continue
-        if step.module_id == "visualization" and index > last_core:
-            continue
-        if step.module_id == "custom_analysis" and index < first_display:
-            continue
-        raise _baseline_roster_feedback(authority, steps, expected)
+    index = _baseline_invalid_addition_index(step_ids, tuple(step.module_id for step in steps), expected)
+    if index is not None:
+        raise _baseline_roster_feedback(authority, steps, expected, index=index)
 
 
 def check_authority_outline(
@@ -1024,16 +1065,14 @@ def check_authority_plan(
         bound, _findings = sealed.bind_plan(plan)
         sealed.current_case.validate_plan(bound)
     except (CurrentCaseScientificAuthorityError, BaselineAssociationAuthorityError) as error:
-        if isinstance(authority, BaselineAssociationRuntimeAuthority) and error.reason_code == _BASELINE_STEP_ROSTER_MISMATCH:
+        if (isinstance(authority, BaselineAssociationRuntimeAuthority)
+                and isinstance(error, BaselineAssociationAuthorityError)
+                and error.reason_code == _BASELINE_STEP_ROSTER_MISMATCH):
             steps = tuple(step.step_id for step in plan.steps)
             expected = baseline_core_step_ids(
                 getattr(plan.design_selection, "execution_tier", None), has_visualization="visualization" in steps,
             )
-            # Only an addition's executable detail is editable in a sealed outline.
-            # Core ID or order drift has to be repaired in the outline itself.
-            index = None
-            if _baseline_core_matches(steps, expected):
-                index = next((i for i, step_id in enumerate(steps) if step_id not in expected), None)
+            index = _baseline_roster_repair_index(authority, plan, steps, expected, error)
             raise _baseline_roster_feedback(authority, plan.steps, expected, index=index) from error
         if isinstance(authority, LandmarkSplineRuntimeAuthority) and error.reason_code == "landmark_spline_binary_sensitivity_unsupported":
             for index, step in enumerate(plan.steps):
