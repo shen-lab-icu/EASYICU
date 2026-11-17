@@ -108,14 +108,16 @@ def released_fact_lines(
     facts: Sequence[ManuscriptMethodFact],
     bind: Callable[[str], str] | None = None,
 ) -> tuple[tuple[int, int, ManuscriptMethodFact], ...]:
-    """Find exact host fact lines with typed numbers in their declared sections."""
+    """Find exact typed rules and quoted source definitions in their sections."""
 
     found: list[tuple[int, int, ManuscriptMethodFact]] = []
     for section, span_of in _SECTION_SPANS.items():
         by_line = {
             (bind(fact.scaffold) if bind is not None else fact.scaffold): fact
             for fact in facts
-            if fact.section == section and fact.typed_values
+            if fact.section == section and (fact.typed_values or (
+                fact.source_field.endswith(".description") and re.search(r"\d", fact.text)
+            ))
         }
         span = span_of(text) if by_line else None
         if span is None:

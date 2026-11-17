@@ -354,3 +354,27 @@ def test_write_phase_owner_projects_then_audits_the_same_current_source(tmp_path
     assert failure.severity == "error"
     assert failure.validator in _MANUSCRIPT_ERROR_VALIDATORS
     assert failure.detail["source_fields"] == ["variables[1].description"]
+
+
+@pytest.mark.parametrize("definition", [
+    "Age groups: patients younger than 65 years versus patients aged 65 years or older",
+    "Level codes: 1 = creatinine below 1 mg/dL; 2 = creatinine at least 2 mg/dL",
+])
+def test_source_definition_numbers_survive_the_production_numeric_chain(tmp_path, definition):
+    from easyicu.research_agent.reporting.manuscript_method_facts import method_fact_binding, audit_bound_source_method_facts
+    from easyicu.research_agent.reporting.manuscript_post import drop_untraceable_numeric_sentences
+
+    payload = _context().model_dump(mode="json")
+    payload["variables"][0]["description"] = definition
+    store, record = _source(tmp_path, context=ResearchContext.model_validate(payload))
+    scaffold, _ = place_manuscript_method_facts("## Methods\n\n### Variables\n", store.manuscript_method_facts())
+    bound = store.bind_manuscript(scaffold, per_step_records=[])
+    kept, removed = drop_untraceable_numeric_sentences(bound, evidence=store, per_step_records=[],
+                                                      **method_fact_binding(store, []))
+    assert not removed
+    assert audit_bound_source_method_facts(kept, evidence=store, per_step_records=[]) is None
+    final, bindings, unknown = bind_numeric_values(kept, evidence=store, per_step_records=[],
+                                                  **method_fact_binding(store, []))
+    assert not unknown and bindings
+    assert all(c.source_field == "variables[0].description" for c in bindings.values())
+    assert record.sha256 in final

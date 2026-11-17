@@ -9,6 +9,7 @@ model-facing class from also becoming a manuscript workflow coordinator.
 
 from __future__ import annotations
 
+from collections import Counter
 from dataclasses import dataclass, replace
 import hashlib
 import json
@@ -863,6 +864,12 @@ def repair_existing_manuscript_sections(
 
 _NUMBER_OUTSIDE_TOKEN = re.compile(r"(?<![\w.])[+−-]?(?:\d[\d,]*(?:\.\d+)?|\.\d+)(?:[eE][+-]?\d+)?(?!\w)")
 _PRESERVED_VALUE = re.compile(r"\{(?:manuscript|audit)_value:[^{}]*\}")
+_BINDING_TOKEN_RE = re.compile(r"\{(?:evidence|claim):[^{}\s]+\}|\[@[^\]\n]+\]")
+
+
+def manuscript_binding_tokens(text: str) -> list[str]:
+    """Exact binding identities shared by the repair prompt and its guard."""
+    return _BINDING_TOKEN_RE.findall(text)
 
 
 def _masked_section_values(text: str, *, prefix: str = "manuscript") -> tuple[str, dict[str, str]]:
@@ -928,6 +935,7 @@ def repair_named_manuscript_sections(
             "\n".join(f"- {item}" for item in errors[:12]), prefix="audit",
         )
         current_section, preserved_values = _masked_section_values(sections.get(spec.key, ""))
+        protected_tokens = Counter(manuscript_binding_tokens(current_section))
         instruction = (
             "EVIDENCE-AUTHORITY CONTRACT REPAIR:\n"
             + "The adjacent deterministic claim policy rejected these sentences "
@@ -948,6 +956,10 @@ def repair_named_manuscript_sections(
             + "for its existing numbers. Keep each marker exactly once, in its "
             + "original subsection; the host restores the literal before validation. "
             + "Do not copy `{audit_value:...}` diagnostic markers into the section."
+            + "\nTOKENS TO KEEP VERBATIM (retain at least these occurrence counts in this section):\n"
+            + "\n".join(f"- {token}: {count} occurrence(s)" for token, count in protected_tokens.items())
+            + "\nAn adjustment-set correction changes the covariate prose; keep the "
+            + "existing evidence/claim tokens and other subsections verbatim."
         )
         repaired = _ensure_section_heading(
             spec,

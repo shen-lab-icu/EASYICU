@@ -448,7 +448,10 @@ def _extract_ci_claims(
         flags=re.IGNORECASE,
     )
     claims: List[Tuple[float, float, Optional[str]]] = []
+    definitions = _definition_footnote_ids(text)
     for match in pattern.finditer(clean_text):
+        if match.group("fid") in definitions:
+            continue
         try:
             low = float(match.group(1))
             high = float(match.group(2))
@@ -625,6 +628,14 @@ _FOOTNOTE_DEFINITION_RE = re.compile(
 )
 
 
+def _definition_footnote_ids(text: str) -> set[str]:
+    """Consume the numeric binder's classification; do not infer definitions."""
+    return {
+        match["fid"] for match in _FOOTNOTE_DEFINITION_RE.finditer(text)
+        if "authority=definition" in match["fields"].split("; ")
+    }
+
+
 def footnote_step_ids(bound_manuscript: str) -> Dict[str, str]:
     """Map each numeric footnote id to the step that produced its value.
 
@@ -751,7 +762,10 @@ def _extract_metric_claims_with_footnote(
         metric_pattern + r"([^0-9]{0,40})([01]\.\d+)(?:\[\^(?P<fid>[^\]]+)\])?",
         flags=re.IGNORECASE,
     )
+    definitions = _definition_footnote_ids(text)
     for match in pattern.finditer(clean_text):
+        if match.group("fid") in definitions:
+            continue
         # A cue is authoritative only when it sits between the metric name and
         # the number ("AUROC estimates differing by less than 0.001"). Ordinary
         # prose elsewhere in the clause ("Within the cohort, AUROC was 0.92")
@@ -804,7 +818,10 @@ def _extract_percent_claims_near_with_footnote(
         r"\s*(?:CI\b|confidence\s+interval|credible\s+interval)",
         flags=re.IGNORECASE,
     )
+    definitions = _definition_footnote_ids(text)
     for match in pattern.finditer(clean_text):
+        if match.group("fid") in definitions:
+            continue
         trailer = clean_text[match.end(): match.end() + 32]
         if ci_trailer.match(trailer):
             continue

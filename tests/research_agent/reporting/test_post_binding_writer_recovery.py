@@ -200,7 +200,7 @@ def _section(text, name):
     return text.split(f"## {name}\n", 1)[1].split("\n## ", 1)[0].strip()
 
 
-def _exercise(tmp_path, monkeypatch, bad, responses, *, changed_bindings=False, initial_findings=(), baseline_mentions=None):
+def _exercise(tmp_path, monkeypatch, bad, responses, *, changed_bindings=False, initial_findings=(), baseline_mentions=None, definition_labels=None):
     context = ResearchContext.model_validate({
         "research_question": "Assess potassium-based renal readmission prediction.",
         "cohort": {"cohort_name": "synthetic", "database": "miiv", "n_stays": 120},
@@ -215,6 +215,10 @@ def _exercise(tmp_path, monkeypatch, bad, responses, *, changed_bindings=False, 
     if baseline_mentions is not None:
         monkeypatch.setattr(write_phase, "baseline_reporting_mentions", lambda *_args: baseline_mentions)
     store = EvidenceStore(tmp_path, enforcement_mode=EvidenceEnforcementMode.STRICT)
+    if definition_labels:
+        plan.display_labels = definition_labels
+        store.register_json(kind="log", description="Registered synthetic plan", payload=plan.model_dump(mode="json"),
+                            filename="plan.json", evidence_id="analysis_plan", producer="planner", generation_mode="system")
     summary = {"cohort_n": 120, "another_count": 121, "auroc": 0.74, "events": 15}
     store.register_json(kind="statistic", description="Synthetic summary", payload=summary,
                         filename="summary.json", evidence_id="renal_summary", produced_by_step="renal_model")
@@ -256,6 +260,12 @@ def _exercise(tmp_path, monkeypatch, bad, responses, *, changed_bindings=False, 
         # harness's authority. It is not used to construct numeric evidence.
         assert "The cohort comprised" in filtered.scaffold
         bound = store.bind_manuscript(scaffold, per_step_records=records)
+        if definition_labels:
+            from easyicu.research_agent.reporting.manuscript_post import drop_untraceable_numeric_sentences
+            bound, removed = drop_untraceable_numeric_sentences(bound, evidence=store, per_step_records=records)
+            if removed:
+                findings.append(ValidationFinding(validator="manuscript_numeric_auditor", severity="warning",
+                                message="Filtered numeric sentences", detail={"removed_sentences": removed}))
         bound, values, unknown = bind_numeric_values(bound, evidence=store, per_step_records=records,
                                                      enforcement_mode=EvidenceEnforcementMode.STRICT)
         if changed_bindings and len(bindings) > 1:
@@ -452,3 +462,73 @@ def test_repair_model_can_keep_opaque_values_without_receiving_or_changing_them(
     assert "{manuscript_value:" not in result[0].scaffold
     current = client.calls[0][0][1].content.split("CURRENT SECTION", 1)[1].split("CITATION RULE", 1)[0]
     assert "120" not in current and "15 " not in current
+
+
+@pytest.mark.parametrize("before, after, owner, code", [
+    ("The outcome count was 15 {evidence:renal_summary}.", "The outcome count was", "Results", "MANUSCRIPT_SECTION_TRUNCATED"),
+    ("The outcome count was 15 {evidence:renal_summary}.", "", "Results", "MANUSCRIPT_SUBSECTION_MISSING_OR_EMPTY"),
+    ("The AUROC was 0.74 {evidence:renal_summary}.", "See Figure 1 {evidence:renal_summary}.", "Results", "MANUSCRIPT_RESULT_SUBSECTION_CALLOUT_ONLY"),
+    ("The evaluation addresses discrimination for renal readmission within the study population.", "Independent validation is required.", "Conclusion", "MANUSCRIPT_CONCLUSION_WITHOUT_INTERPRETATION"),
+])
+def test_structural_repair_remains_available_with_registered_numeric_labels(tmp_path, monkeypatch, before, after, owner, code):
+    bad = GOOD.replace(before, after)
+    label = "patients aged 65 years or older"
+    bad = bad.replace("### Variables\n", "### Variables\nWe studied " + label + " {evidence:renal_summary}.\n\n")
+    response = f"## {owner}\n\n" + _section(GOOD, owner)
+    result, client, _, _, findings = _exercise(tmp_path, monkeypatch, bad, [response],
+                                              definition_labels={"age=older": label})
+    assert result[1].manuscript_critique.status == "pass" and len(client.calls) == 1
+    assert code in client.calls[0][0][-1].content
+    assert not any((f.detail or {}).get("removed_sentences") for f in findings)
+    receipt = json.loads((tmp_path / "manuscript_audit_repair.json").read_text())
+    assert receipt["status"] == "pass" and receipt["attempts"][0]["numeric_checks"] == "pass"
+
+
+@pytest.mark.parametrize("binding_change", [None, "drop", "replace"])
+def test_adjustment_repair_keeps_methods_tokens_verbatim(tmp_path, monkeypatch, binding_change):
+    bad = GOOD.replace("The executed analysis assessed discrimination", "The adjustment set comprised age and severity")
+    bad = bad.replace("The AUROC was", "After adjustment for age and sex, the AUROC was")
+    response = "## Methods\n\n" + _section(bad, "Methods").replace("age and severity", "age and sex")
+    if binding_change:
+        response = response.replace("{evidence:renal_summary}", "" if binding_change == "drop" else "{evidence:other_summary}", 1)
+        with pytest.raises(EvidenceEnforcementError, match="existing evidence or claim binding"):
+            _exercise(tmp_path, monkeypatch, bad, [response])
+        receipt = json.loads((tmp_path / "manuscript_audit_repair.json").read_text())
+        assert receipt["attempts"][0]["authority_failure"]["check"] == "section_tokens"
+        assert receipt["attempts"][0]["authority_failure"]["section"] == "methods"
+        assert receipt["attempts"][0]["numeric_checks"] == "pending"
+    else:
+        result, client, _, _, _ = _exercise(tmp_path, monkeypatch, bad, [response])
+        assert result[1].manuscript_critique.status == "pass"
+        feedback = client.calls[0][0][-1].content
+        assert "MANUSCRIPT_ADJUSTMENT_SET_CONFLICT" in feedback
+        assert "TOKENS TO KEEP VERBATIM" in feedback
+        assert "{evidence:renal_summary}" in feedback and "4 occurrence(s)" in feedback
+
+
+def test_adjustment_repair_still_refuses_an_unaffected_section_change():
+    from easyicu.research_agent.reporting.manuscript_audit_repair import _require_preserved_sections
+
+    changed = GOOD.replace("Interpretation is limited", "Interpretation remains limited")
+    with pytest.raises(EvidenceEnforcementError, match="unaffected section") as failure:
+        _require_preserved_sections(GOOD, changed, ("methods",))
+    assert failure.value.detail == {"check": "unaffected_section", "section": "discussion"}
+
+
+def test_a_repair_candidate_with_new_filter_removals_is_still_rejected(tmp_path, monkeypatch):
+    bad = GOOD.replace("The AUROC was 0.74 {evidence:renal_summary}.", "See Figure 1 {evidence:renal_summary}.")
+    response = "## Results\n\n" + _section(GOOD, "Results") + "\n\nThere were 991 deaths {evidence:renal_summary}."
+    with pytest.raises(EvidenceEnforcementError, match="MANUSCRIPT_AUDIT_NON_REPAIRABLE"):
+        _exercise(tmp_path, monkeypatch, bad, [response], definition_labels={"age=older": "patients aged 65 years or older"})
+    receipt = json.loads((tmp_path / "manuscript_audit_repair.json").read_text())
+    assert receipt["status"] == "rejected" and len(receipt["attempts"]) == 1
+
+
+def test_adjustment_repair_cannot_drop_a_definition_written_in_scientific_notation(tmp_path, monkeypatch):
+    label = "potassium at least 1 × 10⁻³ mmol/L"
+    bad = GOOD.replace("The executed analysis assessed discrimination",
+                       "The adjustment set comprised age and severity, using " + label)
+    bad = bad.replace("The AUROC was", "After adjustment for age and sex, the AUROC was")
+    response = "## Methods\n\n" + _section(bad, "Methods").replace("age and severity, using " + label, "age and sex")
+    with pytest.raises(EvidenceEnforcementError, match="existing bound number or source changed"):
+        _exercise(tmp_path, monkeypatch, bad, [response], definition_labels={"potassium=low": label})

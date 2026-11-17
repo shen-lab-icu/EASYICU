@@ -49,6 +49,9 @@ from .manuscript_sentence_context import contextual_sentence_deletion
 from .manuscript_surface import claim_token_stands_in_block
 from .manuscript_bibliographic_years import bibliographic_year_spans
 from .manuscript_method_facts import released_fact_lines
+from .manuscript_definition_numerics import (
+    DefinitionSpan, definition_claim, definition_number_matches, registered_definition_spans,
+)
 from .population_selection import (
     POPULATION_STATEMENT_NOT_HOST_CITED,
     AnalyzedPopulation,
@@ -2133,13 +2136,16 @@ def _released_fact_claim(
     value: str,
     lookup_value: str,
 ) -> Optional[Tuple[NumericClaim, str]]:
-    """Bind a number only to the typed values of its exact host fact line."""
+    """Bind an exact source definition or a typed host rule to its own source."""
 
     for line_start, line_end, fact in released:
         if not line_start <= start < line_end:
             continue
         parsed = _parsed_numeric_literal(lookup_value)
-        if parsed is None or parsed[1] or parsed[0] not in fact.typed_values:
+        if parsed is None or (
+            not fact.source_field.endswith(".description")
+            and (parsed[1] or parsed[0] not in fact.typed_values)
+        ):
             return None
         return NumericClaim(
             value=value,
@@ -2211,9 +2217,10 @@ def bind_numeric_values(
     * STRICT mode → raise :class:`EvidenceEnforcementError` after
       scanning, with the offending values in ``detail['untraced']``.
 
-    Exact host method facts in their declared sections bind only the values
-    reproduced from typed parameters. Their footnotes include the source field,
-    evidence id and digest. Free-text metadata and edited lines gain no release.
+    Exact host rules bind values reproduced from typed parameters. Quoted
+    source-definition lines and registered plan labels bind their own numeric
+    occurrences to their definition source, never to a result. Edited lines
+    and equal values outside those spans gain no definition authority.
 
     The implementation skips numbers that are already inside
     ``{evidence:<id>}`` placeholders, existing footnote markers
@@ -2249,11 +2256,16 @@ def bind_numeric_values(
     )
     skip_spans = sorted(_spans_to_skip(manuscript) + bibliographic_year_spans(manuscript, literature))
     released = released_fact_lines(manuscript, method_facts, bind_fact)
+    definitions = (*registered_definition_spans(manuscript, evidence), *(
+        DefinitionSpan(start, end, fact.evidence_id, fact.source_field, fact.source_sha256)
+        for start, end, fact in released if fact.source_field.endswith(".description")
+    ))
     fact_sources: Dict[str, str] = {}
     binding_map: Dict[str, NumericClaim] = {}
     untraced: List[str] = []
     miscited: List[Dict[str, Any]] = []
     unnamed: List[Dict[str, Any]] = []
+    rejected_occurrences: List[Dict[str, Any]] = []
     used_ids: Dict[str, str] = {}  # claim identity -> footnote_id
     display_values: Dict[str, str] = {}
     previous_step_id: Optional[str] = None
@@ -2279,7 +2291,7 @@ def bind_numeric_values(
 
     out_parts: List[str] = []
     cursor = 0
-    for match in _NUMERIC_IN_PROSE_RE.finditer(manuscript):
+    for match in definition_number_matches(manuscript, definitions):
         start, end = match.start("value"), match.end("value")
         if _position_is_inside(start, skip_spans):
             continue
@@ -2300,6 +2312,9 @@ def bind_numeric_values(
         fact_claim = _released_fact_claim(
             released, start=start, value=value, lookup_value=lookup_value,
         )
+        parsed = _parsed_numeric_literal(value)
+        if fact_claim is None and parsed is not None:
+            fact_claim = definition_claim(definitions, start=start, end=end, value=value, canonical=parsed[0])
         if fact_claim is not None:
             claim, source_sha256 = fact_claim
             fid = _footnote_id_for(claim, display_value=value, typed_fact=True)
@@ -2334,6 +2349,7 @@ def bind_numeric_values(
         named = [item for item in candidates if not unnamed_by[id(item[0])]]
         if not named and candidates:
             untraced.append(value)
+            rejected_occurrences.append({"start": start, "end": end, "value": value})
             unnamed_ids = [_claim_identity(candidate) for candidate, _ in candidates]
             not_ruled_out = list(
                 dict.fromkeys(
@@ -2350,6 +2366,7 @@ def bind_numeric_values(
                     "not_ruled_out": not_ruled_out,
                 }
             )
+            rejected_occurrences[-1]["unnamed_fact_identity"] = unnamed[-1]
             if mode is EvidenceEnforcementMode.SOFT:
                 out_parts.append(
                     f" <!-- AMBIGUOUS:{value}"
@@ -2377,11 +2394,13 @@ def bind_numeric_values(
         )
         if claim is None:
             untraced.append(value)
+            rejected_occurrences.append({"start": start, "end": end, "value": value})
             miscitation = _miscitation_detail(
                 candidates, context=context, lineage=lineage
             )
             if miscitation is not None:
                 miscited.append({"value": value, **miscitation})
+                rejected_occurrences[-1]["miscited"] = miscited[-1]
             if mode is EvidenceEnforcementMode.SOFT:
                 if miscitation is not None:
                     out_parts.append(
@@ -2417,6 +2436,7 @@ def bind_numeric_values(
             ]
             if fid in fact_sources:
                 fields.append(f"sha256={fact_sources[fid]}")
+                fields.append("authority=definition")
             if claim.effect_scale is not None:
                 fields.append(f"effect_scale={claim.effect_scale.value}")
             if claim.estimand is not None:
@@ -2455,6 +2475,7 @@ def bind_numeric_values(
             ),
             detail={
                 "untraced": untraced,
+                "untraced_occurrences": rejected_occurrences,
                 **({"miscited": miscited} if miscited else {}),
                 **({"unnamed_fact_identity": unnamed} if unnamed else {}),
             },
@@ -2477,61 +2498,39 @@ def drop_untraceable_numeric_sentences(
     Writer prose is optional; numeric authority is not.  A model can still
     calculate a plausible number or attach a real value to the wrong evidence
     owner after being told not to.  Rather than guessing a replacement or
-    weakening :func:`bind_numeric_values`, test each numeric sentence against
-    that same gate, remove the complete rejected sentence, record why it was
-    removed, and let the caller run the full-document STRICT binder again.
+    weakening :func:`bind_numeric_values`, evaluate the full document with
+    that gate, remove sentences containing rejected occurrences, record why
+    they were removed, and let the caller run the STRICT binder again.
     """
 
     if not manuscript:
         return manuscript, []
-    skip_spans = sorted(_spans_to_skip(manuscript) + bibliographic_year_spans(manuscript, literature))
-    # Section ownership is visible only in the whole document.
-    released = released_fact_lines(manuscript, method_facts, bind_fact)
-    rejected_by_span: Dict[Tuple[int, int], Dict[str, Any]] = {}
-    for match in _NUMERIC_IN_PROSE_RE.finditer(manuscript):
-        start, end = match.start("value"), match.end("value")
-        if _position_is_inside(start, skip_spans):
-            continue
-        value = match.group("value")
-        if _released_fact_claim(
-            released, start=start, value=value,
-            lookup_value=_lookup_literal_for_numeric_match(manuscript, match_end=end, value=value),
-        ) is not None:
-            continue
-        if _is_bibliographic_year_context(
-            manuscript,
-            start=start,
-            end=end,
-            value=value,
-        ):
-            continue
-        span = _numeric_sentence_bounds(manuscript, start=start, end=end)
-        if span in rejected_by_span:
-            continue
-        sentence = manuscript[span[0] : span[1]]
-        try:
-            bind_numeric_values(
-                sentence,
-                evidence=evidence,
-                enforcement_mode=EvidenceEnforcementMode.STRICT,
-                per_step_records=per_step_records,
-                literature=literature,
-            )
-        except EvidenceEnforcementError as exc:
-            detail = dict(exc.detail or {})
-            rejected_by_span[span] = {
-                "sentence": sentence.strip(),
-                "untraced": [str(item) for item in detail.get("untraced", [])],
-                "miscited": list(detail.get("miscited", [])),
-                **(
-                    {"unnamed_fact_identity": list(detail["unnamed_fact_identity"])}
-                    if detail.get("unnamed_fact_identity")
-                    else {}
-                ),
-            }
-
-    if not rejected_by_span:
+    # Evaluate the full document once. Slicing sentences before binding loses
+    # the section ownership of host facts and can disagree with final binding.
+    try:
+        bind_numeric_values(
+            manuscript, evidence=evidence, enforcement_mode=EvidenceEnforcementMode.STRICT,
+            per_step_records=per_step_records, literature=literature,
+            method_facts=method_facts, bind_fact=bind_fact,
+        )
         return manuscript, []
+    except EvidenceEnforcementError as exc:
+        occurrences = (exc.detail or {}).get("untraced_occurrences")
+        if not occurrences:
+            raise
+    rejected_by_span: Dict[Tuple[int, int], Dict[str, Any]] = {}
+    for occurrence in occurrences:
+        start, end = occurrence["start"], occurrence["end"]
+        span = _numeric_sentence_bounds(manuscript, start=start, end=end)
+        detail = rejected_by_span.setdefault(span, {
+            "sentence": manuscript[span[0]:span[1]].strip(), "untraced": [], "miscited": [],
+        })
+        detail["untraced"].append(occurrence["value"])
+        if "miscited" in occurrence:
+            detail["miscited"].append(occurrence["miscited"])
+        if "unnamed_fact_identity" in occurrence:
+            detail.setdefault("unnamed_fact_identity", []).append(occurrence["unnamed_fact_identity"])
+
     merged: List[Tuple[int, int, List[Dict[str, Any]]]] = []
     for (start, end), detail in sorted(rejected_by_span.items()):
         deletion = contextual_sentence_deletion(manuscript, start, end)

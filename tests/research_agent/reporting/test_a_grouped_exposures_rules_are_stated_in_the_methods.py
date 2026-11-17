@@ -11,10 +11,10 @@ wrote is removed.
 Such a line states numbers -- a threshold of 180 mg/dL, a window of 24 h --
 that the numeric binder would read as untraced results.  Each fact states the
 numbers it reproduced from typed parameters (``typed_values``), and the
-binder binds those numbers, and only those, on the fact's own line placed
+binder binds those numbers, and only those, on the rule's own line placed
 exactly in its section, footnoting each to the fact's source field, the
-context's evidence and its digest.  A fact written from free text states no
-typed number, so a description's "300 points" still needs a result claim.
+context's evidence and its digest. A quoted source definition also binds its
+own numerals on its exact line; their values grant no result authority.
 
 A grouping that names no rule -- one built before groupings carried their
 parameters, or one whose line would read as markup -- gives no line.
@@ -237,17 +237,17 @@ def test_without_the_facts_the_binder_reads_the_threshold_as_a_result(
         _bind(store, bound)
 
 
-def test_only_exact_typed_fact_lines_are_found_in_their_section(tmp_path) -> None:
+def test_only_exact_rules_and_source_definition_lines_are_found_in_their_section(tmp_path) -> None:
     store = _store(
         tmp_path, _descriptive(_grouping(), description="A score of 300 points")
     )
     bound = _bound_draft(store)
     binding = method_fact_binding(store, [])
     found = released_fact_lines(bound, binding["method_facts"], binding["bind_fact"])
-    assert [fact.source_field for _start, _end, fact in found] == [
+    assert [fact.source_field for _start, _end, fact in found] == ["variables[1].description", *(
         f"cohort.provenance.{EXPOSURE_GROUP_LABELS_KEY}[0].levels[{index}]"
         for index in range(4)
-    ]
+    )]
     assert all(
         bound[start:end] == binding["bind_fact"](fact.scaffold)
         for start, end, fact in found
@@ -351,16 +351,19 @@ def test_decimal_window_and_threshold_bind_to_each_own_level(tmp_path) -> None:
     assert "sha256=" in bound
 
 
-def test_a_fact_from_free_text_still_needs_a_result_claim(tmp_path) -> None:
+def test_a_quoted_source_definition_binds_only_its_own_numbers(tmp_path) -> None:
     store = _store(
         tmp_path,
         _descriptive(description="A score increase of at least 300 points"),
     )
     bound = _bound_draft(store)
 
-    with pytest.raises(EvidenceEnforcementError, match="numeric value") as untraced:
-        _bind(store, bound, **method_fact_binding(store, []))
-    assert untraced.value.detail["untraced"] == ["300"]
+    _, bindings, unknown = _bind(store, bound, **method_fact_binding(store, []))
+    assert not unknown
+    assert [(c.value, c.source_field) for c in bindings.values()] == [("300", "variables[1].description")]
+    for forged in (bound.replace("300 points", "301 points"), bound + "\n\nThere were 300 deaths."):
+        with pytest.raises(EvidenceEnforcementError, match="numeric value"):
+            _bind(store, forged, **method_fact_binding(store, []))
 
 
 def test_the_sentence_filter_keeps_the_hosts_lines(tmp_path) -> None:

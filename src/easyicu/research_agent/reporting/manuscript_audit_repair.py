@@ -15,7 +15,7 @@ import re
 from typing import Any, Callable, Mapping, Sequence
 
 from ..authority.evidence_store import EvidenceEnforcementError
-from .manuscript_sections import ManuscriptSectionContractError
+from .manuscript_sections import ManuscriptSectionContractError, manuscript_binding_tokens
 
 # Preserve the final-quality path's existing one-revision budget.
 MAX_MANUSCRIPT_AUDIT_REPAIRS = 1
@@ -33,8 +33,12 @@ REPAIRABLE_MANUSCRIPT_CODES = frozenset({
     "OWNER_CLAIM_TARGET_ABSENT",
 })
 _CODE = re.compile(r"\b(?:MANUSCRIPT_[A-Z_]+|OWNER_CLAIM_TARGET_ABSENT)\b")
-_TOKEN = re.compile(r"\{(?:evidence|claim):[^{}\s]+\}|\[@[^\]\n]+\]")
-_MARKER = re.compile(r"(?P<literal>[+−-]?(?:\d[\d,]*(?:\.\d+)?|\.\d+)(?:[eE][+-]?\d+)?)(?:%?[ \t]*)\[\^(?P<claim>claim_\d+)\]")
+_MARKER = re.compile(
+    r"(?P<literal>[+−-]?(?:"
+    r"(?:\d+(?:\.\d+)?|\.\d+)\s*[×x]\s*10[⁺⁻]?[⁰¹²³⁴⁵⁶⁷⁸⁹]+"
+    r"|(?:\d[\d,]*(?:\.\d+)?|\.\d+)(?:[eE][+-]?\d+)?))"
+    r"(?:%?[ \t]*)\[\^(?P<claim>claim_\d+)\]"
+)
 
 
 def _sections(text: str) -> dict[str, str]:
@@ -68,9 +72,17 @@ def _require_preserved_sections(before: str, after: str, keys: Sequence[str]) ->
     for section, text in original.items():
         if section not in names:
             if candidate.get(section) != text:
-                raise EvidenceEnforcementError("MANUSCRIPT_REPAIR_AUTHORITY_CHANGED: an unaffected section changed.")
-        elif Counter(_TOKEN.findall(text)) - Counter(_TOKEN.findall(candidate.get(section, ""))):
-            raise EvidenceEnforcementError("MANUSCRIPT_REPAIR_AUTHORITY_CHANGED: an existing evidence or claim binding changed.")
+                raise EvidenceEnforcementError(
+                    "MANUSCRIPT_REPAIR_AUTHORITY_CHANGED: an unaffected section changed.",
+                    detail={"check": "unaffected_section", "section": section},
+                )
+        else:
+            missing = Counter(manuscript_binding_tokens(text)) - Counter(manuscript_binding_tokens(candidate.get(section, "")))
+            if missing:
+                raise EvidenceEnforcementError(
+                    "MANUSCRIPT_REPAIR_AUTHORITY_CHANGED: an existing evidence or claim binding changed.",
+                    detail={"check": "section_tokens", "section": section, "missing_tokens": dict(missing)},
+                )
 
 
 def _authority_failed(findings: Sequence[Any], binding: Any) -> bool:
@@ -174,6 +186,8 @@ def run_manuscript_audit_repair(
         except Exception as exc:
             row.update(status="rejected", error_type=type(exc).__name__,
                        error_codes=_CODE.findall(str(exc)))
+            if isinstance(exc, EvidenceEnforcementError) and exc.detail:
+                row["authority_failure"] = exc.detail
             receipt.update(status="rejected", remaining_codes=row["error_codes"] or _codes(errors))
             if isinstance(exc, ManuscriptSectionContractError):
                 receipt["remaining_codes"] = sorted(set(receipt["remaining_codes"]) | {"MANUSCRIPT_SUBSECTION_MISSING_OR_EMPTY"})
