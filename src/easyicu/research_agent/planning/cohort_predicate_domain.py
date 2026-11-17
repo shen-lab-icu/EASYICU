@@ -34,6 +34,7 @@ from __future__ import annotations
 import json
 import math
 import numbers
+import re
 from dataclasses import dataclass
 from fractions import Fraction
 from typing import Any, Iterable, Literal, Mapping, Sequence
@@ -199,6 +200,42 @@ class PredicateEmptiesExposureLevel:
         )
 
 
+# A question that asks what share of the whole population a level is fixes the
+# denominator: every declared level must stay in the cohort. Case-neutral
+# wording only; "比例风险"/"proportional" (hazards/odds) are not shares.
+_POPULATION_SHARE = re.compile(
+    r"\b(?:what|which)\s+(?:share|proportion|percentage|fraction|percent)\b(?!al)"
+    r"|\b(?:share|proportion|percentage|fraction|prevalence)\s+of\s+(?:all\s+)?(?:the\s+)?"
+    r"(?:patients|stays|admissions|population|cohort|icu\s+stays)\b"
+    r"|\bhow\s+(?:common|prevalent)\b"
+    r"|占[^。？?！!；;，,]{0,8}?(?:比例|比重|百分比|多少)|占比|所占(?:比例|百分比)|构成比",
+    re.IGNORECASE,
+)
+
+
+def question_asks_population_share(question: str | None) -> bool:
+    """Whether the question asks what share of the whole population a level is."""
+
+    return bool(_POPULATION_SHARE.search(str(question or "")))
+
+
+def share_resolves_level_conflict(context: ResearchContext, conflict: PredicateEmptiesExposureLevel) -> bool:
+    """A share question decides a restriction on a declared grouping's own concept.
+
+    The grouping and the restriction read the same concept; the share needs every
+    level in its denominator, so the restriction, not the grouping, yields.
+    """
+
+    concepts = {
+        item.get("variable"): item.get("concept")
+        for item in context.cohort.provenance.get(EXPOSURE_GROUP_LABELS_KEY, ())
+    }
+    return (
+        concepts.get(conflict.grouping) == conflict.predicate.concept_id
+        and question_asks_population_share(context.research_question)
+    )
+
+
 def exposure_level_conflict_feedback(
     context: ResearchContext, conflicts: Sequence[PredicateEmptiesExposureLevel],
 ) -> str:
@@ -221,13 +258,20 @@ def exposure_level_conflict_feedback(
         "question requirement that asks it (coverage \"plan\")"
         for concept, grouping in pairs
     )
+    sides = "; ".join(
+        f"population restriction on {concept!r} versus the declared grouping {grouping!r}"
+        for concept, grouping in pairs
+    )
     return " ".join(messages) + (
         " Observed level counts: unavailable in this planning context; this is a "
-        "typed-rule contradiction, not an observed count. The declared grouping is the "
-        "study's stated contrast and stays. If the question needs the whole population "
-        "(for example what share of stays a level is, or a comparison between levels), "
-        f"{resolve}; the host then removes the contradicting restriction and records why. "
-        "Do not restate the restriction in another form, invent counts, or discard a level."
+        f"typed-rule contradiction, not an observed count. Conflicting pair: {sides}. "
+        "Resolution options: (a) drop the population restriction and keep the grouping. "
+        "This is required when the question needs the whole population, for example what "
+        f"share of stays a level is or a comparison between levels: {resolve}; the host then "
+        "removes the restriction and records why. (b) keep the restriction and drop the "
+        "grouping. The grouping is a stated study choice, so only the user can drop it; the "
+        "Planner must not choose (b). Do not restate the restriction in another form, invent "
+        "counts, or discard a level."
     )
 
 

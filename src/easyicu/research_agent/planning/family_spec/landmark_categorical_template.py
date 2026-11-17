@@ -48,7 +48,11 @@ from ...contracts.model_retention import MISSING_CATEGORY_SHARE_THRESHOLD
 from ...contracts.model_terms import AdjustmentProposal
 from ...schema import ResearchContext
 from ..cohort_contract import ConceptPredicate, cohort_concept_id_scope
-from ..cohort_predicate_domain import cohort_emptied_exposure_levels, exposure_level_conflict_feedback
+from ..cohort_predicate_domain import (
+    cohort_emptied_exposure_levels,
+    exposure_level_conflict_feedback,
+    share_resolves_level_conflict,
+)
 from ..progressive_compiler import planner_cohort_definition, progressive_cohort_concept_ids
 from ..design_selection import ResearchDesignCandidate, ResearchDesignSelection
 from ..method_literature import METHOD_CARDS
@@ -936,7 +940,10 @@ def reconcile_population_grouping(
         set(reading.concepts) for reading in spec.question_requirements
         if reading.kind in {"estimand", "subgroup"} and reading.coverage == "plan"
     ]
-    unresolved = [item for item in conflicts if not any(
+    # A reading that requests both the concept and its grouping, or a question
+    # that asks what share of the whole population a level is, keeps the level.
+    share_decided = [item for item in conflicts if share_resolves_level_conflict(context, item)]
+    unresolved = [item for item in conflicts if item not in share_decided and not any(
         {item.grouping, item.predicate.concept_id} <= concepts for concepts in requested
     )]
     if unresolved:
@@ -985,6 +992,9 @@ def reconcile_population_grouping(
         f"{item.grouping} level {item.level}"
         for item in conflicts
     ) + "."
+    if share_decided:
+        note += (" The question asks what share of the whole population a level is, so the "
+                 "denominator keeps every declared level.")
     if stated:
         note += " Superseded population wording: " + "; ".join(stated) + "."
     unapplied = [item.criterion for item in criteria if not item.concept_ids]

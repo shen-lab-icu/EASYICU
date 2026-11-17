@@ -35,10 +35,14 @@ from tests.research_agent.planning.family_spec_fixtures import (
 )
 
 
-def _study(*, grouping=True, typed_bound=False):
+# Wording without a population share: only a typed reading can decide it.
+_NOT_A_SHARE = "Among eligible stays, how do stays with an entry value at least 47 fare, and what is their outcome?"
+
+
+def _study(*, grouping=True, typed_bound=False, question=None, measure="entry_measure", cut=47):
     context = _descriptive_context()
-    concept = "age" if typed_bound else "entry_measure"
-    question = (
+    concept = "age" if typed_bound else measure
+    question = question or (
         "Among eligible stays, what share has an entry value at least 47 and what is its outcome?"
         if grouping else
         "Among adults with an entry value at least 47, describe outcomes within that population."
@@ -46,8 +50,8 @@ def _study(*, grouping=True, typed_bound=False):
     parameters = {
         "concept": concept, "window": None, "scale": "ordinal",
         "groups": [
-            {"id": "g1", "rule": {"summary": "value", "op": "<", "value": 47.0}},
-            {"id": "g2", "rule": {"summary": "value", "op": ">=", "value": 47.0}},
+            {"id": "g1", "rule": {"summary": "value", "op": "<", "value": float(cut)}},
+            {"id": "g2", "rule": {"summary": "value", "op": ">=", "value": float(cut)}},
         ],
         "unmeasured": "exclude", "source_columns": {"value": concept},
     }
@@ -65,7 +69,7 @@ def _study(*, grouping=True, typed_bound=False):
         "research_question": question,
         "primary_exposure": "entry_band" if grouping else "phenotype_flag",
         "variables": [*context.variables,
-            ConceptDescriptor(name="entry_measure", role=VariableRole.DEMOGRAPHIC, dtype="float64"),
+            ConceptDescriptor(name=measure, role=VariableRole.DEMOGRAPHIC, dtype="float64"),
             ConceptDescriptor(name="entry_band", role=VariableRole.DEMOGRAPHIC, dtype="int64",
                               unit_normalization="exposure_group_ordinal", valid_range=(1, 2)),
         ],
@@ -96,7 +100,7 @@ def _request(context):
     )
 
 
-def _payload(context, *, side="inclusion", reading=True, typed_bound=False):
+def _payload(context, *, side="inclusion", reading=True, typed_bound=False, measure="entry_measure", cut=47):
     request = _request(context)
     return {
         "schema_version": "easyicu.family_plan_spec/1", "family_id": request.family_id,
@@ -114,14 +118,14 @@ def _payload(context, *, side="inclusion", reading=True, typed_bound=False):
         "roster_decision_note": "No additional baseline variables requested.",
         "question_requirements": [{
             "id": "r1", "kind": "estimand", "quote": context.research_question,
-            "concepts": ["age" if typed_bound else "entry_measure", "entry_band", "death"]
+            "concepts": ["age" if typed_bound else measure, "entry_band", "death"]
             if reading else ["death"],
             "coverage": "plan",
         }],
         "population": None if typed_bound else {
-            "criteria": [{"criterion": "entry value at least 47", "concept_ids": ["entry_measure"]}],
-            "inclusion": [_predicate()] if side == "inclusion" else [],
-            "exclusion": [_predicate(op="<")] if side == "exclusion" else [],
+            "criteria": [{"criterion": f"entry value at least {cut}", "concept_ids": [measure]}],
+            "inclusion": [_predicate(measure, value=cut)] if side == "inclusion" else [],
+            "exclusion": [_predicate(measure, op="<", value=cut)] if side == "exclusion" else [],
         },
     }
 
@@ -183,7 +187,7 @@ def test_outcome_only_within_a_restricted_population_declares_no_exposure_levels
 
 
 def test_an_unresolved_conflict_stops_before_review_without_dropping_eligibility():
-    context = _study()
+    context = _study(question=_NOT_A_SHARE)
     _expect_exhausted_empty_level(context, _payload(context, reading=False))
 
 
@@ -195,7 +199,7 @@ def _expect_exhausted_empty_level(context, payload):
 
 
 def test_a_real_empty_level_refusal_can_be_repaired_in_the_same_family_attempt():
-    context = _study()
+    context = _study(question=_NOT_A_SHARE)
     llm, result = _run(context, [
         json.dumps(_payload(context, reading=False)), json.dumps(_payload(context)),
     ])
@@ -207,13 +211,17 @@ def test_a_real_empty_level_refusal_can_be_repaired_in_the_same_family_attempt()
     assert "Observed level counts: unavailable" in feedback
     # The feedback names the one move that resolves it: the host's own
     # reconciliation, triggered by a reading that requests the grouping.
+    # Both sides and both options are named; only (a) is the Planner's to take.
+    assert "Conflicting pair: population restriction on 'entry_measure' versus the declared grouping 'entry_band'" in feedback
+    assert "(a) drop the population restriction and keep the grouping" in feedback
     assert "list both 'entry_measure' and 'entry_band'" in feedback
-    assert "restate the restriction in another form" in feedback
+    assert "(b) keep the restriction and drop the grouping" in feedback
+    assert "the Planner must not choose (b)" in feedback
 
 
 @pytest.mark.parametrize("concepts", [["entry_band", "death"], ["entry_measure", "death"]])
 def test_a_reading_must_bind_both_the_source_concept_and_its_grouping(concepts):
-    context = _study()
+    context = _study(question=_NOT_A_SHARE)
     payload = _payload(context)
     payload["question_requirements"][0]["concepts"] = concepts
     _expect_exhausted_empty_level(context, payload)
@@ -221,7 +229,7 @@ def test_a_reading_must_bind_both_the_source_concept_and_its_grouping(concepts):
 
 @pytest.mark.parametrize("kind,coverage", [("definition", "definition_only"), ("analysis", "plan")])
 def test_reading_a_concept_without_requesting_its_grouping_cannot_remove_eligibility(kind, coverage):
-    context = _study()
+    context = _study(question=_NOT_A_SHARE)
     payload = _payload(context)
     payload["question_requirements"][0].update(kind=kind, coverage=coverage)
     if kind == "definition":
@@ -285,3 +293,31 @@ def test_compiler_refuses_a_conflict_even_when_family_reconciliation_is_bypassed
             skeleton=skeleton, context=context, allowed_literature_citation_keys=ALLOWED_CITATIONS,
         )
     assert caught.value.reason_code == "declared_exposure_level_empty"
+
+
+@pytest.mark.parametrize("measure,cut,question", [
+    # The dH4 shape (a share of the whole population, then the level's outcome),
+    # in Chinese, and two other variables with their own declared groupings.
+    ("entry_measure", 47, "入 ICU 时 entry value at least 47 的住院占多大比例？他们的院内死亡率是多少？"),
+    ("sofa_score_x", 10, "What proportion of ICU stays have an entry value at least 10, and what is their mortality?"),
+    ("lactate_x", 4, "乳酸 entry value at least 4 的患者占比是多少，死亡率如何？"),
+])
+def test_a_share_question_keeps_every_declared_level_without_a_grouping_reading(measure, cut, question):
+    context = _study(question=question, measure=measure, cut=cut)
+    llm, result = _run(context, [json.dumps(_payload(context, reading=False, measure=measure, cut=cut))])
+    assert len(llm.calls) == 1  # decided by the host, not by another Planner attempt
+    plan = result.output
+    assert [(p.concept_id, p.value) for p in plan.cohort.inclusion] == [("age", 18)]
+    assert not population_emptied_exposure_levels(context, plan)
+    note = plan.design_selection.selected.reviewable_plan[0]
+    assert "share of the whole population" in note and "removed" in note.lower()
+
+
+def test_a_share_question_keeps_a_compatible_restriction_on_the_same_concept():
+    # The share wording removes only a restriction that empties a declared level.
+    context = _study(question=_NOT_A_SHARE.replace("how do stays", "what share of stays"))
+    payload = _payload(context, reading=False)
+    payload["population"]["inclusion"] = [_predicate(value=19)]
+    payload["population"]["criteria"][0]["criterion"] = "entry value at least 19"
+    _, result = _run(context, [json.dumps(payload)])
+    assert ("entry_measure", 19) in [(p.concept_id, p.value) for p in result.output.cohort.inclusion]
