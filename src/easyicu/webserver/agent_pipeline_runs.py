@@ -1161,16 +1161,14 @@ def _safe_pipeline_typed_failure(exc: BaseException) -> Dict[str, Any]:
     for item in chain:
         if isinstance(item, ExecutionCohortSchemaError):
             location = execution_failure_diagnostic(chain)
-            # A configured runner and earlier planning progress do not establish
-            # that any step started before the initial cohort bind.
-            if location["phase"] not in {"execute", "write", "finalise"} and location[
-                "step_id"
-            ] in {"unknown", "plan"}:
+            # Execution preflight can report the phase before the first step starts.
+            if location["phase"] not in {"execute", "write", "finalise"} or (
+                location["phase"] == "execute" and location["step_id"] == "unknown"
+            ):
+                cohort_step_id = safe_execution_step_id(item.cohort_step_id)
                 location.update(
                     phase="execution_input_binding",
-                    step_id=safe_execution_step_id(
-                        item.cohort_step_id or "cohort_definition"
-                    ),
+                    step_id="cohort_definition" if cohort_step_id == "unknown" else cohort_step_id,
                     runner_kind="not_started",
                 )
             return {

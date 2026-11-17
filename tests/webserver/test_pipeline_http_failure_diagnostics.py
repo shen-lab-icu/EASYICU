@@ -297,6 +297,57 @@ def test_an_unrecognized_scientific_authority_cause_stays_private():
     assert private not in json.dumps(projected)
 
 
+@pytest.mark.parametrize(
+    "event",
+    [
+        {"phase": "execution"},
+        {"stage": "runner", "runner_kind": "docker"},
+        {"phase": "runtime", "step_id": "prepare_feature_index"},
+    ],
+    ids=["execution-entry", "runner-preflight", "named-runtime-preflight"],
+)
+def test_cohort_binding_failure_before_any_step_uses_planned_coordinates(event):
+    from easyicu.research_agent.authority.analysis_cohort import ExecutionCohortSchemaError
+    from easyicu.webserver.execution_failure import track_failure_location
+
+    with pytest.raises(ExecutionCohortSchemaError) as caught:
+        with track_failure_location(runner_kind="docker") as progress:
+            progress({"stage": "planning"})
+            progress(event)
+            raise ExecutionCohortSchemaError(
+                "The recorded selection cannot be reconstructed.",
+                cohort_step_id="select_reviewed_records",
+            )
+
+    assert agent_pipeline_runs._safe_pipeline_typed_failure(caught.value) == {
+        "owner": "easyicu.execution.cohort_authority_v1",
+        "reason_code": "execution_cohort_schema_invalid",
+        "phase": "execution_input_binding",
+        "step_id": "select_reviewed_records",
+        "runner_kind": "not_started",
+        "exception_type": "ExecutionCohortSchemaError",
+    }
+
+
+@pytest.mark.parametrize("cohort_step_id", ["Filter-Eligibility", "x" * 81, None])
+def test_cohort_binding_failure_uses_fallback_after_step_id_validation(cohort_step_id):
+    from easyicu.research_agent.authority.analysis_cohort import ExecutionCohortSchemaError
+
+    failure = ExecutionCohortSchemaError(
+        "The locked eligibility rule could not be read.",
+        cohort_step_id=cohort_step_id,
+    )
+
+    assert agent_pipeline_runs._safe_pipeline_typed_failure(failure) == {
+        "owner": "easyicu.execution.cohort_authority_v1",
+        "reason_code": "execution_cohort_schema_invalid",
+        "phase": "execution_input_binding",
+        "step_id": "cohort_definition",
+        "runner_kind": "not_started",
+        "exception_type": "ExecutionCohortSchemaError",
+    }
+
+
 def test_existing_typed_owner_takes_precedence_over_transport_cause():
     failure = RuntimeError("private compiler detail")
     failure.easyicu_safe_diagnostic = {

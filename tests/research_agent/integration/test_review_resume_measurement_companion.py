@@ -14,6 +14,7 @@ from easyicu.research_agent.cohort.materializer import materialize_to_parquet
 from easyicu.research_agent.orchestration.human_review_checkpoint import load_checkpoint
 from easyicu.research_agent.orchestration.workflow import HumanReviewDecision
 from easyicu.research_agent.planning.cohort_contract import (
+    CohortSchemaError,
     cohort_concept_id_scope,
     concept_id_exists,
 )
@@ -21,6 +22,12 @@ from easyicu.research_agent.providers.mocks import PatternScriptedMockLLMClient
 from easyicu.research_agent.research_context.typed import parse_research_context_json
 from easyicu.research_agent.schema import AnalysisPlan
 from easyicu.webserver.agent_pipeline_runs import _write_review_resume_failure_diagnostic
+from easyicu.webserver.agent_review_recovery import (
+    PendingReviewEntry,
+    PendingReviewRegistry,
+    PendingReviewResumeFailure,
+    resume_pending_review,
+)
 from easyicu.webserver.execution_failure import track_failure_location
 from tests.support.durable_human_review import _force_approvable_plan_review, _pipeline
 from tests.support.pipeline_contracts import disable_article_contract, stable_plan_rules
@@ -37,7 +44,9 @@ _QUESTION = (
 )
 
 
-def _pending_prediction_plan(tmp_path, monkeypatch):
+def _pending_prediction_plan(
+    tmp_path, monkeypatch, *, stop_after_cohort=True, runner_kind="auto"
+):
     disable_article_contract(monkeypatch)
     _force_approvable_plan_review(monkeypatch)
     export = typed_export(
@@ -117,6 +126,7 @@ def _pending_prediction_plan(tmp_path, monkeypatch):
         return _pipeline(
             workdir,
             llm=llm,
+            runner_kind=runner_kind,
             enable_literature=False,
             enable_replanning=False,
         )
@@ -128,7 +138,7 @@ def _pending_prediction_plan(tmp_path, monkeypatch):
         target_outcome="death",
         database="miiv",
         stop_after_analysis=True,
-        stop_after_step_id=_COHORT_STEP_ID,
+        stop_after_step_id=_COHORT_STEP_ID if stop_after_cohort else None,
     )
     return first, pending, pipeline
 
@@ -261,27 +271,73 @@ def _reviewed_binding_inputs(pending):
 
 
 def test_cohort_rebind_receipt_reports_the_active_step(tmp_path, monkeypatch):
-    _, pending, _ = _pending_prediction_plan(tmp_path, monkeypatch)
-    inputs = _reviewed_binding_inputs(pending)
-    state = ExecutionInputAuthorityState.bind(**inputs)
+    from easyicu.research_agent.authority import execution_input
+    from easyicu.research_agent.execution import phase
 
-    with pytest.raises(
-        ExecutionCohortSchemaError, match=f"unknown concept_id: {_UNRECORDED}"
-    ) as caught:
-        with track_failure_location(runner_kind="docker") as progress:
-            progress({"stage": "step", "step_id": _COHORT_STEP_ID, "status": "complete"})
-            progress({"stage": "step", "step_id": "primary_model", "status": "running"})
-            state.rebind_cohort(
-                plan=_plan_with_unrecorded_concept(inputs["plan"]),
-                context=inputs["context"],
+    first, pending, _ = _pending_prediction_plan(
+        tmp_path, monkeypatch, stop_after_cohort=False, runner_kind="subprocess"
+    )
+    real_bind = execution_input.bind_execution_cohort_authority
+    real_prepare_step = phase._step_prepare_execution_authority
+    bind_calls = 0
+
+    def bind_damaged_replay(*, plan, **kwargs):
+        nonlocal bind_calls
+        bind_calls += 1
+        if bind_calls == 2:
+            plan = _plan_with_unrecorded_concept(plan)
+        return real_bind(plan=plan, **kwargs)
+
+    def prepare_step_and_rebind(**kwargs):
+        terminal, prepared = real_prepare_step(**kwargs)
+        if kwargs["step"].step_id == "primary_model" and prepared is not None:
+            # Inject a rebind after the executor has emitted real step progress.
+            kwargs["run_input_authority_state"].rebind_cohort(
+                plan=kwargs["plan"], context=kwargs["context"]
+            )
+        return terminal, prepared
+
+    monkeypatch.setattr(
+        execution_input, "bind_execution_cohort_authority", bind_damaged_replay
+    )
+    monkeypatch.setattr(
+        phase, "_step_prepare_execution_authority", prepare_step_and_rebind
+    )
+    registry = PendingReviewRegistry()
+    entry = PendingReviewEntry(
+        pipeline=first,
+        pending=pending,
+        wrapper_dir=tmp_path,
+        study={},
+        provider={},
+        acquisition=None,
+        created_at=0,
+    )
+    registry.register(entry)
+    with pytest.raises(PendingReviewResumeFailure) as caught:
+        with track_failure_location(runner_kind=first._config.runner_kind) as progress:
+            resume_pending_review(
+                registry,
+                entry,
+                [decision.model_dump(mode="json") for decision in _decisions(pending)],
+                run_id=pending.run_id,
+                progress_callback=progress,
             )
 
-    assert state.selected_path == inputs["analysis_path"]
-    wrapper = RuntimeError("internal rebind failure")
-    wrapper.__cause__ = caught.value
+    assert bind_calls == 2
+    failure = caught.value
+    cause = failure.cause
+    assert isinstance(cause, ExecutionCohortSchemaError)
+    assert failure.__cause__ is cause
+    assert isinstance(cause.__cause__, CohortSchemaError)
+    assert f"unknown concept_id: {_UNRECORDED}" in str(cause)
+    assert cause.cohort_step_id == _COHORT_STEP_ID
+    assert not failure.resumable
+    checkpoint_path = Path(pending.run_dir) / "human_review_checkpoint.json"
+    assert load_checkpoint(checkpoint_path, require_pending=False).state == "failed"
     diagnostic_path = _write_review_resume_failure_diagnostic(
         wrapper_dir=tmp_path,
-        exc=wrapper,
+        exc=cause,
         code="research_pipeline_approved_run_failed",
         review_resumable=False,
     )
@@ -292,7 +348,7 @@ def test_cohort_rebind_receipt_reports_the_active_step(tmp_path, monkeypatch):
         "reason_code": "execution_cohort_schema_invalid",
         "phase": "execute",
         "step_id": "primary_model",
-        "runner_kind": "docker",
+        "runner_kind": "subprocess",
         "exception_type": "ExecutionCohortSchemaError",
     }
     assert _UNRECORDED not in json.dumps(receipt)

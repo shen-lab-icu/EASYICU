@@ -12,12 +12,21 @@ from functools import partial
 from threading import Event
 from typing import Any, Callable, Iterable, Optional, Sequence
 
-from ..schema import AgentRuntimeState, AnalysisStep
+from ..authority.analysis_cohort import ExecutionCohortSchemaError
 from ..authority.provider_hard_stop import ProviderHardStopError
 from ..contracts.runtime import RunExecutionState, RunTransition
+from ..schema import AgentRuntimeState, AnalysisStep
 from .replan_review import (
     _successful_run_transition_requests_replan as _successful_run_transition_requests_replan,
     _successful_step_requests_replan as _successful_step_requests_replan,
+)
+
+
+_TERMINAL_STEP_ERRORS = (
+    KeyboardInterrupt,
+    SystemExit,
+    ProviderHardStopError,
+    ExecutionCohortSchemaError,
 )
 
 
@@ -64,7 +73,7 @@ class RunCoordinator:
                 state.stop_reason = f"step_raised:{step.step_id}:{type(error).__name__}"
                 if on_step_exception is not None:
                     on_step_exception(step, error)
-                if isinstance(error, (KeyboardInterrupt, SystemExit, ProviderHardStopError)):
+                if isinstance(error, _TERMINAL_STEP_ERRORS):
                     raise
                 break
             state.executed_step_ids.add(step.step_id)
@@ -170,7 +179,7 @@ class RunCoordinator:
                 error = future.exception()
                 if error is not None:
                     on_worker_error(futures[future], error)
-                    if isinstance(error, (ProviderHardStopError, KeyboardInterrupt, SystemExit)):
+                    if isinstance(error, _TERMINAL_STEP_ERRORS):
                         stop_error = stop_error or error
                     for pending in futures:
                         pending.cancel()
