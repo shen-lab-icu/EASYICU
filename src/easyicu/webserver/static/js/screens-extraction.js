@@ -321,20 +321,20 @@
     if (Number.isFinite(cfg.observation_window_hours) && cfg.observation_window_hours > 0) exWindowHours = cfg.observation_window_hours;
   }
 
-  function applyStudySetup(setup) {
+  function applyStudySetup(setup, studySource) {
     if (!setup || typeof setup !== 'object') return null;
     // A server revision alone does not replace the currently displayed run.
     // Local pending changes still differ even before the server allocates one.
     const coordinate = setup.study_context_id ? JSON.stringify({ ...setup, revision: 0 }) : '';
-    if (coordinate && coordinate === exHydratedStudyCoordinate) return setup;
-    const nextStudyId = String(setup.study_context_id || '');
-    const changingStudy = exHydratedStudyId && nextStudyId !== exHydratedStudyId;
+    const sameSetup = coordinate !== '' && coordinate === exHydratedStudyCoordinate;
     // A job's form values and study association describe that exact run.
     // Even a same-study revision (or the first study on a native run) must
     // wait: replacing those values would relabel the old terminal result.
-    if (extractionTaskRunning()) return null;
-    if (nextStudyId !== exHydratedStudyId) minuteModules?.reset();
-    else minuteModules?.clear();
+    if (extractionTaskRunning()) return sameSetup ? setup : null;
+    minuteModules?.hydrate(studySource, { sameSetup, ready: exReal === 'ready' });
+    if (sameSetup) return setup;
+    const nextStudyId = String(setup.study_context_id || '');
+    const changingStudy = exHydratedStudyId && nextStudyId !== exHydratedStudyId;
     if (changingStudy) {
       abandonExtractionContinuity();
       exView = 'home'; exReal = 'connect'; exPath = ''; exSource = null;

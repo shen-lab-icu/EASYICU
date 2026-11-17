@@ -69,7 +69,8 @@
     const setup = project(context, expectedDatabase);
     const adapter = window.EU_EXTRACTION_CONTEXT;
     if (!adapter || typeof adapter.applyStudySetup !== 'function') return setup;
-    return adapter.applyStudySetup(setup);
+    // The form projection stays path-free. The source is only for coverage invalidation.
+    return adapter.applyStudySetup(setup, context?.data_source);
   }
 
   function matchesDatabase(expected, actual) {

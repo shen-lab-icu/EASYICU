@@ -387,18 +387,114 @@ test('a new extraction and a fresh scan can reload coverage for the same databas
   assert.equal(attempts, 3);
 });
 
-test('rendering with no scanned source removes loaded minute choices', async () => {
-  const c = vm.createContext({ window: { EU_API: { getJSON: async () => coverage } } });
+function minuteOwner(getJSON) {
+  const c = vm.createContext({ window: { EU_API: { getJSON } } });
   vm.runInContext(minuteSource, c);
-  const owner = c.window.EU_EXTRACTION_MINUTE.create({
+  return c.window.EU_EXTRACTION_MINUTE.create({
     t: en => en, escHtml: text => text, hosted: () => false,
     repaint() {}, backgroundRepaint() {},
   });
+}
+
+test('rendering without a source drops a checked minute module', async () => {
+  const owner = minuteOwner(async () => coverage);
   owner.render('sic');
   await settle();
-  assert.match(owner.render('sic'), /Arterial line readings/);
-  assert.doesNotMatch(owner.render(''), /data-ex-minute-module|data-ex-minute-retry/);
+  assert.match(owner.render('sic'), /data-ex-minute-module="haemo_native"/);
+  let select;
+  const input = {
+    dataset: { exMinuteModule: 'haemo_native' }, checked: true, focus() {},
+    addEventListener(_event, listener) { select = listener; },
+  };
+  owner.bind({ querySelector: () => null, querySelectorAll: () => [input] }, () => {});
+  select();
+  assert.equal(owner.count(), 1);
+  assert.doesNotMatch(owner.render(''), /data-ex-minute-module/);
   assert.equal(owner.count(), 0);
+  owner.render('sic');
+  await settle();
+  assert.match(owner.render('sic'), /data-ex-minute-module="haemo_native"/);
+  assert.equal(owner.count(), 0, 'Reconnecting must leave the module unchecked');
+});
+
+test('removing the source also drops Retry for the failed lookup', async () => {
+  const owner = minuteOwner(async () => { throw new Error('Coverage service is offline'); });
+  owner.render('sic');
+  await settle();
+  assert.match(owner.render('sic'), /data-ex-minute-retry/);
+  const empty = owner.render('');
+  assert.match(empty, /Database coverage is unavailable/);
+  assert.doesNotMatch(empty, /data-ex-minute-retry/);
+});
+
+test('removing a source from the same study discards its pending minute coverage reply', async () => {
+  let finishPending;
+  const screen = minuteScreen(() => new Promise(resolve => { finishPending = resolve; }));
+  const study = {
+    id: 'monitor-calibration', revision: 1,
+    data_source: { path: '/fixture/calibration/incoming', database: 'sic' },
+  };
+  const bridge = screen.c.window.EU_EXTRACTION_STUDY_CONTEXT;
+  bridge.hydrate(study, 'sic');
+  await screen.connect(study.data_source.path);
+  assert.match(screen.render(), /Checking database coverage/);
+  let repaints = 0;
+  screen.c.window.__euRender = () => { repaints++; };
+
+  bridge.hydrate({ ...study, revision: 2, data_source: null }, 'sic');
+  finishPending(coverage);
+  await settle();
+  assert.equal(repaints, 0, 'Coverage from the removed study source must not repaint the workspace');
+});
+
+test('hydrating while a folder needs conversion ignores its earlier coverage reply', async () => {
+  let finishPending;
+  const screen = minuteScreen(() => new Promise(resolve => { finishPending = resolve; }));
+  const study = {
+    id: 'monitor-archive', revision: 1,
+    data_source: { path: '/fixture/archive/quarterly', database: 'sic' },
+  };
+  const bridge = screen.c.window.EU_EXTRACTION_STUDY_CONTEXT;
+  bridge.hydrate(study);
+  await screen.connect(study.data_source.path);
+  assert.match(screen.render(), /Checking database coverage/);
+  const job = screen.c.window.EU_EXTRACTION_JOB_HOST;
+  const conversion = { kind: 'convert', job_id: 'archive-convert', source: study.data_source };
+  job.begin(conversion);
+  job.applyEvent(conversion, { type: 'end', status: 'error', error: 'Archive directory needs repair' });
+  assert.doesNotMatch(screen.render(), /exMinuteHeading/);
+  let repaints = 0;
+  screen.c.window.__euRender = () => { repaints++; };
+
+  bridge.hydrate({ ...study, revision: 2 });
+  finishPending(coverage);
+  await settle();
+  assert.equal(repaints, 0, 'A folder waiting for conversion must discard the earlier response');
+});
+
+test('a replacement study folder retries failed coverage for the same database', async () => {
+  let attempts = 0;
+  const screen = minuteScreen(async () => {
+    if (++attempts === 1) throw new Error('Coverage lookup interrupted');
+    return coverage;
+  });
+  const study = {
+    id: 'night-shift-observations', revision: 4,
+    data_source: { path: '/fixture/observations/initial', database: 'sic' },
+  };
+  const bridge = screen.c.window.EU_EXTRACTION_STUDY_CONTEXT;
+  bridge.hydrate(study);
+  await screen.connect(study.data_source.path);
+  assert.match(screen.render(), /data-ex-minute-retry/);
+  bridge.hydrate({ ...study, revision: 5 });
+  assert.match(screen.render(), /data-ex-minute-retry/);
+  assert.equal(attempts, 1);
+
+  bridge.hydrate({ ...study, revision: 6, data_source: { ...study.data_source, path: '/fixture/observations/corrected' } });
+  assert.match(screen.render(), /Checking database coverage/);
+  await settle();
+  assert.match(screen.render(), /data-ex-minute-module="haemo_native"/);
+  assert.equal(attempts, 2);
 });
 
 test('starting source binding discards an in-flight coverage response', async () => {

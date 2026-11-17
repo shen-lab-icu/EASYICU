@@ -6,6 +6,7 @@
     let group = null;
     let failed = false;
     let request = 0;
+    let hydratedSource = '';
 
     function reset() {
       database = '';
@@ -13,6 +14,12 @@
       failed = false;
       selected.clear();
       ++request;
+    }
+
+    function hydrate(source, { sameSetup, ready }) {
+      const coordinate = JSON.stringify([source?.path || '', source?.database || '']);
+      if (!sameSetup || !ready || coordinate !== hydratedSource) reset();
+      hydratedSource = coordinate;
     }
 
     function load(key) {
@@ -107,7 +114,7 @@
     }
 
     return {
-      render, bind, resultDetail, reset,
+      render, bind, resultDetail, reset, hydrate,
       clear: () => selected.clear(),
       keys: () => choices().map(row => row.id),
       count: () => choices().reduce((count, row) => count + row.signals.length, 0),
