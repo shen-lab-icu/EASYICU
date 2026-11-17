@@ -408,6 +408,25 @@ def test_filtering_a_binding_failure_cannot_make_it_editorially_repairable(tmp_p
 
 
 
+@pytest.mark.parametrize("validator, detail", [
+    ("manuscript_numeric_auditor", {"removed_sentences": [{"sentence": "Unsupported number."}]}),
+    ("evidence_bound_writer", {"missing_evidence_ids": ["foreign_source"]}),
+])
+def test_a_routine_filter_warning_without_audit_findings_keeps_the_draft(tmp_path, validator, detail):
+    from easyicu.research_agent.reporting.manuscript_audit_repair import run_manuscript_audit_repair
+
+    calls, findings = [], []
+    def draft(repair):
+        calls.append(repair)
+        findings.append(ValidationFinding(validator=validator, severity="warning", message="Filtered.", detail=detail))
+        return SimpleNamespace(scaffold=GOOD, writer_error_message=None)
+    result = run_manuscript_audit_repair(
+        draft=draft, bind=lambda _: SimpleNamespace(bound=GOOD), findings=findings,
+        section_errors=lambda *_: {}, run_dir=None, evidence=None,
+    )
+    assert calls == [None] and result[0].scaffold == GOOD and len(findings) == 1
+
+
 def test_incomplete_repair_stops_with_typed_codes_and_a_receipt(tmp_path, monkeypatch):
     bad = GOOD.replace("The AUROC was 0.74 {evidence:renal_summary}.", "See Figure 1 {evidence:renal_summary}.")
     with pytest.raises(EvidenceEnforcementError, match="MANUSCRIPT_SUBSECTION_MISSING_OR_EMPTY"):

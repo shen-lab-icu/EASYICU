@@ -73,16 +73,24 @@ def _require_preserved_sections(before: str, after: str, keys: Sequence[str]) ->
             raise EvidenceEnforcementError("MANUSCRIPT_REPAIR_AUTHORITY_CHANGED: an existing evidence or claim binding changed.")
 
 
-def _non_repairable(findings: Sequence[Any], binding: Any) -> bool:
+def _authority_failed(findings: Sequence[Any], binding: Any) -> bool:
+    """A numeric or evidence failure on its own."""
     if getattr(binding, "untraced_numerics", ()):
         return True
     return any(
-        (finding.validator in {"manuscript_numeric_auditor", "evidence_bound_writer"}
-         and (finding.severity == "error" or (
-             finding.validator == "manuscript_numeric_auditor"
-             and (finding.detail or {}).get("removed_sentences")
-         ) or (finding.detail or {}).get("missing_evidence_ids")
-           or (finding.detail or {}).get("reason_code") == "unregistered_evidence_placeholder_removed"))
+        finding.validator in {"manuscript_numeric_auditor", "evidence_bound_writer"}
+        and (finding.severity == "error"
+             or (finding.detail or {}).get("missing_evidence_ids")
+             or (finding.detail or {}).get("reason_code") == "unregistered_evidence_placeholder_removed")
+        for finding in findings
+    )
+
+
+def _non_repairable(findings: Sequence[Any], binding: Any) -> bool:
+    """A failure, or a filtered numeric sentence, that no revision may paper over."""
+    return _authority_failed(findings, binding) or any(
+        finding.validator == "manuscript_numeric_auditor"
+        and (finding.detail or {}).get("removed_sentences")
         for finding in findings
     )
 
@@ -115,15 +123,12 @@ def run_manuscript_audit_repair(
         "schema_version": "easyicu.manuscript_audit_repair/1",
         "max_attempts": MAX_MANUSCRIPT_AUDIT_REPAIRS, "attempts": [], "status": "not_needed",
     }
-    try:
-        current = draft(None)
-        binding = bind(current)
-        if not current.writer_error_message and _non_repairable(findings[start:], binding):
-            raise EvidenceEnforcementError("MANUSCRIPT_AUDIT_NON_REPAIRABLE: numeric or evidence checks failed.")
-    except EvidenceEnforcementError:
-        receipt.update(status="non_repairable", remaining_codes=["MANUSCRIPT_AUDIT_NON_REPAIRABLE"])
-        _persist(run_dir, evidence, receipt)
-        raise
+    # A draft that needs no revision keeps its normal path: a STRICT-filter
+    # warning is routine there and the final gates judge it as before.  Only a
+    # draft that asks for a revision is refused one after a numeric/evidence
+    # failure, so filtering can never make that failure editorially repairable.
+    current = draft(None)
+    binding = bind(current)
     if skip_repair or current.writer_error_message:
         _persist(run_dir, evidence, receipt)
         return current, binding
@@ -131,6 +136,10 @@ def run_manuscript_audit_repair(
     if not errors:
         _persist(run_dir, evidence, receipt)
         return current, binding
+    if _non_repairable(findings[start:], binding):
+        receipt.update(status="non_repairable", remaining_codes=["MANUSCRIPT_AUDIT_NON_REPAIRABLE", *_codes(errors)])
+        _persist(run_dir, evidence, receipt)
+        raise EvidenceEnforcementError("MANUSCRIPT_AUDIT_NON_REPAIRABLE: numeric or evidence checks failed.")
     codes = _codes(errors)
     if not codes or set(codes) - REPAIRABLE_MANUSCRIPT_CODES:
         receipt.update(status="non_repairable", remaining_codes=codes)
@@ -148,6 +157,7 @@ def run_manuscript_audit_repair(
         receipt["attempts"].append(row)
         receipt["status"] = "running"
         _persist(run_dir, evidence, receipt)
+        candidate_start = len(findings)
         try:
             candidate = draft((current.scaffold, errors))
             if candidate.writer_error_message:
@@ -157,7 +167,7 @@ def run_manuscript_audit_repair(
                 )
             _require_preserved_sections(current.scaffold, candidate.scaffold, tuple(errors))
             checked = bind(candidate)
-            if _non_repairable(findings[start:], checked):
+            if _non_repairable(findings[candidate_start:], checked):
                 raise EvidenceEnforcementError("MANUSCRIPT_AUDIT_NON_REPAIRABLE: repaired evidence or numeric checks failed.")
             if original_authority - _numeric_authority(checked):
                 raise EvidenceEnforcementError("MANUSCRIPT_REPAIR_AUTHORITY_CHANGED: an existing bound number or source changed.")
