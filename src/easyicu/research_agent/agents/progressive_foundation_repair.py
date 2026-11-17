@@ -1,4 +1,4 @@
-"""Bounded Planner repair of late foundation display-label requirements."""
+"""Bounded Planner repair of foundation display-label requirements."""
 
 from __future__ import annotations
 
@@ -6,11 +6,16 @@ import json
 from typing import Any, Callable, Mapping, Sequence
 
 from ..canonical_json import canonical_sha256, extract_json_payload
-from ..planning.progressive_compiler import validate_progressive_foundation
+from ..planning.progressive_compiler import (
+    required_binary_display_label_scopes,
+    required_reader_display_label_keys,
+    validate_progressive_foundation,
+)
 from ..planning.progressive_contract import (
     ProgressiveFoundationMaterialization,
     ProgressivePlanCompileError,
     ProgressivePlanFoundation,
+    ProgressivePlanOutline,
     ProgressiveStepMaterialization,
 )
 from ..providers.capabilities import llm_supports_strict_json_schema
@@ -39,6 +44,64 @@ def foundation_label_repair_keys(error: ProgressivePlanCompileError) -> tuple[st
         return ()
     keys = error.details.get("required_display_label_keys", expected)
     return tuple(key for key in keys if key and key in expected)
+
+
+def defer_foundation_label_repair(check: Callable[[], Any]) -> None:
+    """Keep projection parse retries from rewriting a label-only refusal.
+
+    The caller must run the projected candidate through
+    ``run_with_foundation_label_repair`` before publishing it. All other
+    validation failures keep their original parse/host handling.
+    """
+    try:
+        check()
+    except ProgressivePlanCompileError as exc:
+        if not foundation_label_repair_keys(exc):
+            raise
+
+
+def validate_projected_foundation(
+    foundation: ProgressivePlanFoundation, *, context: ResearchContext,
+    outline: ProgressivePlanOutline, require_robustness_intent: bool,
+    retained: Sequence[ProgressiveStepMaterialization] = (),
+) -> None:
+    """Check both the outline's requirements and an accepted replay prefix."""
+    validate_progressive_foundation(
+        foundation, context=context, analysis_type=outline.analysis_type,
+        require_robustness_intent=require_robustness_intent,
+        robustness_replay_required=any(step.module_id == "robustness_replay" for step in outline.steps),
+        required_binary_display_label_scopes=required_binary_display_label_scopes(
+            context, [*outline.steps, *(item.step for item in retained)],
+        ),
+        required_reader_display_label_keys=required_reader_display_label_keys(context, outline.design_selection),
+    )
+
+
+def repair_projected_foundation(
+    llm: Any, *, materialization: ProgressiveFoundationMaterialization,
+    context: ResearchContext, outline: ProgressivePlanOutline,
+    require_robustness_intent: bool, retained: Sequence[ProgressiveStepMaterialization],
+    prompt_metrics: dict[str, Any], revision_limit: int,
+    progress_callback: Callable[[Any], None] | None, resumed: bool,
+    on_repaired: Callable[[ProgressiveFoundationMaterialization], None],
+) -> ProgressiveFoundationMaterialization:
+    """Validate a fresh or resumed foundation before any prefix is published."""
+    def record_repaired(item: ProgressiveFoundationMaterialization) -> None:
+        nonlocal materialization
+        materialization = item
+        on_repaired(item)
+
+    run_with_foundation_label_repair(
+        lambda current: validate_projected_foundation(
+            current, context=context, outline=outline,
+            require_robustness_intent=require_robustness_intent, retained=retained,
+        ),
+        llm, materialization=materialization, context=context, analysis_type=outline.analysis_type,
+        retained=retained, prompt_metrics=prompt_metrics,
+        revision_base=prompt_metrics["compile_revision_count"], revision_limit=revision_limit,
+        progress_callback=progress_callback, resumed=resumed, on_repaired=record_repaired,
+    )
+    return materialization
 
 
 def repair_foundation_display_labels(
@@ -149,13 +212,10 @@ def repair_foundation_display_labels(
             "schema_authority_sha256": schema.authority_sha256,
         })
         return amended
-    raise ProgressivePlanCompileError(
-        "progressive_foundation_label_repair_exhausted",
-        "The bounded foundation-label repair budget was exhausted.",
-        path="display_labels", cause_code=finding.reason_code,
-        findings=[{"required_display_label_keys": list(keys),
-                   "repair_scope": "foundation_display_labels_only"}],
-    ) from last_failure
+    # Exhaustion does not replace the validator's typed refusal or coordinates.
+    if last_failure is finding:
+        raise finding
+    raise finding from last_failure
 
 
 def run_with_foundation_label_repair(
@@ -172,7 +232,6 @@ def run_with_foundation_label_repair(
     progress_callback: Callable[[Any], None] | None,
     resumed: bool,
     on_repaired: Callable[[ProgressiveFoundationMaterialization], None],
-    repairable: bool = True,
 ) -> Any:
     """Run a foundation-bound check; amend only the display labels it rejects.
 
@@ -184,7 +243,7 @@ def run_with_foundation_label_repair(
         try:
             return check(materialization.foundation)
         except ProgressivePlanCompileError as exc:
-            if not repairable or not foundation_label_repair_keys(exc):
+            if not foundation_label_repair_keys(exc):
                 raise
             spent = prompt_metrics.get("compile_revision_count", 0) - revision_base
             materialization = repair_foundation_display_labels(

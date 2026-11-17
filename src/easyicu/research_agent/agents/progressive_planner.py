@@ -63,7 +63,6 @@ from ..planning.progressive_compiler import (
     progressive_module_selection_contract,
     required_binary_display_label_scopes,
     required_reader_display_label_keys,
-    validate_progressive_foundation,
 )
 from ..planning.figure_plan_mutation import requires_visualization_step as _requires_visualization_step
 from ..contracts.claim_ceiling import bind_plan_tier, tier_from_planning_contract
@@ -77,8 +76,12 @@ from .progressive_literature_repair import (
 )
 from .progressive_foundation_repair import (
     binding_repair_response_failure,
+    defer_foundation_label_repair,
+    foundation_label_repair_keys,
+    repair_projected_foundation,
     run_with_foundation_label_repair,
     spend_host_candidate_repair,
+    validate_projected_foundation,
 )
 from ..planning.progressive_contract import (
     PROGRESSIVE_ARTICLE_ROLES,
@@ -3273,33 +3276,50 @@ class ProgressivePlannerAgent:
         checkpoint_emitter: ProgressivePlannerCheckpointEmitter, resumed: bool,
         adjustment_proposal: Any = None,
     ) -> tuple[AnalysisPlan, ProgressivePlanCompileReceipt, ProgressivePlanSkeleton]:
-        """Recheck a complete plan, repairing only a bounded unaccepted suffix."""
+        """Recheck a plan; repair rejected labels or a bounded unaccepted suffix."""
         foundation = foundation_materialization.foundation
         selected_action_ids, selected_action_rows = _action_catalog((outline.analysis_type,))
         reporting_source_keys = _article_reporting_source_keys(
             article_context=article_context, analysis_type=outline.analysis_type,
             enforce_article_contract=enforce_article_contract,
         )
-        for final_revision in range(automatic_retry_limit(_MAX_COMPILE_REVISIONS) + 1):
-            skeleton = assemble_progressive_skeleton(
-                outline=outline, foundation=foundation, steps=prefix_state.steps,
+        revision_base = self._attempt.prompt_metrics["compile_revision_count"]
+
+        def foundation_repaired(item: ProgressiveFoundationMaterialization) -> None:
+            nonlocal foundation, foundation_materialization
+            foundation_materialization, foundation = item, item.foundation
+            self._attempt.foundation = item
+            checkpoint_emitter.emit(
+                stage="step", outline=outline, foundation=item,
+                materializations=prefix_state.materializations, prompt_metrics=self._attempt.prompt_metrics,
             )
+
+        for final_revision in range(automatic_retry_limit(_MAX_COMPILE_REVISIONS) + 1):
             try:
-                plan, receipt = self._compile_and_accept(
-                    skeleton, execution_tier=tier_from_planning_contract(planning_contract_context),
-                    agent_context=context,
-                    article_context=article_context,
-                    allowed_literature_citation_keys=allowed_literature_citation_keys,
-                    direct_comparator_literature_keys=direct_comparator_literature_keys,
-                    allowed_know_how_decisions=allowed_know_how_decisions,
-                    enforce_article_contract=enforce_article_contract,
-                    adjustment_proposal=adjustment_proposal,
+                plan, receipt = run_with_foundation_label_repair(
+                    lambda current: self._compile_and_accept(
+                        assemble_progressive_skeleton(outline=outline, foundation=current, steps=prefix_state.steps),
+                        execution_tier=tier_from_planning_contract(planning_contract_context),
+                        agent_context=context,
+                        article_context=article_context,
+                        allowed_literature_citation_keys=allowed_literature_citation_keys,
+                        direct_comparator_literature_keys=direct_comparator_literature_keys,
+                        allowed_know_how_decisions=allowed_know_how_decisions,
+                        enforce_article_contract=enforce_article_contract,
+                        adjustment_proposal=adjustment_proposal,
+                    ),
+                    self.llm, materialization=foundation_materialization, context=context,
+                    analysis_type=outline.analysis_type, retained=prefix_state.materializations,
+                    prompt_metrics=self._attempt.prompt_metrics, revision_base=revision_base,
+                    revision_limit=automatic_retry_limit(_MAX_COMPILE_REVISIONS) - final_revision,
+                    progress_callback=progress_callback, resumed=resumed, on_repaired=foundation_repaired,
                 )
             except ProgressivePlanCompileError as exc:
                 self._attempt.record_final_rejection(exc)
                 start = final_acceptance_repair_start(exc, outline)
                 if (
-                    start is None or final_revision >= automatic_retry_limit(_MAX_COMPILE_REVISIONS)
+                    start is None or final_revision + (self._attempt.prompt_metrics["compile_revision_count"] - revision_base)
+                    >= automatic_retry_limit(_MAX_COMPILE_REVISIONS)
                     or len(self._attempt.prompt_metrics.get("final_acceptance_repairs", []))
                     >= automatic_retry_limit(_MAX_COMPILE_REVISIONS)
                 ):
@@ -3345,6 +3365,7 @@ class ProgressivePlannerAgent:
                         [m.model_dump(mode="json") for m in retained]
                     ),
                 })
+                suffix_revision_base = self._attempt.prompt_metrics["compile_revision_count"]
                 prefix_state = self._materialize_remaining_steps(
                     prefix_state, context=context, outline=outline,
                     foundation_materialization=foundation_materialization,
@@ -3360,10 +3381,12 @@ class ProgressivePlannerAgent:
                     acceptance_observation=exc.details,
                     previous_suffix=previous_suffix,
                 )
+                revision_base += self._attempt.prompt_metrics["compile_revision_count"] - suffix_revision_base
                 foundation_materialization = self._attempt.foundation or foundation_materialization
                 foundation = foundation_materialization.foundation
                 continue
             break
+        skeleton = assemble_progressive_skeleton(outline=outline, foundation=foundation, steps=prefix_state.steps)
         return plan, receipt, skeleton
 
     def _materialize_remaining_steps(
@@ -3508,7 +3531,7 @@ class ProgressivePlannerAgent:
                                 path="literature_bindings",
                             )
                 except ProgressivePlanCompileError as exc:
-                    if exc.reason_code == "progressive_foundation_label_repair_exhausted":
+                    if foundation_label_repair_keys(exc):
                         raise
                     # A single-attempt job cannot replace a rejected host step
                     # with another automatically generated candidate.
@@ -3767,9 +3790,8 @@ class ProgressivePlannerAgent:
                         ) from exc
                     if exc.reason_code in _NON_REPAIRABLE_COORDINATE_FINDINGS or exc.details.get("repair_scope") == "outline_required":
                         raise
-                    if (
-                        exc.reason_code == "progressive_foundation_label_repair_exhausted"
-                        or self._attempt.prompt_metrics["compile_revision_count"] - revision_base
+                    if foundation_label_repair_keys(exc) or (
+                        self._attempt.prompt_metrics["compile_revision_count"] - revision_base
                         >= automatic_retry_limit(_MAX_COMPILE_REVISIONS)
                     ):
                         raise
@@ -3846,12 +3868,7 @@ class ProgressivePlannerAgent:
         progress_callback: Optional[Callable[[Any], None]],
         outline_retry_journal: Mapping[str, Any] | None,
     ) -> AnalysisPlan:
-        """Delegate the family-spec attempt while keeping host binders in-module.
-
-        The sibling owner runs the single spec call, the template projection,
-        and the unchanged validator/compiler chain; this method only supplies
-        the Planner-private outline binders and acceptance callables.
-        """
+        """Supply outline authority and acceptance to the family-spec owner."""
 
         from ..planning.family_spec import BASELINE_ASSOCIATION_FAMILY_ID, family_template_id_for_context
 
@@ -3942,7 +3959,7 @@ class ProgressivePlannerAgent:
                 stage="family_spec", parse_attempt_limit=automatic_retry_limit(_MAX_STEP_PARSE_RETRIES) + 1,
             )
         return run_family_spec_attempt(
-            llm=family_llm,
+            llm=family_llm, foundation_repair_llm=self.llm,
             attempt=self._attempt,
             context=context,
             article_context=article_context,
@@ -3970,6 +3987,7 @@ class ProgressivePlannerAgent:
             checkpoint_emitter=checkpoint_emitter,
             progress_callback=progress_callback,
             max_parse_retries=automatic_retry_limit(_MAX_STEP_PARSE_RETRIES),
+            max_compile_revisions=automatic_retry_limit(_MAX_COMPILE_REVISIONS),
             prompt_byte_limit=planner_prompt_byte_limit(self.llm),
             bind_outline=bind_outline,
             validate_outline=validate_outline,
@@ -4783,16 +4801,11 @@ class ProgressivePlannerAgent:
                         "outline digest",
                         path="outline_sha256",
                     )
-                validate_progressive_foundation(
-                    parsed.foundation,
-                    context=context,
-                    analysis_type=outline.analysis_type,
-                    require_robustness_intent=require_robustness_intent,
-                    robustness_replay_required=any(
-                        step.module_id == "robustness_replay" for step in outline.steps
-                    ),
-                    required_binary_display_label_scopes=required_label_scopes,
-                    required_reader_display_label_keys=required_label_keys,
+                defer_foundation_label_repair(
+                    lambda: validate_projected_foundation(
+                        parsed.foundation, context=context, outline=outline,
+                        require_robustness_intent=require_robustness_intent,
+                    )
                 )
                 return parsed
 
@@ -4874,31 +4887,16 @@ class ProgressivePlannerAgent:
                 "cohort selection mode",
                 path="cohort.selection_mode",
             )
-        resume_label_scopes = required_binary_display_label_scopes(
-            context, [item.step for item in resume_checkpoint.materializations],
-        ) if resume_checkpoint is not None else ()
-
-        def foundation_repaired(item: ProgressiveFoundationMaterialization) -> None:
-            nonlocal foundation, foundation_materialization
-            foundation_materialization, foundation = item, item.foundation
-            self._attempt.foundation = item
-
-        run_with_foundation_label_repair(
-            lambda current: validate_progressive_foundation(
-                current, context=context, analysis_type=outline.analysis_type,
-                require_robustness_intent=require_robustness_intent,
-                robustness_replay_required=any(step.module_id == "robustness_replay" for step in outline.steps),
-                required_binary_display_label_scopes=(*required_label_scopes, *resume_label_scopes),
-                required_reader_display_label_keys=required_label_keys,
-            ),
-            self.llm, materialization=foundation_materialization, context=context,
-            analysis_type=outline.analysis_type,
+        self._attempt.foundation = foundation_materialization
+        foundation_materialization = repair_projected_foundation(
+            self.llm, materialization=foundation_materialization, context=context, outline=outline,
+            require_robustness_intent=require_robustness_intent,
             retained=resume_checkpoint.materializations if resume_checkpoint is not None else (),
             prompt_metrics=self._attempt.prompt_metrics,
-            revision_base=self._attempt.prompt_metrics["compile_revision_count"],
             revision_limit=automatic_retry_limit(_MAX_COMPILE_REVISIONS), progress_callback=progress_callback,
-            resumed=True, on_repaired=foundation_repaired, repairable=resume_checkpoint is not None,
+            resumed=resume_checkpoint is not None, on_repaired=lambda item: setattr(self._attempt, "foundation", item),
         )
+        foundation = foundation_materialization.foundation
         self._attempt.foundation = foundation_materialization
         if not resume_foundation_reused:
             checkpoint_emitter.emit(

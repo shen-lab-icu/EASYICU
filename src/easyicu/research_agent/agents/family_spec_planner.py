@@ -17,6 +17,7 @@ a host template writes, :func:`family_result_stop` names this strategy.
 from __future__ import annotations
 
 import json
+from dataclasses import replace
 from typing import Any, Callable, Mapping, Optional, Sequence, get_args
 
 from .population_spec_transport import (
@@ -95,10 +96,12 @@ from ..planning.progressive_compiler import (
     validate_progressive_foundation,
 )
 from ..planning.progressive_contract import (
+    ProgressiveFoundationMaterialization,
     ProgressiveCohortPredicate,
     ProgressivePlanCompileError,
     ProgressivePredicateValue,
     ProgressivePlanCompileReceipt,
+    ProgressivePlanFoundation,
     ProgressivePlanOutline,
     ProgressivePlanSkeleton,
     ProgressivePlannerCheckpoint,
@@ -121,6 +124,10 @@ from ..planning.publication_readiness import render_required_plan_shape
 from ..schema import AnalysisPlan, ResearchContext
 from ._support import _dump_raw
 from .progressive_attempt import ProgressivePlannerAttemptState
+from .progressive_foundation_repair import (
+    defer_foundation_label_repair,
+    run_with_foundation_label_repair,
+)
 
 FAMILY_SPEC_STRATEGY = "family_spec_v1"
 
@@ -1130,6 +1137,7 @@ def _source_absolute_risk_scope(context: ResearchContext) -> str | None:
 def run_family_spec_attempt(
     *,
     llm: Any,
+    foundation_repair_llm: Any,
     attempt: ProgressivePlannerAttemptState,
     context: ResearchContext,
     article_context: ResearchContext,
@@ -1151,6 +1159,7 @@ def run_family_spec_attempt(
     checkpoint_emitter: ProgressivePlannerCheckpointEmitter,
     progress_callback: Optional[Callable[[Any], None]],
     max_parse_retries: int,
+    max_compile_revisions: int,
     prompt_byte_limit: int,
     bind_outline: Callable[[ProgressivePlanOutline], ProgressivePlanOutline],
     validate_outline: Callable[[ProgressivePlanOutline], None],
@@ -1162,9 +1171,9 @@ def run_family_spec_attempt(
     """One spec call, then a host-projected skeleton through the same gates.
 
     The Planner fills the family spec; the host template projects outline,
-    foundation, and every step. Foundation and prefix validation run inside
-    parsing, so located population or distribution refusals reach structured
-    retry with its existing budget. The fresh-plan outline authority and final
+    foundation, and every step. Population and distribution refusals retain
+    their bounded spec retry; label findings leave parsing with the projection
+    and reach the label owner before publication. Outline authority and final
     acceptance run unchanged (injected by the Progressive agent). A rejected
     projection keeps the validator's own reason code and uses the shared bounded
     step/suffix repair lane. A request the host refuses stops the same way, so the run
@@ -1307,6 +1316,12 @@ def run_family_spec_attempt(
                 "family template foundation did not bind the validated outline digest",
                 path="outline_sha256",
             )
+        defer_foundation_label_repair(
+            lambda: validate_foundation(draft.foundation.foundation, outline)
+        )
+        return draft
+
+    def validate_foundation(foundation: ProgressivePlanFoundation, outline: ProgressivePlanOutline) -> None:
         require_robustness_intent = bool(
             enforce_article_contract
             and "robustness"
@@ -1314,11 +1329,10 @@ def run_family_spec_attempt(
                 article_context, analysis_type=outline.analysis_type,
             ).required_roles
         )
-        # The same foundation owner checks the population's original words.
-        # Keep it inside parsing so the model sees its located refusal within
-        # the existing retry budget, before any checkpoint is published.
+        # Population findings retain their spec retry. Label-only findings
+        # leave parsing with the projection, for the targeted repair owner.
         validate_progressive_foundation(
-            draft.foundation.foundation,
+            foundation,
             context=context,
             analysis_type=outline.analysis_type,
             require_robustness_intent=require_robustness_intent,
@@ -1332,7 +1346,6 @@ def run_family_spec_attempt(
                 context, outline.design_selection,
             ),
         )
-        return draft
 
     def compile_draft_prefixes(draft: FamilySkeletonDraft) -> tuple[ProgressivePrefixState, ...]:
         # Keep compile-time policy findings inside the same bounded spec retry
@@ -1443,6 +1456,21 @@ def run_family_spec_attempt(
         progress_callback=progress_callback,
         structured_output=schema,
         format_reminder=response_shape,
+    )
+
+    def foundation_repaired(item: ProgressiveFoundationMaterialization) -> None:
+        nonlocal draft
+        draft = replace(draft, foundation=item)
+        attempt.foundation = item
+
+    attempt.foundation = draft.foundation
+    run_with_foundation_label_repair(
+        lambda current: validate_foundation(current, draft.outline),
+        foundation_repair_llm, materialization=draft.foundation, context=context,
+        analysis_type=draft.outline.analysis_type, retained=(),
+        prompt_metrics=attempt.prompt_metrics, revision_base=0,
+        revision_limit=max_compile_revisions, progress_callback=progress_callback,
+        resumed=False, on_repaired=foundation_repaired,
     )
     capture_efficiency_metrics()
     attempt.prompt_metrics["family_spec_sha256"] = canonical_sha256(
