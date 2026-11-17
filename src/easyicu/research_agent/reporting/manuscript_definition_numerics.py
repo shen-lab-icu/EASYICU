@@ -200,8 +200,12 @@ def _grouped_quantities(context, labels):
         # A shared unqualified concept is insufficient to identify one of
         # several groupings formed from that measure.
         concept = rules.concept.casefold()
-        if names.count(concept) == 1:
-            names_for_group.update(_variable_names(rules.concept, concept, concept_reader_name(concept)))
+        concept_names = _variable_names(rules.concept, concept, concept_reader_name(concept))
+        shared_aliases = set()
+        if names.count(concept) > 1:
+            shared_aliases = _variable_aliases(concept_names, context=context, labels=labels)
+        else:
+            names_for_group.update(concept_names)
         aliases = _variable_aliases(names_for_group, context=context, labels=labels)
         field = f"cohort.provenance.{EXPOSURE_GROUP_LABELS_KEY}[{index}]"
         quantities = [_Quantity(f"{field}.levels[{pos}].code", variable, level["code"], kind="level")
@@ -234,7 +238,10 @@ def _grouped_quantities(context, labels):
                         complement = "<=" if other.upper_inclusive else "<"
                     if complement:
                         quantities.append(replace(quantity, operator=complement))
-        yield aliases, quantities
+        yield aliases - shared_aliases, quantities, True
+        if shared_aliases:
+            # Keep explicitly attached short numerals visible to enforcement.
+            yield shared_aliases, [q for q in quantities if q.kind == "threshold"], False
 
 
 def _plan_quantities(plan, prefix, context):
@@ -320,10 +327,14 @@ _SUFFIX_OPERATOR = re.compile(
     r"\s+(?:or|and)\s+(?:(?P<above>older|higher|more|greater|above)|younger|lower|less|fewer|below)\b",
     re.I,
 )
-_COORDINATOR = re.compile(r"(?:\s*,\s*|\s+)(?:and|(?-i:or)|versus|vs\.?)\s+(?:the\s+)?", re.I)
+_COORDINATOR = re.compile(
+    r"(?:(?P<comma>\s*,\s*)|\s+)(?:(?P<list_join>and|(?-i:or))|versus|vs\.?)\s+(?:the\s+)?", re.I,
+)
+_LIST_COMMA = re.compile(r"\s*,\s*(?=[+-]?(?:\d|\.\d))")
 _REFERENCE = re.compile(r"\s*,\s*with\s+(?:the\s+)?", re.I)
 _LEVEL_NOUN = re.compile(r"\s+(?:group|category|level|stratum)\b", re.I)
 _CUTOFF_NOUN = re.compile(r"\s+(?:cut[- ]?off|threshold|cut point|boundary)\b", re.I)
+_BOUNDARY_END = re.compile(r"\s*(?:[)\]]\s*)*(?:;|[.!?]?\s*\Z)")
 _TIME_UNITS = (("years?", "yrs?", "y"), ("days?", "d"), ("hours?", "hrs?", "h"),
                ("weeks?", "wks?"), ("months?", "mos?"), ("points?",))
 # Detect a unit conflicting with the typed one even if a comparator matches.
@@ -380,7 +391,7 @@ def _attached_quantity_end(text, end, quantity, kind, before, *, marked_boundary
     if kind == "cutoff" or (unit_end != end and marked_boundary):
         # A bare cutoff must end here or have a recognized list continuation.
         # A predicate after the value can turn it into a statistic.
-        if (text[unit_end:].strip() in {"", ".", "!", "?"}
+        if (_BOUNDARY_END.match(text, unit_end) or _LIST_COMMA.match(text, unit_end)
             or _COORDINATOR.match(text, unit_end) or _REFERENCE.match(text, unit_end)):
             return unit_end
     return None
@@ -445,6 +456,15 @@ def _read_quantity(text, start, kind, definitions, parse_literal, *, anchor, pre
                 matches.setdefault(key, (record, quantity, cursor))
         if applicable:
             definitions_seen.add(frozenset(applicable))
+    if len(matches) == 2:
+        column_key, unqualified_key = matches
+        if column_key[-1] is None:
+            column_key, unqualified_key = unqualified_key, column_key
+        if unqualified_key[-1] is None and column_key[:-1] == unqualified_key[:-1]:
+            # A coincident plan boundary has no column of its own. The single
+            # matching grouping column supplies the more specific source.
+            definitions_seen.discard(frozenset({unqualified_key}))
+            del matches[unqualified_key]
     if len(definitions_seen) == 1 and len(matches) == 1:
         record, quantity, cursor = next(iter(matches.values()))
         return start, end, (record, quantity), cursor
@@ -485,6 +505,7 @@ def _quantity_spans(text, anchors, sources, parse_literal, *, cites_context, gro
         marked_boundary = kind in {"cutoff", "at"}
         position = attached.end()
         previous = reference = None
+        serial_list = False
         while occurrence := _read_quantity(
             text, position, kind, definitions, parse_literal, anchor=anchor.start(), previous=previous,
             marked_boundary=marked_boundary, cites_context=cites_context,
@@ -498,11 +519,14 @@ def _quantity_spans(text, anchors, sources, parse_literal, *, cites_context, gro
             _, previous = source
             connector = _COORDINATOR.match(text, cursor)
             reference = _REFERENCE.match(text, cursor)
-            continuation = connector or reference
+            list_comma = _LIST_COMMA.match(text, cursor) if marked_boundary and previous.kind == "threshold" else None
+            continuation = connector or reference or list_comma
             if continuation is None:
                 break
-            if continuation[0].lstrip().startswith(","):
+            # A preceding numeric list item licenses an Oxford comma.
+            if reference or (connector and connector["comma"] and not (serial_list and connector["list_join"])):
                 marked_boundary = False
+            serial_list = list_comma is not None
             position = continuation.end()
             marker = _LEVEL_PREFIX.match(text, position)
             kind = marker[0].strip().casefold() if marker else ""
@@ -565,11 +589,12 @@ def registered_definition_spans(text, evidence, *, sentence_bounds, parse_litera
     context_record, context = _registered_context(evidence, records)
     labels = plan.get("display_labels") or {}
     grouped = list(_grouped_quantities(context, labels)) if context else []
-    grouped_variables = {quantity.variable.casefold() for _, quantities in grouped for quantity in quantities}
+    grouped_variables = {quantity.variable.casefold() for _, quantities, _ in grouped for quantity in quantities}
     # A registered context supplies the units and variable names even when
     # only the plan is cited. An unverified context disables typed plan binds.
     planned = list(_plan_quantities(plan, prefix, context)) if registered and (context or not context_record) else []
-    known_names = {alias for aliases, quantities in (*grouped, *planned) if quantities for alias in aliases}
+    known_names = {alias for aliases, quantities, _ in grouped if quantities for alias in aliases}
+    known_names.update(alias for aliases, quantities in planned if quantities for alias in aliases)
     if not known_names:
         return exact, ()
     if context:
@@ -592,7 +617,9 @@ def registered_definition_spans(text, evidence, *, sentence_bounds, parse_litera
         seen.add((start, end))
         sentence, cited = _sentence_citations(sentence_text, start, end)
         cites_context = context_record is not None and _cites(context_record, cited, evidence)
-        sources = [(context_record, aliases, quantities, True) for aliases, quantities in grouped if cites_context]
+        sources = [
+            (context_record, aliases, quantities, citable) for aliases, quantities, citable in grouped if cites_context
+        ]
         if planned:
             cites_plan = _cites(plan_record, cited, evidence)
             sources.extend((plan_record, aliases, quantities, cites_plan) for aliases, quantities in planned)

@@ -233,6 +233,9 @@ PARAPHRASED = "SOFA score was represented by two ordered categories: under 8.0 p
     ("We compared SOFA code 2 and code 1", ["2", "1"], ["levels[1].code", "levels[0].code"]),
     ("The creatinine cutoff was 2.0 mg/dL versus below 2 mg/dL", ["2.0", "2"], ["groups[0].rule.value"]),
     ("The creatinine cutoff was below 2.0 mg/dL or 2 mg/dL", ["2.0", "2"], ["groups[0].rule.value"]),
+    ("We defined the strata (the creatinine cut point was 2.0 mg/dL)", ["2.0"], ["groups[0].rule.value"]),
+    ("We defined the strata [the creatinine boundary was 2.0 mg/dL]", ["2.0"], ["groups[0].rule.value"]),
+    ("The creatinine threshold was 2.0 mg/dL; unmeasured stays were omitted", ["2.0"], ["groups[0].rule.value"]),
 ])
 def test_a_cited_typed_definition_binds_each_paraphrased_occurrence(typed_definition_store, text, values, fields):
     store, records = typed_definition_store
@@ -499,9 +502,11 @@ def test_repeated_outcome_windows_bind_only_when_the_requirements_agree(cohort_p
 
 
 @pytest.mark.parametrize("concept", ["plt", "PLT"])
-@pytest.mark.parametrize("boundary", [
-    "PLT at admission was no less than 117 cells/µL",
-    "Platelet count was no less than 117 cells/µL",
+@pytest.mark.parametrize("boundary, second_cutoff", [
+    ("PLT at admission was no less than 117 cells/µL", None),
+    ("Platelet count was no less than 117 cells/µL", None),
+    ("At screening, platelet count was 117 cells/µL or higher", 251),
+    ("Platelet count at hospital entry was 117 cells/µL or higher", 117),
 ])
 @pytest.mark.parametrize("cites, evidence_id, field", [
     ("{evidence:research_context}", "research_context",
@@ -511,11 +516,18 @@ def test_repeated_outcome_windows_bind_only_when_the_requirements_agree(cohort_p
      "cohort.provenance.exposure_group_labels[0].parameters.groups[1].rule.value"),
 ])
 def test_shared_cohort_and_exposure_boundaries_bind_to_a_cited_source(
-    tmp_path, concept, boundary, cites, evidence_id, field,
+    tmp_path, concept, boundary, second_cutoff, cites, evidence_id, field,
 ):
     store = EvidenceStore(tmp_path, enforcement_mode="strict")
     grouping = _grouping(concept, 117, "cells/µL")
-    grouping["parameters"]["source_columns"] = {"value": "plt_first"}
+    parameters = grouping["parameters"]
+    parameters["source_columns"] = {"value": "plt_first"}
+    if second_cutoff is not None:
+        parameters["source_columns"]["max"] = "plt_max"
+        parameters["groups"].append({
+            "id": "g3", "rule": {"summary": "max", "op": ">=", "value": second_cutoff, "unit": "cells/µL"},
+        })
+        grouping["levels"].append({"code": 3, "group": "g3", "label": "Elevated maximum"})
     _register_context(store, ResearchContext.model_validate({
         "research_question": "Group platelet counts by a synthetic boundary",
         "cohort": {"cohort_name": "synthetic", "database": "eicu", "n_stays": 100,
@@ -529,8 +541,15 @@ def test_shared_cohort_and_exposure_boundaries_bind_to_a_cited_source(
         ]},
         "steps": [],
     }, "analysis_plan")
-    _, removed, _, bindings, _ = _chain(store, [], f"{boundary} {cites}.")
-    assert not removed and len(bindings) == 1
+    text = f"{boundary} {cites}."
+    _, removed, _, bindings, untraced = _chain(store, [], text)
+    if second_cutoff == 117 and evidence_id == "research_context":
+        with pytest.raises(EvidenceEnforcementError) as error:
+            bind_numeric_values(text, evidence=store, per_step_records=[])
+        assert [row["value"] for row in error.value.detail["untraced_occurrences"]] == ["117"]
+        assert [row["untraced"] for row in removed] == [["117"]]
+        return
+    assert not removed and not untraced and len(bindings) == 1
     claim = next(iter(bindings.values()))
     assert (claim.evidence_id, claim.source_field) == (evidence_id, field)
 
@@ -565,12 +584,15 @@ def test_adult_inclusion_does_not_mask_an_age_group_boundary(tmp_path):
     assert [row["untraced"] for row in removed] == [["18"]]
 
 
-@pytest.mark.parametrize("sentence", [
-    "Age was grouped at 18 years {evidence:research_context}.",
-    "We split age at 18 years {evidence:research_context}.",
-    "We used an age cutoff of 18 {evidence:research_context}.",
+@pytest.mark.parametrize("has_age_predicate", [True, False])
+@pytest.mark.parametrize("sentence, value", [
+    ("Age was grouped at 18 years {evidence:research_context}.", "18"),
+    ("We split age at 18 years {evidence:research_context}.", "18"),
+    ("We used an age cutoff of 18 {evidence:research_context}.", "18"),
+    ("For the sensitivity strata, we split age at 18 {evidence:research_context}.", "18"),
+    ("For the oldest stratum, we grouped age at 65 {evidence:research_context}.", "65"),
 ])
-def test_shared_age_groupings_block_plan_fallback_for_unqualified_age(tmp_path, sentence):
+def test_shared_age_groupings_block_plan_fallback_for_unqualified_age(tmp_path, has_age_predicate, sentence, value):
     store = EvidenceStore(tmp_path, enforcement_mode="strict")
     question = "Compare two ways to stratify the synthetic cohort by age"
     younger = _grouping("age", 65, "years")
@@ -585,29 +607,28 @@ def test_shared_age_groupings_block_plan_fallback_for_unqualified_age(tmp_path, 
             {"name": "crea", "dtype": "float64", "unit": "mg/dL"},
         ],
     }))
+    inclusion = [_predicate("crea", "<", 2.5)]
+    if has_age_predicate:
+        inclusion.insert(0, _predicate("age", ">=", 18))
     _register_cohort_plan(store, {
         "research_question": question,
-        "cohort": {"name": "synthetic", "inclusion": [
-            _predicate("age", ">=", 18), _predicate("crea", "<", 2.5),
-        ]},
+        "cohort": {"name": "synthetic", "inclusion": inclusion},
         "steps": [],
     }, "analysis_plan")
 
     with pytest.raises(EvidenceEnforcementError) as error:
         bind_numeric_values(sentence, evidence=store, per_step_records=[])
-    assert [row["value"] for row in error.value.detail["untraced_occurrences"]] == ["18"]
+    assert [row["value"] for row in error.value.detail["untraced_occurrences"]] == [value]
     _, removed, _, _, _ = _chain(store, [], sentence)
-    assert [row["untraced"] for row in removed] == [["18"]]
+    assert [row["untraced"] for row in removed] == [[value]]
 
-    text = (
-        "Age of 18 years or older qualified at screening {evidence:analysis_plan}.\n\n"
-        "Creatinine below 2.5 mg/dL qualified at screening {evidence:research_context}."
-    )
+    text = "Creatinine below 2.5 mg/dL qualified at screening {evidence:research_context}."
+    if has_age_predicate:
+        text = "Age of 18 years or older qualified at screening {evidence:analysis_plan}.\n\n" + text
     _, removed, _, bindings, untraced = _chain(store, [], text)
     assert removed == [] and untraced == []
     assert [(claim.evidence_id, claim.source_field) for claim in bindings.values()] == [
-        ("analysis_plan", "cohort.inclusion[0].value"),
-        ("analysis_plan", "cohort.inclusion[1].value"),
+        ("analysis_plan", f"cohort.inclusion[{index}].value") for index in range(len(inclusion))
     ]
 
 
@@ -673,10 +694,30 @@ def test_two_cohort_cutoffs_bind_to_their_own_values(cohort_plan_store):
     assert [(claim.value, claim.source_field) for claim in bindings.values()] == [
         ("18", "cohort.inclusion[0].value"), ("85", "cohort.inclusion[1].value"),
     ]
-    joined_clauses = text.replace("years and", "years, and", 1)
-    with pytest.raises(EvidenceEnforcementError) as error:
-        bind_numeric_values(joined_clauses, evidence=store, per_step_records=[])
-    assert [row["value"] for row in error.value.detail["untraced_occurrences"]] == ["85"]
+    for coordinator in ("and", "or"):
+        joined_clauses = text.replace("years and", f"years, {coordinator}", 1)
+        with pytest.raises(EvidenceEnforcementError) as error:
+            bind_numeric_values(joined_clauses, evidence=store, per_step_records=[])
+        assert [row["value"] for row in error.value.detail["untraced_occurrences"]] == ["85"]
+
+
+@pytest.mark.parametrize("coordinator", ["and", "or"])
+def test_three_cohort_cutoffs_bind_across_serial_commas(cohort_plan_store, coordinator):
+    store, plan = cohort_plan_store
+    plan["cohort"]["inclusion"] = [_predicate("age", ">=", 52), _predicate("age", "<=", 67)]
+    plan["cohort"]["exclusion"] = [_predicate("age", ">", 83)]
+    _register_cohort_plan(store, plan, "analysis_plan")
+
+    text = (
+        f"For the screening categories, the age cut point was 52 years, 67 years, {coordinator} 83 years "
+        "{evidence:analysis_plan}."
+    )
+    _, removed, _, bindings, untraced = _chain(store, [], text)
+    assert removed == [] and untraced == []
+    assert [(claim.value, claim.source_field) for claim in bindings.values()] == [
+        ("52", "cohort.inclusion[0].value"), ("67", "cohort.inclusion[1].value"),
+        ("83", "cohort.exclusion[0].value"),
+    ]
 
 
 @pytest.mark.parametrize("sentence, value", [
