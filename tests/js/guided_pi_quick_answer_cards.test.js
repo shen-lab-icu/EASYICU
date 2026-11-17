@@ -120,6 +120,42 @@ test('a median is shown with its quartiles from their own rows', () => {
   assert.match(en, /<td>1.8 \(IQR 1.2–3.1\) mmol\/L<\/td>/);
 });
 
+test('a continuous distribution card names and renders the fixed summary', () => {
+  const { cards } = owners('en');
+  const item = attachment();
+  const reading = { ...READING, question: 'Describe the distribution of age by sex.', grouping: ['sex'],
+    measure: { concept: 'age', statistic: 'distribution' } };
+  Object.assign(item.proposal.card.plan, { reading, effective_reading: reading, measure_levels: [] });
+  const plan = rendered(cards, item);
+  assert.match(plan, /N and missing count, median \(IQR\), and mean \(SD\) of Age/);
+  assert.match(plan, /<dt>Groups<\/dt><dd>Sex<\/dd>/);
+  const rows = Object.entries({ cohort_n: 30, nonmissing_n: 18, missing_n: 12, median: 60, q1: 50, q3: 70,
+    mean: 59, std: 9.2 }).map(([statistic, value]) => ({ statistic, value, group: 'Female', level: '',
+    unit: statistic.endsWith('_n') ? '' : 'years', evidence: evidence(statistic) }));
+  item.answer = { status: 'ok', source: SOURCE, rows };
+  const answer = rendered(cards, item);
+  assert.match(answer, /<th scope="row">Female<\/th>/);
+  assert.match(answer, /60 \(IQR 50–70\) years/);
+  assert.match(answer, /Mean 59 \(SD 9.2\) years/);
+  assert.match(answer, /18 of 30 with a value.*12 missing/);
+  assert.doesNotMatch(answer, /<svg|<img|<canvas/);
+});
+
+test('a categorical distribution card renders every level and its proportion', () => {
+  const { cards } = owners();
+  const item = attachment();
+  const reading = { ...READING, question: '性别分布如何？', measure: { concept: 'sex', statistic: 'distribution' } };
+  Object.assign(item.proposal.card.plan, { reading, effective_reading: reading, measure_levels: ['Female', 'Male'] });
+  assert.match(rendered(cards, item), /按类别的计数和比例/);
+  const rows = [['Female', 18, 60], ['Male', 12, 40]].flatMap(([level, count, percent]) =>
+    [['numerator', count], ['denominator', 30], ['percentage', percent]].map(([statistic, value]) =>
+      ({ statistic, value, group: 'Overall', level, unit: statistic === 'percentage' ? '%' : '', evidence: evidence(statistic) })));
+  item.answer = { status: 'ok', source: SOURCE, rows };
+  const answer = rendered(cards, item);
+  assert.match(answer, /Female 18 \/ 30（60%）/);
+  assert.match(answer, /Male 12 \/ 30（40%）/);
+});
+
 test('a grouped comparison reads each group and the test from their own rows', () => {
   const { cards } = owners('en');
   const rows = [];

@@ -204,12 +204,13 @@ def _plan(reading, effective, source):
         raise QuickStop("quick_unit_not_prepared")
     variable = _variable(source, effective.measure)
     levels = _levels(variable)
-    categorical = effective.measure.statistic in {"count", "proportion"}
-    if variable is not None and effective.measure.statistic == "proportion" and not levels:
+    statistic = effective.measure.statistic
+    categorical = statistic in {"count", "proportion"} or (statistic == "distribution" and bool(levels))
+    if variable is not None and statistic == "proportion" and not levels:
         raise QuickStop("quick_levels_unresolved")
     if not categorical and levels:
         raise QuickStop("quick_measure_ambiguous")
-    if effective.measure.level is not None and effective.measure.level not in levels:
+    if effective.measure.level is not None and (statistic == "distribution" or effective.measure.level not in levels):
         raise QuickStop("quick_level_unresolved")
     group = (_variable(source, Measure(concept=effective.grouping[0], statistic="count"))
              if effective.grouping else None)
@@ -234,7 +235,7 @@ def _plan(reading, effective, source):
         if source.patient_column is None:
             raise QuickStop("quick_independent_units_unverified")
         test = ("chi_square_with_fisher_exact_for_sparse_2x2" if categorical else
-                "welch_t_or_anova" if effective.measure.statistic == "mean" else "mann_whitney_or_kruskal")
+                "welch_t_or_anova" if statistic == "mean" else "mann_whitney_or_kruskal")
     return QuickPlan(
         reading=reading, effective_reading=effective, source_binding=source.binding,
         source_data_sha256=source.data_sha256, context_sha256=canonical_sha256(source.context.model_dump(mode="json")),

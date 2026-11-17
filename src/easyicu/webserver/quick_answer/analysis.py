@@ -167,7 +167,11 @@ def _cell(row, statistic, value, *, unit=""):
 
 
 # A median is reported with its quartiles, the conventional median (IQR).
-_REPORTED = {"median": {"median", "q1", "q3"}, "iqr": {"median", "q1", "q3"}}
+_REPORTED = {
+    "median": {"median", "q1", "q3"},
+    "iqr": {"median", "q1", "q3"},
+    "distribution": {"median", "q1", "q3", "mean", "std"},
+}
 
 
 def descriptive_cells(source, plan):
@@ -187,10 +191,18 @@ def descriptive_cells(source, plan):
     summaries = [cohort_summary_table(partition, columns, metadata).assign(group=group)
                  for group, _role, partition in descriptive_partitions(frame, group_column, group_levels)]
     table = pd.concat(summaries, ignore_index=True)
+    measure = plan.effective_reading.measure
+    distribution = measure.statistic == "distribution"
+    if distribution and plan.measure_levels:
+        # The kernel emits one row per declared level in order. Restore the
+        # original labels where pandas coerced them alongside empty cells.
+        level_rows = table.index[table["statistic"].eq("level_count")]
+        table["level"] = table["level"].astype(object)
+        table.loc[level_rows, "level"] = pd.Series(plan.measure_levels * len(summaries), index=level_rows, dtype=object)
     if poolable and plan.measure_column:
         table = _withhold_small_counts(table)
     _disclose_counts(table)
-    measure = plan.effective_reading.measure
+    reported = _REPORTED.get(measure.statistic, {measure.statistic})
     cells = []
     for row in table.to_dict("records"):
         statistic = row["statistic"]
@@ -199,9 +211,12 @@ def descriptive_cells(source, plan):
         elif statistic == "level_count" and (measure.level is None or row["level"] == measure.level):
             cells.append(_cell(row, "numerator", row["numerator"]))
             cells.append(_cell(row, "denominator", row["denominator"]))
-            if measure.statistic == "proportion":
+            if measure.statistic == "proportion" or (distribution and row["denominator"] > 0):
                 cells.append(_cell(row, "percentage", row["percentage"], unit="%"))
-        elif statistic in _REPORTED.get(measure.statistic, {measure.statistic}):
+        elif statistic in reported:
+            # Retain counts in empty partitions. Sample SD needs two observations.
+            if distribution and row["denominator"] < (2 if statistic == "std" else 1):
+                continue
             cells.append(_cell(row, statistic, row["value"], unit=row.get("unit") or ""))
     if plan.test:
         variable = TableOneVariableSpec(

@@ -79,13 +79,16 @@
       return (window.EU_DATABASE_NAMES && window.EU_DATABASE_NAMES.name(key)) || key;
     }
     function hours(value) { return Number.isInteger(value) ? String(value) : String(Number(value).toFixed(1)); }
-    function measureText(reading) {
+    function measureText(reading, measureLevels) {
       const measure = reading && reading.measure || {};
       const span = measure.window;
       const summary = pair(SUMMARIES, measure.summary);
       const name = conceptName(measure.concept);
       const level = measure.level == null || measure.level === '' ? '' : ` = ${measure.level}`;
-      const statistic = pair(STATISTICS, measure.statistic);
+      const statistic = measure.statistic !== 'distribution' ? pair(STATISTICS, measure.statistic)
+        : measureLevels && measureLevels.length
+          ? tr('N and missing count, counts and proportions by level', '有值及缺失例数、按类别的计数和比例')
+          : tr('N and missing count, median (IQR), and mean (SD)', '有值及缺失例数、中位数（四分位数间距）、均值（标准差）');
       return tr(
         `${statistic} of ${summary ? summary + ' ' : ''}${name}${level}${span ? `, ICU hours ${hours(span.start_hours)}–${hours(span.end_hours)}` : ''}`,
         `${span ? `入 ICU ${hours(span.start_hours)}–${hours(span.end_hours)} 小时` : ''}${name}${summary ? summary + '值' : ''}${level}的${statistic}`,
@@ -108,7 +111,7 @@
     }
     const POOLED = 'Other groups (pooled)'; // quick_answer/planning.py POOLED_GROUP
     // One line per group, each value read from its own answer row.
-    function answerTable(answer) {
+    function answerTable(answer, distribution) {
       const rows = Array.isArray(answer && answer.rows) ? answer.rows : [];
       const groups = [];
       const byGroup = new Map();
@@ -116,34 +119,50 @@
       rows.forEach(row => {
         if (String(row.statistic || '').startsWith('p_value:')) { comparison = row; return; }
         const group = String(row.group || 'Overall');
-        if (!byGroup.has(group)) { byGroup.set(group, {}); groups.push(group); }
-        const cells = byGroup.get(group);
-        const key = row.level ? `${row.statistic}:${row.level}` : row.statistic;
-        cells[key] = row;
-        if (row.statistic === 'numerator' || row.statistic === 'percentage' || row.statistic === 'denominator') cells[row.statistic] = row;
+        if (!byGroup.has(group)) { byGroup.set(group, { cells: {}, levels: new Map() }); groups.push(group); }
+        const { cells, levels } = byGroup.get(group);
+        if (distribution && ['numerator', 'denominator', 'percentage'].includes(row.statistic)) {
+          if (!levels.has(row.level)) levels.set(row.level, {});
+          levels.get(row.level)[row.statistic] = row;
+        } else cells[row.statistic] = row;
       });
       // A group whose statistic is absent while others have one was withheld (too few values).
       const withStatistic = rows.some(row => ['median', 'mean', 'q1', 'q3'].includes(row.statistic));
       const unitOf = row => row.unit && row.unit !== '%' ? ' ' + esc(row.unit) : row.unit === '%' ? '%' : '';
       const withUnit = row => row ? `${number(row.value)}${unitOf(row)}` : '';
+      const countPercent = cells => {
+        const count = number(cells.numerator.value);
+        return distribution && cells.denominator.value === 0 ? count
+          : `${count} / ${number(cells.denominator.value)}${cells.percentage ? tr(` (${withUnit(cells.percentage)})`, `（${withUnit(cells.percentage)}）`) : ''}`;
+      };
       const lines = groups.map(group => {
-        const cells = byGroup.get(group);
+        const { cells, levels } = byGroup.get(group);
         let result = '';
         if (cells.median && cells.q1 && cells.q3) {
           const quartiles = `${number(cells.q1.value)}–${number(cells.q3.value)}`;
           result = `${number(cells.median.value)}${tr(` (IQR ${quartiles})`, `（${quartiles}）`)}${unitOf(cells.median)}`;
         } else if (cells.median) result = withUnit(cells.median);
-        else if (cells.mean) result = withUnit(cells.mean);
+        else if (cells.mean && !distribution) result = withUnit(cells.mean);
         else if (cells.q1 && cells.q3) result = `${number(cells.q1.value)}–${withUnit(cells.q3)}`;
         else if (cells.numerator && cells.denominator) {
-          result = `${number(cells.numerator.value)} / ${number(cells.denominator.value)}${cells.percentage ? tr(` (${withUnit(cells.percentage)})`, `（${withUnit(cells.percentage)}）`) : ''}`;
+          result = countPercent(cells);
+        }
+        if (levels.size) result = Array.from(levels, ([level, counts]) =>
+          `<div>${esc(level || tr('(empty label)', '（空类别标签）'))} ${countPercent(counts)}</div>`).join('');
+        if (distribution && cells.mean) {
+          const mean = cells.std
+            ? `${number(cells.mean.value)}${tr(` (SD ${number(cells.std.value)})`, `（标准差 ${number(cells.std.value)}）`)}${unitOf(cells.mean)}`
+            : withUnit(cells.mean);
+          result += `<div>${tr('Mean', '均值')} ${mean}</div>`;
         }
         const observed = cells.nonmissing_n && cells.cohort_n
           ? tr(`${number(cells.nonmissing_n.value)} of ${number(cells.cohort_n.value)} with a value`, `${number(cells.cohort_n.value)} 例中 ${number(cells.nonmissing_n.value)} 例有值`)
           : cells.cohort_n ? tr(`${number(cells.cohort_n.value)} in the group`, `共 ${number(cells.cohort_n.value)} 例`) : '';
+        const missing = distribution && cells.missing_n ? `<div>${tr(`${number(cells.missing_n.value)} missing`, `缺失 ${number(cells.missing_n.value)} 例`)}</div>` : '';
+        if (!result && distribution && cells.nonmissing_n?.value === 0) result = esc(tr('No observed values', '无观测值'));
         if (!result && withStatistic) result = esc(tr('Too few values to show under the privacy rule', '有值例数过少，按隐私规则不显示'));
         const label = group === 'Overall' ? tr('All', '全部') : group === POOLED ? esc(tr('Other groups (pooled)', '其他组（合并）')) : esc(group);
-        return `<tr><th scope="row">${label}</th><td>${result}</td><td>${observed}</td></tr>`;
+        return `<tr><th scope="row">${label}</th><td>${result}</td><td>${observed}${missing}</td></tr>`;
       });
       const pooledNote = byGroup.has(POOLED) ? `<p class="gpi-quick-test">${esc(tr('Groups too small to show alone are pooled into “Other groups” under the privacy rule.', '人数过少的组按隐私规则合并为“其他组”显示。'))}</p>` : '';
       const test = comparison ? String(comparison.statistic).slice('p_value:'.length) : '';
@@ -164,7 +183,9 @@
       const proposal = attachment.proposal || {};
       const answer = attachment.answer || null;
       const card = proposal.card || null;
-      const reading = (card && card.plan && card.plan.effective_reading) || (proposal.expand && (proposal.expand.effective_reading || proposal.expand.reading)) || {};
+      const plan = card && card.plan;
+      const reading = (plan && plan.effective_reading) || (proposal.expand && (proposal.expand.effective_reading || proposal.expand.reading)) || {};
+      const measureLevels = plan && plan.measure_levels;
       const source = (answer && answer.source) || (card && card.source) || (proposal.expand && proposal.expand.source) || {};
       const off = disabled() ? ' disabled' : '';
       const expandButton = primary => `<button class="btn ${primary ? 'primary ' : ''}sm" type="button" data-gpi-quick-expand="${esc(id)}"${off}>${esc(tr('Make it a full study', '改为完整研究'))}</button>`;
@@ -174,16 +195,16 @@
       // A compare over more than two groups is summarised per group, untested.
       const untested = reading.intent === 'compare' && (answer
         ? !(answer.rows || []).some(row => String(row.statistic).startsWith('p_value:'))
-        : !!(card && card.plan && !card.plan.test));
+        : !!(plan && !plan.test));
       const untestedNote = untested ? `<p class="gpi-quick-test">${esc(tr('No between-group test: a quick answer tests exactly two groups. Make it a full study to compare all groups.', '未做组间检验：快速回答只对两组做检验。如需比较所有组，请改为完整研究。'))}</p>` : '';
       let body = '';
       if (answer && answer.status === 'ok') {
-        body = `<p class="gpi-quick-measure">${esc(measureText(reading))}</p>${answerTable(answer)}${untestedNote}${scope}<div class="gpi-quick-actions">${expandButton(false)}</div>`;
+        body = `<p class="gpi-quick-measure">${esc(measureText(reading, measureLevels))}</p>${answerTable(answer, reading.measure?.statistic === 'distribution')}${untestedNote}${scope}<div class="gpi-quick-actions">${expandButton(false)}</div>`;
       } else if (answer) {
         body = `<p class="gpi-quick-reason">${esc(reasonText(answer.reason))}</p><div class="gpi-quick-actions">${expandButton(true)}</div>`;
       } else if (proposal.status === 'approval_required' && card) {
         const substitution = card.capability && card.capability.status === 'substitution';
-        body = `<dl class="gpi-quick-plan"><dt>${esc(tr('Population', '人群'))}</dt><dd>${esc(populationText(reading))}</dd><dt>${esc(tr('Calculation', '计算'))}</dt><dd>${esc(measureText(reading))}</dd>${Array.isArray(reading.grouping) && reading.grouping.length
+        body = `<dl class="gpi-quick-plan"><dt>${esc(tr('Population', '人群'))}</dt><dd>${esc(populationText(reading))}</dd><dt>${esc(tr('Calculation', '计算'))}</dt><dd>${esc(measureText(reading, measureLevels))}</dd>${Array.isArray(reading.grouping) && reading.grouping.length
           ? `<dt>${esc(tr('Groups', '分组'))}</dt><dd>${esc(reading.grouping.map(conceptName).join(tr(', ', '、')))}</dd>` : ''}</dl>${substitutionsHtml(card.capability)}${untestedNote}${scope}<div class="gpi-quick-actions">${expandButton(false)}<button class="btn primary sm" type="button" data-gpi-quick-approve="${esc(id)}" data-gpi-quick-card="${esc(card.sha256)}" data-gpi-quick-accept="${substitution ? 'true' : 'false'}"${off}>${esc(substitution ? tr('Accept the changes and calculate', '同意口径调整并计算') : tr('Calculate', '计算'))}</button></div>`;
       } else {
         body = `<p class="gpi-quick-reason">${esc(reasonText(proposal.reason))}</p><div class="gpi-quick-actions">${expandButton(true)}</div>`;

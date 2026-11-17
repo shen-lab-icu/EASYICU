@@ -20,7 +20,13 @@ class Contract(BaseModel):
 
 class Measure(Contract):
     concept: str = Field(default="", max_length=120, pattern=r"^[A-Za-z0-9_]*$")
-    statistic: Literal["count", "proportion", "mean", "median", "iqr"]
+    statistic: Literal["count", "proportion", "mean", "median", "iqr", "distribution"] = Field(description=(
+        "Use distribution for a descriptive request for the distribution, spread or summary of one measure "
+        "when no particular statistic or presentation is requested. Use intent describe for a summary, "
+        "including when it is requested by group. The fixed summary reports observed and missing counts, "
+        "median and quartiles plus mean and standard deviation for continuous measures, or counts and "
+        "proportions for all categorical levels (leave level empty), overall and per group when grouped."
+    ))
     summary: Literal["value", "max", "min", "first", "last", "mean"] = "value"
     window: SpecWindow | None = None
     level: str | int | float | bool | None = None
@@ -42,11 +48,13 @@ class QuickReading(Contract):
     # women" as sex were both typed and both listed, and the card never formed).
     ambiguities: tuple[str, ...] = Field(default=(), description=(
         "Only a choice the question leaves open that would change the answer, such as two "
-        "different measures or groupings its words could each mean. A conventional reading "
+        "different populations, measures or groupings its words could each mean. A conventional reading "
         "you applied, such as a first day as hours 0 to 24 after ICU admission or men and "
         "women as sex, is not an ambiguity: type it in measure, window and grouping, where "
-        "the card shows it, and leave this empty. Any entry stops the quick answer and "
-        "offers the full study instead."
+        "the card shows it, and leave this empty. A request for a distribution, spread or summary "
+        "without a specified presentation is also conventional: use distribution in measure.statistic "
+        "and leave this empty when the population, measure and grouping are clear. Any entry stops "
+        "the quick answer and offers the full study instead."
     ))
 
 

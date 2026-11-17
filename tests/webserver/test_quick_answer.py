@@ -278,6 +278,7 @@ def test_a_name_that_reads_as_no_concept_stays_as_typed(prepared):
 def test_the_interpreter_is_told_a_conventional_reading_is_not_an_ambiguity():
     text = QuickReading.model_json_schema()["properties"]["ambiguities"]["description"]
     assert "is not an ambiguity" in text and "stops the quick answer" in text
+    assert all(term in text for term in ("distribution", "spread", "summary", "measure.statistic"))
 
 
 @pytest.mark.parametrize("question", [
@@ -435,6 +436,89 @@ def test_grouped_descriptions_keep_all_declared_groups(prepared, tmp_path):
     assert {row.group: row.value for row in answer.rows if row.statistic == "median"} == {
         "Overall": 40, "Male": 40, "Female": 40,
     }
+
+
+def test_creatinine_distribution_by_sex_uses_the_quick_summary(prepared, tmp_path):
+    frame = pd.read_parquet(prepared.path).assign(
+        crea=[1.0, 2.0, 3.0] * 6 + [None] * 12 + [2.0, 3.0, 4.0] * 10,
+    )
+    context = prepared.context.model_copy(update={"variables": [
+        *prepared.context.variables, ConceptDescriptor(name="crea", dtype="float64", role="lab", unit="mg/dL"),
+    ]})
+    source = rebound(prepared, frame=frame, context=context)
+    request = reading("肌酐按性别的分布如何？", grouping=["sex"],
+                      measure={"concept": "crea", "statistic": "distribution"})
+    proposal = prepare_quick_answer(request, source=source, provider=None)
+    assert (proposal.status, proposal.reason) == ("approval_required", "quick_qualified")
+    assert proposal.card.plan.test is None
+    answer = run(proposal, source, tmp_path)
+    assert answer.status == "ok", answer.reason
+    rows_by_group = {group: {row.statistic: row.value for row in answer.rows if row.group == group}
+                     for group in {row.group for row in answer.rows}}
+    assert set(rows_by_group) == {"Overall", "Male", "Female"}
+    assert rows_by_group["Male"] == pytest.approx({
+        "cohort_n": 30, "nonmissing_n": 18, "missing_n": 12, "mean": 2, "std": (12 / 17) ** .5,
+        "median": 2, "q1": 1, "q3": 3,
+    })
+    assert rows_by_group["Female"] == pytest.approx({
+        "cohort_n": 30, "nonmissing_n": 30, "missing_n": 0, "mean": 3, "std": (20 / 29) ** .5,
+        "median": 3, "q1": 2, "q3": 4,
+    })
+    assert all(row.unit == "mg/dL" for row in answer.rows if row.statistic in {"mean", "std", "median", "q1", "q3"})
+
+
+def test_categorical_distribution_reports_every_level_within_each_group(prepared, tmp_path):
+    frame = pd.read_parquet(prepared.path).assign(icu_death=[0] * 18 + [1] * 12 + [0] * 12 + [1] * 18)
+    source = rebound(prepared, frame=frame)
+    request = reading("Describe the distribution of observed ICU discharge status by sex.", grouping=["sex"],
+                      measure={"concept": "icu_death", "statistic": "distribution"})
+    proposal = prepare_quick_answer(request, source=source, provider=None)
+    assert (proposal.status, proposal.reason) == ("approval_required", "quick_qualified")
+    assert proposal.card.plan.measure_levels == (0, 1)
+    answer = run(proposal, source, tmp_path)
+    assert answer.status == "ok", answer.reason
+    for group, level_counts in {"Overall": (30, 30), "Male": (18, 12), "Female": (12, 18)}.items():
+        total = sum(level_counts)
+        for level, count in enumerate(level_counts):
+            assert {row.statistic: row.value for row in answer.rows if row.group == group and row.level == str(level)} == {
+                "numerator": count, "denominator": total, "percentage": 100 * count / total,
+            }
+
+
+@pytest.mark.parametrize(("concept", "expected"), [
+    ("age", {}), ("icu_death", {("0", "numerator"): 0, ("0", "denominator"): 0,
+                              ("1", "numerator"): 0, ("1", "denominator"): 0}),
+])
+def test_distribution_keeps_counts_when_all_values_are_missing(prepared, tmp_path, concept, expected):
+    frame = pd.read_parquet(prepared.path)
+    frame[concept] = float("nan")
+    source = rebound(prepared, frame=frame)
+    request = reading("Describe the distribution.", measure={"concept": concept, "statistic": "distribution"})
+    proposal = prepare_quick_answer(request, source=source, provider=None)
+    assert proposal.status == "approval_required", proposal.reason
+    answer = run(proposal, source, tmp_path)
+    assert answer.status == "ok", answer.reason
+    assert {(row.level, row.statistic): row.value for row in answer.rows} == {
+        ("", "cohort_n"): 60, ("", "missing_n"): 60, ("", "nonmissing_n"): 0, **expected,
+    }
+
+
+@pytest.mark.parametrize(("question", "statistic", "grouping", "ambiguities", "reason"), [
+    ("Describe the renal measure's distribution by sex.", "distribution", ["sex"],
+     ["Either creatinine or urine output"], "quick_reading_ambiguous"),
+    ("Describe the distribution of creatinine by sex and ICU type.", "distribution",
+     ["sex", "icu_unit_type"], [], "quick_grouping_scope_exceeded"),
+    ("Describe the distribution of creatinine by sex.", "median", ["sex"],
+     ["Could mean quantiles, spread, or a figure"], "quick_reading_ambiguous"),
+])
+def test_distribution_keeps_quick_scope_and_any_recorded_ambiguity(
+    prepared, question, statistic, grouping, ambiguities, reason,
+):
+    request = reading(question, grouping=grouping, ambiguities=ambiguities,
+                      measure={"concept": "crea", "statistic": statistic})
+    proposal = prepare_quick_answer(request, source=prepared, provider=None)
+    assert (proposal.status, proposal.reason) == ("full_study", reason)
+    assert proposal.card is None and proposal.expand.reading == request
 
 
 def test_missing_values_are_counted_without_changing_the_observed_denominator(prepared, tmp_path):

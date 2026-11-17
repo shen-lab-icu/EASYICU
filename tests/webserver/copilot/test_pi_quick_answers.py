@@ -87,6 +87,20 @@ def test_quick_tool_accepts_intent_only():
     assert TOOL_MODEL_SCHEMAS["easyicu_quick_answer"] == QuickQuestionInput.model_json_schema()
 
 
+def test_distribution_submitted_by_the_quick_tool_can_be_approved(host):
+    request = reading("Describe the first-day peak lactate distribution by sex.", grouping=["sex"])
+    request["measure"]["statistic"] = "distribution"
+    attachment = submit(host, request)
+    proposal = attachment["proposal"]
+    assert (proposal["status"], proposal["reason"]) == ("approval_required", "quick_qualified")
+    assert proposal["card"]["plan"]["test"] is None
+    answer = approve(host, attachment)["answer"]
+    assert answer["status"] == "ok", answer["reason"]
+    assert {row["group"]: row["value"] for row in answer["rows"] if row["statistic"] == "median"} == {
+        "Overall": 4, "Male": 4, "Female": 4,
+    }
+
+
 def test_tool_card_click_answer_binds_every_number_and_reloads(host):
     service, record, _ = host
     attachment = submit(host)
