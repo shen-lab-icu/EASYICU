@@ -57,12 +57,14 @@
 
     function noteRefusal(error) {
       const code = String(error && error.code || '');
-      if (['codex_auth_login_required', 'codex_auth_session_invalid'].includes(code)) {
+      const { provider } = (state.session || {}).research_provider || {};
+      if (provider === 'codex') {
+        if (!['codex_auth_login_required', 'codex_auth_session_invalid'].includes(code)) return false;
         state.codexAuth = null;
         return true;
       }
-      if (['pi_provider_research_configuration_unverified', 'pi_provider_research_inference_unverified',
-        'pi_provider_research_transport_unsupported'].includes(code) || code.startsWith('pi_credential_')) {
+      if (provider && (['pi_provider_research_configuration_unverified', 'pi_provider_research_inference_unverified',
+        'pi_provider_research_transport_unsupported'].includes(code) || code.startsWith('pi_credential_'))) {
         state.runtime = { ...state.runtime, configuration: {
           ...(state.runtime || {}).configuration, connection_verified: false,
         } };
@@ -71,7 +73,11 @@
       return false;
     }
 
-    return { forAction, noteRefusal };
+    function isVisible() {
+      return Boolean(state.host?.querySelector('[data-gpi-run-readiness]'));
+    }
+
+    return { forAction, noteRefusal, isVisible };
   }
 
   window.EasyICU.guidedPi.declare('runReadiness', { create });

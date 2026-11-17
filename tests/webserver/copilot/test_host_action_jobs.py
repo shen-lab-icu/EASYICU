@@ -504,6 +504,7 @@ def test_agent_run_refusal_then_same_reviewed_decision_starts_once(
     # Before the fix this is 409 host_action_decision_stale: the refused
     # preparation persisted its subgroup normalization without starting a job.
     assert second.status_code == 200, second.json()
+    assert context_store.get_context(study.study_id)["stated_subgroups"] == []
     duplicate = client.post("/api/jobs/agent-run", json=body)
     assert duplicate.status_code == 200
     assert duplicate.json()["reused"] is True

@@ -131,6 +131,32 @@
       return true;
     }
 
+    function showRunReadiness(fallback) {
+      // A retry can come from a transcript or report without a confirmation card.
+      if (host.runReadinessVisible) {
+        host.render(true);
+        if (host.runReadinessVisible()) return;
+      }
+      host.setError(fallback);
+      host.render(true);
+    }
+
+    function runBlocked(code) {
+      const readiness = host.runReadiness?.(code);
+      if (!readiness) return false;
+      showRunReadiness(readiness.reason);
+      return true;
+    }
+
+    function showRunFailure(error, checkReadiness = true) {
+      if (checkReadiness && host.noteRunRefusal?.(error)) {
+        showRunReadiness(host.errorText(error));
+      } else if (!followHostDecisionRefusal(error)) {
+        host.setError(host.errorText(error));
+        host.render();
+      }
+    }
+
     function automaticRevisionBlocked() {
       const summary = (host.workflow() || {}).plan_review_summary || {};
       return Array.isArray(summary.automatic_revision_blockers)
@@ -231,7 +257,7 @@
 
     async function startFormalPlanGeneration(reasonCode, options = {}) {
       if (unavailable()) return false;
-      if (host.runReadiness && host.runReadiness(reasonCode)) { host.render(); return false; }
+      if (runBlocked(reasonCode)) return false;
       const automatic = Boolean(options && options.automatic);
       const retryingStoppedPlan = reasonCode === 'agent_plan_revision_nonconvergent';
       if (retryingStoppedPlan && (automatic || !canRetryStoppedPlan(host.workflow()))) return false;
@@ -398,10 +424,7 @@
         if (guardedTransition) startedTransitions.delete(guardKey);
         endStarting();
         host.setBusy(false);
-        if (host.noteRunRefusal && host.noteRunRefusal(error)) { host.render(); return false; }
-        if (followHostDecisionRefusal(error)) return false;
-        host.setError(host.errorText(error));
-        host.render();
+        showRunFailure(error);
         return false;
       }
     }
@@ -701,6 +724,8 @@
 
     async function submitReview(decision) {
       if (unavailable()) return;
+      const approving = decision === 'approved';
+      if (approving && runBlocked('operator_plan_approval_required')) return;
       const session = host.session() || {};
       const binding = session.binding || {};
       const runId = String(binding.run_id || '').trim();
@@ -729,15 +754,13 @@
         showRecordedDecision();
       } catch (error) {
         host.setBusy(false);
-        if (followHostDecisionRefusal(error)) return;
-        host.setError(host.errorText(error));
-        host.render();
+        showRunFailure(error, approving);
       }
     }
 
     async function retryFailedExecution(reason) {
       if (unavailable()) return;
-      if (host.runReadiness && host.runReadiness('failed_pipeline_execution_retry_available')) { host.render(); return; }
+      if (runBlocked('failed_pipeline_execution_retry_available')) return;
       if (!replay || typeof replay.retryFailedExecution !== 'function') {
         host.setError(tr(
           'The failed run coordinates are unavailable. Refresh this project and try again.',
@@ -814,10 +837,7 @@
         );
       } catch (error) {
         host.setBusy(false);
-        if (host.noteRunRefusal && host.noteRunRefusal(error)) { host.render(); return; }
-        if (followHostDecisionRefusal(error)) return;
-        host.setError(host.errorText(error));
-        host.render();
+        showRunFailure(error);
       }
     }
 

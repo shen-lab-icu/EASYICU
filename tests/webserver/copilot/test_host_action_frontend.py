@@ -63,6 +63,10 @@ def test_a_starting_decision_is_a_card_with_nothing_to_act_on() -> None:
 _ACTIONS = """
   global.window = {};
   eval(__ACTIONS__);
+  eval(__REPLAY__);
+  eval(__READINESS__);
+  eval(__DATA__);
+  eval(__CONFIRMATION__);
   const calls = [];
   const timers = [];
   global.setTimeout = (callback, ms) => { timers.push([callback, ms]); return timers.length; };
@@ -73,22 +77,40 @@ _ACTIONS = """
       scientific_configuration_sha256: 'a'.repeat(64), source_run_id: 'run_candidate',
     }},
   };
-  const host = {
-    tr: (en, zh) => zh, errorText: error => 'copy:' + error.code,
-    regeneration: {}, nextActions: {}, replay: {}, projectId: () => 'project-1',
-    turnGrants: () => [], busy: () => false, sessionIsStale: () => false,
-    session: () => ({
+  const state = {
+    session: {
       session_id: 'session-1',
       binding: {run_id: 'run_candidate', study_context_id: 'study-1', study_revision: 3},
-      research_provider: {provider: 'openai', credential_source: 'pi_verified'},
-    }),
+      research_provider: {provider: 'openai', model: 'synthetic', credential_source: 'pi_verified'},
+    },
+    get workflow() { return workflow; },
+    host: {
+      querySelector: selector => selector === '[data-gpi-run-readiness]'
+        && confirmation.workflowConfirmationHtml().includes('data-gpi-run-readiness'),
+    },
+    runtime: {status: 'ready', api_transport: 'openai-completions'},
+    codexAuth: {authentication_verified: true},
+  };
+  const tr = (en, zh) => zh;
+  const readiness = window.EasyICU.guidedPi.require('runReadiness').create({state, tr});
+  const refuse = (kind, body) => {
+    calls.push([kind, body]);
+    throw Object.assign(new Error('refused'), {code: REFUSAL});
+  };
+  const host = {
+    tr, errorText: error => 'copy:' + error.code,
+    regeneration: {}, nextActions: {}, replay: window.EasyICU.guidedPi.require('replay'),
+    projectId: () => 'project-1',
+    turnGrants: () => [], busy: () => false, sessionIsStale: () => false,
+    session: () => state.session,
     workflow: () => workflow,
+    runReadiness: readiness.forAction,
+    noteRunRefusal: readiness.noteRefusal,
+    runReadinessVisible: readiness.isVisible,
     api: () => ({
       loadStudyContext: async () => ({context: {question: 'q', data_source: {path: '/prepared'}}}),
-      startAgentRun: async body => {
-        calls.push(['plan', body]);
-        throw Object.assign(new Error('refused'), {code: REFUSAL});
-      },
+      startAgentRun: async body => refuse('plan', body),
+      submitAgentRunReview: async body => refuse('review', body),
     }),
     loadWorkflow: async () => {
       calls.push(['workflow']);
@@ -100,16 +122,26 @@ _ACTIONS = """
     setBusy: () => {}, setError: value => calls.push(['error', value]),
     appendMessage: value => calls.push(['message', value.text]),
   };
+  const confirmation = window.EU_GUIDED_PI_CONFIRMATION.create({
+    ...host, esc: value => String(value), iconHtml: () => '', resourceButton: () => '',
+  });
   const actions = window.EU_GUIDED_PI_PLAN_ACTIONS.create(host);
   const settle = () => new Promise(resolve => setImmediate(resolve));
 """
 
 
 def _plan_actions(body: str, *, refusal: str = "", after: str = "starting") -> dict:
+    script = _ACTIONS
+    for token, owner in (
+        ("__ACTIONS__", "plan-actions"),
+        ("__REPLAY__", "replay"),
+        ("__READINESS__", "run-readiness"),
+        ("__DATA__", "confirmation-data"),
+        ("__CONFIRMATION__", "confirmation"),
+    ):
+        script = script.replace(token, json.dumps(_read(f"js/screens-guided-pi-{owner}.js")))
     script = (
-        _ACTIONS.replace(
-            "__ACTIONS__", json.dumps(_read("js/screens-guided-pi-plan-actions.js"))
-        )
+        script
         .replace("REFUSAL", json.dumps(refusal))
         .replace("AFTER", json.dumps(after))
         + body
@@ -139,26 +171,16 @@ def test_refused_prepare_reclicks_only_on_another_explicit_click() -> None:
     assert posts[0]["plan_revision_source_run_id"] == "run_candidate"
     assert posts[0]["credential_source"] == "pi_verified"
     assert "report_only" not in posts[0]
+    assert ["error", "copy:research_pipeline_execution_runtime_unavailable"] in result["calls"]
 
 
 def test_run_readiness_is_at_the_card_and_the_action_boundary() -> None:
-    source = _read("js/screens-guided-pi-run-readiness.js")
-    body = """
-      eval(__READINESS__);
-      eval(__DATA__);
-      eval(__CONFIRMATION__);
+    result = _plan_actions("""
       (async () => {
-        const state = {
-          session: {...host.session(), research_provider: {
-            provider: 'codex', model: 'synthetic-model', credential_source: 'codex_user_auth',
-          }}, workflow, runtime: {status: 'ready'}, codexAuth: null,
+        state.session.research_provider = {
+          provider: 'codex', model: 'synthetic-model', credential_source: 'codex_user_auth',
         };
-        const readiness = window.EasyICU.guidedPi.require('runReadiness').create({state, tr: host.tr});
-        host.session = () => state.session;
-        host.runReadiness = readiness.forAction;
-        const confirmation = window.EU_GUIDED_PI_CONFIRMATION.create({
-          ...host, esc: value => String(value), iconHtml: () => '', resourceButton: () => '',
-        });
+        state.codexAuth = null;
         const blocked = confirmation.workflowConfirmationHtml();
         await actions.confirmWorkflow(confirmation.workflowConfirmation());
         const noPost = !calls.some(row => row[0] === 'plan');
@@ -173,16 +195,16 @@ def test_run_readiness_is_at_the_card_and_the_action_boundary() -> None:
         const providerMissing = readiness.forAction('plan_execution_upgrade_required');
         state.runtime = {status: 'ready', api_transport: 'openai-completions'};
         const providerReady = readiness.forAction('plan_execution_upgrade_required');
-        const handled = readiness.noteRefusal({code: 'pi_provider_research_inference_unverified'});
+        await actions.confirmWorkflow(confirmation.workflowConfirmation());
+        const refused = confirmation.workflowConfirmationHtml();
         const providerRefused = readiness.forAction('plan_execution_upgrade_required');
+        await actions.confirmWorkflow(confirmation.workflowConfirmation());
         window.EasyICU.guidedPi.declare('hosted', {active: () => true});
         const hostedBlocked = confirmation.workflowConfirmationHtml();
-        process.stdout.write(JSON.stringify({blocked, ready, mismatch, mismatchState, providerMissing, providerReady, handled, providerRefused, hostedBlocked, noPost, calls}));
+        process.stdout.write(JSON.stringify({blocked, ready, mismatch, mismatchState, providerMissing,
+          providerReady, refused, providerRefused, hostedBlocked, noPost, calls}));
       })().catch(error => { console.error(error); process.exit(1); });
-    """.replace("__READINESS__", json.dumps(source)).replace(
-        "__DATA__", json.dumps(_read("js/screens-guided-pi-confirmation-data.js"))
-    ).replace("__CONFIRMATION__", json.dumps(_read("js/screens-guided-pi-confirmation.js")))
-    result = _plan_actions(body)
+    """, refusal="pi_provider_research_inference_unverified")
     assert result["noPost"] is True
     assert "此浏览器登录账户" in result["blocked"]
     assert "data-gpi-config" in result["blocked"]
@@ -192,21 +214,134 @@ def test_run_readiness_is_at_the_card_and_the_action_boundary() -> None:
     assert result["mismatchState"]["connect"] is False
     assert result["providerMissing"]["connect"] is True
     assert result["providerReady"] is None
-    assert result["handled"] is True
     assert result["providerRefused"]["connect"] is True
+    assert "data-gpi-config" in result["refused"]
+    assert "data-gpi-confirm-action" not in result["refused"]
     assert "管理员处理" in result["hostedBlocked"]
     assert "data-gpi-config" not in result["hostedBlocked"]
     assert "data-gpi-confirm-action disabled" in result["hostedBlocked"]
+    assert sum(row[0] == "plan" for row in result["calls"]) == 1
     assert not any(row[0] == "error" and row[1] for row in result["calls"])
+
+
+@pytest.mark.parametrize("reason", ["retry", "restore", "report_only"])
+def test_retry_without_a_confirmation_card_uses_the_existing_error_banner(reason: str) -> None:
+    result = _plan_actions("""
+      (async () => {
+        workflow = {next_action_code: 'research_results_ready'};
+        const reason = __REASON__;
+        const retryReason = reason === 'retry' ? undefined : reason;
+        await actions.retryFailedExecution(retryReason);
+        const first = calls.splice(0);
+        await actions.retryFailedExecution(retryReason);
+        process.stdout.write(JSON.stringify({first, calls, connection: state.runtime.configuration}));
+      })().catch(error => { console.error(error); process.exit(1); });
+    """.replace("__REASON__", json.dumps(reason)), refusal="pi_provider_research_inference_unverified")
+
+    [post] = [row[1] for row in result["first"] if row[0] == "plan"]
+    assert post.get("report_only", False) is (reason != "retry")
+    assert ["error", "copy:pi_provider_research_inference_unverified"] in result["first"]
+    assert result["connection"]["connection_verified"] is False
+    assert not any(row[0] == "plan" for row in result["calls"])
+    assert ["error", "请先检查模型连接。"] in result["calls"]
+
+
+def test_formal_plan_refusal_without_readiness_on_the_card_uses_the_error_banner() -> None:
+    result = _plan_actions("""
+      (async () => {
+        workflow = {next_action_code: 'population_inclusion_not_applied'};
+        await actions.startFormalPlanGeneration(workflow.next_action_code);
+        process.stdout.write(JSON.stringify({calls, card: confirmation.workflowConfirmation()}));
+      })().catch(error => { console.error(error); process.exit(1); });
+    """, refusal="pi_provider_research_inference_unverified")
+
+    assert any(row[0] == "plan" for row in result["calls"])
+    assert not (result["card"] or {}).get("readiness")
+    assert ["error", "copy:pi_provider_research_inference_unverified"] in result["calls"]
+
+
+@pytest.mark.parametrize(("provider", "refusal"), [
+    ("codex", "pi_provider_research_inference_unverified"),
+    ("openai", "codex_auth_session_invalid"),
+])
+def test_a_refusal_for_another_provider_uses_the_error_banner(provider: str, refusal: str) -> None:
+    result = _plan_actions("""
+      (async () => {
+        const provider = __PROVIDER__;
+        state.session.research_provider = {
+          provider, model: 'synthetic',
+          credential_source: provider === 'codex' ? 'codex_user_auth' : 'pi_verified',
+        };
+        await actions.confirmWorkflow(confirmation.workflowConfirmation());
+        process.stdout.write(JSON.stringify({calls, auth: state.codexAuth, runtime: state.runtime}));
+      })().catch(error => { console.error(error); process.exit(1); });
+    """.replace("__PROVIDER__", json.dumps(provider)), refusal=refusal)
+
+    assert ["error", f"copy:{refusal}"] in result["calls"]
+    assert result["auth"]["authentication_verified"] is True
+    assert "configuration" not in result["runtime"]
+
+
+def test_plan_approval_checks_and_updates_account_readiness() -> None:
+    result = _plan_actions("""
+      (async () => {
+        workflow = {next_action_code: 'operator_plan_approval_required'};
+        state.session.research_provider = {
+          provider: 'codex', model: 'synthetic', credential_source: 'codex_user_auth',
+        };
+        await actions.confirmWorkflow(confirmation.workflowConfirmation());
+        const refused = confirmation.workflowConfirmationHtml();
+        const auth = state.codexAuth;
+        await actions.confirmWorkflow(confirmation.workflowConfirmation());
+        const approvals = calls.splice(0);
+        await actions.submitReview('rejected');
+        process.stdout.write(JSON.stringify({auth, refused, approvals, rejection: calls}));
+      })().catch(error => { console.error(error); process.exit(1); });
+    """, refusal="codex_auth_session_invalid")
+
+    assert result["auth"] is None
+    assert "此浏览器登录账户" in result["refused"]
+    assert "data-gpi-config" in result["refused"]
+    assert "data-gpi-confirm-action" not in result["refused"]
+    [approval] = [row[1] for row in result["approvals"] if row[0] == "review"]
+    assert approval["decision"] == "approved"
+    assert not any(row[0] == "error" and row[1] for row in result["approvals"])
+    [rejection] = [row[1] for row in result["rejection"] if row[0] == "review"]
+    assert rejection["decision"] == "rejected"
+
+
+def test_hosted_stopped_plan_keeps_its_disabled_retry_label() -> None:
+    result = _plan_actions("""
+      workflow = {
+        next_action_code: 'agent_plan_revision_nonconvergent',
+        plan_review_summary: {
+          run_id: 'run_candidate', authorization_questions: [], automatic_revision_blockers: [],
+          remediation_buckets: {agent_plan_revision: ['repair']},
+        },
+      };
+      const ready = confirmation.workflowConfirmationHtml();
+      state.runtime = {status: 'unavailable'};
+      const account = confirmation.workflowConfirmationHtml();
+      window.EasyICU.guidedPi.declare('hosted', {active: () => true});
+      process.stdout.write(JSON.stringify({ready, account, hosted: confirmation.workflowConfirmationHtml()}));
+    """)
+
+    assert "data-gpi-confirm-action>修复后重新规划一次" in result["ready"]
+    assert "data-gpi-config" in result["account"]
+    assert "data-gpi-confirm-action" not in result["account"]
+    assert "管理员处理" in result["hosted"]
+    assert "data-gpi-config" not in result["hosted"]
+    assert "data-gpi-confirm-action disabled>修复后重新规划一次" in result["hosted"]
 
 
 def test_run_readiness_sibling_is_loaded_before_the_screen() -> None:
     index = _read("index.html")
-    readiness = "js/screens-guided-pi-run-readiness.js?v=20261117-run1"
+    readiness = "js/screens-guided-pi-run-readiness.js?v=20261117-run2"
     assert index.index(readiness) < index.index('src="js/screens-guided-pi.js?')
     screen = _read("js/screens-guided-pi.js")
     assert "runReadiness: RUN_READINESS.forAction" in screen
     assert "noteRunRefusal: RUN_READINESS.noteRefusal" in screen
+    assert "runReadinessVisible: RUN_READINESS.isVisible" in screen
 
 
 def test_a_repeat_the_host_says_is_starting_shows_no_banner_and_follows_it() -> None:

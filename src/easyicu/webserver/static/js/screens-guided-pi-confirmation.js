@@ -945,6 +945,10 @@
       const decisionActions = firstDecisionCopy && Array.isArray(firstDecisionCopy.options)
         ? firstDecisionCopy.options.map(option => `<button class="gpi-decision-option" type="button" data-gpi-plan-decision-code="${esc(String(firstDecisionItem && firstDecisionItem.code || ''))}" data-gpi-plan-decision-option="${esc(option.optionId)}"${firstDecisionCopy.cardSha256 ? ` data-gpi-plan-decision-card="${esc(firstDecisionCopy.cardSha256)}"` : ''}><strong>${esc(option.label)}</strong><span>${esc(option.effect)}</span>${option.requirement ? `<small>${esc(option.requirement)}</small>` : ''}</button>`).join('')
         : '';
+      const { readiness, retryPlanRevision } = confirmation;
+      const showPrimaryAction = retryPlanRevision ? !readiness?.connect : !confirmation.nonApprovable;
+      const primaryLabel = retryPlanRevision ? confirmation.retryLabel : confirmation.approve;
+      const primaryDisabled = confirmation.approveDisabled || (!retryPlanRevision && deferredScopeRejected);
       return `${planConversation}<section class="gpi-confirmation${confirmation.code === 'plan_scientific_changes_required' ? ' is-science-review' : ''}${confirmation.compactApproval ? ' is-plan-approval' : ''}" aria-label="${tr('Workflow confirmation required', '需要确认科研流程')}">
         <span class="gpi-confirmation-icon" aria-hidden="true">${iconHtml('shield', 17)}</span>
         <div class="gpi-confirmation-body">${failureNotice}<strong>${esc(displayedTitle)}</strong>${confirmation.reason && !firstDecisionCopy ? `<p class="gpi-confirmation-reason">${esc(confirmation.reason)}</p>` : ''}${displayedNote ? `<small>${esc(displayedNote)}</small>` : ''}${desktopProfile}${reviewedPopulation}${deferredInputScope}${populationPreparation}${populationAcceptance}${sourceAdjustments}${flowSteps}${dataStatus}${pendingPreparation}${repeatedStaysDefault}${icdSourceNotice}${reviewStatus}${studyReadings}${trialBody}${groupNotes}${questionNotes}${reviewMaterials}${compactOtherAction}</div>
@@ -954,8 +958,8 @@
           ${decisionActions && icdSourceFinding ? `<button class="btn sm" type="button" data-gpi-confirm-edit>${esc(tr('Change cohort', '修改人群'))}</button>` : ''}
           ${decisionActions && !icdSourceFinding && firstDecisionCopy && firstDecisionCopy.allowEdit ? `<button class="btn sm" type="button" data-gpi-confirm-edit>${esc(String(firstDecisionItem && firstDecisionItem.code || '') === 'ADJUSTMENT_SET_NOT_USER_CONFIRMED' ? tr('Request plan changes', '提出计划修改') : tr('Choose another approach', '选择其他方案'))}</button>` : ''}
           ${confirmation.rejectMessage && !confirmation.compactApproval ? `<button class="btn sm" type="button" data-gpi-confirm-reject>${esc(confirmation.reject)}</button>` : ''}
-          ${confirmation.readiness ? `<small role="status">${esc(confirmation.readiness.reason)}</small>${confirmation.readiness.connect ? `<button class="btn sm" type="button" data-gpi-config>${esc(tr('Check connection', '检查连接'))}</button>` : ''}` : ''}
-          ${confirmation.retryPlanRevision && !confirmation.readiness ? `<button class="btn primary sm" type="button" data-gpi-confirm-action>${esc(confirmation.retryLabel)}</button>` : confirmation.nonApprovable ? '' : `<button class="btn primary sm" type="button" data-gpi-confirm-action${confirmation.approveDisabled || deferredScopeRejected ? ' disabled' : ''}>${esc(confirmation.approve)}</button>`}
+          ${readiness ? `<small role="status" data-gpi-run-readiness>${esc(readiness.reason)}</small>${readiness.connect ? `<button class="btn sm" type="button" data-gpi-config>${esc(tr('Check connection', '检查连接'))}</button>` : ''}` : ''}
+          ${showPrimaryAction ? `<button class="btn primary sm" type="button" data-gpi-confirm-action${primaryDisabled ? ' disabled' : ''}>${esc(primaryLabel)}</button>` : ''}
         </div>
       </section>`;
     }

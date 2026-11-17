@@ -233,8 +233,7 @@
     planConfigurationError: () => state.planConfigurationError,
     cohortEligibilityDecisionHtml: copies => COHORT_ELIGIBILITY.repeatedStayDecisionHtml(copies),
   });
-  const workflowConfirmation = CONFIRMATION.workflowConfirmation;
-  const workflowConfirmationHtml = CONFIRMATION.workflowConfirmationHtml;
+  const { workflowConfirmation, workflowConfirmationHtml } = CONFIRMATION;
   const COHORT_ELIGIBILITY = MODULES.require('cohortEligibility').create({
     tr, esc,
     session: () => state.session,
@@ -368,6 +367,7 @@
     selectionRevision: () => state.sessionSelectionRevision,
     workflow: () => state.workflow,
     runReadiness: RUN_READINESS.forAction, noteRunRefusal: RUN_READINESS.noteRefusal,
+    runReadinessVisible: RUN_READINESS.isVisible,
     latestRun: () => state.latestRun,
     busy: () => state.busy || Boolean(state.childJobId),
     sessionIsStale,
