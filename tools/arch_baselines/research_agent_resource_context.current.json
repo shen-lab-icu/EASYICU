@@ -1,7 +1,7 @@
 {
   "baseline_change_summary": {
     "source_digest_changes": [
-      "src/easyicu/research_agent/planning/cohort_contract.py"
+      "src/easyicu/research_agent/schema.py"
     ],
     "summary_changes": {}
   },
@@ -372,9 +372,16 @@
         "src/easyicu/research_agent/planning/cohort_contract.py"
       ],
       "summary_changes": {}
+    },
+    {
+      "reason": "sha3 (S732: s732hd H1/H3): schema.py source digest (user-approved sealed change); planner prompt sizes unchanged",
+      "source_digest_changes": [
+        "src/easyicu/research_agent/schema.py"
+      ],
+      "summary_changes": {}
     }
   ],
-  "baseline_reason": "sha2 (S732: s732d3 + s732bl2): cohort_contract.py source digest; planner prompt sizes unchanged",
+  "baseline_reason": "sha3 (S732: s732hd H1/H3): schema.py source digest (user-approved sealed change); planner prompt sizes unchanged",
   "online_runtime_metrics": {
     "reason": "Bundle 0 freezes the offline resource/context envelope only; provider latency and repair counts remain run-artifact metrics.",
     "status": "not_measured_no_provider_calls"
@@ -415,7 +422,7 @@
     "src/easyicu/research_agent/resources/context.py": "8ce42accd83398ff9972b8e50f2f64f9ac926ad610d2c386f2b763adf77af2e1",
     "src/easyicu/research_agent/resources/scheduler.py": "50d836934c0f079c35265004495a067a543ed575e2ed1757319fe619c9c7a280",
     "src/easyicu/research_agent/resources/schema.py": "456053a9d96a8ee5fe0b3e8b2cfa22187f6bb0d8cc81b43d28569ffd311fd288",
-    "src/easyicu/research_agent/schema.py": "4bfcee83665863afbe4c22ca98e5f37eadb92f323f75d25e641afbd1d7e61ea4",
+    "src/easyicu/research_agent/schema.py": "b5c4f2fdce93b18b4efcdb5f767c5f07f68a4a91f662061860849439f77050be",
     "src/easyicu/resources.py": "f0f30158c9a39285e6b146fd652a180df352b5a32dfaa095ce5faf91d4a2842c",
     "tools/research_agent_resource_baseline.py": "643dd67bf97f51cf8ad87179404c6b29fbee7dffbb986fd7c1c15801b8d380e4"
   },
