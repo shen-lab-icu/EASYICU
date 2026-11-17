@@ -308,6 +308,91 @@ def test_final_audit_repairs_only_the_failing_section_and_records_attempt(tmp_pa
     assert receipt["attempts"][0]["evidence_checks"] == "pass"
 
 
+@pytest.mark.parametrize("keep_citation", [True, False])
+def test_repeated_sentence_joins_callout_repair_and_must_keep_its_citation(
+    tmp_path, monkeypatch, keep_citation,
+):
+    repeated = "The available records capture readmissions within the hospital network during follow-up"
+    citation = "{evidence:renal_summary}"
+    sentence = f"{repeated} {citation}."
+    bad = GOOD.replace(
+        "The AUROC was 0.74 {evidence:renal_summary}.", "See Figure 1 {evidence:renal_summary}.",
+    )
+    bad = bad.replace("## Discussion\n\n", f"## Discussion\n\n{sentence}\n\n")
+    bad = bad.replace("## Conclusion\n\n", f"## Conclusion\n\n{sentence}\n\n")
+    conclusion = "## Conclusion\n\n" + _section(GOOD, "Conclusion")
+    rephrased = f"The findings therefore apply to readmissions recorded by this network {citation}."
+    if keep_citation:
+        conclusion += "\n\n" + rephrased
+    responses = ["## Results\n\n" + _section(GOOD, "Results"), conclusion]
+    if keep_citation:
+        (draft, binding), client, drafts, bindings, _ = _exercise(tmp_path, monkeypatch, bad, responses)
+        assert len(drafts) == len(bindings) == 2 and len(client.calls) == 2
+        assert binding.manuscript_critique.status == "pass"
+        assert _section(draft.scaffold, "Discussion") == _section(bad, "Discussion")
+        assert rephrased in _section(draft.scaffold, "Conclusion")
+        feedback = client.calls[1][0][-1].content
+        assert "MANUSCRIPT_REPEATED_SENTENCE" in feedback and repeated in feedback
+        assert "once, then refer back to it or interpret it in new words" in feedback
+        assert f"{citation}: 1 occurrence(s)" in feedback
+    else:
+        with pytest.raises(EvidenceEnforcementError, match="existing evidence or claim binding") as failure:
+            _exercise(tmp_path, monkeypatch, bad, responses)
+        assert failure.value.detail == {
+            "check": "section_tokens", "section": "conclusion", "missing_tokens": {citation: 1},
+        }
+    receipt = json.loads((tmp_path / "manuscript_audit_repair.json").read_text())
+    assert receipt["status"] == ("pass" if keep_citation else "rejected")
+    assert receipt["max_attempts"] == len(receipt["attempts"]) == 1
+    assert receipt["attempts"][0]["audit_codes"] == [
+        "MANUSCRIPT_REPEATED_SENTENCE", "MANUSCRIPT_RESULT_SUBSECTION_CALLOUT_ONLY",
+    ]
+
+
+@pytest.mark.parametrize(("severity", "status"), [("warning", "pass"), ("error", "non_repairable")])
+def test_unrepairable_code_blocks_a_repair_only_at_error_severity(tmp_path, monkeypatch, severity, status):
+    from dataclasses import replace
+
+    from easyicu.research_agent.reporting import manuscript_quality
+
+    code = "MANUSCRIPT_UNSUPPORTED_EDITORIAL_FINDING"
+    finding = manuscript_quality.ManuscriptQualityFinding(
+        code=code, severity=severity, section="Discussion", message="A synthetic audit finding.",
+    )
+
+    def audit_with_finding(*args, **kwargs):
+        audit = audit_manuscript_quality(*args, **kwargs)
+        return replace(audit, findings=(*audit.findings, finding))
+
+    monkeypatch.setattr(manuscript_quality, "audit_manuscript_quality", audit_with_finding)
+    bad = GOOD.replace(
+        "The AUROC was 0.74 {evidence:renal_summary}.", "See Figure 1 {evidence:renal_summary}.",
+    )
+    _, client, drafts, bindings, _ = _exercise(
+        tmp_path, monkeypatch, bad, ["## Results\n\n" + _section(GOOD, "Results")],
+    )
+    receipt = json.loads((tmp_path / "manuscript_audit_repair.json").read_text())
+    assert receipt["status"] == status
+    if severity == "warning":
+        assert len(drafts) == len(bindings) == 2 and len(client.calls) == 1
+        assert len(receipt["attempts"]) == 1
+        assert receipt["attempts"][0]["audit_codes"] == ["MANUSCRIPT_RESULT_SUBSECTION_CALLOUT_ONLY"]
+    else:
+        assert len(drafts) == len(bindings) == 1 and client.calls == []
+        assert receipt["attempts"] == []
+        assert receipt["remaining_codes"] == ["MANUSCRIPT_RESULT_SUBSECTION_CALLOUT_ONLY", code]
+
+
+def test_repeated_sentence_warning_alone_does_not_spend_a_writer_attempt(tmp_path, monkeypatch):
+    sentence = "The available records capture readmissions within the hospital network during follow-up."
+    bad = GOOD.replace("## Discussion\n\n", f"## Discussion\n\n{sentence}\n\n")
+    bad = bad.replace("## Conclusion\n\n", f"## Conclusion\n\n{sentence}\n\n")
+    _, client, drafts, _, _ = _exercise(tmp_path, monkeypatch, bad, ["unused"])
+    assert drafts == [None] and client.calls == []
+    receipt = json.loads((tmp_path / "manuscript_audit_repair.json").read_text())
+    assert receipt["status"] == "not_needed" and receipt["attempts"] == []
+
+
 def test_final_audit_repair_is_bounded_and_retains_typed_codes(tmp_path, monkeypatch):
     bad = GOOD.replace("### Model performance\nThe AUROC was 0.74 {evidence:renal_summary}.",
                        "### Model performance\nSee Figure 1 {evidence:renal_summary}.")
@@ -347,6 +432,11 @@ def test_numeric_failure_never_enters_editorial_repair(tmp_path, monkeypatch):
                                 message="A numeric claim is fabricated.", detail={"code": "FABRICATED_NUMBER"})
     with pytest.raises(EvidenceEnforcementError, match="MANUSCRIPT_AUDIT_NON_REPAIRABLE"):
         _exercise(tmp_path, monkeypatch, bad, ["unused"], initial_findings=(finding,))
+    receipt = json.loads((tmp_path / "manuscript_audit_repair.json").read_text())
+    assert receipt["status"] == "non_repairable" and receipt["attempts"] == []
+    assert receipt["remaining_codes"] == [
+        "MANUSCRIPT_AUDIT_NON_REPAIRABLE", "MANUSCRIPT_RESULT_SUBSECTION_CALLOUT_ONLY",
+    ]
 
 
 @pytest.mark.parametrize("owner, before, after, code, baseline", [

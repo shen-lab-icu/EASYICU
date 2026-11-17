@@ -549,6 +549,7 @@ def _quality_repair_specs(
     expected_baseline_mentions: Mapping[str, tuple[str, ...]] | None = None,
     expected_primary_result_facts: Sequence = (),
     analysis_plan: AnalysisPlan | None = None,
+    repairable_warning_codes: frozenset[str] = frozenset(),
 ) -> tuple[tuple[ManuscriptSectionSpec, str], ...]:
     """Map deterministic manuscript findings to their section owners."""
 
@@ -566,8 +567,7 @@ def _quality_repair_specs(
         "Conclusion": ("conclusion",),
         "Methods/Results": ("methods", "results"),
     }
-    messages: dict[str, list[str]] = {}
-    for finding in audit_manuscript_quality(
+    findings = audit_manuscript_quality(
         scientific,
         expected_primary_result_facts=expected_primary_result_facts,
         analysis_plan=analysis_plan,
@@ -575,9 +575,19 @@ def _quality_repair_specs(
         reader_display_labels=reader_display_labels,
         expected_baseline_mentions=expected_baseline_mentions,
         require_administrative_sections=False,
-    ).findings:
-        if finding.severity != "error":
-            continue
+    ).findings
+    repair_findings = [
+        finding for finding in findings
+        if finding.severity == "error" and finding.section in section_keys
+    ]
+    # An allowlisted warning can use the revision already prompted by an error.
+    if repair_findings and repairable_warning_codes:
+        repair_findings.extend(
+            finding for finding in findings
+            if finding.severity == "warning" and finding.code in repairable_warning_codes
+        )
+    messages: dict[str, list[str]] = {}
+    for finding in repair_findings:
         owner_keys = section_keys.get(finding.section, ())
         if finding.code == "MANUSCRIPT_ADJUSTMENT_SET_CONFLICT":
             # Results are the executed-result reporting surface.  When the two
@@ -636,8 +646,9 @@ def quality_repair_section_errors(
     expected_baseline_mentions: Mapping[str, tuple[str, ...]] | None = None,
     expected_primary_result_facts: Sequence = (),
     analysis_plan: AnalysisPlan | None = None,
+    repairable_warning_codes: frozenset[str] = frozenset(),
 ) -> dict[str, tuple[str, ...]]:
-    """Use the same quality-to-owner mapping for adjacent evidence repair."""
+    """Map errors and any accompanying allowed warnings to their section owners."""
 
     return {
         spec.key: (detail,)
@@ -648,6 +659,7 @@ def quality_repair_section_errors(
             expected_display_labels=expected_display_labels,
             reader_display_labels=reader_display_labels,
             expected_baseline_mentions=expected_baseline_mentions,
+            repairable_warning_codes=repairable_warning_codes,
         )
     }
 

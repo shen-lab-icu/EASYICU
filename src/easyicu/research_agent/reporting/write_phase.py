@@ -3732,7 +3732,7 @@ def _draft_bind_and_repair_manuscript(
     emit_progress: Callable[..., None],
 ) -> tuple[_DraftStageResult, _BindingStageResult]:
     """Feed final audit feedback to the existing bounded section repair owner."""
-    from .manuscript_audit_repair import run_manuscript_audit_repair
+    from .manuscript_audit_repair import REPAIRABLE_MANUSCRIPT_CODES, run_manuscript_audit_repair
     from .manuscript_sections import quality_repair_section_errors
 
     def draft_candidate(section_repair):
@@ -3786,6 +3786,7 @@ def _draft_bind_and_repair_manuscript(
         errors = quality_repair_section_errors(
             binding.bound,
             analysis_plan=execute_result.plan,
+            repairable_warning_codes=REPAIRABLE_MANUSCRIPT_CODES,
             expected_primary_result_facts=binding.primary_result_facts,
             expected_display_labels=expected_manuscript_display_labels(
                 draft.current_evidence_names, draft.reader_tables,
