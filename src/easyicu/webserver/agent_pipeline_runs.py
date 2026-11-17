@@ -6283,6 +6283,10 @@ def _load_candidate_plan_materialization_authority(
             primary_cohort.planner_selectable_cohort(study.get("cohort"))
         )
         if stated_mode is not None and candidate_cohort.selection_mode != stated_mode:
+            from .research_launch_population import sealed_candidate_population_mode
+
+            stated_mode = sealed_candidate_population_mode(inner_run=inner_run, capsule=capsule, stated_mode=stated_mode)
+        if stated_mode is not None and candidate_cohort.selection_mode != stated_mode:
             raise ValueError("The candidate contradicts the stated population mode.")
     except (TypeError, ValueError) as exc:
         raise ResearchPipelineRunError(

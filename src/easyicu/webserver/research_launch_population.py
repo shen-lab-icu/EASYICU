@@ -32,6 +32,38 @@ def resolved_launch_population_mode(
     return population_grouping_resolution(context).selection_mode(required_mode)
 
 
+
+def sealed_candidate_population_mode(
+    *, inner_run: Any, capsule: Mapping[str, Any], stated_mode: str | None,
+) -> str | None:
+    """Resolve the stated mode with the candidate's own sealed planning context.
+
+    The launch bound the candidate's mode through the same host decision
+    (``resolved_launch_population_mode``); materialization must not re-derive
+    it from the saved study alone. The context is read only when its bytes
+    match the digest the verified input capsule sealed.
+    """
+    if stated_mode != "predicate_filtered":
+        return stated_mode
+    import hashlib
+    from pathlib import Path
+
+    from easyicu.research_agent.planning.cohort_predicate_domain import population_grouping_resolution
+    from easyicu.research_agent.schema import ResearchContext
+
+    relative = str(capsule.get("context_relative_path") or "")
+    path = Path(inner_run) / relative
+    if not relative or Path(relative).is_absolute() or ".." in Path(relative).parts:
+        return stated_mode
+    try:
+        raw = path.read_bytes()
+    except OSError:
+        return stated_mode
+    if hashlib.sha256(raw).hexdigest() != str(capsule.get("context_sha256") or ""):
+        return stated_mode
+    context = ResearchContext.model_validate_json(raw)
+    return population_grouping_resolution(context).selection_mode(stated_mode)
+
 def prepare_source_population(study: Mapping[str, Any]) -> dict[str, Any]:
     """Project a source proposal for preparation; preserve its original request.
 

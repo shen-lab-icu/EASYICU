@@ -610,3 +610,26 @@ def test_a_saved_icu_duration_bound_is_absorbed_only_by_its_own_grouping(unit, c
     assert caller_bound_population_conflict(
         result.output, context=context, required_selection_mode="predicate_filtered",
     ) is None
+
+
+@pytest.mark.parametrize("case", ["share", "not_share", "no_grouping", "digest", "escape", "other_mode"])
+def test_materialization_resolves_the_stated_mode_with_the_sealed_candidate_context(tmp_path, case):
+    """Live dH4 s3 shape: planning absorbed the bound; prepare-data must agree.
+
+    The candidate-materialization authority re-derived predicate_filtered from
+    the saved study alone and refused the accepted all-input candidate.
+    """
+    import hashlib
+
+    from easyicu.webserver.research_launch_population import sealed_candidate_population_mode
+
+    context = _study(typed_bound=True, question=_NOT_A_SHARE if case == "not_share" else None)
+    if case == "no_grouping":
+        context = context.model_copy(update={"cohort": context.cohort.model_copy(update={"provenance": {}})})
+    raw = context.model_dump_json().encode()
+    (tmp_path / "research_context.json").write_bytes(raw)
+    capsule = {"context_relative_path": "../research_context.json" if case == "escape" else "research_context.json",
+               "context_sha256": "0" * 64 if case == "digest" else hashlib.sha256(raw).hexdigest()}
+    stated = "all_input_rows" if case == "other_mode" else "predicate_filtered"
+    resolved = sealed_candidate_population_mode(inner_run=tmp_path, capsule=capsule, stated_mode=stated)
+    assert resolved == ("all_input_rows" if case in {"share", "other_mode"} else "predicate_filtered")
