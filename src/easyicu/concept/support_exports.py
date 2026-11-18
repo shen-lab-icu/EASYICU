@@ -110,8 +110,16 @@ def _rank_identity(rows, *, database, stay, person, hospital, order):
         hospital_valid = by_visit | valid_offset
         first_hospital = _first_hospital_stay(
             rows, person=person, hospital=hospital, order=hospital_order, valid=hospital_valid,
-        ).mask(valid_visit & visit.gt(1), False)
-        proven_later = first_hospital.eq(False).fillna(False)
+        )
+        later_visit = valid_visit & visit.gt(1)
+        # An offset clock that starts with a known return visit cannot rank the admission.
+        contradicted = (
+            (~by_visit & first_hospital.fillna(False) & later_visit)
+            .groupby(groups, sort=False).transform("any").eq(True)
+        )
+        hospital_valid &= ~contradicted
+        first_hospital = first_hospital.mask(contradicted).mask(later_visit, False)
+        proven_later = first_hospital.eq(False).fillna(False) & ~contradicted
         year = rows["hospitaldischargeyear"]
         same_year = year.groupby(groups, sort=False).transform("nunique").eq(1)
         valid &= rows[hospital].notna() & hospital_valid & np.isfinite(year) & same_year
@@ -133,7 +141,6 @@ def _rank_identity(rows, *, database, stay, person, hospital, order):
         ordinal = difference.groupby(ranked[person], sort=False).cummax() + positions
     else:
         ordinal = positions + 1
-    rows["stay_order"] = ordinal.astype("Int64")
     first = positions.eq(0).astype("boolean").reindex(rows.index)
     if database == "aumc":
         first &= rows["admissioncount"].eq(1)
@@ -148,7 +155,12 @@ def _rank_identity(rows, *, database, stay, person, hospital, order):
         earliest = ranked.groupby(person, sort=False)[order[0]].transform("min")
         candidates = admissions.gt(1) & ranked[order[0]].eq(earliest) & first_hospital.loc[ranked.index]
         first.loc[candidates.index[candidates]] = pd.NA
-    rows["is_first_icu_stay"] = first.where(rankable).mask(proven_later.fillna(False), False)
+    first = first.where(rankable).mask(proven_later.fillna(False), False)
+    # A sort tie-breaker cannot establish the first stay that anchors person ranks.
+    unverified_first = ordinal.eq(1) & ~first.loc[ranked.index].fillna(False)
+    unverified_people = ranked.loc[unverified_first, person]
+    rows["stay_order"] = ordinal.mask(ranked[person].isin(unverified_people)).astype("Int64")
+    rows["is_first_icu_stay"] = first
     rows["is_first_icu_stay_of_hospital_admission"] = first_hospital
     return rows
 
