@@ -12,6 +12,7 @@
   const MAX_DATABASE = 64;
   const MAX_MODULES = 64;
   const MAX_MODULE = 128;
+  const MAX_CONCEPTS_PER_MODULE = 128;
   const MAX_STORAGE_CHARS = 16384;
 
   let generation = 0;
@@ -43,9 +44,12 @@
           .slice(0, MAX_MODULES)
           .map(module => module.slice(0, MAX_MODULE))
       : [];
-    const concepts = Object.fromEntries(modules.filter(module => Array.isArray(config.concepts?.[module]))
-      .map(module => [module, config.concepts[module].slice(0, MAX_MODULES)
-        .filter(id => typeof id === 'string' && id.length <= MAX_MODULE)]));
+    const projections = Object.entries(config.concepts || {});
+    // A partial projection cannot safely reconstruct the submitted selection.
+    if (projections.some(([module, ids]) => !modules.includes(module) || !Array.isArray(ids) ||
+      !ids.length || ids.length > MAX_CONCEPTS_PER_MODULE ||
+      ids.some(id => typeof id !== 'string' || !id.length || id.length > MAX_MODULE))) return null;
+    const concepts = Object.fromEntries(projections.map(([module, ids]) => [module, ids.slice()]));
     const maxPatients = Number(config.max_patients);
     return {
       run_mode: config.run_mode === 'recommended' ? 'recommended' : 'custom',
@@ -66,11 +70,13 @@
     const source = cleanSource(value.source);
     const jobId = boundedText(value.job_id, 64);
     if (!kind || !source || (requireJobId && !JOB_ID_RE.test(jobId))) return null;
+    const config = cleanConfig(kind, value.config);
+    if (!config) return null;
     const record = {
       job_id: requireJobId ? jobId : '',
       kind,
       source,
-      config: cleanConfig(kind, value.config),
+      config,
     };
     return JSON.stringify(record).length <= MAX_STORAGE_CHARS ? record : null;
   }

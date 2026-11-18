@@ -7,9 +7,7 @@
     function render({ path, database, ready }) {
       path = String(path || '').trim();
       if (!state || state.path !== path || state.database !== database || state.ready !== ready) {
-        const requested = path && database && ready ? prefill : null;
-        state = { path, database, ready, group: null, failed: false, pending: false, selected: new Map(), requested };
-        if (requested) prefill = null;
+        state = { path, database, ready, group: null, failed: false, pending: false, selected: new Map() };
       }
       if (path && database && ready && !state.group && !state.failed && !state.pending && window.EU_API?.getJSON) {
         load(state);
@@ -17,45 +15,35 @@
     }
 
     function reset(keepSource) {
+      prefill = null;
       if (state?.ready && keepSource && state.path === String(keepSource.path || '').trim() && state.database === keepSource.database) return true;
       resetForConnection();
-      prefill = null;
       return false;
     }
 
     function resetForConnection() {
-      // Keep prefill that has yet to be bound to a validated folder.
+      // The next folder resolves the prefill against its own coverage.
       state = null;
     }
 
     function clear() {
       prefill = null;
-      if (!state) return;
-      state.requested = null;
-      state.selected.clear();
+      state?.selected.clear();
     }
 
     function setSelection(modules, concepts) {
       clear();
       if (!Array.isArray(modules) || !modules.length) return;
-      const requested = { modules: new Set(modules), concepts };
-      if (state?.ready && state.path && state.database) {
-        state.requested = requested;
-        resolveSelection(state);
-      } else {
-        // A study or handoff can specify features before a folder has been validated.
-        prefill = requested;
-      }
+      prefill = { modules: new Set(modules), concepts };
+      if (state) resolveSelection(state);
     }
 
     function resolveSelection(current) {
-      const { group, requested, selected } = current;
-      if (!group || !requested) return;
-      current.requested = null;
-      if (group.unavailable_reason || hosted()) return;
+      const { group, selected } = current;
+      if (!group || !prefill || group.unavailable_reason || hosted()) return;
       for (const row of group.modules) {
-        if (!requested.modules.has(row.id) || row.unavailable_reason || !Array.isArray(row.signals)) continue;
-        const projection = requested.concepts?.[row.id];
+        if (!prefill.modules.has(row.id) || row.unavailable_reason || !Array.isArray(row.signals)) continue;
+        const projection = prefill.concepts?.[row.id];
         const signals = Array.isArray(projection) ? row.signals.filter(id => projection.includes(id)) : row.signals;
         if (signals.length) selected.set(row.id, signals);
       }
@@ -135,6 +123,7 @@
           const id = input.dataset.exMinuteModule;
           const row = current.group.modules.find(row => row.id === id);
           if (!Array.isArray(row?.signals) || !row.signals.length || row.unavailable_reason) return;
+          prefill = null;
           if (input.checked) current.selected.set(id, row.signals);
           else current.selected.delete(id);
           markStale();

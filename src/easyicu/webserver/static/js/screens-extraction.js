@@ -310,9 +310,9 @@
   function applyGuidedPrefill(handoff) {
     const cfg = handoff && handoff.config;
     if (!cfg || typeof cfg !== 'object' || extractionTaskRunning()) return;
-    minuteModules?.setSelection(cfg.modules, cfg.concepts);
     if (cfg.cohort_preset && COHORT_PRESETS.some(p => p[0] === cfg.cohort_preset)) exCohortPreset = cfg.cohort_preset;
     if (Array.isArray(cfg.modules) && cfg.modules.length) {
+      minuteModules?.setSelection(cfg.modules, cfg.concepts);
       const want = new Set(cfg.modules);
       MODS.forEach(m => { m[3] = want.has(moduleKey(m)) || want.has(m[0]); });
     }
@@ -523,7 +523,7 @@
         config: {
           run_mode: runMode,
           modules,
-          concepts: minuteModules?.payload(new Set(modules)),
+          concepts: payload.concepts,
           format: exFormat,
           merge: exMerge === 'merged',
           max_patients: exMaxPatients,
@@ -1050,8 +1050,10 @@
         if (!keepsForm) {
           const modules = new Set(config.modules || []);
           MODS.forEach(m => { m[3] = modules.has(moduleKey(m)); });
-          exSelectedConcepts = config.concepts || {};
-          minuteModules?.setSelection(config.modules, config.concepts);
+          const concepts = config.concepts || {};
+          exSelectedConcepts = Object.fromEntries(MODS.map(moduleKey).filter(key => Array.isArray(concepts[key]))
+            .map(key => [key, concepts[key]]));
+          minuteModules?.setSelection(config.modules, concepts);
         }
         exReal = 'ready';
         exportJobId = record.job_id;

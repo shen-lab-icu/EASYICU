@@ -325,7 +325,7 @@ function minuteScreen(getOptions = async () => coverage, storage = new Map(), st
   }
 
   return {
-    c, render, interact, connect, submit, requests,
+    c, render, interact, connect, submit, requests, posted,
     get markup() { return markup; },
     get paints() { return paints; },
     jobEvent(message) { events.onmessage({ data: JSON.stringify(message) }); },
@@ -435,6 +435,62 @@ test('an updated arterial study intersects its saved projection when coverage ar
   assert.deepEqual(body.concepts, { haemo_native: ['dbp_invasive'] });
 });
 
+test('a pulse-waveform revision changes only the signal projection on the connected folder', async () => {
+  const screen = minuteScreen(async () => arterialCoverage);
+  const bridge = screen.c.window.EU_EXTRACTION_STUDY_CONTEXT;
+  const study = {
+    id: 'pulse-waveform-calibration', revision: 1,
+    data_source: { path: '/fixture/pulse-waveform-calibration', database: 'sic' },
+    modules: ['haemo_native'], concepts: { haemo_native: ['sbp_invasive', 'dbp_invasive'] },
+  };
+  bridge.hydrate(study);
+  await screen.connect(study.data_source.path);
+  assert.match(screen.markup, /SICdb<\/b> · sbp_invasive, dbp_invasive</);
+
+  bridge.hydrate({ ...study, revision: 2, concepts: { haemo_native: ['sbp_invasive'] } });
+  assert.match(screen.render(), /SICdb<\/b> · sbp_invasive</);
+  const body = await screen.submit();
+  assert.deepEqual(body.modules, study.modules);
+  assert.deepEqual(body.concepts, { haemo_native: ['sbp_invasive'] });
+  assert.equal(screen.requests.length, 1);
+});
+
+for (const loaded of [false, true]) {
+  test(`a waveform handoff survives a folder change ${loaded ? 'after coverage loads' : 'during the coverage lookup'}`, async () => {
+    let finishWardCopy;
+    let attempt = 0;
+    const screen = minuteScreen(() => {
+      if (++attempt > 1) return Promise.resolve(arterialCoverage);
+      if (loaded) return Promise.resolve(coverage);
+      return new Promise(resolve => { finishWardCopy = resolve; });
+    });
+    const bridge = screen.c.window.EU_EXTRACTION_STUDY_CONTEXT;
+    const study = {
+      id: 'arterial-transducer-audit', revision: 1, data_source: { database: 'sic' },
+      modules: ['haemo_native'], concepts: { haemo_native: ['sbp_invasive'] },
+    };
+    bridge.hydrate(study);
+    await screen.connect('/fixture/transducer/ward-copy');
+    assert.match(screen.markup, loaded ? /SICdb<\/b> · sbp_invasive</ : /Checking database coverage/);
+
+    assert.ok(screen.c.window.EU_EXTRACTION_NATIVE_OWNER.beginSourceBinding());
+    const path = '/fixture/transducer/verified-copy';
+    await screen.connect(path);
+    bridge.hydrate({ ...study, revision: 2, data_source: { path, database: 'sic' } });
+    if (finishWardCopy) {
+      const paints = screen.paints;
+      finishWardCopy(coverage);
+      await settle();
+      assert.equal(screen.paints, paints, 'Coverage from the ward copy must never repaint the verified copy');
+    }
+    assert.match(screen.render(), /SICdb<\/b> · sbp_invasive</);
+    const body = await screen.submit();
+    assert.equal(body.path, path);
+    assert.deepEqual(body.modules, study.modules);
+    assert.deepEqual(body.concepts, study.concepts);
+  });
+}
+
 test('guided perfusion prefill carries its signal projection into extraction', async () => {
   const screen = minuteScreen(async () => arterialCoverage);
   let handoff = { config: { modules: ['haemo_native'], concepts: { haemo_native: ['dbp_invasive'] } } };
@@ -452,20 +508,55 @@ test('guided perfusion prefill carries its signal projection into extraction', a
   assert.deepEqual(body.concepts, { haemo_native: ['dbp_invasive'] });
 });
 
+test('a guided waveform choice waits for an eligible copy when the connected folder has no coverage', async () => {
+  let attempt = 0;
+  const screen = minuteScreen(async () => ++attempt === 1
+    ? { minute_resolution: { modules: [], unavailable_reason: 'no_whitelisted_signals' } }
+    : arterialCoverage);
+  await screen.connect('/fixture/transducers/incomplete-copy');
+  const config = { modules: ['haemo_native'], concepts: { haemo_native: ['dbp_invasive'] } };
+  screen.c.window.EU_GUIDED_HANDOFF = { take: () => ({ config }) };
+  assert.doesNotMatch(screen.render(), /data-ex-minute-module=/);
+  delete screen.c.window.EU_GUIDED_HANDOFF;
+
+  assert.ok(screen.c.window.EU_EXTRACTION_NATIVE_OWNER.beginSourceBinding());
+  await screen.connect('/fixture/transducers/complete-copy');
+  const body = await screen.submit();
+  assert.deepEqual(body.modules, config.modules);
+  assert.deepEqual(body.concepts, config.concepts);
+});
+
+test('a first-stay cohort handoff preserves manually checked bedside signals', async () => {
+  const screen = minuteScreen();
+  await screen.connect('/fixture/bedside/first-stays');
+  screen.interact('data-ex-core');
+  screen.interact('data-ex-minute-module', 'subhour_signals', 'change', { checked: true });
+  screen.c.window.EU_GUIDED_HANDOFF = { take: () => ({ config: { cohort_preset: 'adult_first' } }) };
+  screen.render();
+  delete screen.c.window.EU_GUIDED_HANDOFF;
+
+  const body = await screen.submit();
+  assert.equal(body.cohort.preset, 'adult_first');
+  assert.deepEqual(body.modules, [...recommendedModules, 'subhour_signals']);
+  assert.deepEqual(body.concepts, { vitals: ['sbp'], subhour_signals: ['map_invasive'] });
+});
+
 for (const status of ['running', 'failed']) {
-  test(`a reloaded ${status} pressure export returns to setup with the original minute projection`, async () => {
+  test(`a reloaded ${status} calibration export resubmits the same temperature and pressure projections`, async () => {
     const storage = new Map();
-    const originalCoverage = { minute_resolution: { modules: [
-      { ...arterialCoverage.minute_resolution.modules[0], signals: ['dbp_invasive'] },
-    ] } };
-    const original = minuteScreen(async () => originalCoverage, storage);
+    const original = minuteScreen(async () => arterialCoverage, storage);
+    original.c.window.EU_CATALOG.groupConcepts.vitals = ['sbp', 'temp'];
+    original.c.window.EU_EXTRACTION_STUDY_CONTEXT.hydrate({
+      id: 'archive-temperature-calibration', data_source: { database: 'sic' }, modules: ['vitals', 'haemo_native'],
+      execution_concepts: { primary_exposure: 'temp' }, concepts: { haemo_native: ['dbp_invasive'] },
+    });
     await original.connect('/fixture/pressure-archive');
-    original.interact('data-ex-minute-module', 'haemo_native', 'change', { checked: true });
     const submitted = await original.submit();
-    assert.deepEqual(submitted.modules, ['haemo_native']);
-    assert.deepEqual(submitted.concepts, { haemo_native: ['dbp_invasive'] });
+    assert.deepEqual(submitted.modules, ['vitals', 'haemo_native']);
+    assert.deepEqual(submitted.concepts, { vitals: ['temp'], haemo_native: ['dbp_invasive'] });
 
     const restored = minuteScreen(async () => arterialCoverage, storage, status);
+    restored.c.window.EU_CATALOG.groupConcepts.vitals = ['sbp', 'temp'];
     assert.ok(await restored.c.window.EU_EXTRACTION_JOB_CONTINUITY.ready);
     await settle();
     if (status === 'running') {
@@ -474,12 +565,45 @@ for (const status of ['running', 'failed']) {
     restored.interact('data-ex-reset');
 
     assert.match(restored.markup, /data-ex-minute-module="haemo_native" checked/);
-    assert.deepEqual(Array.from(restored.c.window.EU_EXTRACTION_CONTEXT.snapshot().modules), ['haemo_native']);
+    assert.deepEqual(Array.from(restored.c.window.EU_EXTRACTION_CONTEXT.snapshot().modules), submitted.modules);
     const body = await restored.submit();
-    assert.deepEqual(body.modules, ['haemo_native']);
-    assert.deepEqual(body.concepts, { haemo_native: ['dbp_invasive'] });
+    assert.deepEqual(body, submitted);
   });
 }
+
+test('the largest hourly catalog group fits in the saved extraction projection', async () => {
+  const storage = new Map();
+  const screen = minuteScreen(async () => coverage, storage);
+  vm.runInContext(file(null, 'data-catalog.js'), screen.c);
+  const groups = Object.entries(screen.c.window.EU_CATALOG.groupConcepts);
+  const [module, concepts] = groups.reduce((largest, next) => next[1].length > largest[1].length ? next : largest);
+  screen.c.window.EU_EXTRACTION_STUDY_CONTEXT.hydrate({
+    id: 'renal-panel-archive', data_source: { database: 'sic' }, modules: [module],
+  });
+  await screen.connect('/fixture/renal-panel');
+  const submitted = await screen.submit();
+  const record = JSON.parse(storage.get('easyicu.extractionJob.v1'));
+  assert.deepEqual(submitted.concepts[module], Array.from(concepts));
+  assert.deepEqual(record.config.concepts, submitted.concepts);
+});
+
+test('an oversized kidney signal list stops before posting or saving a partial extraction form', async () => {
+  const storage = new Map();
+  const screen = minuteScreen(async () => coverage, storage);
+  screen.c.window.EU_CATALOG.groupConcepts.renal = Array.from({ length: 129 }, (_, i) => 'kidney_signal_' + i);
+  screen.c.window.EU_EXTRACTION_STUDY_CONTEXT.hydrate({
+    id: 'expanded-kidney-panel', data_source: { database: 'sic' }, modules: ['renal'],
+  });
+  await screen.connect('/fixture/expanded-kidney-panel');
+  screen.interact('data-ex-step-next', 'cohort');
+  screen.interact('data-ex-step-next', 'export');
+  screen.interact('data-ex-run', 'custom');
+  await settle();
+
+  assert.match(screen.markup, /The extraction reconnect metadata is invalid; the task was not started\./);
+  assert.deepEqual(screen.posted, []);
+  assert.equal(storage.has('easyicu.extractionJob.v1'), false);
+});
 
 test('a padded telemetry path keeps coverage and minute choices when the job attaches', async () => {
   const screen = minuteScreen();
@@ -535,6 +659,35 @@ function minuteOwner(getJSON) {
   return c.window.EU_EXTRACTION_MINUTE.create({
     t: en => en, escHtml: text => text, hosted: () => false,
     repaint() {}, backgroundRepaint() {},
+  });
+}
+
+for (const clear of ['clear', 'reset', 'checkbox']) {
+  test(`a ${clear} clears inherited monitor choices before connecting another folder`, async () => {
+    const owner = minuteOwner(async () => coverage);
+    const connected = { path: '/fixture/monitor-room/east', database: 'sic', ready: true };
+    owner.setSelection(['subhour_signals'], { subhour_signals: ['map_invasive'] });
+    owner.render(connected);
+    await settle();
+    assert.deepEqual(Array.from(owner.keys()), ['subhour_signals']);
+    if (clear === 'checkbox') {
+      let change;
+      const input = {
+        dataset: { exMinuteModule: 'subhour_signals' }, checked: false, focus() {},
+        addEventListener(_event, listener) { change = listener; },
+      };
+      owner.bind({ querySelector: () => null, querySelectorAll: () => [input] }, () => {});
+      change();
+    } else if (clear === 'reset') {
+      assert.equal(owner.reset(connected), true, 'A same-source reset retains the visible form');
+      assert.deepEqual(Array.from(owner.keys()), ['subhour_signals']);
+    } else {
+      owner.clear();
+    }
+    owner.resetForConnection();
+    owner.render({ ...connected, path: '/fixture/monitor-room/west' });
+    await settle();
+    assert.deepEqual(Array.from(owner.keys()), []);
   });
 }
 
