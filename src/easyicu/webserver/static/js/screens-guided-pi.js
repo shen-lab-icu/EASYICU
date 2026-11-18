@@ -391,7 +391,7 @@
       if (at >= 0) state.messages.splice(at);
     },
   });
-  const confirmWorkflowAction = () => PLAN_ACTIONS.confirmWorkflow(workflowConfirmation());
+  const confirmWorkflowAction = exposureOption => PLAN_ACTIONS.confirmWorkflow(workflowConfirmation(), exposureOption);
   const authorizeCandidatePlan = {
     planContext: () => {
       const session = state.session || {};

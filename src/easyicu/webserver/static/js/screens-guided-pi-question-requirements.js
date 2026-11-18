@@ -96,6 +96,14 @@
     };
   }
 
+  function offeredExposureChoice(item, offer) {
+    const choice = item.exposure_choice;
+    return offer && choice && item.disposition === 'not_covered' && item.source === 'host_verified'
+      && choice.primary_exposure === offer.primary && Array.isArray(choice.additional_exposures)
+      && Array.isArray(offer.additional) && choice.additional_exposures.length === offer.additional.length
+      && choice.additional_exposures.every((concept, index) => concept === offer.additional[index]);
+  }
+
   function notesHtml(summary, { tr, esc, recordLink = () => '' }) {
     const notes = summary && summary.question_requirements;
     const lines = [];
@@ -141,7 +149,7 @@
     } else if (notes && notes.status === 'shown') {
       (Array.isArray(notes.items) ? notes.items : [])
         .filter(item => item && typeof item === 'object')
-        .forEach(item => lines.push(itemLine(summary.exposure_arrangement && item.exposure_choice
+        .forEach(item => lines.push(itemLine(offeredExposureChoice(item, summary.exposure_arrangement)
           ? { ...item, exposure_choice: null } : item, tr)));
       (Array.isArray(notes.unstated) ? notes.unstated : [])
         .filter(row => row && typeof row === 'object')

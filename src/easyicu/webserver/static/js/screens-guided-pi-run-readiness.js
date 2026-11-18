@@ -9,6 +9,7 @@
     'plan_configuration_superseded', 'plan_review_not_resumable',
     'scientific_plan_review_policy_stale', 'planner_checkpoint_resume_available',
     'agent_plan_revision_nonconvergent', 'operator_plan_approval_required', 'target_trial_plan_ready',
+    'question_requirement_not_covered',
   ]);
 
   function create({ state, tr }) {

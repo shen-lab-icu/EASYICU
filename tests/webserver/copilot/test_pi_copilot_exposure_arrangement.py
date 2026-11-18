@@ -103,6 +103,24 @@ def test_no_choice_from_an_approval_gate_or_obsolete_judgment(current_review):
     )
 
 
+@pytest.mark.parametrize(
+    "additional_requirement", ["subgroup", "unverified_exposure", "same_exposure", "unstated"]
+)
+def test_no_offer_when_another_requirement_needs_review(current_review, additional_requirement):
+    notes = current_review["question_requirements"]
+    exposure = notes["items"][0]
+    if additional_requirement == "unstated":
+        notes["unstated"] = [{"evidence": "split the result by admission shift", "read": False}]
+    else:
+        other = {
+            "subgroup": {"disposition": "not_covered", "source": "host_verified"},
+            "unverified_exposure": {**exposure, "source": "plan_declared"},
+            "same_exposure": exposure,
+        }[additional_requirement]
+        notes["items"].append({**other, "quote": "Report separate estimates by admission shift."})
+    assert exposure_arrangement_offer("question_requirement_not_covered", current_review) is None
+
+
 def test_selected_arrangement_reaches_revision_turn(
     tmp_path, study_state, monkeypatch, current_review
 ):

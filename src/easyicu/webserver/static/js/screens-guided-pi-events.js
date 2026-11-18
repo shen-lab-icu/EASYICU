@@ -567,10 +567,7 @@
         }
         const exposureChoice = event.target.closest('[data-gpi-exposure-arrangement]');
         if (exposureChoice) {
-          const owner = window.EasyICU.guidedPi.optional('questionRequirements');
-          const arrangement = owner?.exposureArrangement(state.workflow, tr);
-          const option = arrangement?.alternatives.find(item => item.id === exposureChoice.dataset.gpiExposureArrangement);
-          if (option) sendText(arrangement.options[option.id], ['provider_run', 'literature'], 'confirm_exposure_arrangement', true, 'host_prompt');
+          if (!exposureChoice.disabled) confirmWorkflowAction(exposureChoice.dataset.gpiExposureArrangement);
           return;
         }
         if (event.target.closest('[data-gpi-confirm-action]')) { confirmWorkflowAction(); return; }

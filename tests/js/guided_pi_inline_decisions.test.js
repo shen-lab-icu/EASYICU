@@ -8,7 +8,7 @@ const js = path.resolve('src/easyicu/webserver/static/js');
 global.window = {};
 for (const name of ['modules', 'data-consent', 'cohort-eligibility', 'confirmation-data',
   'question-requirements', 'confirmation', 'target-trial-copy', 'target-trial', 'transcript',
-  'session-view', 'next-actions', 'plan-actions']) {
+  'session-view', 'next-actions', 'plan-actions', 'events', 'run-readiness']) {
   if (name === 'modules') require(path.join(js, 'html-escape.js'));
   require(path.join(js, `screens-guided-pi-${name}.js`));
 }
@@ -16,7 +16,7 @@ const modules = window.EasyICU.guidedPi;
 const { esc } = window.EU_HTML;
 const stub = (overrides = {}) => new Proxy(overrides, { get: (item, key) => item[key] || (() => '') });
 
-function render(language, workflow, sessionPatch, ideaExplored = true) {
+function render(language, workflow, sessionPatch, ideaExplored = true, hostPatch = {}) {
   window.EU_LANG = language;
   const tr = (en, zh) => language === 'zh' ? zh : en;
   const session = {
@@ -33,7 +33,7 @@ function render(language, workflow, sessionPatch, ideaExplored = true) {
     ],
   };
   const host = { tr, esc, iconHtml: () => '', resourceButton: () => '', session: () => session,
-    workflow: () => workflow, sessionIsStale: () => false, busy: () => false };
+    workflow: () => workflow, sessionIsStale: () => false, busy: () => false, ...hostPatch };
   const confirmation = modules.require('confirmation').create(host);
   const view = modules.require('sessionView').create({
     ...host, state, modules, dataConsent: modules.require('dataConsent'), header: stub(),
@@ -72,8 +72,8 @@ for (const language of ['en', 'zh']) {
   for (const [workflow, session, action] of steps) {
     test(`${language}: ${workflow.next_action_code} is inline after exploration`, () => {
       const { html } = render(language, workflow, session);
-      const log = html.split('data-gpi-log>')[1].split('<div class="gpi-compose">')[0];
-      const primary = log.match(/<button\b[^>]*class="btn [^"]*\bprimary\b[^"]*"[^>]*>/g) || [];
+      const log = conversationLog(html);
+      const primary = primaryButtons(log);
       assert.equal(primary.length, 1, workflow.next_action_code);
       assert.match(primary[0], action);
       assert.doesNotMatch(log, /data-gpi-next-choice|data-gpi-aside-pending/);
@@ -106,11 +106,212 @@ for (const language of ['en', 'zh']) {
     assert.equal(proposal.exposureArrangement.defaultOption, 'primary_and_secondary');
     assert.match(proposal.note, /measure_a.*measure_b/);
     const messages = [];
-    const actions = modules.require('planActions').create({ sendText: (...args) => messages.push(args) });
+    const actions = modules.require('planActions').create({
+      session: () => ({ session_id: 'session' }), busy: () => false, sessionIsStale: () => false,
+      sendText: (...args) => messages.push(args),
+    });
     assert.deepEqual(messages, []);
     await actions.confirmWorkflow(proposal);
     assert.deepEqual(messages, [[proposal.exposureArrangement.options.primary_and_secondary,
       ['provider_run', 'literature'], 'confirm_exposure_arrangement', true, 'host_prompt']]);
+  });
+}
+
+function conversationLog(html) {
+  return html.split('data-gpi-log>')[1].split('<div class="gpi-compose">')[0];
+}
+
+function primaryButtons(html) {
+  return html.match(/<button\b[^>]*class="btn [^"]*\bprimary\b[^"]*"[^>]*>/g) || [];
+}
+
+const trialProposal = {
+  next_action_code: 'target_trial_statement_needed',
+  target_trial_card: { state: 'proposal', proposal: {
+    expected_revision: 7, digest: 'a'.repeat(64), missing: [],
+    elements: [{ key: 'treatment', value: 'example infusion', source: 'question' }],
+  } },
+};
+const trialReview = {
+  next_action_code: 'target_trial_review',
+  target_trial_card: { state: 'approvable', approvable: true, confirm_all_on_approval: true,
+    compile_sha256: 'b'.repeat(64), confirmation_lines: 1, confirmations: [{ text: 'Review the index stay' }] },
+};
+
+function trialActions() {
+  const state = { selection: 0, busy: false, workflow: trialProposal, error: '', watched: [] };
+  const session = { session_id: 'session', binding: { study_context_id: 'study', study_revision: 7 } };
+  const api = {};
+  const actions = modules.require('planActions').create({
+    session: () => session, workflow: () => state.workflow, projectId: () => 'project',
+    selectionRevision: () => state.selection, sessionIsStale: () => false,
+    busy: () => state.busy, setBusy: busy => { state.busy = busy; },
+    api: () => api, setError: error => { state.error = error; }, errorText: error => error.message,
+    render() {}, refreshSession: async () => {}, loadWorkflow: async () => { await state.onLoad?.(); },
+    watchChildJob: (...args) => { state.watched.push([state.busy, ...args]); },
+  });
+  const click = () => actions.confirmWorkflow(render('en', state.workflow, session).confirmation.workflowConfirmation());
+  return { state, api, click };
+}
+
+test('Continue releases the action before watching the job and only an Approve click submits approval', async () => {
+  const { state, api, click } = trialActions();
+  const approvals = [];
+  api.compilePiCopilotTargetTrialProposal = async (session, body) => {
+    assert.equal(session, 'session');
+    assert.equal(body.proposal_sha256, 'a'.repeat(64));
+    assert.equal(state.busy, true);
+    return { job_id: 'trial-job' };
+  };
+  api.approvePiCopilotTargetTrial = async (session, body) => { approvals.push([session, body]); };
+  await click();
+  assert.equal(state.busy, false);
+  assert.deepEqual(state.watched, [[false, 'trial-job', 'easyicu_target_trial_compile_submitted']]);
+  state.workflow = trialReview;
+  assert.deepEqual(approvals, []);
+  await click();
+  assert.equal(state.busy, false);
+  assert.equal(approvals.length, 1);
+  assert.equal(approvals[0][1].compile_sha256, 'b'.repeat(64));
+  assert.equal(approvals[0][1].n_lines_confirmed, 1);
+});
+
+for (const [step, workflow, method] of [
+  ['Continue', trialProposal, 'compilePiCopilotTargetTrialProposal'],
+  ['Approve', trialReview, 'approvePiCopilotTargetTrial'],
+]) {
+  for (const exit of ['current error', 'stale success', 'stale error', 'stale after reload']) {
+    test(`${step} releases the action on ${exit}`, async () => {
+      const { state, api, click } = trialActions();
+      state.workflow = workflow;
+      let loads = 0;
+      state.onLoad = () => {
+        loads += 1;
+        if (exit === 'stale after reload') state.selection += 1;
+      };
+      api[method] = async () => {
+        if (['stale success', 'stale error'].includes(exit)) state.selection += 1;
+        if (exit !== 'stale success') throw new Error('Synthetic transport failure');
+        return { job_id: 'old-job' };
+      };
+      await click();
+      assert.equal(state.busy, false);
+      assert.deepEqual(state.watched, []);
+      assert.equal(loads, ['current error', 'stale after reload'].includes(exit) ? 1 : 0);
+      assert.equal(state.error, exit === 'current error' ? 'Synthetic transport failure' : '');
+    });
+  }
+}
+
+function exposureWorkflow(reviewPatch = {}) {
+  return {
+    next_action_code: 'question_requirement_not_covered',
+    plan_review_summary: {
+      run_id: 'synthetic-review',
+      exposure_arrangement: {
+        primary: 'signal_a', additional: ['signal_b'], default_option: 'primary_and_secondary',
+        options: {
+          primary_and_secondary: { en: 'Keep the first admission signal primary.' },
+          analyse_both: { en: 'Estimate each admission signal in parallel.' },
+        },
+      },
+      question_requirements: { status: 'shown', judged_on_plan_under_review: true, items: [{
+        source: 'host_verified', disposition: 'not_covered', quote: 'Compare the two admission signals.',
+        exposure_choice: { primary_exposure: 'signal_a', additional_exposures: ['signal_b'] },
+      }] },
+      ...reviewPatch,
+    },
+  };
+}
+
+test('A pending scientific-review decision has one primary connection action in the conversation', () => {
+  const workflow = {
+    next_action_code: 'plan_scientific_changes_required',
+    plan_review_summary: { finding_codes: ['HOST_ICD_SOURCE_UNVERIFIED'] },
+  };
+  const readiness = modules.require('runReadiness').create({ state: { workflow }, tr: en => en });
+  const log = conversationLog(render('en', workflow, {}, true, { runReadiness: readiness.forAction }).html);
+  const primary = primaryButtons(log);
+  assert.equal(primary.length, 1);
+  assert.match(primary[0], /data-gpi-config/);
+  assert.match(log, /data-gpi-confirm-edit/);
+  assert.doesNotMatch(log, /data-gpi-aside-pending/);
+});
+
+test('A disconnected candidate-plan action shows only Check connection as primary', () => {
+  const workflow = { next_action_code: 'provider_ready_to_generate_plan' };
+  const readiness = modules.require('runReadiness').create({ state: { workflow }, tr: en => en });
+  const log = conversationLog(render('en', workflow, {}, true, { runReadiness: readiness.forAction }).html);
+  const primary = primaryButtons(log);
+  assert.equal(primary.length, 1);
+  assert.match(primary[0], /data-gpi-config/);
+  assert.doesNotMatch(log, /data-gpi-confirm-action/);
+});
+
+test('A disconnected exposure arrangement uses Check connection as its only primary action', () => {
+  const workflow = exposureWorkflow();
+  const readiness = modules.require('runReadiness').create({ state: { workflow }, tr: en => en });
+  const log = conversationLog(render('en', workflow, {}, true, { runReadiness: readiness.forAction }).html);
+  const primary = primaryButtons(log);
+  assert.equal(primary.length, 1);
+  assert.match(primary[0], /data-gpi-config/);
+  assert.match(log, /data-gpi-exposure-arrangement="analyse_both" disabled/);
+});
+
+test('Request changes remains inline with another requirement and no exposure offer', () => {
+  const workflow = exposureWorkflow({ exposure_arrangement: null });
+  workflow.plan_review_summary.question_requirements.items.push({
+    source: 'host_verified', disposition: 'not_covered', quote: 'Show estimates by ICU admission shift.',
+  });
+  const log = conversationLog(render('en', workflow, {}).html);
+  assert.match(log, /data-gpi-confirm-edit>Request changes/);
+  assert.match(log, /Show estimates by ICU admission shift/);
+  assert.doesNotMatch(log, /data-gpi-exposure-arrangement/);
+});
+
+test('Exposure card suppresses only the note for the matching verified uncovered arrangement', () => {
+  const workflow = exposureWorkflow();
+  const { items } = workflow.plan_review_summary.question_requirements;
+  items.push(
+    { ...items[0], source: 'plan_declared' },
+    { ...items[0], exposure_choice: { primary_exposure: 'signal_a', additional_exposures: ['signal_d'] } },
+  );
+  const log = conversationLog(render('en', workflow, {}).html);
+  assert.match(log, /Not answered by this plan: “Compare the two admission signals.”/);
+  assert.equal((log.match(/The question asks to analyse signal_a and signal_b/g) || []).length, 1);
+  assert.match(log, /The question asks to analyse signal_a and signal_d/);
+});
+
+for (const gate of ['ready', 'invalid scope', 'unready', 'busy', 'stale', 'source pending']) {
+  test(`An exposure alternative sent through the card respects ${gate}`, async () => {
+    const workflow = exposureWorkflow(gate === 'invalid scope' ? { deferred_input_scope: {} } : {});
+    const hostPatch = { runReadiness: () => gate === 'unready' ? { reason: 'Check connection', connect: true } : null };
+    const view = render('en', workflow, {}, true, hostPatch);
+    const messages = [];
+    const sendText = (...args) => messages.push(args);
+    const session = { session_id: 'session' };
+    const actions = modules.require('planActions').create({
+      session: () => session, busy: () => gate === 'busy', sessionIsStale: () => gate === 'stale',
+      researchSourceReady: () => gate !== 'source pending', sendText,
+    });
+    const handlers = {};
+    modules.require('events').create({
+      state: { session, workflow, busy: gate === 'busy', host: {
+        addEventListener: (name, handler) => { handlers[name] = handler; },
+      } },
+      COHORT_ELIGIBILITY: stub(), tr: en => en, sendText,
+      confirmWorkflowAction: option => actions.confirmWorkflow(view.confirmation.workflowConfirmation(), option),
+    }).wire();
+    const alternative = { dataset: { gpiExposureArrangement: 'analyse_both' } };
+    await handlers.click({ target: {
+      closest: selector => selector === '[data-gpi-exposure-arrangement]' ? alternative : null,
+    } });
+    assert.deepEqual(messages, gate === 'ready'
+      ? [['Estimate each admission signal in parallel.', ['provider_run', 'literature'], 'confirm_exposure_arrangement', true, 'host_prompt']]
+      : []);
+    if (['invalid scope', 'unready'].includes(gate)) {
+      assert.match(view.html, /data-gpi-exposure-arrangement="analyse_both" disabled/);
+    }
   });
 }
 
@@ -139,7 +340,7 @@ for (const language of ['en', 'zh']) {
     const clarification = { ...workflow, target_trial_card: {
       state: 'clarification', proposal: { ...workflow.target_trial_card.proposal, digest: null, missing: ['treatment'] },
     } };
-    const missing = render(language, clarification, {}).html;
+    const missing = conversationLog(render(language, clarification, {}).html);
     assert.equal((missing.match(/data-gpi-clarification/g) || []).length, 1);
     assert.match(missing, language === 'zh' ? /你要研究哪种治疗/ : /Which treatment should be studied/);
     assert.match(missing, /data-gpi-confirm-edit/);

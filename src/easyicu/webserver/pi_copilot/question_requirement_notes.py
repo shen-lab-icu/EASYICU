@@ -164,18 +164,25 @@ def exposure_arrangement_offer(workflow_code: str, review: Mapping[str, Any]) ->
     if workflow_code != "question_requirement_not_covered":
         return None
     notes = review.get("question_requirements") or {}
-    if not review.get("run_id") or notes.get("judged_on_plan_under_review") is not True:
+    if (
+        not review.get("run_id")
+        or notes.get("judged_on_plan_under_review") is not True
+        or notes.get("unstated")
+    ):
         return None
-    offers = {}
-    for item in notes.get("items") or ():
-        choice = item.get("exposure_choice")
-        if item.get("disposition") == "not_covered" and item.get("source") == "host_verified" and choice:
-            coordinate = (choice["primary_exposure"], *choice["additional_exposures"])
-            offers.setdefault(coordinate, []).append(str(item.get("quote") or ""))
-    # Multiple distinct arrangements need individual scientific review.
-    if len(offers) != 1:
+    uncovered = [item for item in notes.get("items") or () if item.get("disposition") == "not_covered"]
+    if len(uncovered) != 1:
         return None
-    ((primary, *others), quotes), = offers.items()
+    (item,) = uncovered
+    choice = item.get("exposure_choice")
+    if item.get("source") != "host_verified" or not isinstance(choice, Mapping):
+        return None
+    primary = choice.get("primary_exposure")
+    others = choice.get("additional_exposures")
+    if not isinstance(primary, str) or not isinstance(others, list) or not all(
+        isinstance(concept, str) for concept in others
+    ):
+        return None
     if not others or len(set([primary, *others])) != len(others) + 1 or any(
         not re.fullmatch(r"[A-Za-z][A-Za-z0-9_]{0,127}", concept) for concept in [primary, *others]
     ):
@@ -199,7 +206,7 @@ def exposure_arrangement_offer(workflow_code: str, review: Mapping[str, Any]) ->
         "primary": primary,
         "additional": others,
         "default_option": "analyse_both" if re.search(
-            r"co[- ]?primary|equally primary|共同主要|同等主要", " ".join(quotes), re.I
+            r"co[- ]?primary|equally primary|共同主要|同等主要", str(item.get("quote") or ""), re.I
         ) else "primary_and_secondary",
         "options": {
             key: {

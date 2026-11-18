@@ -112,7 +112,7 @@ def _treatment(
     explicit_classes = {
         row["id"]
         for row in supported_treatment_classes()
-        if words in {row["label_en"].casefold(), row["label_zh"], row["id"]}
+        if words in {row[key].casefold() for key in ("label_en", "label_zh", "id")}
     }
     entries = [
         entry
@@ -268,8 +268,8 @@ def target_trial_proposal(study: Mapping[str, Any]) -> TargetTrialProposal | Non
     else:
         missing.append("treatment")
 
-    if "defer_strategy" in evidence and not _OTHER_STRATEGY.search(question):
-        initiate, defer = evidence["initiate_strategy"], evidence["defer_strategy"]
+    initiate, defer = evidence.get("initiate_strategy"), evidence.get("defer_strategy")
+    if initiate and defer and not _OTHER_STRATEGY.search(question):
         spec["strategies"] = {
             **add("strategies", f"{initiate} / {defer}"),
             # Labels are descriptive. The executable definitions are fixed by the trial contract.
@@ -281,14 +281,16 @@ def target_trial_proposal(study: Mapping[str, Any]) -> TargetTrialProposal | Non
         missing.append("strategies")
 
     zero, grace = reading.time_zero_hours, reading.grace_period_hours
+    zero_words = evidence.get("time_zero")
     if (
-        zero is not None
+        zero_words
+        and zero is not None
         and zero.is_integer()
         and MIN_TIME_ZERO_HOURS <= zero <= MAX_TIME_ZERO_HOURS
         and len(time_zero_spans(question)) == 1
     ):
         spec["time_zero"] = {
-            **add("time_zero", evidence["time_zero"]),
+            **add("time_zero", zero_words),
             "hours_after_icu_admission": int(zero),
         }
     else:
@@ -304,7 +306,7 @@ def target_trial_proposal(study: Mapping[str, Any]) -> TargetTrialProposal | Non
         and not _GRACE_OTHER_ORIGIN.match(question[initiation.end :])
     ):
         spec["grace_period"] = {
-            **add("grace_period", evidence["initiate_strategy"]),
+            **add("grace_period", initiation.evidence),
             "hours": int(grace),
         }
     else:

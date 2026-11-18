@@ -41,11 +41,20 @@
     // repeated-stay route (plan_decisions.repeated_stays_system_default_route).
     const SYSTEM_DEFAULT_CARDS = new Set(['operator_plan_approval_required', 'plan_execution_upgrade_required']);
 
+    function deferredScopeRejected(review) {
+      return Boolean(review?.deferred_input_scope && !validDeferredInputScope(review.deferred_input_scope));
+    }
+
     function workflowConfirmation() {
       const confirmation = currentWorkflowConfirmation();
-      const readiness = confirmation && host.runReadiness && host.runReadiness(confirmation.code);
-      return readiness ? { ...confirmation, readiness, approveDisabled: true,
-        nonApprovable: readiness.connect || confirmation.nonApprovable } : confirmation;
+      if (!confirmation) return null;
+      const readiness = host.runReadiness?.(confirmation.code);
+      if (readiness) return { ...confirmation, readiness, approveDisabled: true,
+        nonApprovable: readiness.connect || confirmation.nonApprovable };
+      if (!confirmation.retryPlanRevision && deferredScopeRejected(host.workflow()?.plan_review_summary)) {
+        return { ...confirmation, approveDisabled: true };
+      }
+      return confirmation;
     }
 
     function currentWorkflowConfirmation() {
@@ -642,8 +651,7 @@
         .map(resource => resourceButton(resource, resource.label));
       const reviewResources = reviewResourceButtons.join('');
       const review = host.workflow() && host.workflow().plan_review_summary;
-      const deferredScopeRejected = review && review.deferred_input_scope
-        && !validDeferredInputScope(review.deferred_input_scope);
+      const scopeRejected = deferredScopeRejected(review);
       const planPreview = host.workflow() && host.workflow().plan_conversation_preview;
       const decisionItems = confirmation.code === 'plan_scientific_changes_required'
         && review && Array.isArray(review.authorization_questions)
@@ -933,7 +941,7 @@
         ? planConversationHtml(planPreview)
         : '';
       const displayedTitle = review && review.deferred_input_scope
-        ? deferredScopeRejected ? tr('The plan’s data-read scope is not verified', '计划的数据读取范围尚未核验')
+        ? scopeRejected ? tr('The plan’s data-read scope is not verified', '计划的数据读取范围尚未核验')
           : tr('Review the complete plan and data-read scope', '审阅完整计划与数据读取范围')
         : firstDecisionCopy ? firstDecisionCopy.cardTitle : confirmation.title;
       const displayedNote = review && review.deferred_input_scope ? ''
@@ -956,21 +964,23 @@
         ? firstDecisionCopy.options.map(option => `<button class="gpi-decision-option" type="button" data-gpi-plan-decision-code="${esc(String(firstDecisionItem && firstDecisionItem.code || ''))}" data-gpi-plan-decision-option="${esc(option.optionId)}"${firstDecisionCopy.cardSha256 ? ` data-gpi-plan-decision-card="${esc(firstDecisionCopy.cardSha256)}"` : ''}><strong>${esc(option.label)}</strong><span>${esc(option.effect)}</span>${option.requirement ? `<small>${esc(option.requirement)}</small>` : ''}</button>`).join('')
         : '';
       const { readiness, retryPlanRevision } = confirmation;
-      const showPrimaryAction = retryPlanRevision ? !readiness?.connect : !confirmation.nonApprovable;
+      const showPrimaryAction = !readiness?.connect && (retryPlanRevision || !confirmation.nonApprovable);
+      const editPrimary = !readiness?.connect && !showPrimaryAction
+        && (confirmation.clarification || confirmation.code === 'plan_scientific_changes_required');
       const primaryLabel = retryPlanRevision ? confirmation.retryLabel : confirmation.approve;
-      const primaryDisabled = confirmation.approveDisabled || (!retryPlanRevision && deferredScopeRejected);
+      const primaryDisabled = confirmation.approveDisabled ? ' disabled' : '';
       return `${planConversation}<section class="gpi-confirmation${confirmation.code === 'plan_scientific_changes_required' ? ' is-science-review' : ''}${confirmation.compactApproval ? ' is-plan-approval' : ''}" ${confirmation.clarification ? 'data-gpi-clarification ' : ''}aria-label="${tr('Workflow confirmation required', '需要确认科研流程')}">
         <span class="gpi-confirmation-icon" aria-hidden="true">${iconHtml('shield', 17)}</span>
         <div class="gpi-confirmation-body">${failureNotice}<strong>${esc(displayedTitle)}</strong>${confirmation.reason && !firstDecisionCopy ? `<p class="gpi-confirmation-reason">${esc(confirmation.reason)}</p>` : ''}${displayedNote ? `<small>${esc(displayedNote)}</small>` : ''}${desktopProfile}${reviewedPopulation}${deferredInputScope}${populationPreparation}${populationAcceptance}${sourceAdjustments}${flowSteps}${dataStatus}${pendingPreparation}${repeatedStaysDefault}${icdSourceNotice}${reviewStatus}${studyReadings}${trialBody}${groupNotes}${questionNotes}${reviewMaterials}${compactOtherAction}</div>
         <div class="gpi-confirmation-actions${decisionActions ? ' has-decision-options' : ''}">
           ${confirmation.dataStatus && !confirmation.compactApproval ? `<button class="btn sm" type="button" data-gpi-confirm-preview-data>${esc(tr('Preview analysis data', '先预览分析数据'))}</button>` : ''}
-          ${decisionActions || (confirmation.hideEdit || (confirmation.code === 'plan_scientific_changes_required' && !decisionCount && !icdSourceFinding) ? '' : `<button class="btn ${confirmation.clarification || confirmation.code === 'plan_scientific_changes_required' ? 'primary ' : ''}sm" type="button" data-gpi-confirm-edit>${confirmation.editLabel ? esc(confirmation.editLabel) : icdSourceFinding && !decisionCount ? tr('Change cohort', '修改人群') : confirmation.code === 'plan_scientific_changes_required' ? tr('Answer this question', '回答这个问题') : confirmation.code === 'provider_ready_to_generate_plan' ? tr('Add research requirements', '我想先补充研究要求') : confirmation.code === 'failed_pipeline_execution_retry_available' ? tr('Generate a fresh research plan', '重新生成研究计划') : confirmation.compactApproval ? tr('Change plan', '修改计划') : tr('Request changes', '提出修改')}</button>`)}
+          ${decisionActions || (confirmation.hideEdit || (confirmation.code === 'plan_scientific_changes_required' && !decisionCount && !icdSourceFinding) ? '' : `<button class="btn ${editPrimary ? 'primary ' : ''}sm" type="button" data-gpi-confirm-edit>${confirmation.editLabel ? esc(confirmation.editLabel) : icdSourceFinding && !decisionCount ? tr('Change cohort', '修改人群') : confirmation.code === 'plan_scientific_changes_required' ? tr('Answer this question', '回答这个问题') : confirmation.code === 'provider_ready_to_generate_plan' ? tr('Add research requirements', '我想先补充研究要求') : confirmation.code === 'failed_pipeline_execution_retry_available' ? tr('Generate a fresh research plan', '重新生成研究计划') : confirmation.compactApproval ? tr('Change plan', '修改计划') : tr('Request changes', '提出修改')}</button>`)}
           ${decisionActions && icdSourceFinding ? `<button class="btn sm" type="button" data-gpi-confirm-edit>${esc(tr('Change cohort', '修改人群'))}</button>` : ''}
           ${decisionActions && !icdSourceFinding && firstDecisionCopy && firstDecisionCopy.allowEdit ? `<button class="btn sm" type="button" data-gpi-confirm-edit>${esc(String(firstDecisionItem && firstDecisionItem.code || '') === 'ADJUSTMENT_SET_NOT_USER_CONFIRMED' ? tr('Request plan changes', '提出计划修改') : tr('Choose another approach', '选择其他方案'))}</button>` : ''}
-          ${confirmation.exposureArrangement ? confirmation.exposureArrangement.alternatives.map(option => `<button class="btn sm" type="button" data-gpi-exposure-arrangement="${esc(option.id)}">${esc(option.label)}</button>`).join('') : ''}
+          ${confirmation.exposureArrangement ? confirmation.exposureArrangement.alternatives.map(option => `<button class="btn sm" type="button" data-gpi-exposure-arrangement="${esc(option.id)}"${primaryDisabled}>${esc(option.label)}</button>`).join('') : ''}
           ${confirmation.rejectMessage && !confirmation.compactApproval ? `<button class="btn sm" type="button" data-gpi-confirm-reject>${esc(confirmation.reject)}</button>` : ''}
           ${readiness ? `<small role="status" data-gpi-run-readiness>${esc(readiness.reason)}</small>${readiness.connect ? `<button class="btn primary sm" type="button" data-gpi-config>${esc(tr('Check connection', '检查连接'))}</button>` : ''}` : ''}
-          ${showPrimaryAction ? `<button class="btn primary sm" type="button" data-gpi-confirm-action${primaryDisabled ? ' disabled' : ''}>${esc(primaryLabel)}</button>` : ''}
+          ${showPrimaryAction ? `<button class="btn primary sm" type="button" data-gpi-confirm-action${primaryDisabled}>${esc(primaryLabel)}</button>` : ''}
         </div>
       </section>`;
     }
