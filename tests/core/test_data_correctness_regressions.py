@@ -273,6 +273,129 @@ def test_second_nested_worker_exit_blocks_native_and_formal_gates(tmp_path, monk
         formal_run_receipt._database_section(tmp_path, "miiv", str(source.base_path), "128-159", 0, "")
 
 
+@pytest.mark.skipif(not hasattr(os, "fork"), reason="needs a forked worker to inject an exit")
+@pytest.mark.parametrize("worker_exit", [0, 9], ids=["clean", "exit-9"])
+def test_desktop_renal_automatically_uses_nested_batches(tmp_path, monkeypatch, worker_exit):
+    import easyicu
+    import psutil
+
+    from easyicu.runtime import memory_manager
+    from easyicu.webserver.hosted import deployment_kind
+    from tests.support.renal_export import write_renal_source
+    from tools import formal_run_receipt
+
+    monkeypatch.setenv("EASYICU_DEPLOYMENT", "desktop")
+    for key in (
+        "EASYICU_HOSTED", "EASYICU_ONESHOT_BUDGET_MB", "EASYICU_AUTO_CHUNK_SIZE",
+        "EASYICU_DISABLE_AUTO_CHUNK", "EASYICU_FORCE_INPROCESS_BATCH",
+        "EASYICU_FORCE_SUBPROCESS_BATCH",
+    ):
+        monkeypatch.delenv(key, raising=False)
+    assert deployment_kind() == "desktop"
+    total_ram = 16 * 1024**3
+    memory = psutil.virtual_memory()._replace(total=total_ram, available=total_ram)
+    monkeypatch.setattr(psutil, "virtual_memory", lambda: memory)
+    cohort_size = 200_859
+    concepts = extraction_api.EXTRACT_MODULES["renal"]
+    assert memory_manager.estimate_memory_mb(concepts, "eicu", cohort_size) > 0.6 * 16 * 1024
+
+    # Only materialize observations for synthetic stays at the two ends of
+    # the estimator's cohort. Both original batches have real source rows.
+    source = tmp_path / "source"
+    write_renal_source(source, "eicu", stays=24, hours=6, urine_rows_per_hour=1)
+    id_col = "patientunitstayid"
+    for path in source.glob("*.parquet"):
+        frame = pd.read_parquet(path)
+        if id_col in frame and not frame.empty:
+            ids = frame[id_col]
+            frame[id_col] = ids.where(ids <= 12, ids + cohort_size - 24)
+            frame.to_parquet(path, index=False)
+    patient_ids = {id_col: list(range(1, cohort_size + 1))}
+    load_kwargs = dict(
+        concepts=concepts, database="eicu", data_path=str(source),
+        patient_ids=patient_ids, merge=True, verbose=False, concept_workers=1,
+    )
+
+    original_worker = memory_manager._subprocess_load_worker
+    run_batch = memory_manager._run_batch_process
+    attempts = []
+
+    def worker(args):
+        if worker_exit and cohort_size in args["patient_ids"][id_col]:
+            raise SystemExit(worker_exit)
+        original_worker(args)
+
+    def observe_batch(args, attempt_dir, batch_num, mode):
+        ids = args["patient_ids"][id_col]
+        exitcode = run_batch(args, attempt_dir, batch_num, mode)
+        attempts.append((batch_num, ids[0], ids[-1], exitcode))
+        return exitcode
+
+    monkeypatch.setattr(memory_manager, "_subprocess_load_worker", worker)
+    monkeypatch.setattr(memory_manager, "_run_batch_process", observe_batch)
+    if not worker_exit:
+        actual = api.load_concepts(**load_kwargs)
+        assert len(attempts) == 2
+        first, second = attempts
+        assert first == (1, 1, second[1] - 1, 0)
+        assert second == (2, first[2] + 1, cohort_size, 0)
+        attempts.clear()
+        expected = api.load_concepts(**load_kwargs, batch_size=cohort_size)
+        assert attempts == []
+        assert {1, cohort_size} <= set(expected[id_col])
+        keys = [id_col, "charttime"]
+        pd.testing.assert_frame_equal(
+            actual.sort_values(keys).reset_index(drop=True),
+            expected.sort_values(keys).reset_index(drop=True),
+            check_exact=True,
+        )
+        return
+
+    load_concepts = easyicu.load_concepts
+    failures = []
+
+    def observe_failure(**kwargs):
+        try:
+            return load_concepts(**kwargs)
+        except ConceptExtractionUnavailable as exc:
+            failures.append(exc)
+            raise
+
+    monkeypatch.setattr(easyicu, "load_concepts", observe_failure)
+    output = tmp_path / "module"
+    output.mkdir()
+    extraction_api._run_module_extraction(
+        module_name="renal", concepts=concepts, database="eicu",
+        data_path=str(source), patient_ids_filter=patient_ids,
+        batch_size=None, output_dir=str(output),
+    )
+    assert [(batch_num, code) for batch_num, _, _, code in attempts] == [
+        (1, 0), (2, 9), (2, 0), (2, 9),
+    ]
+    failure, = failures
+    assert failure.stage == "subprocess_batch_load"
+    assert failure.detail == "batch 2: worker exited with code 9"
+
+    module = json.loads((output / "_manifest.json").read_text(encoding="utf-8"))
+    assert module["saved"] == {}
+    assert failure.detail in module["errors"][0]
+    assert not (output / "renal.parquet").exists()
+    native = tmp_path / "native"
+    native.mkdir()
+    with pytest.raises(ValueError, match="requires every requested module to finish"):
+        extraction_api._publish_native_export_v2(
+            database="eicu", data_path=str(source), output_dir=str(native),
+            modules=["renal"], max_patients=None, result={"modules": {"renal": module}},
+        )
+    assert not (native / "_manifest.json").exists()
+
+    summary_dir = tmp_path / "eicu"
+    summary_dir.mkdir()
+    (summary_dir / "summary.json").write_text(json.dumps({"errors": module["errors"]}), encoding="utf-8")
+    with pytest.raises(formal_run_receipt.ReceiptError, match="database_run_reported_errors"):
+        formal_run_receipt._database_section(tmp_path, "eicu", str(source), "128-159", 0, "")
+
+
 @pytest.mark.parametrize("reasons", [{}, {"fio2_set": "required_source_table_missing"}])
 @pytest.mark.parametrize("reverse", [False, True])
 def test_disagreeing_absence_receipts_clear_only_the_disputed_concept(reasons, reverse):
