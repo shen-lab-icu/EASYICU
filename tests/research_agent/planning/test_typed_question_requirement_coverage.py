@@ -370,6 +370,8 @@ def test_unit_and_clinical_definition_require_the_used_role_and_registry_version
     plan = _model_plan()
     plan.steps[0].model_requirements = [_model(exposure="kdigo_creat")]
     graded = key(Grading(contract_id=owner.contract_id, version=owner.version), bind("kdigo_creat"))
+    assert _evaluate(graded, plan, context=context)[0].state == "not_covered"
+    plan.steps[0].inputs[0] = "kdigo_creat"
     assert _evaluate(graded, plan, context=context)[0].state == "covered"
     assert _evaluate(
         key(graded.facet, bind("kdigo_creat", "outcome")), plan, context=context,

@@ -15,10 +15,16 @@ from easyicu.concept.metadata_sidecar import TimeCoordinate
 from ...canonical_json import canonical_sha256
 from ...contracts.association_execution import (
     LANDMARK_SPLINE_ASSOCIATION_CAPABILITY_ID,
+    association_execution_verdict,
     primary_binary_effect_measure,
 )
 from ...contracts.descriptive_execution import exposure_outcome_distribution_execution_verdict
-from ...contracts.model_terms import PreparationRefusal, preparation_base_method, preparation_for_step
+from ...contracts.model_terms import (
+    PreparationRefusal,
+    preparation_base_method,
+    preparation_for_step,
+    validate_model_term_roster,
+)
 from ...contracts.prediction_validation import external_validation_spec_for_step, external_validation_step_matches
 from ...contracts.product_files import RUN_DELIVERABLES
 from ...schema import AnalysisPlan, AnalysisStep, ResearchContext
@@ -58,7 +64,7 @@ from .contract import (
     Unit,
     Window,
 )
-from .registry import STUDY_POPULATION, registered_anchor, registered_concept_id
+from .registry import STUDY_POPULATION, contract_registry_sha256, registered_anchor, registered_concept_id
 
 _ANALYSIS_ROLES = {"primary", "secondary", "sensitivity"}
 _HOUR_UNITS = {"h", "hours"}
@@ -69,6 +75,7 @@ _TIME_UNITS = {"minutes": "min", "hours": "h", "days": "d"}
 class ProjectedFacts:
     authority: FactAuthority
     facts: tuple[HostFact, ...]
+    study_choices: tuple[HostFact, ...] = ()
 
 
 class _Projection:
@@ -86,6 +93,7 @@ class _Projection:
             plan_sha256=canonical_sha256(plan.model_dump(mode="json")),
             context_sha256=canonical_sha256(context.model_dump(mode="json")) if context else None,
             dictionary_version=dictionary.version,
+            registry_sha256=contract_registry_sha256(),
             coordinate_sha256=canonical_sha256(sorted({
                 (clock.column, clock.origin, clock.unit) for clock in time_coordinates
             })) if time_coordinates else None,
@@ -100,6 +108,7 @@ class _Projection:
             if semantics and semantics.time_origin and semantics.time_unit:
                 self.clocks[name].add((semantics.time_origin, semantics.time_unit))
         self.facts: list[HostFact] = []
+        self.study_choices: list[HostFact] = []
 
     def bind(
         self, coordinates: Sequence[tuple[str, Role]],
@@ -126,12 +135,14 @@ class _Projection:
     def add(
         self, source: str, bindings: tuple[Binding, ...], facet: Facet,
         time: Time = NotApplicable(),
+        *, study_choice: bool = False,
     ) -> None:
         if not bindings:
             return
         if isinstance(time, (Interval, Point)):
             bindings += (Binding(role="time_anchor", concept_id=time.anchor),)
-        self.facts.append(HostFact(
+        target = self.study_choices if study_choice else self.facts
+        target.append(HostFact(
             key=RequirementKey(bindings=bindings, time=time, facet=facet),
             provenance=Provenance(source_field=source, authority=self.authority),
         ))
@@ -269,13 +280,62 @@ class _Projection:
             ):
                 continue
             anchor = self.clock_anchor(spec.event_time_variable)
-            if anchor:
+            endpoint = self.context.endpoint
+            if anchor and (endpoint is None or anchor == registered_anchor(endpoint.time_origin, self.dictionary)):
                 self.add(
                     f"{source}.sensitivity_spec_ids/{spec.spec_id}",
                     self.bind(((self.context.target_outcome, "outcome"),)),
                     TimeZero(purpose="sensitivity_landmark"),
                     Point(anchor=anchor, unit="h", offset=spec.landmark_hours),
                 )
+
+    def study_landmarks(self) -> None:
+        context = self.context
+        if not context or not context.user_preferences or not context.target_outcome or not context.endpoint:
+            return
+        endpoint = context.endpoint
+        if endpoint.name != context.target_outcome:
+            return
+        for index, spec in enumerate(context.user_preferences.sensitivity_specs):
+            if spec.strategy != "landmark" or not spec.event_time_variable or spec.landmark_hours is None:
+                continue
+            anchor = self.clock_anchor(spec.event_time_variable)
+            if (
+                anchor and endpoint.time_column == spec.event_time_variable
+                and anchor == registered_anchor(endpoint.time_origin, self.dictionary)
+            ):
+                self.add(
+                    f"context.user_preferences.sensitivity_specs[{index}]",
+                    self.bind(((endpoint.name, "outcome"),)), TimeZero(purpose="sensitivity_landmark"),
+                    Point(anchor=anchor, unit="h", offset=spec.landmark_hours), study_choice=True,
+                )
+
+    def model_terms(self, step: AnalysisStep, source: str) -> None:
+        if not association_execution_verdict(step).claimed:
+            return
+        [model] = step.model_requirements
+        if model.analysis_role != step.planned_analysis_role or model.model_terms is None:
+            return
+        try:
+            validate_model_term_roster(
+                terms=model.model_terms, exposure=model.exposure_source, covariates=model.covariates,
+            )
+        except ValueError:
+            return
+        if not {model.outcome, *(term.name for term in model.model_terms)} <= set(step.inputs):
+            return
+        for position, term in enumerate(model.model_terms):
+            self.add(
+                f"{source}.model_requirements[0].model_terms[{position}]",
+                self.bind(((term.name, term.role), (model.outcome, "outcome"))),
+                Method(action_id="model_term", parameters=(
+                    Parameter(name="model_method", value=model.method_family),
+                    Parameter(name="coding", value=term.coding),
+                    Parameter(name="transform", value=term.transform),
+                    Parameter(name="levels", value=tuple(term.levels or ())),
+                    Parameter(name="reference_level", value=term.reference_level),
+                )),
+            )
 
     def endpoint_origin(self, step: AnalysisStep, source: str) -> None:
         family = step.family_primary_result_requirement
@@ -288,6 +348,7 @@ class _Projection:
             or family.event_column != endpoint.event_column
             or family.time_origin is None or family.time_origin != endpoint.time_origin
             or family.outcome != endpoint.name
+            or not {endpoint.time_column, endpoint.event_column} <= set(step.inputs)
         ):
             return
         anchor = registered_anchor(family.time_origin, self.dictionary)
@@ -321,22 +382,31 @@ class _Projection:
         if first:
             policy = "first_icu_stay_per_patient"
             source = "context.cohort.provenance.first_icu_stay_restriction"
-        elif primary is not None and "first_icu_stay_restriction" not in provenance:
-            index, step = primary
+            self.add(source, (STUDY_POPULATION,), RepeatStayPolicy(policy=policy), study_choice=True)
+        elif "first_icu_stay_restriction" not in provenance:
             try:
                 authority = context_dependence_authority(self.context)
             except DependenceAuthorityError:
                 return
+            if authority is None:
+                return
+            policy = "retain_each_stay_cluster_by_patient"
+            self.add(
+                "context.user_preferences.data_constraints.analysis_design", (STUDY_POPULATION,),
+                RepeatStayPolicy(policy=policy), study_choice=True,
+            )
+            if primary is None:
+                return
+            index, step = primary
             model = step.model_requirements
             runtime = step.runtime_dependence_contract
             execution_dependence = [item.dependence for item in model]
             if runtime is not None:
                 execution_dependence.append(runtime.dependence)
-            if authority is None or not execution_dependence or any(
+            if not execution_dependence or any(
                 item != authority for item in execution_dependence
             ):
                 return
-            policy = "retain_each_stay_cluster_by_patient"
             field = "model_requirements" if model else "runtime_dependence_contract.dependence"
             source = f"plan.steps[{index}].{field}"
         else:
@@ -398,22 +468,26 @@ def project_facts(
 ) -> ProjectedFacts:
     projection = _Projection(plan, context, dictionary, time_coordinates)
     projection.cohort()
+    projection.study_landmarks()
     all_roles: dict[str, set[Role]] = defaultdict(set)
-    primary = None
+    primary_steps = []
     for index, step in enumerate(plan.steps):
         source = f"plan.steps[{index}]"
         projection.grouping(step, source)
         if step.planned_analysis_role not in _ANALYSIS_ROLES:
             continue
         roles: dict[str, set[Role]] = defaultdict(set)
+        inputs = set(step.inputs)
         for column, role in _step_roles(step):
-            roles[column].add(role)
-            all_roles[column].add(role)
+            if column in inputs:
+                roles[column].add(role)
+                all_roles[column].add(role)
         projection.preparation(step, roles, source)
+        projection.model_terms(step, source)
         projection.landmarks(step, source)
         projection.external_validation(step, source)
         if step.planned_analysis_role == "primary":
-            primary = (index, step)
+            primary_steps.append((index, step))
             projection.endpoint_origin(step, source)
             measure = primary_binary_effect_measure(step)
             coordinates = tuple(
@@ -433,7 +507,10 @@ def project_facts(
                     )),
                 )
     projection.clinical(all_roles)
-    projection.repeat_stays(primary)
+    projection.repeat_stays(primary_steps[0] if len(primary_steps) == 1 else None)
     for output_id in RUN_DELIVERABLES:
         projection.add(f"run_delivery.{output_id}", (STUDY_POPULATION,), Delivery(output_id=output_id))
-    return ProjectedFacts(authority=projection.authority, facts=tuple(projection.facts))
+    return ProjectedFacts(
+        authority=projection.authority, facts=tuple(projection.facts),
+        study_choices=tuple(projection.study_choices),
+    )

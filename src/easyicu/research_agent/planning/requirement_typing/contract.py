@@ -29,6 +29,7 @@ FacetName = Literal[
     "time_zero", "window", "grading", "unit", "method", "cohort_predicate",
     "repeat_stay_reporting", "repeat_stay_policy", "delivery",
 ]
+PartOrigin = Literal["study_choice", "plan_contract", "model_proposal_host_validated"]
 
 
 class _Record(BaseModel):
@@ -230,6 +231,7 @@ class FactAuthority(_Record):
     context_sha256: Digest | None
     dictionary_version: Identifier
     coordinate_sha256: Digest | None = None
+    registry_sha256: Digest | None = None
 
 
 class Provenance(_Record):
@@ -267,6 +269,7 @@ class Unknown(_Record):
         "missing_typed_coordinates", "unregistered_coordinate",
         "dictionary_snapshot_mismatch", "conflicting_evidence", "source_span_unavailable",
         "plan_contract_unavailable",
+        "invalid_typing_proposal", "unresolved_alternatives", "unbound_source_coordinates",
     ] = "missing_typed_coordinates"
 
 
@@ -284,6 +287,8 @@ class AtomicPart(_Record):
     source_span: SourceSpan
     key: RequirementKey | None
     facet_hint: FacetName | None = None
+    origin: PartOrigin | None = None
+    alternatives: tuple[RequirementKey, ...] = ()
 
     @model_validator(mode="after")
     def _facet_agrees(self) -> AtomicPart:

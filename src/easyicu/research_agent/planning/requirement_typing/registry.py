@@ -6,6 +6,7 @@ from functools import lru_cache
 from hashlib import sha256
 from typing import TYPE_CHECKING
 
+from easyicu.clinical_contracts import load_clinical_contracts
 from easyicu.databases.time_origin import ICU_ADMISSION_ORIGIN, SIC_CARE_UNIT_ORIGIN
 from easyicu.resources import (
     SIC_CASE_OVERLAY_CONCEPTS,
@@ -16,9 +17,13 @@ from easyicu.resources import (
 )
 
 from ...canonical_json import canonical_sha256
-from .contract import Binding, DictionarySnapshot
+from ...contracts.prediction_validation import EXTERNAL_ACTION
+from ...contracts.product_files import RUN_DELIVERABLES, RUN_DELIVERY_SCHEMA_VERSION
+from .contract import Binding, DictionarySnapshot, Grading, Method, RequirementKey, Unit
 
 if TYPE_CHECKING:
+    from easyicu.concept.schema import ConceptDictionary
+
     from ...schema import ConceptDescriptor
 
 
@@ -26,11 +31,64 @@ STUDY_POPULATION = Binding(role="population", concept_id="study_population")
 _ANCHOR_ALIASES = {"icu_admit": ICU_ADMISSION_ORIGIN, "hospital_admit": "hospital_admission"}
 _SOURCE_ANCHORS = frozenset({ICU_ADMISSION_ORIGIN, "hospital_admission", SIC_CARE_UNIT_ORIGIN})
 _EVENT_ANCHORS = frozenset({"sep3", "vent_start", "vent_end", "rrt"})
+_METHOD_POLICIES = frozenset({
+    "binary_effect_measure", "descriptive.exposure_outcome_distribution", "model_term",
+    "multiple_imputation", EXTERNAL_ACTION,
+})
+
+
+@lru_cache(maxsize=4)
+def _dictionary(source_name: str | None) -> ConceptDictionary:
+    return load_dictionary(include_sofa2=True, source_name=source_name)
+
+
+@lru_cache(maxsize=1)
+def contract_registry_sha256() -> str:
+    return canonical_sha256({
+        "intake": "easyicu.requirement_intake/1",
+        "grading": sorted((item.contract_id, item.version, item.source_id, item.concepts)
+                          for item in load_clinical_contracts().values()),
+        "method_policies": sorted(_METHOD_POLICIES),
+        "delivery": (RUN_DELIVERY_SCHEMA_VERSION, sorted(RUN_DELIVERABLES)),
+    })
+
+
+def unregistered_fields(
+    key: RequirementKey, dictionary: DictionarySnapshot, *, units: frozenset[str],
+) -> tuple[str, ...]:
+    fields = []
+    for index, binding in enumerate(key.bindings):
+        ids = {
+            "time_anchor": dictionary.anchor_ids,
+            "population": dictionary.concept_ids if key.facet.kind == "cohort_predicate" else dictionary.population_ids,
+        }.get(binding.role, dictionary.concept_ids)
+        if binding.concept_id not in ids:
+            fields.append(f"bindings[{index}].concept_id")
+    facet = key.facet
+    if isinstance(facet, Method) and facet.action_id not in _METHOD_POLICIES:
+        fields.append("facet.action_id")
+    if isinstance(facet, Unit) and facet.code not in units:
+        fields.append("facet.code")
+    if isinstance(facet, Grading):
+        owner = load_clinical_contracts().get(facet.contract_id)
+        if owner is None or any(
+            binding.concept_id not in owner.concepts for binding in key.bindings if binding.role != "time_anchor"
+        ):
+            fields.append("facet.contract_id")
+        elif owner.version != facet.version:
+            fields.append("facet.version")
+    return tuple(fields)
+
+
+@lru_cache(maxsize=4)
+def registered_unit_codes(source_name: str | None) -> frozenset[str]:
+    dictionary = _dictionary(source_name)
+    return frozenset(unit for definition in dictionary.values() for unit in (definition.units or ()))
 
 
 @lru_cache(maxsize=4)
 def registered_dictionary(source_name: str | None = None) -> DictionarySnapshot:
-    dictionary = load_dictionary(include_sofa2=True, source_name=source_name)
+    dictionary = _dictionary(source_name)
     concepts = frozenset(dictionary.keys())
     anchors = _SOURCE_ANCHORS | (_EVENT_ANCHORS & concepts)
     files = {}
@@ -46,6 +104,7 @@ def registered_dictionary(source_name: str | None = None) -> DictionarySnapshot:
         version=canonical_sha256({
             "files": files, "concept_ids": sorted(concepts), "anchor_ids": sorted(anchors),
             "population_ids": [STUDY_POPULATION.concept_id],
+            "unit_codes": sorted(registered_unit_codes(source_name)),
         }),
         concept_ids=concepts,
         anchor_ids=anchors,

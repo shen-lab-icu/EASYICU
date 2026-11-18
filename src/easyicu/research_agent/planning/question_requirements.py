@@ -1096,6 +1096,7 @@ def judge_question_requirements(
     sealed: Sequence[str] = (),
     question: str | None = None,
     shadow_context: ResearchContext | None = None,
+    typing_proposals: object = (),
 ) -> tuple[JudgedRequirement, ...]:
     """Decide how the compiled plan answers each stated requirement.
 
@@ -1123,7 +1124,9 @@ def judge_question_requirements(
         judged = tuple(
             replace(entry, quote_span=matcher.find(entry.requirement.quote)) for entry in judged
         )
-    observe_requirements(judged, plan=plan, question=question, context=shadow_context)
+    observe_requirements(
+        judged, plan=plan, question=question, context=shadow_context, proposals=typing_proposals,
+    )
     return judged
 
 

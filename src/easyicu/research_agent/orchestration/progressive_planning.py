@@ -576,6 +576,7 @@ def question_requirement_outcome(
         host_facts=host_facts, sealed=sealed,
         question=context.research_question,
         shadow_context=context,
+        typing_proposals=getattr(facts, "question_requirement_typings", ()),
     )
     unstated = (
         ()

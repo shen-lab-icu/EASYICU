@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import logging
+from collections import Counter
 from types import SimpleNamespace
 
 import pytest
@@ -13,10 +14,15 @@ from easyicu.research_agent.planning.question_requirements import (
     question_requirement_host_facts,
 )
 from easyicu.research_agent.planning.requirement_typing.shadow import FLAG, LOGGER
+from easyicu.research_agent.planning.requirement_typing.contract import CohortPredicate, Method
 from easyicu.research_agent.planning.sensitivity_authority import PrespecifiedSensitivitySpec
 from easyicu.research_agent.schema import UserPreferences
 
 from .test_typed_question_requirement_coverage import _context, _model_plan
+from .test_typed_question_requirement_regressions import (
+    CLUSTER, KDIGO_48, MAX_POTASSIUM, REPORT_STAYS, STUDY_POPULATION, VASOPRESSOR16,
+    bind, interval, key,
+)
 
 BILINGUAL_CASES = (
     ("time_zero", "Clarify vasopressor initiation time zero at 16 hours", "明确升压药开始的时间零点为16小时"),
@@ -31,7 +37,7 @@ BILINGUAL_CASES = (
 )
 
 
-def _legacy(facet: str, quote: str):
+def _legacy(facet: str, quote: str, proposals=()):
     context = _context().model_copy(update={"research_question": quote})
     plan = _model_plan().model_copy(update={"research_question": quote})
     kwargs = {"kind": "analysis", "concepts": []}
@@ -57,6 +63,7 @@ def _legacy(facet: str, quote: str):
         relatives=lambda concept: frozenset({concept}),
         check_gap=lambda gap: pytest.fail("fixture declared no gap"),
         host_facts=host_facts, question=quote, shadow_context=context,
+        typing_proposals=proposals,
     )
 
 
@@ -74,6 +81,35 @@ def test_live_v1_credits_dialysis_landmark_to_vasopressor_clause(monkeypatch) ->
     assert clause["evidence"]["statement"] == {"landmark_hours": 16, "strategy": "landmark"}
 
 
+_SCRIPTED_KEYS = {
+    "time_zero": VASOPRESSOR16,
+    "window": MAX_POTASSIUM,
+    "grading": KDIGO_48,
+    "method": key(Method(action_id="prediction.external_validation"), STUDY_POPULATION),
+    "cohort_predicate": key(CohortPredicate(
+        operation="max", operator=">=", value=5.5, polarity="include", missing_policy="exclude",
+    ), bind("k", "population"), time=interval(0, 24)),
+    "repeat_stay_reporting": REPORT_STAYS,
+    "repeat_stay_policy": CLUSTER,
+}
+
+
+def proposal(part_id, quote, asked, *, facet=None, alternatives=(), start=0):
+    return {
+        "part_id": part_id, "source_span": {"start": start, "end": start + len(quote)},
+        "facet_hint": facet or (asked.facet.kind if asked else None),
+        "key": asked.model_dump(mode="json") if asked else None,
+        "alternatives": [choice.model_dump(mode="json") for choice in alternatives],
+    }
+
+
+def _shadow_event(caplog):
+    [event] = [entry.requirement_coverage_shadow for entry in caplog.records
+               if hasattr(entry, "requirement_coverage_shadow")
+               and entry.requirement_coverage_shadow["boundary"] == "question_requirements"]
+    return event
+
+
 @pytest.mark.parametrize(
     ("facet", "language", "quote"),
     [pytest.param(facet, language, quote, id=f"{facet}-{language}")
@@ -89,13 +125,35 @@ def test_bilingual_shadow_parts(facet, language, quote, monkeypatch, caplog) -> 
     monkeypatch.setenv(FLAG, "shadow")
     shadowed = judge()
     assert shadowed == prior
-    [event] = [entry.requirement_coverage_shadow for entry in caplog.records
-               if hasattr(entry, "requirement_coverage_shadow")]
+    event = _shadow_event(caplog)
     [row] = event["parts"]
     assert row["source_span"] is not None
     assert row["v2"] == ("covered" if facet == "delivery" else "unknown")
     assert (row["result"]["part"]["key"] is not None) == (facet == "delivery")
     assert quote not in str(event)
+
+
+def test_same_18_parts_with_scripted_intake(monkeypatch, caplog) -> None:
+    monkeypatch.setenv(FLAG, "shadow")
+    caplog.set_level(logging.DEBUG, logger=LOGGER.name)
+    counts = {facet: Counter() for facet, _, _ in BILINGUAL_CASES}
+    differences = Counter()
+    for facet, english, chinese in BILINGUAL_CASES:
+        for quote in (english, chinese):
+            caplog.clear()
+            proposals = [] if facet == "delivery" else [proposal("r1", quote, _SCRIPTED_KEYS.get(facet), facet=facet)]
+            _legacy(facet, quote, proposals)()
+            [row] = _shadow_event(caplog)["parts"]
+            counts[facet][row["v2"]] += 1
+            if row["v1"] == "covered" and row["v2"] != "covered":
+                assert facet in {"method", "time_zero"}
+                differences["prose_proven" if row["v1_reason"] == "plan_declared" else "true_false_pass"] += 1
+    assert sum(group["unknown"] for group in counts.values()) <= 4
+    assert counts["delivery"] == {"covered": 2}
+    assert counts["time_zero"] == {"unknown": 2}
+    assert differences == {"true_false_pass": 1, "prose_proven": 2}
+    print("same 18 v2 per facet", {facet: dict(count) for facet, count in counts.items()})
+    print("same 18 shadow differences", dict(differences))
 
 
 def test_legacy_plan_without_a_typed_contract_reports_unknown(monkeypatch, caplog) -> None:
