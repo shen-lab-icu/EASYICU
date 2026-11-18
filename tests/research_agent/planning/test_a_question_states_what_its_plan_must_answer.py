@@ -190,7 +190,7 @@ def _planned(context: ResearchContext, requirements: list[dict[str, Any]]):
     request = _request(context, cohort_mode=None)
     _llm, result = _run(
         context,
-        [json.dumps(_payload(request, requirements))],
+        [json.dumps(_payload(request, requirements))] * 3,
         required_primary_cohort_selection_mode=None,
     )
     return result
@@ -1682,3 +1682,19 @@ def test_m1_grouping_a_methods_list_into_one_clause_does_not_hide_a_missing_memb
     row = _clause_judgment([stated, item])[-1]
     assert row.disposition == "not_covered"
     assert [clause["quote"] for clause in row.clauses if clause["disposition"] == "not_covered"] == ["units"]
+
+
+def test_family_spec_reconsiders_an_unverifiable_non_benchmark_gap():
+    context = _context()
+    request = _request(context, cohort_mode=None)
+    gap = _UNCHECKABLE
+    covered = {**gap, "coverage": "plan", "gap": None}
+
+    llm, _ = _run(
+        context, [json.dumps(_payload(request, [_BENCHMARK, choice])) for choice in (gap, covered)],
+        required_primary_cohort_selection_mode=None,
+    )
+
+    assert len(llm.calls) == 2
+    feedback = llm.calls[1][0][-1].content
+    assert all(part in feedback for part in ("estimand_unsupported", "offered_families", "typed evidence"))

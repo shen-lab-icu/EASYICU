@@ -248,7 +248,7 @@ def test_pipeline_owner_loads_private_prefix_and_revalidates_same_outline(tmp_pa
     assert len(calls) == 3 and calls[1] == calls[2]
 
 
-def test_replay_rebuilds_the_one_shot_capability_gap_confirmation(tmp_path, monkeypatch):
+def test_replay_rebuilds_the_bounded_capability_gap_repair(tmp_path, monkeypatch):
     # Fake transports exercise retry semantics; real worker ownership is covered by SIGKILL.
     monkeypatch.setattr(owner, "_verify_pending_guard", lambda *_args: None)
     from easyicu.research_agent.agents.progressive_planner import ProgressivePlannerAgent
@@ -289,7 +289,7 @@ def test_replay_rebuilds_the_one_shot_capability_gap_confirmation(tmp_path, monk
                                    "source_path": source, "source_sha256": hashlib.sha256(source.read_bytes()).hexdigest(),
                                    "literature_sha256": "e" * 64})
     assert stopped.value.reason_code == "progressive_capability_gap"
-    assert len(calls) == 3 and calls[1] == calls[2]
+    assert len(calls) == 4 and calls[1] == calls[2]
 
 
 def test_web_scope_finds_original_metadata_only_literature_and_catalog(tmp_path, monkeypatch):

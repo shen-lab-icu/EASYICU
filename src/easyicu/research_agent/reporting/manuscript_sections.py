@@ -24,6 +24,7 @@ from .manuscript_baseline import baseline_naming_instruction, baseline_reporting
 from .manuscript_result_structure import required_result_subsections, result_section_instruction
 from .manuscript_surface import MANUSCRIPT_SECTION_LENGTH_TARGETS
 from .population_selection import analyzed_population, writer_population_block
+from ..bounded_repair import BoundedRepair, RepairFeedback
 from ..schema import AnalysisPlan
 
 
@@ -47,14 +48,18 @@ class ManuscriptSectionSpec:
 
 
 class ManuscriptSectionContractError(RuntimeError):
-    """A writer section remained structurally incomplete after one retry."""
+    """A Writer section is missing required prose."""
 
-    def __init__(self, *, section_name: str, missing_subsections: tuple[str, ...]):
+    def __init__(
+        self, *, section_name: str, missing_subsections: tuple[str, ...],
+        repair_receipt: Mapping[str, Any] | None = None,
+    ):
         self.section_name = section_name
         self.missing_subsections = missing_subsections
+        self.repair_receipt = repair_receipt
         super().__init__(
             f"Writer section {section_name!r} has missing or empty required "
-            f"subsections after one targeted retry: {', '.join(missing_subsections)}"
+            f"subsections: {', '.join(missing_subsections)}"
         )
 
 
@@ -426,7 +431,7 @@ MANUSCRIPT_SECTION_SPECS = (
 )
 
 
-MANUSCRIPT_WRITER_CONTRACT_VERSION = "38"
+MANUSCRIPT_WRITER_CONTRACT_VERSION = "39"
 
 
 def manuscript_section_specs(analysis_plan: AnalysisPlan | None = None):
@@ -724,7 +729,7 @@ def _leading_with_analyzed_population(
     return call
 
 
-def _existing_scientific_sections(manuscript: str) -> dict[str, str]:
+def _existing_scientific_sections(manuscript: str, *, accept_aliases: bool = False) -> dict[str, str]:
     """Project an existing scaffold back onto the eight Writer owners."""
 
     text = str(manuscript or "")
@@ -739,6 +744,8 @@ def _existing_scientific_sections(manuscript: str) -> dict[str, str]:
         for spec in MANUSCRIPT_SECTION_SPECS
         if spec.key != "title"
     }
+    if accept_aliases:
+        key_by_name.update(_WRITER_SECTION_ALIASES)
     for index, match in enumerate(matches):
         key = key_by_name.get(match.group(1).strip().casefold())
         if key is None:
@@ -884,6 +891,58 @@ def manuscript_binding_tokens(text: str) -> list[str]:
     return _BINDING_TOKEN_RE.findall(text)
 
 
+_WRITER_SECTION_ALIASES = {
+    "摘要": "abstract",
+    "background": "introduction",
+    "背景": "introduction",
+    "引言": "introduction",
+    "method": "methods",
+    "materials and methods": "methods",
+    "methods and analysis": "methods",
+    "方法": "methods",
+    "findings": "results",
+    "结果": "results",
+    "研究结果": "results",
+    "讨论": "discussion",
+    "strengths and limitations": "limitations",
+    "局限性": "limitations",
+    "conclusions": "conclusion",
+    "结论": "conclusion",
+}
+
+
+def manuscript_section_key(section_name: str) -> str:
+    """Locate contract feedback on the same section key the Writer receives."""
+    name = section_name.strip().casefold()
+    return next(
+        (spec.key for spec in MANUSCRIPT_SECTION_SPECS if spec.section_name.casefold() == name),
+        _WRITER_SECTION_ALIASES.get(name, name),
+    )
+
+
+def manuscript_repair_feedback(
+    errors: Mapping[str, Sequence[str]],
+) -> tuple[RepairFeedback, ...]:
+    return tuple(
+        RepairFeedback(code, section)
+        for section, rows in errors.items()
+        for row in rows
+        for code in re.findall(r"\b(?:MANUSCRIPT_[A-Z0-9_]+|OWNER_CLAIM_TARGET_ABSENT)\b", row)
+        or ["MANUSCRIPT_EDITORIAL_FINDING"]
+    )
+
+
+def manuscript_repair_regressions(
+    before: Sequence[RepairFeedback], after: Sequence[RepairFeedback],
+) -> tuple[RepairFeedback, ...]:
+    previous = Counter((item.code, item.path) for item in before)
+    candidate = Counter((item.code, item.path) for item in after)
+    return tuple(
+        RepairFeedback("MANUSCRIPT_REPAIR_REGRESSION", section, {"finding": code, "count": count})
+        for (code, section), count in (candidate - previous).items()
+    )
+
+
 def _masked_section_values(text: str, *, prefix: str = "manuscript") -> tuple[str, dict[str, str]]:
     """Keep prior numeric literals local while a Writer revises their prose.
 
@@ -915,6 +974,24 @@ def _masked_section_values(text: str, *, prefix: str = "manuscript") -> tuple[st
     return "".join(output), values
 
 
+def report_only_authority_changes(before: str, after: str) -> tuple[str, ...]:
+    """Locate changed literals or lost bindings in a report-only revision.
+
+    The migration has no numeric binder for newly written literals. New facts
+    can enter through registered claim tokens expanded by the host.
+    """
+    original, candidate = _existing_scientific_sections(before), _existing_scientific_sections(after)
+    changed = []
+    for key in sorted(original.keys() | candidate.keys()):
+        previous, revised = original.get(key, ""), candidate.get(key, "")
+        old_values = Counter(_masked_section_values(previous)[1].values())
+        new_values = Counter(_masked_section_values(revised)[1].values())
+        missing_bindings = Counter(manuscript_binding_tokens(previous)) - Counter(manuscript_binding_tokens(revised))
+        if old_values != new_values or missing_bindings:
+            changed.append(key)
+    return tuple(changed)
+
+
 def repair_named_manuscript_sections(
     manuscript: str,
     *,
@@ -931,7 +1008,7 @@ def repair_named_manuscript_sections(
     """
 
     call_section = _leading_with_analyzed_population(call_section, common)
-    sections = _existing_scientific_sections(manuscript)
+    sections = _existing_scientific_sections(manuscript, accept_aliases=True)
     specs = {spec.key: spec for spec in manuscript_section_specs(common.get("analysis_plan"))}
     unknown = sorted(set(section_errors) - set(specs))
     if unknown:
@@ -983,6 +1060,9 @@ def repair_named_manuscript_sections(
                 **common,
             ),
         )
+        # A section response may contain additional level-two headings.
+        # Only its requested section can participate in the repair checks.
+        repaired = _existing_scientific_sections(repaired).get(spec.key, repaired)
         for marker, literal in preserved_values.items():
             repaired = repaired.replace(marker, literal)
         if _PRESERVED_VALUE.search(repaired):
@@ -1039,12 +1119,55 @@ def repair_named_manuscript_sections(
     return candidate, tuple(repaired_keys)
 
 
+def _repair_section_structure(
+    spec: ManuscriptSectionSpec, section: str, *, call_section: Callable[..., str],
+    common: Mapping[str, Any], receipts: list[Mapping[str, Any]] | None,
+) -> str:
+    missing = _missing_required_subsections(spec, section)
+    if not missing:
+        return section
+    repair = BoundedRepair()
+    if receipts is not None:
+        receipts.append(repair.receipt)
+    code = "MANUSCRIPT_SUBSECTION_MISSING_OR_EMPTY"
+    while missing and repair.available:
+        feedback = RepairFeedback(code, spec.key, {"missing_subsections": list(missing)})
+        repair.begin((feedback,))
+        headings = ", ".join("the main section body" if name == "section body" else f"`### {name}`"
+                             for name in missing)
+        instruction = (
+            spec.instruction + "\n\nSTRUCTURAL CONTRACT REPAIR:\n"
+            + f"{feedback.code}: The previous draft omitted or left these subsections empty: {headings}. "
+            "Regenerate the complete section with evidence-bound manuscript prose in every required subsection. "
+            "Write the manuscript section without process notes."
+        )
+        try:
+            section = _ensure_section_heading(spec, call_section(
+                section_name=spec.section_name, instruction=instruction,
+                max_tokens=min(8192, 2 * spec.max_tokens), **common,
+            ))
+        except BaseException as exc:
+            repair.finish("rejected", findings=(RepairFeedback(
+                "MANUSCRIPT_SECTION_REPAIR_INTERRUPTED", spec.key, {"error_type": type(exc).__name__},
+            ),))
+            raise
+        missing = _missing_required_subsections(spec, section)
+        next_findings = (RepairFeedback(code, spec.key, {"missing_subsections": list(missing)}),) if missing else ()
+        repair.finish("rejected" if missing else "resolved", findings=next_findings)
+    if missing:
+        raise ManuscriptSectionContractError(
+            section_name=spec.section_name, missing_subsections=missing, repair_receipt=repair.receipt,
+        )
+    return section
+
+
 def render_manuscript_sections(
     *,
     call_section: Callable[..., str],
     common: Mapping[str, Any],
     administrative_authority: ManuscriptAdministrativeAuthority | None = None,
     checkpoint: Callable[[str], None] | None = None,
+    repair_receipts: list[Mapping[str, Any]] | None = None,
 ) -> str:
     """Dispatch scientific sections and append host-owned administrative facts.
 
@@ -1073,41 +1196,9 @@ def render_manuscript_sections(
                 **common,
             ),
         )
-        missing_subsections = _missing_required_subsections(spec, section)
-        if missing_subsections:
-            retry_instruction = (
-                spec.instruction
-                + "\n\nSTRUCTURAL CONTRACT REPAIR:\n"
-                + "The previous draft omitted or left empty these required "
-                + "subsections: "
-                + ", ".join(
-                    (
-                        "the main section body"
-                        if subsection == "section body"
-                        else f"`### {subsection}`"
-                    )
-                    for subsection in missing_subsections
-                )
-                + ". Regenerate the complete section. Every listed subsection "
-                + "must contain evidence-bound manuscript prose. Do not mention "
-                + "the repair or the previous draft."
-            )
-            section = _ensure_section_heading(
-                spec,
-                call_section(
-                    section_name=spec.section_name,
-                    instruction=retry_instruction,
-                    max_tokens=min(8192, 2 * spec.max_tokens),
-                    **common,
-                ),
-            )
-            missing_subsections = _missing_required_subsections(spec, section)
-        if missing_subsections:
-            raise ManuscriptSectionContractError(
-                section_name=spec.section_name,
-                missing_subsections=missing_subsections,
-            )
-        sections[spec.key] = section
+        sections[spec.key] = _repair_section_structure(
+            spec, section, call_section=call_section, common=common, receipts=repair_receipts,
+        )
         if checkpoint:
             checkpoint(_assemble_scientific_sections(sections))
 

@@ -5,23 +5,28 @@ from __future__ import annotations
 import json
 from typing import Any, Callable, Mapping, Sequence
 
+from ..bounded_repair import BoundedRepair, DEFAULT_REPAIR_ATTEMPTS, RepairFeedback
 from ..canonical_json import canonical_sha256, extract_json_payload
+from ..planning.progressive_artifacts import ProgressivePlannerCheckpointEmitter
 from ..planning.progressive_compiler import (
     required_binary_display_label_scopes,
     required_reader_display_label_keys,
     validate_progressive_foundation,
 )
+from ..planning.prompt_projection import PlannerPromptBlock
 from ..planning.progressive_contract import (
     ProgressiveFoundationMaterialization,
     ProgressivePlanCompileError,
     ProgressivePlanFoundation,
     ProgressivePlanOutline,
+    ProgressivePlannerCheckpoint,
     ProgressiveStepMaterialization,
 )
 from ..providers.capabilities import llm_supports_strict_json_schema
 from ..providers.protocol import LLMMessage, StructuredOutputRequest
 from ..providers.structured_retry import (
     StructuredResponseFailure,
+    automatic_retry_limit,
     automatic_retry_scope,
     call_llm_with_structured_retry,
 )
@@ -177,8 +182,16 @@ def repair_foundation_display_labels(
         return candidate
 
     last_failure: Exception = finding
-    messages = [LLMMessage(role="user", content=prompt)]
-    for _ in range(remaining_revisions):
+    repair = BoundedRepair(max(0, min(remaining_revisions, DEFAULT_REPAIR_ATTEMPTS)))
+    if repair.available:
+        prompt_metrics.setdefault("foundation_label_repair_attempts", []).append(repair.receipt)
+    required = RepairFeedback(finding.reason_code, "display_labels", {"keys": list(keys)})
+    feedback = (required,)
+    while repair.available:
+        repair.begin(feedback)
+        messages = [LLMMessage(
+            role="user", content=prompt + "\n" + json.dumps([item.as_dict() for item in feedback]),
+        )]
         prompt_metrics["compile_revision_count"] = prompt_metrics.get("compile_revision_count", 0) + 1
         if resumed:
             prompt_metrics["current_run_compile_revision_count"] = (
@@ -197,8 +210,20 @@ def repair_foundation_display_labels(
                 )
         except StructuredResponseFailure as exc:
             last_failure = exc
-            messages = [LLMMessage(role="user", content=prompt + "\nValidator: " + str(exc.__cause__))]
+            cause = exc.__cause__
+            refusal = RepairFeedback(
+                getattr(cause, "reason_code", "progressive_foundation_label_invalid_response"),
+                "display_labels", {"message": str(cause)},
+            )
+            repair.finish("rejected", findings=(refusal,))
+            feedback = (required, refusal)
             continue
+        except BaseException as exc:
+            repair.finish("rejected", findings=(RepairFeedback(
+                getattr(exc, "reason_code", "progressive_foundation_label_interrupted"), "display_labels",
+            ),))
+            raise
+        repair.finish("resolved")
         amended = materialization.model_copy(update={"foundation": repaired})
         prompt_metrics.setdefault("foundation_label_repairs", []).append({
             "reason_code": finding.reason_code,
@@ -214,7 +239,7 @@ def repair_foundation_display_labels(
         return amended
     # Exhaustion does not replace the validator's typed refusal or coordinates.
     # The spent-revision count tells a reader the label owner was reached.
-    spent = {"foundation_label_repair_revisions": remaining_revisions}
+    spent = {"foundation_label_repair_revisions": len(repair.receipt["attempts"])}
     finding.details.setdefault("metrics", {}).update(spent)
     finding.easyicu_safe_diagnostic.setdefault("metrics", {}).update(spent)
     if last_failure is finding:
@@ -283,27 +308,142 @@ def binding_repair_response_failure(
     )
 
 
-def spend_host_candidate_repair(
-    error: ProgressivePlanCompileError,
-    *,
-    candidate: ProgressiveStepMaterialization,
-    prompt_metrics: dict[str, Any],
-    revision_base: int,
-    revision_limit: int,
-    resumed: bool,
-    non_repairable: frozenset[str] | set[str],
-) -> dict[str, Any] | None:
-    """Admit a rejected template candidate to the current-step repair lane.
+class StepCompileRepair:
+    """Record current-step repair against the unchanged compiler and prefix."""
 
-    Returns the compiler observation for the Planner's repair call and spends
-    one revision, or ``None`` when the finding needs the outline or the shared
-    current-step budget is spent (the caller then re-raises the finding).
-    """
-    if error.reason_code in non_repairable or error.details.get("repair_scope") == "outline_required":
-        return None
-    if prompt_metrics["compile_revision_count"] - revision_base >= revision_limit:
-        return None
-    prompt_metrics["compile_revision_count"] += 1
-    if resumed:
-        prompt_metrics["current_run_compile_revision_count"] += 1
-    return {**error.details, "previous_materialization": candidate.model_dump(mode="json")}
+    def __init__(
+        self, prompt_metrics: dict[str, Any], *, revision_limit: int, resumed: bool,
+    ) -> None:
+        self.metrics = prompt_metrics
+        self.base = prompt_metrics["compile_revision_count"]
+        self.loop = BoundedRepair(min(revision_limit, DEFAULT_REPAIR_ATTEMPTS))
+        self.resumed = resumed
+
+    def reject(
+        self, error: ProgressivePlanCompileError, candidate: ProgressiveStepMaterialization,
+    ) -> dict[str, Any] | None:
+        feedback = RepairFeedback(error.reason_code, error.path or "step", {
+            "step_id": error.step_id, "step_index": error.step_index,
+        })
+        self.finish("rejected", findings=(feedback,))
+        # An outline-owned choice cannot be edited by a step repair.
+        if _outline_repair_required(error):
+            error.details["next_action"] = {
+                "kind": "request_user",
+                "message": "Ask the researcher to review the available modules or authorize a different outline.",
+            }
+            return None
+        if foundation_label_repair_keys(error):
+            return None
+        if not self.loop.available or self.metrics["compile_revision_count"] - self.base >= self.loop.receipt["max_attempts"]:
+            return None
+        if not self.loop.receipt["attempts"]:
+            self.metrics.setdefault("step_compile_repairs", []).append(self.loop.receipt)
+        self.loop.begin((feedback,), step_id=candidate.step.step_id)
+        self.metrics["compile_revision_count"] += 1
+        if self.resumed:
+            self.metrics["current_run_compile_revision_count"] += 1
+        return {**error.details, "previous_materialization": candidate.model_dump(mode="json")}
+
+    def finish(self, status, *, findings=()) -> None:
+        if self.loop.active:
+            self.loop.finish(status, findings=findings)
+
+
+def _outline_repair_required(error: ProgressivePlanCompileError) -> bool:
+    return (
+        (error.reason_code == "progressive_analysis_module_unavailable"
+         and error.details.get("repair_scope") == "outline_required")
+        or error.reason_code == "progressive_step_required_method_layer_roster_unavailable"
+    )
+
+
+class OutlineReplan:
+    """Replace a rejected pre-approval outline in an append-only checkpoint chain."""
+
+    def __init__(
+        self, *, enabled: bool, checkpoint_callback: Callable[[ProgressivePlannerCheckpoint], None] | None,
+    ) -> None:
+        self.loop = BoundedRepair(automatic_retry_limit(DEFAULT_REPAIR_ATTEMPTS) if enabled else 0)
+        self.checkpoint_callback = checkpoint_callback
+        self.latest: ProgressivePlannerCheckpoint | None = None
+        self.parent: ProgressivePlannerCheckpoint | None = None
+        self.feedback: RepairFeedback | None = None
+
+    def _publish(self, checkpoint: ProgressivePlannerCheckpoint) -> None:
+        if self.checkpoint_callback is not None:
+            self.checkpoint_callback(checkpoint)
+        self.latest = checkpoint
+
+    def emitter(
+        self, *, request_authority_sha256: str, source: ProgressivePlannerCheckpoint | None,
+    ) -> ProgressivePlannerCheckpointEmitter:
+        if self.parent is not None and self.parent.request_authority_sha256 != request_authority_sha256:
+            raise ProgressivePlanCompileError(
+                "progressive_outline_repair_authority_changed",
+                "the repair request changed the sealed study authority",
+                path="planner_request",
+            )
+        previous = self.parent or source
+        return ProgressivePlannerCheckpointEmitter(
+            callback=self._publish if self.checkpoint_callback is not None else None,
+            request_authority_sha256=previous.request_authority_sha256 if previous else request_authority_sha256,
+            source_checkpoint=previous, restart_outline=self.parent is not None,
+        )
+
+    def prompt(
+        self, messages: Sequence[LLMMessage], blocks: list[PlannerPromptBlock],
+    ) -> Sequence[LLMMessage]:
+        if self.feedback is None:
+            return messages
+        notice = (
+            "The previous outline was rejected by the host compiler. Re-plan the original "
+            "question using the available modules and sealed study metadata. Preserve every "
+            "stated cohort, outcome, estimand and comparison requirement. "
+            "Use a capability gap if the required analysis cannot be expressed.\n"
+            + json.dumps(self.feedback.as_dict(), ensure_ascii=False)
+        )
+        blocks.append(PlannerPromptBlock("response_shape", notice))
+        return [messages[0], LLMMessage(role="user", content=messages[1].content + "\n\n" + notice)]
+
+    def project_metrics(self, metrics: dict[str, Any]) -> None:
+        if self.feedback is not None:
+            metrics["outline_repair"] = self.loop.receipt
+            metrics["full_revision_count"] = len(self.loop.receipt["attempts"])
+
+    def run(self, propose: Callable[[], Any]) -> Any:
+        while True:
+            try:
+                candidate = propose()
+            except ProgressivePlanCompileError as error:
+                next_feedback = RepairFeedback(error.reason_code, error.path or "outline", {
+                    "step_id": error.step_id,
+                    "findings": error.details.get("findings", []),
+                    "available_modules": error.details.get("available_modules", []),
+                    "repair_scope": "outline_required" if _outline_repair_required(error) else "stop",
+                })
+                if self.loop.active:
+                    self.loop.finish("rejected", findings=(next_feedback,))
+                if not _outline_repair_required(error):
+                    raise
+                if not self.loop.available:
+                    error.details.setdefault("next_action", {
+                        "kind": "request_user",
+                        "message": "Ask the researcher to review the available modules or authorize a different outline.",
+                    })
+                    raise
+                self.feedback = next_feedback
+                self.parent = self.latest
+                self.loop.begin((next_feedback,), previous_checkpoint_sha256=(
+                    self.parent.checkpoint_sha256 if self.parent else None
+                ))
+            except BaseException as error:
+                if self.loop.active:
+                    self.loop.finish("rejected", findings=(RepairFeedback(
+                        getattr(error, "reason_code", "progressive_outline_repair_interrupted"), "outline",
+                    ),))
+                raise
+            else:
+                if self.loop.active:
+                    self.loop.finish("resolved")
+                return candidate

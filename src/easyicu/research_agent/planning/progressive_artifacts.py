@@ -261,6 +261,26 @@ def _validate_revised_checkpoint_transition(
     previous: ProgressivePlannerCheckpoint, current: ProgressivePlannerCheckpoint,
 ) -> None:
     """A suffix revision appends evidence while preserving its retained prefix."""
+    if previous.outline_repair_sequence != current.outline_repair_sequence:
+        repairs = current.prompt_metrics.get("outline_repair", {}).get("attempts", [])
+        repair = repairs[-1] if repairs else {}
+        if (
+            current.stage == "outline" and current.outline_repair_sequence == current.sequence
+            and current.sequence == previous.sequence + 1
+            and current.previous_checkpoint_sha256 == previous.checkpoint_sha256
+            and current.request_authority_sha256 == previous.request_authority_sha256
+            and repair.get("previous_checkpoint_sha256") == previous.checkpoint_sha256
+            and (repair.get("feedback") or [{}])[0].get("facts", {}).get("repair_scope") == "outline_required"
+        ):
+            return
+        raise ProgressivePlanningArtifactError(
+            "progressive_checkpoint_outline_repair_drift",
+            "outline replacement requires its same-authority parent and compiler finding",
+        )
+    if previous.outline != current.outline:
+        raise ProgressivePlanningArtifactError(
+            "progressive_checkpoint_outline_drift", "outline changed outside an outline repair",
+        )
     foundation_valid = _foundation_label_transition_valid(previous, current)
     if not foundation_valid:
         raise ProgressivePlanningArtifactError(
@@ -317,7 +337,9 @@ class ProgressivePlannerCheckpointEmitter:
     callback: Callable[[ProgressivePlannerCheckpoint], None] | None
     request_authority_sha256: str
     source_checkpoint: ProgressivePlannerCheckpoint | None = None
+    restart_outline: bool = False
     _sequence: int = field(init=False)
+    _outline_repair_sequence: int | None = field(init=False)
     _previous_checkpoint_sha256: str | None = field(init=False)
     _previous_checkpoint: ProgressivePlannerCheckpoint | None = field(init=False)
 
@@ -327,6 +349,10 @@ class ProgressivePlannerCheckpointEmitter:
             int(self.source_checkpoint.sequence) + 1
             if self.source_checkpoint is not None
             else 0
+        )
+        self._outline_repair_sequence = (
+            self._sequence if self.restart_outline else
+            self.source_checkpoint.outline_repair_sequence if self.source_checkpoint is not None else None
         )
         self._previous_checkpoint_sha256 = (
             self.source_checkpoint.checkpoint_sha256
@@ -364,7 +390,10 @@ class ProgressivePlannerCheckpointEmitter:
                 json.dumps(prompt_metrics, ensure_ascii=False)
             ),
         }
-        offset = self._sequence - len(materializations) - 1
+        origin = self._outline_repair_sequence or 0
+        if origin:
+            body.update(schema_version="easyicu.progressive_planner_checkpoint/3", outline_repair_sequence=origin)
+        offset = self._sequence - origin - len(materializations) - 1
         if stage == "step" and offset > 0:
             repairs = prompt_metrics.get("final_acceptance_repairs") or []
             if not repairs:
@@ -372,7 +401,9 @@ class ProgressivePlannerCheckpointEmitter:
                     "progressive_checkpoint_revision_missing", "suffix rewind lacks a final gate finding",
                 )
             body.update(
-                schema_version="easyicu.progressive_planner_checkpoint/2",
+                schema_version=(
+                    "easyicu.progressive_planner_checkpoint/3" if origin else "easyicu.progressive_planner_checkpoint/2"
+                ),
                 revision_offset=offset,
                 repair_start_index=repairs[-1]["retained_step_count"],
             )
@@ -443,6 +474,19 @@ class ProgressivePlannerCheckpointRecorder:
         terminal = self.source_chain[-1]
         if not self._persisted:
             source = () if self._validated_outline_persisted else self.source_chain
+            if self._pending and self._pending[0].sequence == 0:
+                replacement = self._pending[0]
+                if (
+                    self._validated_outline_persisted or terminal.stage != "outline"
+                    or terminal.outline.capability_gap is None
+                    or replacement.prompt_metrics.get("superseded_gap_checkpoint_sha256") != terminal.checkpoint_sha256
+                    or replacement.request_authority_sha256 != terminal.request_authority_sha256
+                ):
+                    raise ProgressivePlanningArtifactError(
+                        "progressive_resume_gap_replacement_invalid",
+                        "only an authority-validated stopped outline can be replaced",
+                    )
+                source = ()
             for checkpoint in (*source, *self._pending):
                 persist_progressive_planner_checkpoint(
                     run_dir=self.run_dir,

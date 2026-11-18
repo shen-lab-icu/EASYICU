@@ -16,6 +16,7 @@ from easyicu.research_agent.planning.progressive_contract import (
 )
 from easyicu.research_agent.planning.progressive_module_ids import progressive_module_ids_for_analysis_types
 from easyicu.research_agent.providers.mocks import ScriptedMockLLMClient
+from easyicu.research_agent.providers.structured_retry import StructuredResponseFailure
 from easyicu.research_agent.schema import ConceptDescriptor
 from tests.support.descriptive_plans import descriptive_answer, descriptive_context, descriptive_skeleton
 from .progressive_planner_fixtures import (
@@ -208,9 +209,134 @@ def test_an_unavailable_locked_module_stops_without_spending_step_retries(monkey
     client = ScriptedMockLLMClient([
         json.dumps(item) for item in [outline.model_dump(mode="json"), foundation, *responses]
     ])
+    from easyicu.research_agent.providers.structured_retry import automatic_retry_scope
+
     agent = ProgressivePlannerAgent(client)
-    with pytest.raises(ProgressivePlanCompileError) as caught:
+    with automatic_retry_scope(disabled=True), pytest.raises(ProgressivePlanCompileError) as caught:
         agent.run(context)
     assert caught.value.reason_code == "progressive_analysis_module_unavailable"
     assert len(client.calls) == 4
     assert progressive_planner_failure_facts(caught.value).prompt_metrics["compile_revision_count"] == 0
+
+
+def test_a_candidate_with_the_wrong_outline_digest_gets_typed_step_repair(monkeypatch):
+    from easyicu.research_agent.agents import progressive_planner as owner
+
+    validate = owner.validate_progressive_materialization_coordinate
+    failures = []
+
+    def reject_once(candidate, **kwargs):
+        if not failures:
+            failures.append(candidate)
+            candidate = candidate.model_copy(update={"outline_step_sha256": "f" * 64})
+        return validate(candidate, **kwargs)
+
+    monkeypatch.setattr(owner, "validate_progressive_materialization_coordinate", reject_once)
+    context = _context().model_copy(update={
+        "research_question": "Is the admission flag associated with the later recorded outcome?",
+    })
+    steps = _materialization_payloads()
+    client = ScriptedMockLLMClient([
+        json.dumps(item) for item in (_outline_payload(), _foundation_payload(), steps[0], *steps)
+    ])
+    agent = ProgressivePlannerAgent(client)
+    result = agent.run_attempt(context)
+
+    assert len(client.calls) == len(steps) + 3
+    assert "progressive_step_outline_digest_mismatch" in client.calls[3][0][-1].content
+    assert result.facts.materializations[0] == failures[0]
+
+
+def test_outline_owned_module_refusal_replans_before_any_plan_approval(monkeypatch, tmp_path):
+    from easyicu.research_agent.agents import progressive_planner as owner
+    from easyicu.research_agent.planning.progressive_artifacts import (
+        load_progressive_planner_checkpoint_chain, persist_progressive_planner_checkpoint,
+    )
+    from tests.support.progressive_retry import _RecordingEvidence
+    import hashlib
+
+    context = _context().model_copy(update={"research_question": "Do ward admission signs predict the recorded event?"})
+    steps = _materialization_payloads()
+    outline = _outline_payload()
+    compile_prefix = owner.compile_progressive_prefix
+    refused = []
+
+    def compile_once(state, materialization, **kwargs):
+        if not refused:
+            error = ProgressivePlanCompileError(
+                "progressive_analysis_module_unavailable",
+                "This synthetic module requires an outline choice.",
+                path="module_id", findings=[{"available_modules": ["cohort_definition"]}],
+            )
+            error.details["repair_scope"] = "outline_required"
+            refused.append(error)
+            raise error
+        return compile_prefix(state, materialization, **kwargs)
+
+    monkeypatch.setattr(owner, "compile_progressive_prefix", compile_once)
+    revised = {**outline, "rationale": "Use the supported study representation for the original question."}
+    responses = [outline, _foundation_payload(), steps[0], revised, _foundation_payload(), *steps]
+    client = ScriptedMockLLMClient([json.dumps(item) for item in responses])
+    evidence, paths = _RecordingEvidence(), []
+
+    def checkpoint(item):
+        paths.append(persist_progressive_planner_checkpoint(
+            run_dir=tmp_path, evidence=evidence, checkpoint=item, prompt_pack_version="test",
+        ))
+
+    result = ProgressivePlannerAgent(client).run_attempt(context, checkpoint_callback=checkpoint)
+
+    assert result.output.steps
+    assert "progressive_analysis_module_unavailable" in client.calls[3][0][-1].content
+    assert result.facts.prompt_metrics["outline_repair"]["attempts"][0]["status"] == "resolved"
+    chain = load_progressive_planner_checkpoint_chain(
+        last_checkpoint_path=paths[-1], expected_artifact_sha256=hashlib.sha256(paths[-1].read_bytes()).hexdigest(),
+    )
+    assert chain[0].outline.rationale != chain[-1].outline.rationale
+    assert [checkpoint.sequence for checkpoint in chain] == list(range(len(chain)))
+
+
+@pytest.mark.parametrize("replacement", ["gap", "malformed"])
+def test_failed_outline_replan_does_not_inherit_the_previous_foundation_or_steps(monkeypatch, replacement):
+    from easyicu.research_agent.agents import progressive_planner as owner
+
+    context = _context().model_copy(update={
+        "research_question": "Does an admission marker explain the competing ward outcomes?",
+    })
+    compile_prefix = owner.compile_progressive_prefix
+
+    def refuse_second_step(state, materialization, **kwargs):
+        if state.materializations:
+            error = ProgressivePlanCompileError(
+                "progressive_analysis_module_unavailable",
+                "This module cannot represent a competing endpoint.",
+                path="module_id",
+            )
+            error.details["repair_scope"] = "outline_required"
+            raise error
+        return compile_prefix(state, materialization, **kwargs)
+
+    monkeypatch.setattr(owner, "compile_progressive_prefix", refuse_second_step)
+    outline = _outline_payload()
+    gap = {
+        **outline, "steps": [], "capability_gap": "design_element_unsupported",
+        "rationale": "The two mutually exclusive ward endpoints require a competing-risks design.",
+    }
+    responses = [json.dumps(item) for item in (outline, _foundation_payload(), *_materialization_payloads()[:2])]
+    responses.append(json.dumps(gap) if replacement == "gap" else "not-json")
+    client = ScriptedMockLLMClient(responses, repeat_last=True)
+    checkpoints = []
+    expected_error = ProgressivePlanCompileError if replacement == "gap" else StructuredResponseFailure
+    with pytest.raises(expected_error) as caught:
+        ProgressivePlannerAgent(client).run_attempt(context, checkpoint_callback=checkpoints.append)
+
+    assert any(item.foundation is not None and item.materializations for item in checkpoints)
+    facts = progressive_planner_failure_facts(caught.value)
+    assert facts.prompt_metrics["outline_repair"]["attempts"][0]["status"] == "rejected"
+    if replacement == "gap":
+        assert facts.outline.rationale == gap["rationale"]
+        assert facts.outline.steps == []
+    else:
+        assert facts.outline is None
+    assert facts.foundation is None
+    assert facts.materializations == facts.compile_failure_attempts == ()

@@ -35,9 +35,12 @@ from .writer_evidence import _render_writer_evidence_digest_v2
 from ..research_context.typed import ResearchContextAuthority, parse_research_context_json
 from .descriptive_report_facts import (
     compile_primary_counts_only_report_facts,
+    place_descriptive_report_facts,
     render_descriptive_report_claims,
     restore_descriptive_revision_claims,
+    take_question_fact_tokens,
     verified_descriptive_source_records as _verified_descriptive_source_records,
+    writer_question_coverage,
 )
 from .writer_only_migration import (
     PreparedWriterOnlyMigration,
@@ -271,20 +274,24 @@ def bind_registered_report_numbers(run_dir: Path, manuscript: str) -> tuple[str,
         records,
         evidence_store=evidence,
     )
-    claims = load_registered_scientific_claims(root=run_dir, records=evidence.records())
+    current_ids = {row.evidence_id for row in evidence.current_verified_records(records)}
+    claims = [
+        claim for claim in load_registered_scientific_claims(root=run_dir, records=evidence.records())
+        if claim.evidence_id in current_ids
+    ]
     plan, context = _registered_plan_and_context(evidence)
     facts = compile_primary_counts_only_report_facts(
         records, evidence=evidence, reader_display_labels=plan.display_labels,
-        context=context, plan=plan,
+        context=context, plan=plan, include_repair_facts=True,
     )
-    manuscript = render_descriptive_report_claims(manuscript, facts)
+    manuscript, selected = take_question_fact_tokens(manuscript, facts)
+    manuscript = render_descriptive_report_claims(place_descriptive_report_facts(manuscript, selected), facts)
+    claim_labels = reader_claim_labels(context, plan.display_labels)
     expanded = expand_scientific_claim_tokens(
         manuscript,
         resolve_claim={claim.claim_ref: claim for claim in claims}.get,
-        reader_labels=reader_claim_labels(context, plan.display_labels),
-        current_evidence_ids={
-            row.evidence_id for row in evidence.current_verified_records(records)
-        },
+        reader_labels=claim_labels,
+        current_evidence_ids=current_ids,
     )
     if expanded.missing_claim_refs or expanded.malformed_sentences:
         raise WriterOnlyMigrationError(
@@ -303,9 +310,9 @@ def bind_registered_report_numbers(run_dir: Path, manuscript: str) -> tuple[str,
         method_facts=load_manuscript_method_facts(root=run_dir, records=evidence.records()),
     )
     findings = audit_manuscript_numeric_claims(bound, per_step_records=records)
-    from .descriptive_report_facts import writer_question_coverage
-
-    findings.extend(writer_question_coverage(bound, plan=plan, facts=facts, evidence=evidence))
+    findings.extend(writer_question_coverage(
+        bound, plan=plan, facts=facts, evidence=evidence, claims=claims, claim_labels=claim_labels,
+    ))
     if untraced or any(row.severity == "error" for row in findings):
         raise WriterOnlyMigrationError(
             code="WRITER_ONLY_NUMERIC_AUDIT_FAILED",

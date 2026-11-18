@@ -21,7 +21,9 @@ from ..contracts.manuscript_result_structure import (
     PRIMARY_RESULT_HEADINGS,
     RESULT_HEADINGS_BY_ROLE,
 )
-from ..contracts.manuscript_sentence_context import contextual_sentence_deletion
+from ..contracts.manuscript_sentence_context import (
+    INLINE_SECTION_LABEL_RE, contextual_sentence_deletion, manuscript_regions, prose_sentences,
+)
 
 ClaimResolver = Callable[[str], Optional[ScientificClaim]]
 EvidenceResolver = Callable[[str], bool]
@@ -179,10 +181,6 @@ _HOUR_LENGTH_WINDOW_RE = re.compile(
 )
 _RESULTS_HEADING_RE = re.compile(r"^##\s+results\s*$", re.I | re.MULTILINE)
 _NEXT_H2_RE = re.compile(r"^##\s+.+$", re.MULTILINE)
-_STRUCTURED_ABSTRACT_LABEL_RE = re.compile(
-    r"\*\*(?P<label>Background|Methods|Results|Conclusions|背景|方法|结果|结论)[:：]\*\*\s*",
-    re.I,
-)
 
 # Findings have a closed admission grammar. The qualitative word list remains
 # a diagnostic defence for other prose; it is not the authority for deciding
@@ -512,12 +510,14 @@ def _canonical_duplicate_claim_token(
 
 
 def _split_sentences(text: str) -> list[str]:
-    parts = [
-        part.strip()
-        for part in re.split(r"(?<=[.!?。！？])\s+", text.strip())
-        if part.strip()
-    ]
-    return parts or ([text.strip()] if text.strip() else [])
+    sentences = [text[sentence.start:sentence.end] for sentence in prose_sentences(text)]
+    # Keep malformed syntax available to the authority check when an
+    # annotation lies outside the visible prose ranges.
+    if _contains_malformed_authority_placeholder(text) and not any(
+        _contains_malformed_authority_placeholder(sentence) for sentence in sentences
+    ):
+        return [text.strip()]
+    return sentences
 
 
 def _split_markdown_structure_prefix(line: str) -> tuple[str, str]:
@@ -528,7 +528,7 @@ def _split_markdown_structure_prefix(line: str) -> tuple[str, str]:
     # The manuscript owner requires these neutral abstract labels. Preserve
     # them as structure in both filtering and expansion; arbitrary bold text
     # remains prose and cannot wrap a claim to smuggle in another assertion.
-    if match := _STRUCTURED_ABSTRACT_LABEL_RE.match(line, cursor):
+    if match := INLINE_SECTION_LABEL_RE.match(line, cursor):
         cursor = match.end()
     return line[:cursor], line[cursor:]
 
@@ -841,212 +841,226 @@ def filter_evidence_bound_scaffold(
     findings_depth: int | None = None
     in_abstract = False
     abstract_findings = True
-    for raw_line in scaffold.splitlines():
-        line = raw_line.rstrip()
-        stripped = line.strip()
-        if re.fullmatch(r"##\s+.+", stripped):
-            section, subsection = stripped, ""
-        elif re.fullmatch(r"###\s+.+", stripped):
-            subsection = stripped
-        if line in method_lines and (section, subsection) == _METHOD_FACT_PLACES[
-            method_lines[line]
-        ]:
-            filtered_lines.append(line)
-            continue
-        if is_method_fact_candidate(line):
-            unsupported_scientific_claims.append(stripped)
-            filtered_claims.append(stripped)
+    for region in manuscript_regions(scaffold):
+        block = scaffold[region.start:region.end]
+        opaque = region.kind in {"fence", "html"}
+        if not region.complete:
+            unsupported_scientific_claims.append(block)
+            filtered_claims.append(block)
             filtered_lines.append("")
             continue
-        if stripped.startswith(("```", "~~~")) or not stripped:
-            filtered_lines.append(line)
-            continue
-        structure_prefix, content = _split_markdown_structure_prefix(line)
-        heading_prefix, heading_content = _split_markdown_heading_prefix(content)
-        heading_requires_claim = False
-        if heading_prefix:
-            name = _normalized_heading(heading_content)
-            depth = heading_prefix.count("#")
-            if (
-                in_abstract and findings_depth is not None and depth > findings_depth
-                and name in {"background", "methods", "results", "findings", "conclusion", "conclusions"}
-            ):
-                abstract_findings = name not in {"background", "methods"}
-            elif name in _FINDINGS_HEADINGS:
-                findings_depth = depth
-                in_abstract = name in {"abstract", "摘要"}
-                abstract_findings = True
-            elif (
-                findings_depth is not None and depth <= findings_depth
-                and name in _CONTEXT_HEADINGS
-            ):
-                findings_depth = None
-                in_abstract = False
-            restricted_heading = (
-                findings_depth is not None and name not in _RESULT_STRUCTURE_HEADINGS
-                and not (in_abstract and name in _CONTEXT_HEADINGS)
-                and _CAPTION_LABEL_RE.fullmatch(heading_content) is None
-            )
-            if not restricted_heading and not _heading_requires_evidence(heading_content):
+        first_claim, first_line = len(filtered_claims), len(filtered_lines)
+        for raw_line in block.splitlines() if opaque else (block,):
+            line = raw_line.rstrip()
+            stripped = line.strip()
+            if region.kind == "heading" and re.fullmatch(r"##\s+.+", stripped):
+                section, subsection = stripped, ""
+            elif region.kind == "heading" and re.fullmatch(r"###\s+.+", stripped):
+                subsection = stripped
+            if line in method_lines and (section, subsection) == _METHOD_FACT_PLACES[
+                method_lines[line]
+            ]:
                 filtered_lines.append(line)
                 continue
-            heading_requires_claim = True
-            structure_prefix += heading_prefix
-            content = heading_content
-        # Neutral labels may already have been separated from their claim/body
-        # by the Markdown owner. They still determine the findings boundary.
-        abstract_label = (
-            _ABSTRACT_LABEL_RE.match(content)
-            or _STRUCTURED_ABSTRACT_LABEL_RE.search(structure_prefix)
-        )
-        if in_abstract and abstract_label is not None:
-            abstract_findings = abstract_label.group("label").casefold() not in {
-                "background", "methods", "背景", "方法"
-            }
-        restricted_line = bool(
-            (findings_depth is not None and (not in_abstract or abstract_findings))
-            or (abstract_label is not None and abstract_label.group("label").casefold()
-                in {"results", "findings", "conclusion", "conclusions", "结果", "结论"})
-            or _CAPTION_LABEL_RE.match(content)
-        )
-        if not content.strip():
-            filtered_lines.append(line)
-            continue
-        canonical_line_claim = _canonical_duplicate_claim_token(
-            content,
-            resolve_claim=resolve_claim,
-        )
-        if canonical_line_claim is not None:
-            content = canonical_line_claim
-        elif (
-            _SCIENTIFIC_CLAIM_TOKEN_RE.search(content) is not None
-            and _SCIENTIFIC_CLAIM_SENTENCE_RE.fullmatch(content.strip()) is None
-        ):
-            rejected = content.strip()
-            unsupported_scientific_claims.append(rejected)
-            filtered_claims.append(rejected)
-            filtered_lines.append("")
-            continue
-        sentences = _split_sentences(content)
-        if (
-            len(sentences) == 1
-            and not heading_requires_claim
-            and not _looks_result_like_sentence(sentences[0])
-            and not _looks_qualitative_scientific_assertion(sentences[0])
-            and not _contains_malformed_authority_placeholder(sentences[0])
-            and _SCIENTIFIC_CLAIM_TOKEN_RE.search(sentences[0]) is None
-            and (not restricted_line or _neutral_findings_text(sentences[0]))
-            and not _states_unexecuted_window(sentences[0], executed_spans)
-        ):
-            filtered_lines.append(line)
-            continue
-        kept: list[str] = []
-        for sentence in sentences:
-            if _states_unexecuted_window(sentence, executed_spans):
-                # An executed design states the windows the analysis ran on
-                # (exact Methods facts); any other window is not the analysis.
-                rejected = sentence.strip()
-                removed.append(rejected)
-                filtered_claims.append(rejected)
+            if is_method_fact_candidate(line):
+                unsupported_scientific_claims.append(stripped)
+                filtered_claims.append(stripped)
+                filtered_lines.append("")
                 continue
-            literature_background = bool(
-                not restricted_line
-                and _has_nonnumeric_literature_context(sentence)
-                and re.match(
-                    r"^(?:Prior|Previous|Published) (?:studies|research|work)\b",
-                    sentence, re.I,
+            if stripped.startswith(("```", "~~~")) or not stripped:
+                filtered_lines.append(line)
+                continue
+            structure_prefix, content = _split_markdown_structure_prefix(line)
+            heading_prefix, heading_content = _split_markdown_heading_prefix(content)
+            heading_requires_claim = False
+            if heading_prefix:
+                name = _normalized_heading(heading_content)
+                depth = heading_prefix.count("#")
+                if region.kind == "heading":
+                    if (
+                        in_abstract and findings_depth is not None and depth > findings_depth
+                        and name in {"background", "methods", "results", "findings", "conclusion", "conclusions"}
+                    ):
+                        abstract_findings = name not in {"background", "methods"}
+                    elif name in _FINDINGS_HEADINGS:
+                        findings_depth = depth
+                        in_abstract = name in {"abstract", "摘要"}
+                        abstract_findings = True
+                    elif (
+                        findings_depth is not None and depth <= findings_depth
+                        and name in _CONTEXT_HEADINGS
+                    ):
+                        findings_depth = None
+                        in_abstract = False
+                restricted_heading = (
+                    findings_depth is not None and name not in _RESULT_STRUCTURE_HEADINGS
+                    and not (in_abstract and name in _CONTEXT_HEADINGS)
+                    and _CAPTION_LABEL_RE.fullmatch(heading_content) is None
                 )
-                and re.search(r"\b(?:our|we|this study|present study)\b", sentence, re.I)
-                is None
+                if not restricted_heading and not _heading_requires_evidence(heading_content):
+                    filtered_lines.append(line)
+                    continue
+                heading_requires_claim = True
+                structure_prefix += heading_prefix
+                content = heading_content
+            # Neutral labels may already have been separated from their claim/body
+            # by the Markdown owner. They still determine the findings boundary.
+            abstract_label = (
+                _ABSTRACT_LABEL_RE.match(content)
+                or INLINE_SECTION_LABEL_RE.search(structure_prefix)
             )
-            canonical_claim = _canonical_duplicate_claim_token(
-                sentence,
+            if not opaque and in_abstract and abstract_label is not None:
+                abstract_findings = abstract_label.group("label").casefold() not in {
+                    "background", "methods", "背景", "方法"
+                }
+            restricted_line = bool(
+                (findings_depth is not None and (not in_abstract or abstract_findings))
+                or (abstract_label is not None and abstract_label.group("label").casefold()
+                    in {"results", "findings", "conclusion", "conclusions", "结果", "结论"})
+                or _CAPTION_LABEL_RE.match(content)
+            )
+            if not content.strip():
+                filtered_lines.append(line)
+                continue
+            canonical_line_claim = _canonical_duplicate_claim_token(
+                content,
                 resolve_claim=resolve_claim,
             )
-            if canonical_claim is not None:
-                sentence = canonical_claim
-            if _contains_malformed_authority_placeholder(sentence):
-                rejected = sentence.strip()
-                unsupported_scientific_claims.append(rejected)
-                filtered_claims.append(rejected)
-                continue
-            claim_match = _SCIENTIFIC_CLAIM_SENTENCE_RE.fullmatch(sentence.strip())
-            if claim_match is not None:
-                if resolve_claim(claim_match.group("ref")) is None:
-                    rejected = sentence.strip()
-                    unsupported_scientific_claims.append(rejected)
-                    filtered_claims.append(rejected)
-                    continue
-                kept.append(sentence.strip())
-                continue
-            if heading_requires_claim:
-                rejected = sentence.strip()
-                unsupported_scientific_claims.append(rejected)
-                filtered_claims.append(rejected)
-                continue
-            if _SCIENTIFIC_CLAIM_TOKEN_RE.search(
-                sentence
-            ) or (
-                _looks_qualitative_scientific_assertion(sentence)
-                and not literature_background
-            ) or (
-                restricted_line and not _neutral_findings_text(sentence)
+            if canonical_line_claim is not None:
+                content = canonical_line_claim
+            elif (
+                _SCIENTIFIC_CLAIM_TOKEN_RE.search(content) is not None
+                and _SCIENTIFIC_CLAIM_SENTENCE_RE.fullmatch(content.strip()) is None
             ):
-                rejected = sentence.strip()
+                rejected = content.strip()
                 unsupported_scientific_claims.append(rejected)
                 filtered_claims.append(rejected)
+                filtered_lines.append("")
                 continue
-            if _looks_result_like_sentence(sentence):
-                if section == "## Methods" and _carries_numeric_value(sentence):
-                    # Numeric method details are admitted only through an exact
-                    # host-registered ManuscriptMethodFact (handled above).
-                    # A generic evidence id proves that an artifact exists; it
-                    # does not prove that this sentence describes that artifact.
-                    # Non-numeric method prose (outcome definitions, missing-
-                    # data handling) keeps the registered-evidence route below.
+            sentences = _split_sentences(content)
+            if (
+                len(sentences) == 1
+                and not heading_requires_claim
+                and not _looks_result_like_sentence(sentences[0])
+                and not _looks_qualitative_scientific_assertion(sentences[0])
+                and not _contains_malformed_authority_placeholder(sentences[0])
+                and _SCIENTIFIC_CLAIM_TOKEN_RE.search(sentences[0]) is None
+                and (not restricted_line or _neutral_findings_text(sentences[0]))
+                and not _states_unexecuted_window(sentences[0], executed_spans)
+            ):
+                filtered_lines.append(line)
+                continue
+            kept: list[str] = []
+            for sentence in sentences:
+                if _states_unexecuted_window(sentence, executed_spans):
+                    # An executed design states the windows the analysis ran on
+                    # (exact Methods facts); any other window is not the analysis.
                     rejected = sentence.strip()
                     removed.append(rejected)
                     filtered_claims.append(rejected)
                     continue
-                # Registered evidence may authorize a numeric fact; the later
-                # numeric-provenance gate still binds every value to its exact
-                # owner and refuses foreign or ambiguous citations.  Exact
-                # literature keys may authorize nonnumeric background context,
-                # while numeric literature claims remain fail-closed.  Neither
-                # route bypasses the qualitative scientific-claim gate above.
-                if _has_registered_evidence(
+                literature_background = bool(
+                    not restricted_line
+                    and _has_nonnumeric_literature_context(sentence)
+                    and re.match(
+                        r"^(?:Prior|Previous|Published) (?:studies|research|work)\b",
+                        sentence, re.I,
+                    )
+                    and re.search(r"\b(?:our|we|this study|present study)\b", sentence, re.I)
+                    is None
+                )
+                canonical_claim = _canonical_duplicate_claim_token(
                     sentence,
-                    resolve_evidence=resolve_evidence,
-                ) or _has_nonnumeric_literature_context(sentence):
+                    resolve_claim=resolve_claim,
+                )
+                if canonical_claim is not None:
+                    sentence = canonical_claim
+                if _contains_malformed_authority_placeholder(sentence):
+                    rejected = sentence.strip()
+                    unsupported_scientific_claims.append(rejected)
+                    filtered_claims.append(rejected)
+                    continue
+                claim_match = _SCIENTIFIC_CLAIM_SENTENCE_RE.fullmatch(sentence.strip())
+                if claim_match is not None:
+                    if resolve_claim(claim_match.group("ref")) is None:
+                        rejected = sentence.strip()
+                        unsupported_scientific_claims.append(rejected)
+                        filtered_claims.append(rejected)
+                        continue
                     kept.append(sentence.strip())
                     continue
-                rejected = sentence.strip()
-                removed.append(rejected)
-                filtered_claims.append(rejected)
-                continue
-            kept.append(sentence.strip())
-        previous_line = filtered_lines[-1].strip() if filtered_lines else ""
-        at_paragraph_start = not previous_line or bool(re.match(r"^#{1,6}\s", previous_line))
-        if (
-            section == "## Methods" and subsection == "### Variables"
-            and not structure_prefix and at_paragraph_start and kept
-        ):
-            # The same context rule used by explicit evidence repair also
-            # applies to automatic filtering. Never leave a dependent fragment
-            # after deleting its opener, invent an antecedent, or cross a line.
-            opener_end = content.find(kept[0])
-            if opener_end > 0:
-                deletion = contextual_sentence_deletion(content, 0, opener_end)
-                for dependent in deletion.dependent_sentences:
-                    if not kept or kept[0] != dependent:
-                        break
-                    kept.pop(0)
-                    removed.append(dependent)
-                    filtered_claims.append(dependent)
-        kept_content = " ".join(part for part in kept if part).strip()
-        filtered_lines.append(
-            f"{structure_prefix}{kept_content}".rstrip() if kept_content else ""
-        )
+                if heading_requires_claim:
+                    rejected = sentence.strip()
+                    unsupported_scientific_claims.append(rejected)
+                    filtered_claims.append(rejected)
+                    continue
+                if _SCIENTIFIC_CLAIM_TOKEN_RE.search(
+                    sentence
+                ) or (
+                    _looks_qualitative_scientific_assertion(sentence)
+                    and not literature_background
+                ) or (
+                    restricted_line and not _neutral_findings_text(sentence)
+                ):
+                    rejected = sentence.strip()
+                    unsupported_scientific_claims.append(rejected)
+                    filtered_claims.append(rejected)
+                    continue
+                if _looks_result_like_sentence(sentence):
+                    if section == "## Methods" and _carries_numeric_value(sentence):
+                        # Numeric method details are admitted only through an exact
+                        # host-registered ManuscriptMethodFact (handled above).
+                        # A generic evidence id proves that an artifact exists; it
+                        # does not prove that this sentence describes that artifact.
+                        # Non-numeric method prose (outcome definitions, missing-
+                        # data handling) keeps the registered-evidence route below.
+                        rejected = sentence.strip()
+                        removed.append(rejected)
+                        filtered_claims.append(rejected)
+                        continue
+                    # Registered evidence may authorize a numeric fact; the later
+                    # numeric-provenance gate still binds every value to its exact
+                    # owner and refuses foreign or ambiguous citations.  Exact
+                    # literature keys may authorize nonnumeric background context,
+                    # while numeric literature claims remain fail-closed.  Neither
+                    # route bypasses the qualitative scientific-claim gate above.
+                    if _has_registered_evidence(
+                        sentence,
+                        resolve_evidence=resolve_evidence,
+                    ) or _has_nonnumeric_literature_context(sentence):
+                        kept.append(sentence.strip())
+                        continue
+                    rejected = sentence.strip()
+                    removed.append(rejected)
+                    filtered_claims.append(rejected)
+                    continue
+                kept.append(sentence.strip())
+            previous_line = filtered_lines[-1].strip() if filtered_lines else ""
+            at_paragraph_start = not previous_line or bool(re.match(r"^#{1,6}\s", previous_line))
+            if (
+                not opaque and section == "## Methods" and subsection == "### Variables"
+                and not structure_prefix and at_paragraph_start and kept
+            ):
+                # The same context rule used by explicit evidence repair also
+                # applies to automatic filtering. Never leave a dependent fragment
+                # after deleting its opener, invent an antecedent, or cross a line.
+                opener_end = content.find(kept[0])
+                if opener_end > 0:
+                    deletion = contextual_sentence_deletion(content, 0, opener_end)
+                    for dependent in deletion.dependent_sentences:
+                        if not kept or kept[0] != dependent:
+                            break
+                        kept.pop(0)
+                        removed.append(dependent)
+                        filtered_claims.append(dependent)
+            kept_content = " ".join(part for part in kept if part).strip()
+            filtered_lines.append(
+                f"{structure_prefix}{kept_content}".rstrip() if kept_content else ""
+            )
+        if opaque:
+            # Apply the admission checks inside the block without borrowing
+            # section state or emitting a partially edited fence or HTML block.
+            filtered_lines[first_line:] = [block if len(filtered_claims) == first_claim else ""]
     return ScaffoldPolicyResult(
         scaffold="\n".join(filtered_lines).strip() + "\n",
         filtered_sentences=tuple(filtered_claims),
@@ -1094,7 +1108,7 @@ def expand_scientific_claim_tokens(
             elif interpretation_depth is not None and depth <= interpretation_depth:
                 interpretation_depth = None
             abstract_conclusion = False
-        label = _STRUCTURED_ABSTRACT_LABEL_RE.search(structure_prefix)
+        label = INLINE_SECTION_LABEL_RE.search(structure_prefix)
         if label is not None:
             abstract_conclusion = label.group("label").casefold() in {
                 "conclusion", "conclusions", "结论",

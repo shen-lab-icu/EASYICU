@@ -81,7 +81,8 @@ _ABSENT = ({"evidence_id": EVIDENCE, "claim_id": "rmst", "target_kind": "markdow
 def test_the_repair_loop_asks_for_the_section_and_fails_closed_without_it(
     monkeypatch, second_draft_absent, fails_closed,
 ):
-    drafts = iter([_ABSENT, second_draft_absent])
+    repair_attempts = 3 if fails_closed else 1
+    drafts = iter([_ABSENT] + [second_draft_absent] * repair_attempts)
     repair_requests = []
 
     def draft_manuscript(*_args, section_repair, **_kwargs):
@@ -110,8 +111,11 @@ def test_the_repair_loop_asks_for_the_section_and_fails_closed_without_it(
     )
 
     assert repair_requests[0] is None
-    assert list(repair_requests[1][1]) == ["results"]
-    assert "'### Survival results'" in repair_requests[1][1]["results"][0]
+    assert len(repair_requests) == 1 + repair_attempts
+    for _, errors in repair_requests[1:]:
+        assert list(errors) == ["results"]
+        assert "OWNER_CLAIM_TARGET_ABSENT" in errors["results"][0]
+        assert "'### Survival results'" in errors["results"][0]
     reported = [item for item in findings if (item.detail or {}).get("reason_code") == "writer_draft_lacks_owner_claim_target"]
     assert bool(reported) is fails_closed
     if fails_closed:

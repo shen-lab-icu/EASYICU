@@ -172,10 +172,10 @@ def test_metadata_options_never_override_missing_or_changed_authority(missing):
 
 
 @pytest.mark.parametrize("earlier_rejections", [0, 1, 2, 3])
-def test_an_unverifiable_longitudinal_gap_gets_one_bounded_confirmation(earlier_rejections):
+def test_an_unverifiable_longitudinal_gap_uses_the_remaining_repair_budget(earlier_rejections):
     context = _unbound_window_study()
     claim = json.dumps(_claim(context))
-    llm = ScriptedMockLLMClient(["{}"] * earlier_rejections + [claim, claim])
+    llm = ScriptedMockLLMClient(["{}"] * earlier_rejections + [claim] * (4 - earlier_rejections))
     llm.supports_strict_json_schema = True
     checkpoints, progress = [], []
 
@@ -192,9 +192,9 @@ def test_an_unverifiable_longitudinal_gap_gets_one_bounded_confirmation(earlier_
     assert "question_required" not in caught.value.easyicu_safe_diagnostic
     assert "question_required" not in caught.value.details
     assert "whose necessity the host cannot verify" in str(caught.value)
-    assert len(llm.calls) == min(earlier_rejections + 2, 4)
+    assert len(llm.calls) == 4
     confirmations = [event for event in progress if event.reason_code == "progressive_capability_gap_confirmation_required"]
-    assert len(confirmations) == (1 if earlier_rejections < 3 else 0)
+    assert len(confirmations) == 3 - earlier_rejections
     assert checkpoints[0].prompt_metrics.get("capability_gap_confirmation_count", 0) == len(confirmations)
     if confirmations:
         feedback = llm.calls[earlier_rejections + 1][0][-1].content
@@ -210,11 +210,11 @@ def test_confirmation_does_not_hide_a_different_unsupported_design():
     context = _unbound_window_study()
     revised = {**_claim(context), "capability_gap": "design_element_unsupported",
                "rationale": "The proposed time alignment cannot be established from the declared source facts."}
-    llm = ScriptedMockLLMClient([json.dumps(_claim(context)), json.dumps(revised)])
+    llm = ScriptedMockLLMClient([json.dumps(_claim(context)), *[json.dumps(revised)] * 3])
     llm.supports_strict_json_schema = True
     with pytest.raises(ProgressivePlanCompileError) as caught:
         ProgressivePlannerAgent(llm).run(context, stop_after_outline=True)
-    assert len(llm.calls) == 2
+    assert len(llm.calls) == 4
     assert caught.value.reason_code == "progressive_capability_gap"
     assert caught.value.easyicu_safe_diagnostic["cause_code"] == "design_element_unsupported"
     assert caught.value.details["findings"][0]["verification"] == "unverifiable"

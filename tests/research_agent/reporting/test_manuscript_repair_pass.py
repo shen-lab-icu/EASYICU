@@ -7,6 +7,7 @@ from pathlib import Path
 import pytest
 
 from easyicu.research_agent.authority.evidence_store import EvidenceEnforcementError
+from easyicu.research_agent.providers.structured_retry import StructuredAttempt, StructuredResponseFailure
 from easyicu.research_agent.reporting.manuscript_post import (
     _apply_writer_evidence_repair_decisions,
     _writer_repair_target_span,
@@ -32,13 +33,13 @@ def _repair_pass(decision_provider) -> ManuscriptRepairPass:
     )
 
 
-def _run(repair_pass: ManuscriptRepairPass, *, enforce_scaffold=lambda _text: None):
+def _run(repair_pass: ManuscriptRepairPass, *, enforce_scaffold=lambda _text: None, rejected=(_SENTENCE,)):
     return repair_pass.run(
         _SCAFFOLD,
         llm=object(),
         evidence_ids=["registered_result"],
         evidence_digest="registered_result: observed counts",
-        rejected_sentences=[_SENTENCE],
+        rejected_sentences=list(rejected),
         scientific_claims={},
         claim_required_sentences=[],
         allowed_claim_refs=[],
@@ -182,3 +183,57 @@ def test_write_phase_repair_callback_uses_current_step_ledger(tmp_path):
     assert detail["reason_code"] == "writer_evidence_repair_residual_strict_drop"
     assert "Median age" not in cleaned
     evidence.enforce_evidence_bound_scaffold(cleaned, per_step_records=[])
+
+
+def test_invalid_citation_decision_reaches_writer_again_with_a_typed_reason():
+    calls = []
+
+    def writer(*_args, **kwargs):
+        calls.append(kwargs)
+        if len(calls) == 1:
+            return [WriterRepairDecision.drop(9)]
+        return [WriterRepairDecision.cite(0, ["registered_result"])]
+
+    result = _run(_repair_pass(writer))
+
+    assert len(calls) == 2
+    assert calls[1]["repair_feedback"][-1].code == "writer_evidence_decision_rejected"
+    assert result.evidence_repairs[0]["action"] == "cite"
+    assert [row["status"] for row in result.repair_receipt["attempts"]] == ["rejected", "resolved"]
+
+
+@pytest.mark.parametrize("last_failure", ["application", "parse"])
+def test_fallback_retains_structured_metadata_across_repair_attempts(last_failure):
+    failures = [
+        StructuredResponseFailure([
+            StructuredAttempt(
+                attempt=0, raw_head="incomplete transfer citation", raw_chars=28,
+                error_class="ValueError", error_message="Specify the decision for the ward transfer claim.",
+                reason_code=code,
+            ),
+        ], role="writer_evidence_repair")
+        for code in ("missing_index", "invalid_action", "invalid_citation")
+    ]
+    replies = iter(failures if last_failure == "parse" else [*failures[:2], [WriterRepairDecision.drop(9)]])
+
+    def writer(*_args, **_kwargs):
+        reply = next(replies)
+        if isinstance(reply, StructuredResponseFailure):
+            raise reply
+        return reply
+
+    result = _run(_repair_pass(writer))
+    expected = failures if last_failure == "parse" else failures[:2]
+    assert result.fallback_detail["structured_attempts"] == [
+        row for failure in expected for row in failure.easyicu_structured_attempt_metadata
+    ]
+    assert _SENTENCE not in result.scaffold
+
+
+def test_pass_records_no_attempt_when_the_ward_summary_has_no_rejections():
+    calls = []
+    result = _run(_repair_pass(lambda *_args, **kwargs: calls.append(kwargs) or []), rejected=[])
+
+    assert result.scaffold == _SCAFFOLD
+    assert result.repair_receipt == {}
+    assert calls == []

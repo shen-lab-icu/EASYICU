@@ -997,7 +997,7 @@ def test_rejected_family_response_does_not_publish_typings(refusal, monkeypatch)
         def reject_gap(*args, **kwargs):
             raise ValueError("scripted invalid requirement gap")
 
-        monkeypatch.setattr(family_spec_planner, "check_question_requirement_gaps", reject_gap)
+        monkeypatch.setattr(family_spec_planner, "question_requirement_gap_feedback", reject_gap)
     else:
         def reject_step(state, materialization, **kwargs):
             step_id = materialization.step.step_id

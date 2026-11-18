@@ -1,32 +1,21 @@
-"""Whether a Planner's capability gap is true of the study (host check).
-
-A Planner that cannot express a design element the question needs declares a
-capability gap instead of drafting steps that quietly answer another question
-(``progressive_contract.ProgressiveCapabilityGap``).  A gap stops planning, so
-the host first checks the claim against the study's typed context: a claim the
-context contradicts goes back to the Planner as a repair. Concrete requirements
-are checked here. The host has no typed evidence for or against an
-unsupported estimand or unnamed design element. An unnamed design gap, or an
-unverifiable longitudinal-representation gap, gets one confirmation against
-typed host facts before it stops as unverifiable.
-"""
+"""Host verification and bounded reconsideration of planning capability gaps."""
 
 from __future__ import annotations
 
 import json
 import math
-from dataclasses import dataclass
 from typing import Any, Callable, Literal, NamedTuple, Sequence
 
 from pydantic import BaseModel, ConfigDict, Field
 
 from ..authority.declared_levels import closed_planning_levels_for
+from ..bounded_repair import BoundedRepair, DEFAULT_REPAIR_ATTEMPTS, RepairFeedback
 from ..schema import ConceptDescriptor, ResearchContext
 from ..trajectory.plan_contract import trajectory_context_is_bound
 from .family_spec.request import sealed_trajectory_suite_coordinates
 from .progressive_contract import (
     CapabilityGapRequirement, ProgressiveCapabilityGap, ProgressivePlanCompileError,
-    ProgressivePlanOutline,
+    ProgressivePlanOutline, ProgressivePlannerCheckpoint,
 )
 
 CapabilityGapVerification = Literal["verified", "unverified", "unverifiable"]
@@ -38,13 +27,15 @@ class CapabilityGapCheck(NamedTuple):
     fact: str
 
 
-class CapabilityGapDiagnostic(BaseModel):
-    """Host-owned stopped-outline receipt, for private planning artifacts only.
+class CapabilityGapNextAction(BaseModel):
+    model_config = ConfigDict(extra="forbid", frozen=True)
 
-    This is not part of the Planner's output schema or the browser projection.
-    Rationale is validated planning text, as in an outline checkpoint, never
-    an exception message or a raw provider response.
-    """
+    kind: Literal["request_user"] = "request_user"
+    message: str
+
+
+class CapabilityGapDiagnostic(BaseModel):
+    """Host-owned stopped-outline receipt, for private planning artifacts."""
 
     model_config = ConfigDict(extra="forbid", frozen=True)
 
@@ -53,57 +44,143 @@ class CapabilityGapDiagnostic(BaseModel):
     verification: CapabilityGapVerification
     fact: str = Field(min_length=1, max_length=2_000)
     rationale: str = Field(min_length=8, max_length=1_200)
+    next_action: CapabilityGapNextAction | None = None
 
 
-@dataclass
-class CapabilityGapConfirmation:
-    """One confirmation, charged to the existing outline retry owner."""
+def capability_gap_next_action(
+    gap: ProgressiveCapabilityGap, check: CapabilityGapCheck,
+) -> CapabilityGapNextAction:
+    coordinate = f"{gap.requirement} for {gap.concept}" if gap.concept else gap.requirement
+    return CapabilityGapNextAction(
+        message=f"Ask the researcher to resolve {coordinate}. {check.fact} "
+        "Request the missing capability or an explicit revision of the question."
+    )
 
-    progress_callback: Callable[[Any], None] | None = None
-    requested: bool = False
-    retry_available: bool = False
+
+def capability_gap_feedback(
+    gap: ProgressiveCapabilityGap, check: CapabilityGapCheck, *,
+    offered_families: Sequence[str], path: str = "capability_gap",
+) -> RepairFeedback:
+    return RepairFeedback(
+        "progressive_capability_gap_claim_unverified" if check.verification == "unverified"
+        else "progressive_capability_gap_confirmation_required",
+        path, {
+            "requirement": gap.requirement, "concept": gap.concept,
+            "verification": check.verification, "offered_families": list(offered_families),
+            "verified_fact": check.fact,
+        },
+    )
+
+
+class CapabilityGapRepair:
+    """Use the same bounded reconsideration for outlines and family specs."""
+
+    def __init__(
+        self, offered_families: Sequence[str], progress_callback: Callable[[Any], None] | None,
+        *, limit: int = DEFAULT_REPAIR_ATTEMPTS,
+    ) -> None:
+        self.offered_families = tuple(offered_families)
+        self.progress_callback = progress_callback
+        self.loop = BoundedRepair(min(limit, DEFAULT_REPAIR_ATTEMPTS))
+        self._unrecorded_attempts = 0
+        self.pending: tuple[RepairFeedback, ...] = ()
+        self.retry_available = False
+
+    @property
+    def count(self) -> int:
+        return self._unrecorded_attempts + len(self.loop.receipt["attempts"])
+
+    @property
+    def _remaining(self) -> int:
+        return max(0, self.loop.receipt["max_attempts"] - self.count)
 
     def on_progress(self, event: Any) -> None:
-        # This also accounts for transport resends without creating a second
-        # budget. A gap on the final attempt must remain a definite stop.
-        self.retry_available = event.attempt < event.total_attempts
+        if event.phase == "started":
+            self.retry_available = event.attempt < event.total_attempts
+            if self.pending and self._remaining:
+                attempt_number = self.count + 1
+                row = self.loop.begin(self.pending)
+                row["attempt"] = attempt_number
+                self.pending = ()
+        elif self.loop.active:
+            if event.phase == "rejected":
+                findings = (RepairFeedback(event.reason_code or "invalid_repair_response", "response"),)
+                self.loop.finish("rejected", findings=findings)
+            else:
+                self.loop.finish("resolved")
         if self.progress_callback is not None:
             self.progress_callback(event)
 
-    def check(self, outline: ProgressivePlanOutline, check: CapabilityGapCheck) -> None:
-        if check.verification != "unverifiable" or self.requested or not self.retry_available:
-            return
-        if outline.capability_gap == "design_element_unsupported" and outline.capability_gap_concept is None:
-            message = (
-                "Confirm the unnamed design-element gap against the host facts below. "
-                "Availability alone does not prove the whole design is expressible. "
-                "If the needed element is one of these, draft the steps for the original "
-                "question; otherwise keep the gap and name in rationale what the question "
-                "asks that none of the offered families and typed elements expresses. "
-                "Do not drop a requirement or change the question to fit a family."
-            )
-        elif outline.capability_gap == "longitudinal_representation_unavailable":
-            message = (
-                "Confirm the longitudinal-representation gap against the host facts below. "
-                "The host cannot establish whether the question requires within-stay "
-                "trajectories or repeated measurements; this is not proof that it does "
-                "or does not. Reconsider the question and the proposed design. An outer "
-                "window or an allowed aggregation does not prove a summary was selected, "
-                "materialized, or available, and planning metadata is not patient data. "
-                "Preserve the original outcome and all timing requirements, including "
-                "eligibility, exposure alignment and the time origin. If the required "
-                "representation or another design element remains unproven, keep an "
-                "appropriate capability gap and explain what is missing. Draft steps only "
-                "if the offered capabilities express the original question; do not "
-                "invent data or silently change the research question."
-            )
-        else:
-            return
-        self.requested = True
-        raise ProgressivePlanCompileError(
-            "progressive_capability_gap_confirmation_required", message,
-            path="capability_gap", cause_code=outline.capability_gap,
+    def seed_saved_outline(
+        self, checkpoint: ProgressivePlannerCheckpoint, check: CapabilityGapCheck,
+    ) -> str | None:
+        gap = checkpoint.outline.declared_capability_gap()
+        if gap is None or check.verification == "verified":
+            return None
+        previous = checkpoint.prompt_metrics.get("capability_gap_repair", {})
+        attempts = list(previous.get("attempts", ()))
+        self.loop.receipt["attempts"] = attempts
+        # Older checkpoints may record only the count. Spend that budget
+        # without manufacturing receipts for the missing attempts.
+        saved_count = checkpoint.prompt_metrics.get("capability_gap_confirmation_count", 0)
+        self._unrecorded_attempts = max(0, saved_count - len(attempts))
+        if not self._remaining:
+            return None
+        self.pending = (capability_gap_feedback(gap, check, offered_families=self.offered_families),)
+        return (
+            _capability_gap_repair_message(gap.requirement) + "\n"
+            + json.dumps([item.as_dict() for item in self.pending], ensure_ascii=False)
         )
+
+    def transport_retries(self, client: Any) -> int:
+        limit = self._remaining - bool(self.pending)
+        journal_limit = getattr(client, "structured_retry_limit", None)
+        return min(limit, journal_limit) if type(journal_limit) is int else limit
+
+    def check_outline(self, outline: ProgressivePlanOutline, check: CapabilityGapCheck) -> None:
+        gap = outline.declared_capability_gap()
+        if gap is not None and check.verification != "verified":
+            self.check((capability_gap_feedback(gap, check, offered_families=self.offered_families),))
+
+    def check(
+        self, feedback: tuple[RepairFeedback, ...], *, regressions: tuple[RepairFeedback, ...] = (),
+    ) -> None:
+        if self.loop.active:
+            status = "unresolved" if feedback else "resolved"
+            self.loop.finish(status, findings=feedback, regressions=regressions)
+        self.pending = ()
+        issues = (*feedback, *regressions)
+        if not issues:
+            return
+        if self.retry_available and self._remaining:
+            self.pending = issues
+            first = issues[0]
+        else:
+            blocking = (*(item for item in feedback if item.facts.get("verification") == "unverified"), *regressions)
+            if not blocking:
+                return
+            first = blocking[0]
+        message = json.dumps([item.as_dict() for item in issues], ensure_ascii=False)
+        raise ProgressivePlanCompileError(
+            first.code, _capability_gap_repair_message(first.facts.get("requirement")) + "\n" + message,
+            path=first.path, cause_code=first.facts.get("requirement"),
+            findings=[item.as_dict() for item in issues],
+        )
+
+
+def _capability_gap_repair_message(requirement: str | None) -> str:
+    if requirement == "longitudinal_representation_unavailable":
+        return (
+            "The host cannot establish that an outer window or allowed aggregation supplies "
+            "a selected summary. Planning metadata is not patient data. Preserve eligibility, "
+            "exposure alignment and time origin. If representation is still unproven, keep an "
+            "appropriate capability gap and explain what is missing."
+        )
+    return (
+        "Check what the question asks against the typed evidence and offered families. "
+        "Draft only a design that answers the original question, otherwise keep the gap "
+        "and name the missing requirement in the rationale."
+    )
 
 
 def capability_gap_stop(
@@ -126,6 +203,7 @@ def capability_gap_stop(
     diagnostic = CapabilityGapDiagnostic(
         requirement=gap.requirement, concept=gap.concept,
         verification=check.verification, fact=check.fact, rationale=outline.rationale,
+        next_action=capability_gap_next_action(gap, check),
     )
     message = (
         "the question needs something no offered family can express"
@@ -134,7 +212,7 @@ def capability_gap_stop(
     )
     stop = ProgressivePlanCompileError(
         "progressive_capability_gap",
-        f"{message} ({gap.requirement}, {check.verification}): {outline.rationale}",
+        f"{message} ({gap.requirement}, {check.verification}): {outline.rationale} {diagnostic.next_action.message}",
         path="capability_gap", cause_code=gap.requirement,
         concepts=(gap.concept,) if gap.concept else (),
         element=gap.requirement,
@@ -690,7 +768,7 @@ def check_capability_gap(
 
 __all__ = [
     "CapabilityGapCheck",
-    "CapabilityGapConfirmation",
+    "CapabilityGapRepair",
     "CapabilityGapDiagnostic",
     "CapabilityGapVerification",
     "capability_gap_confirmation_facts",

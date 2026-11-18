@@ -44,6 +44,9 @@ from ..authority.numeric_claim_identity import (
     unnamed_fact_identity,
 )
 from ..schema import ResearchContext
+from .manuscript_audit_repair import (
+    LOSS_STOP, SentenceSpan, sentence_deletion_edits, sentence_spans,
+)
 from .writer_repair_decision import coerce_writer_repair_decisions
 from .manuscript_sentence_context import contextual_sentence_deletion
 from .manuscript_surface import claim_token_stands_in_block
@@ -387,6 +390,7 @@ def _remove_unregistered_evidence_placeholders(
     text: str,
     *,
     allowed_evidence_ids: Sequence[str],
+    on_remove: Callable[[int, str], None] | None = None,
 ) -> tuple[str, List[str]]:
     """Delete only evidence tokens absent from the current registry.
 
@@ -408,6 +412,8 @@ def _remove_unregistered_evidence_placeholders(
         if evidence_id in allowed:
             return match.group(0)
         removed.append(evidence_id)
+        if on_remove is not None:
+            on_remove(match.start("id"), evidence_id)
         return ""
 
     rewritten = re.sub(
@@ -1734,9 +1740,8 @@ def _select_numeric_claim(
     return None, True
 
 
-_NUMERIC_SENTENCE_BOUNDARY_RE = re.compile(
-    r"[.!?](?=\s|$)|(?P<paragraph>\r?\n[^\S\r\n]*\r?\n)"
-)
+_NUMERIC_PARAGRAPH_BOUNDARY = r"(?P<paragraph>\r?\n[^\S\r\n]*\r?\n)"
+_NUMERIC_SENTENCE_BOUNDARY_RE = re.compile(rf"[.!?](?=\s|$)|{_NUMERIC_PARAGRAPH_BOUNDARY}")
 
 _EFFECT_SCALE_PHRASE_PATTERNS = {
     NumericEffectScale.ODDS_RATIO: re.compile(r"\bodds[\s-]+ratios?\b", re.I),
@@ -1943,8 +1948,10 @@ def _numeric_sentence_context(text: str, *, start: int, end: int) -> str:
     return text[context_start:context_end]
 
 
-def _numeric_sentence_bounds(text: str, *, start: int, end: int) -> Tuple[int, int]:
-    """Return the exact sentence span used by numeric provenance binding."""
+def _numeric_sentence_bounds(
+    text: str, *, start: int, end: int,
+) -> Tuple[int, int]:
+    """Locate local evidence for STRICT numeric binding."""
 
     context_start = 0
     for match in _NUMERIC_SENTENCE_BOUNDARY_RE.finditer(text, 0, start):
@@ -2501,6 +2508,7 @@ def drop_untraceable_numeric_sentences(
     literature: LiteratureBundle | None = None,
     method_facts: Sequence[ManuscriptMethodFact] = (),
     bind_fact: Optional[Callable[[str], str]] = None,
+    removal_spans: list[tuple[int, int, tuple[int, ...]]] | None = None,
 ) -> Tuple[str, List[Dict[str, Any]]]:
     """Remove only sentences that the unchanged STRICT numeric gate rejects.
 
@@ -2527,12 +2535,20 @@ def drop_untraceable_numeric_sentences(
         occurrences = (exc.detail or {}).get("untraced_occurrences")
         if not occurrences:
             raise
-    rejected_by_span: Dict[Tuple[int, int], Dict[str, Any]] = {}
-    for occurrence in occurrences:
+    candidates = iter(sentence_spans(manuscript, include_structural=True))
+    owner = next(candidates, None)
+    rejected_by_span: dict[SentenceSpan, dict[str, Any]] = {}
+    for occurrence in sorted(occurrences, key=lambda item: item["start"]):
         start, end = occurrence["start"], occurrence["end"]
-        span = _numeric_sentence_bounds(manuscript, start=start, end=end)
-        detail = rejected_by_span.setdefault(span, {
-            "sentence": manuscript[span[0]:span[1]].strip(), "untraced": [], "miscited": [],
+        while owner is not None and owner.end <= start:
+            owner = next(candidates, None)
+        if owner is None or not (owner.start <= start < end <= owner.end):
+            raise EvidenceEnforcementError(
+                f"{LOSS_STOP}: a rejected number has no exact manuscript span.",
+                detail={"code": LOSS_STOP, "losses": [], "removals": []},
+            )
+        detail = rejected_by_span.setdefault(owner, {
+            "sentence": manuscript[owner.start:owner.end].strip(), "untraced": [], "miscited": [],
         })
         detail["untraced"].append(occurrence["value"])
         if "miscited" in occurrence:
@@ -2540,52 +2556,31 @@ def drop_untraceable_numeric_sentences(
         if "unnamed_fact_identity" in occurrence:
             detail.setdefault("unnamed_fact_identity", []).append(occurrence["unnamed_fact_identity"])
 
-    merged: List[Tuple[int, int, List[Dict[str, Any]]]] = []
-    for (start, end), detail in sorted(rejected_by_span.items()):
-        deletion = contextual_sentence_deletion(manuscript, start, end)
-        end = deletion.end
-        if deletion.dependent_sentences:
-            detail["dependent_context_drops"] = list(deletion.dependent_sentences)
-        if merged and start <= merged[-1][1]:
-            previous_start, previous_end, previous_details = merged[-1]
-            merged[-1] = (
-                previous_start,
-                max(previous_end, end),
-                [*previous_details, detail],
-            )
-        else:
-            merged.append((start, end, [detail]))
+    edits = tuple(sentence_deletion_edits(manuscript, tuple(rejected_by_span), extend_context=True))
     filtered = manuscript
-    for start, end, _details in reversed(merged):
-        filtered = filtered[:start] + filtered[end:]
+    for edit in reversed(edits):
+        filtered = filtered[:edit.start] + edit.replacement + filtered[edit.end:]
     removed: List[Dict[str, Any]] = []
-    for start, end, details in merged:
+    for edit in edits:
+        start, end = edit.start, edit.end
+        if removal_spans is not None:
+            positions = tuple(item["start"] for item in occurrences if start <= item["start"] < end)
+            removal_spans.append((start, end, positions))
+        details = [rejected_by_span[owner] for owner in edit.owners]
         if len(details) == 1:
-            removed.append(details[0])
-            continue
-        removed.append(
-            {
+            detail = details[0]
+        else:
+            detail = {
                 "sentence": manuscript[start:end].strip(),
-                "untraced": list(
-                    dict.fromkeys(
-                        value
-                        for detail in details
-                        for value in detail.get("untraced", [])
-                    )
-                ),
-                "miscited": [
-                    item
-                    for detail in details
-                    for item in detail.get("miscited", [])
-                ],
-                **({"dependent_context_drops": [
-                    item for detail in details for item in detail.get("dependent_context_drops", [])
-                ]} if any(detail.get("dependent_context_drops") for detail in details) else {}),
-                **({"unnamed_fact_identity": [
-                    item for detail in details for item in detail.get("unnamed_fact_identity", [])
-                ]} if any(detail.get("unnamed_fact_identity") for detail in details) else {}),
+                "untraced": list(dict.fromkeys(value for item in details for value in item["untraced"])),
+                "miscited": [value for item in details for value in item["miscited"]],
             }
-        )
+            unnamed = [value for item in details for value in item.get("unnamed_fact_identity", ())]
+            if unnamed:
+                detail["unnamed_fact_identity"] = unnamed
+        if edit.dependent_sentences:
+            detail["dependent_context_drops"] = list(edit.dependent_sentences)
+        removed.append(detail)
     return filtered, removed
 
 

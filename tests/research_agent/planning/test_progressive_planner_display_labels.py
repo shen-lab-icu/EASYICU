@@ -1169,3 +1169,17 @@ def test_the_variables_own_sealed_description_is_a_reader_label() -> None:
         analysis_type="descriptive_epidemiology",
         required_reader_display_label_keys=("exposure_flag", "outcome_flag"),
     )
+
+
+def test_label_retry_has_typed_receipts_and_rejects_a_cohort_edit(monkeypatch):
+    context, payload, repair = _electrolyte_family_case(monkeypatch, missing="reader")
+    attempted_edit = {**repair, "cohort": {"name": "Only morning admissions"}}
+    llm, result = _run_electrolyte_family(
+        context, [json.dumps(item) for item in (payload, attempted_edit, repair)],
+    )
+
+    receipts = result.facts.prompt_metrics["foundation_label_repair_attempts"][0]["attempts"]
+    assert [attempt["status"] for attempt in receipts] == ["rejected", "resolved"]
+    assert receipts[0]["feedback"][0]["path"] == "display_labels"
+    assert "progressive_foundation_label_invalid_response" in llm.calls[-1][0][-1].content
+    assert result.facts.foundation.foundation.cohort.name != attempted_edit["cohort"]["name"]

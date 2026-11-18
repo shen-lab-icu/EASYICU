@@ -47,12 +47,10 @@ def test_the_reader_view_strips_the_markup_deletion_reads_past(markup):
 
 
 def test_the_post_binding_numeric_deletion_takes_its_dependent_sentence(tmp_path):
-    dependent = (
-        "<!-- evidence missing: lactate_summary --> "
-        "This representation used the highest value in the first day."
-    )
+    dependent = "This representation used the highest value in the first day."
     text = (
-        f"## Results\n\nThe maximum lactate was 4.2 mmol/L. {dependent}\n\n"
+        "## Results\n\nThe maximum lactate was 4.2 mmol/L. "
+        f"<!-- evidence missing: lactate_summary --> {dependent}\n\n"
         "The cohort is described below.\n"
     )
     run_dir = tmp_path / "run"

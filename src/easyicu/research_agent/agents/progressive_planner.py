@@ -80,7 +80,7 @@ from .progressive_foundation_repair import (
     foundation_label_repair_keys,
     repair_projected_foundation,
     run_with_foundation_label_repair,
-    spend_host_candidate_repair,
+    OutlineReplan, StepCompileRepair,
     validate_projected_foundation,
 )
 from ..planning.progressive_contract import (
@@ -180,7 +180,7 @@ from .progressive_payload import (
 )
 from .plan_payload import bind_literature_citation_authority
 from ..planning.capability_gap import (
-    CapabilityGapCheck, CapabilityGapConfirmation, capability_gap_confirmation_facts,
+    CapabilityGapCheck, CapabilityGapRepair, capability_gap_confirmation_facts,
     capability_gap_stop, check_capability_gap,
 )
 from .family_spec_planner import (
@@ -229,12 +229,6 @@ _MAX_STEP_PARSE_RETRIES = 2
 # by a missing time-zero authority).  Permit two bounded targeted repairs while
 # still refusing an unbounded Provider loop.
 _MAX_COMPILE_REVISIONS = 2
-_NON_REPAIRABLE_COORDINATE_FINDINGS = frozenset(
-    {
-        "progressive_step_foundation_coordinate_mismatch",
-        "progressive_step_outline_digest_mismatch",
-    }
-)
 _MAX_OUTLINE_OUTPUT_TOKENS = 4_000
 _MAX_FOUNDATION_OUTPUT_TOKENS = 4_000
 _MAX_STEP_OUTPUT_TOKENS = 8_000
@@ -3417,7 +3411,7 @@ class ProgressivePlannerAgent:
         )
         for step_index in range(len(prefix_state.steps), len(outline.steps)):
             outline_step = outline.steps[step_index]
-            revision_base = self._attempt.prompt_metrics.get("compile_revision_count", 0)
+            step_repair = StepCompileRepair(self._attempt.prompt_metrics, revision_limit=automatic_retry_limit(_MAX_COMPILE_REVISIONS), resumed=resumed)
 
             def compile_candidate(materialization: ProgressiveStepMaterialization) -> ProgressivePrefixState:
                 return run_with_foundation_label_repair(
@@ -3429,7 +3423,7 @@ class ProgressivePlannerAgent:
                     ),
                     self.llm, materialization=foundation_materialization, context=context,
                     analysis_type=outline.analysis_type, retained=prefix_state.materializations,
-                    prompt_metrics=self._attempt.prompt_metrics, revision_base=revision_base,
+                    prompt_metrics=self._attempt.prompt_metrics, revision_base=step_repair.base,
                     revision_limit=automatic_retry_limit(_MAX_COMPILE_REVISIONS),
                     progress_callback=progress_callback, resumed=resumed, on_repaired=foundation_repaired,
                 )
@@ -3538,11 +3532,7 @@ class ProgressivePlannerAgent:
                     # Template candidates enter the same bounded current-step
                     # lane as a rejected Planner answer, with its typed finding.
                     if host_materializations is not None:
-                        compiler_observation = spend_host_candidate_repair(
-                            exc, candidate=host_materialization, prompt_metrics=self._attempt.prompt_metrics,
-                            revision_base=revision_base, revision_limit=automatic_retry_limit(_MAX_COMPILE_REVISIONS),
-                            resumed=resumed, non_repairable=_NON_REPAIRABLE_COORDINATE_FINDINGS,
-                        )
+                        compiler_observation = step_repair.reject(exc, host_materialization)
                         if compiler_observation is None:
                             raise
                     # Other host projections retain the usual Planner fallback.
@@ -3657,6 +3647,7 @@ class ProgressivePlannerAgent:
                         "return other steps or flatten step fields into the root.",
                     )
                 except StructuredResponseFailure as exc:
+                    step_repair.finish("rejected")
                     failure = binding_repair_response_failure(
                         compiler_observation, step_id=outline_step.step_id, step_index=step_index,
                     )
@@ -3786,13 +3777,6 @@ class ProgressivePlannerAgent:
                                 }
                             ],
                         ) from exc
-                    if exc.reason_code in _NON_REPAIRABLE_COORDINATE_FINDINGS or exc.details.get("repair_scope") == "outline_required":
-                        raise
-                    if foundation_label_repair_keys(exc) or (
-                        self._attempt.prompt_metrics["compile_revision_count"] - revision_base
-                        >= automatic_retry_limit(_MAX_COMPILE_REVISIONS)
-                    ):
-                        raise
                     if exc.step_index is not None and int(exc.step_index) < step_index:
                         raise ProgressivePlanCompileError(
                             "progressive_materialization_invalidated_prefix",
@@ -3802,13 +3786,11 @@ class ProgressivePlannerAgent:
                             step_index=exc.step_index,
                             path=exc.path,
                         ) from exc
-                    self._attempt.prompt_metrics["compile_revision_count"] += 1
-                    if resumed:
-                        self._attempt.prompt_metrics[
-                            "current_run_compile_revision_count"
-                        ] += 1
-                    compiler_observation = exc.details
+                    compiler_observation = step_repair.reject(exc, materialization)
+                    if compiler_observation is None:
+                        raise
                     continue
+                step_repair.finish("resolved")
                 prefix_state = candidate_state
                 self._attempt.compile_failure_attempts = []
                 self._attempt.materializations = list(prefix_state.materializations)
@@ -3991,7 +3973,7 @@ class ProgressivePlannerAgent:
             bind_outline=bind_outline,
             validate_outline=validate_outline,
             materialize_and_accept=materialize_and_accept,
-            capture_efficiency_metrics=self.capture_efficiency_metrics,
+            capture_efficiency_metrics=self.capture_efficiency_metrics, outline_replan=self._outline_replan,
         )
 
     def run_attempt(
@@ -4004,8 +3986,12 @@ class ProgressivePlannerAgent:
         self._attempt = ProgressivePlannerAttemptState()
         self._last_result = None
         kwargs["progress_callback"] = self._attempt.retry_progress_callback(kwargs.get("progress_callback"))
+        self._outline_replan = OutlineReplan(
+            enabled=not (kwargs.get("resume_checkpoint") or kwargs.get("bound_plan_revision_contract") or kwargs.get("outline_retry_journal")),
+            checkpoint_callback=kwargs.get("checkpoint_callback"),
+        )
         try:
-            output = self._run_output(context, **kwargs)
+            output = self._outline_replan.run(lambda: self._run_output(context, **kwargs))
         except BaseException as error:
             self.capture_efficiency_metrics()
             bind_progressive_planner_failure_facts(error, self._attempt.freeze())
@@ -4055,6 +4041,9 @@ class ProgressivePlannerAgent:
     ) -> AnalysisPlan | ProgressivePlanOutline:
         self._attempt.resume_validated = False
         enforce_article_contract = enforce_article_contract and tier_from_planning_contract(planning_contract_context) == "article"
+        self._attempt.outline = None
+        self._attempt.foundation = None
+        self._attempt.materializations = []
         self._attempt.compile_failure_attempts = []
         if planner_strategy not in {"progressive_v2", FAMILY_SPEC_STRATEGY}:
             raise ValueError(f"unsupported planner_strategy {planner_strategy!r}")
@@ -4239,14 +4228,8 @@ class ProgressivePlannerAgent:
             scientific_authority=scientific_authority,
             runtime_dependency_authority=resume_dependency_context,
         )
-        checkpoint_emitter = ProgressivePlannerCheckpointEmitter(
-            callback=checkpoint_callback,
-            request_authority_sha256=(
-                resume_checkpoint.request_authority_sha256
-                if resume_checkpoint is not None
-                else checkpoint_authorities.request_authority_sha256
-            ),
-            source_checkpoint=resume_checkpoint,
+        checkpoint_emitter = self._outline_replan.emitter(
+            request_authority_sha256=checkpoint_authorities.request_authority_sha256, source=resume_checkpoint,
         )
         if planner_strategy == FAMILY_SPEC_STRATEGY and fallback_reason is None:
             return self._run_family_spec_output(
@@ -4299,7 +4282,7 @@ class ProgressivePlannerAgent:
         )
         schema_bytes = outline_schema.payload_bytes if outline_schema else 0
         prompt_request = project_planner_request(
-            [LLMMessage(role="system", content=_GUIDE), LLMMessage(role="user", content=user_prompt)],
+            self._outline_replan.prompt([LLMMessage(role="system", content=_GUIDE), LLMMessage(role="user", content=user_prompt)], prompt_blocks),
             prompt_blocks, byte_limit=planner_prompt_byte_limit(self.llm), schema_bytes=schema_bytes,
         )
         elide_superseded_replans = any(
@@ -4381,6 +4364,7 @@ class ProgressivePlannerAgent:
             "full_revision_count": 0,
             "suffix_request_payload_bytes": [],
         }
+        self._outline_replan.project_metrics(current_prompt_metrics)
         def bind_outline(parsed: ProgressivePlanOutline) -> ProgressivePlanOutline:
             parsed = _bind_runtime_action_dependencies(parsed)
             parsed = _bind_metadata_only_baseline_fallback(
@@ -4429,6 +4413,7 @@ class ProgressivePlannerAgent:
                 return None
             return static_prediction_outline_stop(candidate)
 
+        gap_repair = CapabilityGapRepair(analysis_types, progress_callback, limit=automatic_retry_limit(_MAX_INITIAL_PARSE_RETRIES))
         if resume_checkpoint is not None:
             self._attempt.prompt_metrics = restore_progressive_resume_prompt_metrics(
                 checkpoint=resume_checkpoint,
@@ -4442,9 +4427,15 @@ class ProgressivePlannerAgent:
                 bound_outline=bind_outline(resume_checkpoint.outline),
             )
             outline = resume_checkpoint.outline
-        else:
+            saved_gap_feedback = gap_repair.seed_saved_outline(resume_checkpoint, capability_gap_check(outline)) if outline.capability_gap else None
+            if saved_gap_feedback:
+                current_prompt_metrics["superseded_gap_checkpoint_sha256"] = resume_checkpoint.checkpoint_sha256
+                checkpoint_emitter = ProgressivePlannerCheckpointEmitter(callback=checkpoint_callback, request_authority_sha256=resume_checkpoint.request_authority_sha256)
+                resume_checkpoint = None
+                messages = [*messages, LLMMessage(role="user", content=saved_gap_feedback)]
+        if resume_checkpoint is None:
             self._attempt.prompt_metrics = current_prompt_metrics
-            gap_confirmation = CapabilityGapConfirmation(progress_callback)
+            self._attempt.prompt_metrics["capability_gap_repair"] = gap_repair.loop.receipt
 
             def parse_outline(raw: str) -> ProgressivePlanOutline:
                 parsed = bind_outline(_parse_model(raw, ProgressivePlanOutline))
@@ -4458,19 +4449,7 @@ class ProgressivePlannerAgent:
                     # validation.
                     return parsed
                 if parsed.capability_gap is not None:
-                    gap = capability_gap_check(parsed)
-                    if gap.verification == "unverified":
-                        raise ProgressivePlanCompileError(
-                            "progressive_capability_gap_claim_unverified",
-                            f"the declared capability gap does not hold: {gap.fact}; "
-                            "draft the steps the offered families can express, or "
-                            "declare a gap the study shows",
-                            path="capability_gap",
-                            cause_code=parsed.capability_gap,
-                        )
-                    gap_confirmation.check(parsed, gap)
-                    # A verified gap, or an unverifiable gap after its one
-                    # confirmation (if budget remained), stops below.
+                    gap_repair.check_outline(parsed, capability_gap_check(parsed))
                     return parsed
                 self._validate_outline_authority(
                     parsed,
@@ -4525,11 +4504,11 @@ class ProgressivePlannerAgent:
                 parser=parse_outline,
                 retryable_parse_error=(self.scientific_authorities.planner_retryable_error if self.scientific_authorities else None),
                 role="progressive_planner_outline",
-                max_retries=automatic_retry_limit(_MAX_INITIAL_PARSE_RETRIES),
+                max_retries=gap_repair.transport_retries(outline_llm),
                 max_tokens=_MAX_OUTLINE_OUTPUT_TOKENS,
                 temperature=0.2,
                 include_failed_response_on_retry=False,
-                progress_callback=gap_confirmation.on_progress,
+                progress_callback=gap_repair.on_progress,
                 structured_output=outline_schema,
                 format_reminder=retry_shape_reminder(
                     messages,
@@ -4564,7 +4543,7 @@ class ProgressivePlannerAgent:
                 "article_requirement_id as module_id.\n"
                 + capability_gap_confirmation_facts(context, offered_families=analysis_types),
             )
-            self._attempt.prompt_metrics["capability_gap_confirmation_count"] = int(gap_confirmation.requested)
+            self._attempt.prompt_metrics["capability_gap_confirmation_count"] = gap_repair.count
             self.capture_efficiency_metrics()
         # The outline committed the family; if no owner can write its result
         # contract, stop without a retry that would re-read the question.
@@ -4595,6 +4574,7 @@ class ProgressivePlannerAgent:
                     stage="outline", outline=outline, foundation=None, materializations=(),
                     prompt_metrics=self._attempt.prompt_metrics,
                 )
+                self._attempt.resume_validated = "superseded_gap_checkpoint_sha256" in current_prompt_metrics
             raise stop
         self._validate_outline_authority(
             outline,
@@ -4620,8 +4600,6 @@ class ProgressivePlannerAgent:
             article_context=article_context,
         )
         self._attempt.outline = outline
-        self._attempt.foundation = None
-        self._attempt.materializations = []
         outline_sha256 = canonical_sha256(outline.model_dump(mode="json"))
         if resume_checkpoint is not None:
             if self._attempt.prompt_metrics.get("outline_sha256") != outline_sha256:
@@ -4639,11 +4617,12 @@ class ProgressivePlannerAgent:
                 materializations=self._attempt.materializations,
                 prompt_metrics=self._attempt.prompt_metrics,
             )
+            self._attempt.resume_validated = "superseded_gap_checkpoint_sha256" in current_prompt_metrics
         if stop_after_outline:
             # Dependency and request authority were validated above.  A
             # resumed outline can therefore be accepted for this deliberately
             # narrower canary without materializing its executable suffix.
-            self._attempt.resume_validated = resume_checkpoint is not None
+            self._attempt.resume_validated |= resume_checkpoint is not None
             self.capture_efficiency_metrics()
             return outline
 
@@ -4958,7 +4937,7 @@ class ProgressivePlannerAgent:
                     migrated_step_ids
                 )
         self._attempt.materializations = list(prefix_state.materializations)
-        self._attempt.resume_validated = resume_checkpoint is not None
+        self._attempt.resume_validated |= resume_checkpoint is not None
 
         prefix_state = self._materialize_remaining_steps(
             prefix_state,

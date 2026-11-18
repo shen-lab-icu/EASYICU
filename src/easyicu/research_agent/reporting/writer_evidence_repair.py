@@ -12,8 +12,9 @@ from __future__ import annotations
 import json
 from typing import List, Mapping, Optional, Sequence
 
+from ..bounded_repair import DEFAULT_REPAIR_ATTEMPTS, RepairFeedback
 from ..providers.protocol import LLMClient, LLMMessage
-from ..providers.structured_retry import call_llm_with_structured_retry
+from ..providers.structured_retry import automatic_retry_scope, call_llm_with_structured_retry
 from .writer_repair_decision import WriterRepairDecision
 
 
@@ -56,6 +57,7 @@ def decide_writer_evidence_repairs(
     scientific_claims: Optional[Mapping[str, str]] = None,
     claim_required_sentences: Sequence[str] = (),
     language: str = "en",
+    repair_feedback: Sequence[RepairFeedback] = (),
 ) -> List[WriterRepairDecision]:
     """Return validated cite/drop/host-claim decisions for rejected prose."""
 
@@ -146,6 +148,9 @@ def decide_writer_evidence_repairs(
                 )
                 + "\n\nMACHINE EVIDENCE DIGEST:\n"
                 + (evidence_digest or "(none)")
+                + ("\n\nTYPED REPAIR FEEDBACK:\n" + json.dumps(
+                    [item.as_dict() for item in repair_feedback], ensure_ascii=False,
+                ) if repair_feedback else "")
             ),
         ),
     ]
@@ -202,24 +207,25 @@ def decide_writer_evidence_repairs(
             )
         return sorted(normalized, key=lambda decision: decision.index)
 
-    return call_llm_with_structured_retry(
-        llm,
-        messages,
-        _parse,
-        role="writer_evidence_citation_repair",
-        max_retries=1,
-        # A strict draft can flag the same unsupported assertion in Abstract,
-        # Results, Discussion, and Conclusion.  Keep one bounded provider call,
-        # but size its JSON budget to the number of decisions so the response
-        # cannot truncate merely because every occurrence is adjudicated.
-        max_tokens=max(1024, min(4096, 256 + len(sentences) * 48)),
-        temperature=0.0,
-        format_reminder=(
-            "The JSON object must contain only `decisions`; every decision "
-            "requires index, action, and evidence_ids; claim actions also require "
-            "one exact claim_ref."
-        ),
-    )
+    with automatic_retry_scope(disabled=bool(repair_feedback)):
+        return call_llm_with_structured_retry(
+            llm,
+            messages,
+            _parse,
+            role="writer_evidence_citation_repair",
+            max_retries=0 if repair_feedback else DEFAULT_REPAIR_ATTEMPTS - 1,
+            # A strict draft can flag the same unsupported assertion in Abstract,
+            # Results, Discussion, and Conclusion.  Keep one bounded provider call,
+            # but size its JSON budget to the number of decisions so the response
+            # cannot truncate merely because every occurrence is adjudicated.
+            max_tokens=max(1024, min(4096, 256 + len(sentences) * 48)),
+            temperature=0.0,
+            format_reminder=(
+                "The JSON object must contain only `decisions`; every decision "
+                "requires index, action, and evidence_ids; claim actions also require "
+                "one exact claim_ref."
+            ),
+        )
 
 
 __all__ = ["WriterRepairDecision", "decide_writer_evidence_repairs"]
