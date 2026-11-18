@@ -646,7 +646,8 @@ def test_review_rechecks_a_removed_host_deliverable_owner(tmp_path):
     assert [clause["disposition"] for clause in review["judged"][0]["clauses"]] == ["covered", "not_covered"]
 
 
-def test_one_web_child_retries_with_the_same_source_and_provider_task(tmp_path, monkeypatch):
+@pytest.mark.parametrize("edit_deliverables", [False, True])
+def test_one_web_child_retries_with_the_same_source_and_provider_task(tmp_path, monkeypatch, edit_deliverables):
     import pandas as pd
 
     from easyicu.research_agent import ResearchAgentPipeline
@@ -662,6 +663,10 @@ def test_one_web_child_retries_with_the_same_source_and_provider_task(tmp_path, 
         "question": "Describe missingness and report the count of documented discharge outcomes.",
         "outcome": "In-hospital death", "execution_concepts": {"outcome": "death"},
     }
+    if edit_deliverables:
+        study["plan_deliverables"] = {
+            "requested": ["references"], "check": [], "confirmed": True, "source": "user_edit",
+        }
     export = _write_pipeline_export(tmp_path / "export")
     study["data_source"] = {"path": str(export), "database": "miiv"}
     client = ScriptedMockLLMClient([json.dumps({
@@ -693,6 +698,7 @@ def test_one_web_child_retries_with_the_same_source_and_provider_task(tmp_path, 
 
     def create_pipeline(config, *, services):
         assert config.require_human_plan_review
+        assert config.recovery_payload()["bound_plan_deliverables"] == study.get("plan_deliverables")
         tasks.append(services.provider_hard_stop)
         return CandidatePipeline()
 
