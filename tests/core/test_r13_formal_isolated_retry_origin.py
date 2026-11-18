@@ -20,44 +20,15 @@ from pathlib import Path
 
 import pytest
 
-from tests.core.test_r13_formal_tool_identity import _git, _stage, receipt
-from tests.core.test_r13_formal_input_snapshot import _manifest as input_manifest
+from tests.support.formal_tools import (
+    RETRY_HOOK as HOOK,
+    git as _git,
+    input_manifest,
+    stage_formal_tools as _stage,
+    tool_identity_receipt as receipt,
+)
 
 REPO = Path(__file__).resolve().parents[2]
-
-HOOK = '''"""Synthetic OOM evidence seam, sealed only in this test clone."""
-import os
-from pathlib import Path
-
-
-def abort_batch(*args):
-    part = Path(args[-1])
-    part.write_bytes(b"uncommitted synthetic part")
-    Path(os.environ["RETRY_SENTINEL"]).touch()
-    os._exit(137)
-
-
-def install(api):
-    original = api._get_extraction_mp_context
-
-    def context(mp):
-        ctx = original(mp)
-
-        class Context:
-            @staticmethod
-            def Process(*, target, args, daemon):
-                if (target is api._write_isolated_stream_batch
-                        and not Path(os.environ["RETRY_SENTINEL"]).exists()):
-                    target = abort_batch
-                return ctx.Process(target=target, args=args, daemon=daemon)
-
-        return Context()
-
-    api._get_extraction_mp_context = context
-    api._ISOLATED_STREAM_BATCH_TARGETS = frozenset({("hirid", "outcome")})
-    api._cgroup_oom_kills = lambda: int(Path(os.environ["RETRY_SENTINEL"]).exists())
-'''
-
 
 @pytest.fixture(scope="module")
 def recovered_run(tmp_path_factory):

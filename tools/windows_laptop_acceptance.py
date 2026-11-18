@@ -681,7 +681,7 @@ def private_owner_logs(log):
 
 def run_acceptance(work_dir: Path, cache_dir: Path, output_dir: Path, *, memory_pressure_gb=8, fetch=None,
                    desktop_first_result=False, desktop_backend: Path | None = None,
-                   cassette_path: Path | None = None) -> dict:
+                   cassette_path: Path | None = None, cassette_root: Path | None = None) -> dict:
     started = time.monotonic()
     report: dict[str, Any] = {
         "schema_version": "easyicu_laptop_acceptance_v1", "status": "failed",
@@ -692,6 +692,8 @@ def run_acceptance(work_dir: Path, cache_dir: Path, output_dir: Path, *, memory_
     try:
         work_dir, cache_dir = work_dir.resolve(), cache_dir.resolve()
         if cassette_path is not None:
+            if cassette_root is not None:
+                cassette_path = repository_cassette_path(cassette_path, root=cassette_root)
             if not desktop_first_result:
                 raise AcceptanceFailure("model_replay_requires_desktop_acceptance")
             cassette_path = cassette_path.resolve()
@@ -775,11 +777,12 @@ def main(argv=None) -> int:
         from easyicu.webserver.demo_source_contracts import SOURCES
         print(demo_cache_key(SOURCES))
         return 0
+    print("Laptop acceptance driver started", flush=True)
     report = run_acceptance(
         args.work_dir, args.cache_dir or args.work_dir / "demo-cache", args.output_dir,
         memory_pressure_gb=args.memory_pressure_gb,
         desktop_first_result=args.desktop_first_result, desktop_backend=args.desktop_backend,
-        cassette_path=repository_cassette_path(args.model_cassette, root=Path(__file__).resolve().parents[1]) if args.model_cassette else None,
+        cassette_path=args.model_cassette, cassette_root=Path(__file__).resolve().parents[1],
     )
     print(f"Laptop acceptance: {report['status']}")
     return {"passed": 0, "blocked": 2}.get(report["status"], 1)

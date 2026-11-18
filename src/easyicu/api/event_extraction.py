@@ -16,8 +16,7 @@ from ..concept.native_events import NATIVE_EVENT_MODULES
 def run_event_extraction(*, module: str, database: str, data_path: str,
                          patient_ids: dict, batch_size: int | None, output_dir: str) -> None:
     from ..concept.fluid_administrations import fluid_source_receipt, load_event_batch
-    from ..config import load_src_cfg
-    from ..datasource import ICUDataSource
+    from ..datasource import storage_source
     from ..resources import load_dictionary
 
     started = time.monotonic()
@@ -39,7 +38,7 @@ def run_event_extraction(*, module: str, database: str, data_path: str,
     saved = {}
     rows = 0
     if available:
-        source = ICUDataSource(load_src_cfg(database), base_path=data_path, enable_cache=False)
+        source = storage_source(database, data_path, enable_cache=False)
         ident = source.config.id_configs["icustay"].id
         ids = list(dict.fromkeys(patient_ids[ident]))
         size = max(1, int(batch_size or 10_000))

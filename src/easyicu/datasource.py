@@ -5325,19 +5325,26 @@ def load_wide_table_aggregated(
     return df
 
 
-def storage_source(database: str, base_path, *, publication_excluded_paths=()) -> "ICUDataSource":
+def registered_source_config(database: str) -> DataSourceConfig:
+    """Resolve a canonical database key from the active source registry."""
+    from .resources import load_data_sources
+
+    return load_data_sources().get(database)
+
+
+def storage_source(
+    database: str, base_path, *, publication_excluded_paths=(), enable_cache: bool = True,
+) -> "ICUDataSource":
     """A data source for ``database`` at ``base_path``, to resolve validated files.
 
     Readers outside the table loader (outcome, cohort and filter readers)
     take their file sets from the storage policy through this source.
     """
-    from .resources import load_data_sources
-
-    config = load_data_sources().get(database)
+    config = registered_source_config(database)
     if config is None:
         raise ValueError(f"Unknown database: {database}")
     return ICUDataSource(
-        config=config, base_path=Path(base_path),
+        config=config, base_path=Path(base_path), enable_cache=enable_cache,
         publication_excluded_paths=publication_excluded_paths,
     )
 
@@ -5350,6 +5357,7 @@ enumerate_bucket_parquet_files = _enumerate_bucket_parquet_files
 
 __all__ = [
     "enumerate_bucket_parquet_files",
+    "registered_source_config",
     "storage_source",
 ]
 

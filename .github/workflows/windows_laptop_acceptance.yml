@@ -138,7 +138,8 @@ jobs:
         id: demo-cache
         run: |
           $runtime = "$env:EASYICU_DESKTOP_BUILD_DIR\venv\Scripts\python.exe"
-          $key = & $runtime -I tools/windows_laptop_acceptance.py --cache-key
+          Write-Host 'Acceptance startup: checking the driver runtime and demo cache key'
+          $key = & $runtime -I -X utf8 tools/windows_laptop_acceptance.py --cache-key
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           "key=$key" >> $env:GITHUB_OUTPUT
 
@@ -156,15 +157,17 @@ jobs:
         run: |
           $ErrorActionPreference = 'Stop'
           $runtime = "$env:EASYICU_DESKTOP_BUILD_DIR\venv\Scripts\python.exe"
-          $installer = & $runtime -I desktop/scripts/verify_desktop_artifact.py windows "$env:WINDOWS_INSTALLER_DIR" --source-commit "$env:SOURCE_COMMIT"
+          Write-Host 'Acceptance startup: verifying installer provenance'
+          $installer = & $runtime -I -X utf8 desktop/scripts/verify_desktop_artifact.py windows "$env:WINDOWS_INSTALLER_DIR" --source-commit "$env:SOURCE_COMMIT"
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           $installDir = "$env:RUNNER_TEMP\EasyICU 数据\installed app"
+          Write-Host 'Acceptance startup: installing verified installer'
           $install = Start-Process -FilePath $installer -ArgumentList "/S /D=$installDir" -PassThru
           if (-not $install.WaitForExit(180000)) {
             & "$env:SystemRoot\System32\taskkill.exe" /PID $install.Id /T /F | Out-Null
             throw 'Installer timed out'
           }
-          if ($install.ExitCode -ne 0) { throw 'Installer failed' }
+          if ($install.ExitCode -ne 0) { throw "Installer failed with exit code $($install.ExitCode)" }
           $result = 1
           try {
             # Only loopback reads and the owner's pinned public-demo downloads
@@ -175,6 +178,7 @@ jobs:
             if (-not [string]::IsNullOrWhiteSpace($env:MODEL_CASSETTE_PATH)) {
               $replayArgs = @('--model-cassette', $env:MODEL_CASSETTE_PATH)
             }
+            Write-Host 'Acceptance startup: launching the driver'
             & $runtime -I -X utf8 tools/windows_laptop_acceptance.py `
               --memory-pressure-gb "$env:MEMORY_PRESSURE_GB" `
               --work-dir "$env:RUNNER_TEMP\EasyICU 数据" `

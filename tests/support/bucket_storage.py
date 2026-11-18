@@ -5,6 +5,8 @@ import json
 import hashlib
 from pathlib import Path
 
+from scripts import build_itemid_bucket_cache as builder
+
 import duckdb
 import pandas as pd
 import pyarrow.parquet as pq
@@ -323,3 +325,53 @@ def with_value_column_rows(frame, database, dictionary, stays):
         elif pd.api.types.is_float_dtype(dtype):
             result[column] = pd.to_numeric(result[column]).astype(dtype)
     return result, sorted(concepts)
+
+
+def legacy_aumc(root, *, receipted=True):
+    source = b6_source(root, "aumc")
+    table = "numericitems"
+    files = source.resolve_target_files(table)
+    frame = pd.concat([pd.read_parquet(p) for p in files], ignore_index=True)
+    cache = root / "numericitems_bucket"
+    cache.mkdir()
+    with duckdb.connect() as con:
+        for bid in range(8):
+            directory = cache / f"bucket_id={bid}"
+            directory.mkdir()
+            selected = f"SELECT * FROM {builder._relation(files)} WHERE hash(itemid) % 8 = {bid}"
+            if con.execute(f"SELECT count(*) FROM ({selected})").fetchone()[0]:
+                con.execute(
+                    f"COPY ({selected}) TO {builder._sql_string(directory / 'part.parquet')} (FORMAT PARQUET)"
+                )
+        schema = builder._schema(con, builder._relation(files))
+        fingerprint = builder._row_fingerprint(
+            con, builder._relation(files), list(frame)
+        )
+    receipt = dict(
+        schema=builder.RECEIPT_SCHEMA,
+        key="itemid",
+        bucket_count=8,
+        duckdb_version=duckdb.__version__,
+        source_schema=schema,
+        rows=len(frame),
+        row_multiset_fingerprint=fingerprint,
+    )
+    (cache / "_COMPLETE").write_text("complete\n")
+    marker = (cache / "_COMPLETE").stat()
+    legacy = dict(
+        num_buckets=8,
+        complete_mtime_ns=marker.st_mtime_ns,
+        complete_size=marker.st_size,
+        files_by_bucket={
+            str(i): [
+                p.relative_to(cache).as_posix()
+                for p in (cache / f"bucket_id={i}").glob("*.parquet")
+            ]
+            for i in range(8)
+        },
+    )
+    (cache / MANIFEST).write_text(json.dumps(legacy))
+    if receipted:
+        (cache / "_BUCKET_BUILD_RECEIPT.json").write_text(json.dumps(receipt))
+    bind_fixture_source(cache, "numericitems")
+    return source, cache

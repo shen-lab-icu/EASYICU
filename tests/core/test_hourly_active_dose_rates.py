@@ -5,6 +5,7 @@ import pytest
 from easyicu.utils.callback_utils import (
     aumc_rate_kg, eicu_rate_kg_callback, mimic_rate_cv, mimic_rate_mv,
 )
+from tests.support.eicu_source import _eicu_source
 
 
 CASES = [
@@ -263,7 +264,6 @@ def test_hand_integrated_public_source_path(tmp_path, database, minutes, rates, 
     from easyicu.concept import ConceptResolver
     from easyicu.resources import load_dictionary
     from tests.support.mimic_synthetic_source import mimic_synthetic_source
-    from tests.core.test_eicu_extraction_audit2 import _eicu_source
 
     root = tmp_path / 'source'
     root.mkdir()
@@ -354,7 +354,6 @@ def test_summary_precedes_episode_clipping_without_losing_stop_boundary(tmp_path
     from easyicu.concept import ConceptResolver
     from easyicu.resources import load_dictionary
     from tests.support.mimic_synthetic_source import mimic_synthetic_source
-    from tests.core.test_eicu_extraction_audit2 import _eicu_source
 
     root = tmp_path / 'source'
     root.mkdir()
@@ -390,7 +389,6 @@ def test_terminal_overhang_obeys_existing_episode_end(tmp_path, database, last_h
     from easyicu.concept import ConceptResolver
     from easyicu.resources import load_dictionary
     from tests.support.mimic_synthetic_source import mimic_synthetic_source
-    from tests.core.test_eicu_extraction_audit2 import _eicu_source
 
     if database == 'mimic':
         frame = pd.DataFrame({'icustay_id': [1], 'itemid': [30120], 'rate': [.2],
@@ -499,7 +497,6 @@ def test_hirid_legacy_hourly_bounds_preserve_coverage_before_active_time_mean(tm
 def test_eicu_units_legacy_hourly_median_bounds_do_not_erase_active_dose(tmp_path):
     from easyicu.concept import ConceptResolver
     from easyicu.resources import load_dictionary
-    from tests.core.test_eicu_extraction_audit2 import _eicu_source
 
     dictionary = load_dictionary()
     ceiling = dictionary['adh_rate'].maximum

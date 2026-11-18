@@ -1,88 +1,8 @@
 import asyncio
-import gzip
 import json
-import os
-import tempfile
-import threading
-import time
-from pathlib import Path
 
 import pytest
-import uvicorn
-from starlette.applications import Starlette
-from starlette.requests import Request
-from starlette.responses import JSONResponse, Response, StreamingResponse
-from starlette.routing import Route
 
-from tests.support.gateway_uds import install_pair_connector
-
-
-@pytest.fixture
-def instances(gateway, client, monkeypatch):
-    """Two ASGI apps over Unix streams; optionally use named UDS listeners."""
-    _, config, _, users = gateway
-    servers, threads, seen = [], [], []
-    gate = threading.Event()
-
-    def instance(name):
-        async def endpoint(request: Request):
-            seen.append(name)
-            if request.url.path == "/encoded":
-                return Response(gzip.compress(b"synthetic download"), status_code=206, headers={
-                    "content-encoding": "gzip", "content-disposition": 'attachment; filename="demo.txt"',
-                    "set-cookie": "__Host-easyicu_session=upstream-forgery; Path=/; Secure",
-                })
-            if request.url.path == "/redirect":
-                return Response(status_code=307, headers={"location": "http://unreachable.invalid/"})
-            if request.url.path in {"/sse", "/download"}:
-                async def chunks():
-                    yield b"data: first\n\n" if request.url.path == "/sse" else b"x" * 262144
-                    await asyncio.to_thread(gate.wait, 5)
-                    yield b"data: second\n\n" if request.url.path == "/sse" else b"y" * 262144
-                return StreamingResponse(chunks(), media_type=("text/event-stream"
-                                         if request.url.path == "/sse" else "application/octet-stream"))
-            body = await request.body()
-            if request.method == "POST" and request.headers.get("origin") != config.public_origin:
-                return JSONResponse({"blocked_by_instance": True}, status_code=403)
-            return JSONResponse({"instance": name, "method": request.method,
-                                 "raw_path": request.scope["raw_path"].decode(),
-                                 "query": request.scope["query_string"].decode(),
-                                 "body": body.decode(), "headers": dict(request.headers)})
-        return Starlette(routes=[Route("/{path:path}", endpoint,
-                                       methods=["GET", "POST", "PATCH", "HEAD"])])
-
-    with tempfile.TemporaryDirectory(prefix="b3-", dir="/tmp") as temp:
-        close_pairs = None
-        try:
-            apps = {}
-            for name in ("alice", "bob"):
-                socket = str(Path(temp) / f"{name}.sock")
-                users[name]["socket"] = socket
-                apps[socket] = instance(name)
-                if os.environ.get("EASYICU_GATEWAY_NAMED_UDS_TEST") != "1":
-                    continue
-                server = uvicorn.Server(uvicorn.Config(apps[socket], uds=socket, log_config=None,
-                                                       access_log=False, lifespan="off"))
-                thread = threading.Thread(target=server.run, daemon=True)
-                servers.append(server)
-                threads.append(thread)
-                thread.start()
-                deadline = time.monotonic() + 5
-                while not server.started and time.monotonic() < deadline:
-                    time.sleep(0.01)
-                assert server.started
-            if not servers:
-                close_pairs = install_pair_connector(monkeypatch, apps)
-            config.users_file.write_text(json.dumps(users))
-            yield seen, gate
-        finally:
-            gate.set()
-            if close_pairs:
-                client.portal.call(close_pairs)
-            for server in servers:
-                server.should_exit = True
-            for thread in threads:
-                thread.join(timeout=6)
 
 
 def test_each_user_routes_only_to_own_socket(client, login, instances):

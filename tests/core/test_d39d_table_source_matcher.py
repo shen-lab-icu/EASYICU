@@ -22,26 +22,20 @@ elsewhere (this matrix is run on the Linux server).
 
 from __future__ import annotations
 
-import hashlib
-import json
 import os
 
-import numpy as np
 import pandas as pd
 import pytest
 
-from easyicu import storage_layout as sl
 from easyicu.config import load_src_cfg
 from easyicu.datasource import ICUDataSource
 from easyicu.storage_layout import StorageIntegrityError
+from tests.support.mimic_storage import IDS, icustays_bucket as _bucket, icustays_parquet as _parquet
 
 AMBIGUOUS = "table_source_ambiguous"
 UNREADABLE = "table_scan_file_unreadable"
 BROKEN = "table_layout_broken"
 CSV_IDS = [900, 901]
-IDS = list(range(100, 120))
-
-
 def _case_sensitive(tmp_path) -> bool:
     probe = tmp_path / "case_probe"
     probe.mkdir()
@@ -60,11 +54,6 @@ def _root(tmp_path, name="mimic"):
     root.mkdir()
     pd.DataFrame({"icustay_id": CSV_IDS}).to_csv(root / "icustays.csv", index=False)
     return root
-
-
-def _parquet(path, ids=IDS):
-    path.parent.mkdir(parents=True, exist_ok=True)
-    pd.DataFrame({"icustay_id": list(ids), "value": np.repeat(60.0, len(ids))}).to_parquet(path, index=False)
 
 
 def _dangling(path, root):
@@ -201,33 +190,6 @@ def test_aliases_of_one_physical_source_count_once(tmp_path, alias):
         (root / "icu" / "icustays").symlink_to(root / "backing", target_is_directory=True)
     ids, listing = _discover(root)
     assert ids == IDS and listing["source_format"] == "parquet"
-
-
-def _bucket(root, *, derived: bool):
-    """A range bucket of icustays beside its flat source, bound by derived_from or not."""
-    flat = root / "icustays.parquet"
-    frame = pd.read_parquet(flat).assign(**{sl.ORDINAL: np.arange(len(IDS), dtype="int64")})
-    bucket = root / "icustays_bucket"
-    (bucket / "bucket_id=0").mkdir(parents=True)
-    (bucket / "_COMPLETE").write_text("synthetic")
-    (bucket / sl.BUILD_RECEIPT).write_text("{}")
-    part = bucket / "bucket_id=0" / "part.parquet"
-    frame.to_parquet(part, index=False)
-    manifest = {
-        "schema": sl.SCHEMA, "scheme": "range", "key_column": "icustay_id", "key_type": "BIGINT",
-        "range_breakpoints": [], "sort_keys": ["icustay_id", sl.ORDINAL],
-        "source_order": sl.ORDINAL, "row_group_target": 65536,
-        "builder_version": sl.BUILDER_VERSION,
-        "inventory": [{"relative_path": "bucket_id=0/part.parquet",
-                       "size": part.stat().st_size, "row_count": len(IDS)}],
-    }
-    if derived:
-        stat = flat.stat()
-        manifest["derived_from"] = {"table": "icustays", "files": [{
-            "path": "icustays.parquet", "size": stat.st_size, "mtime_ns": stat.st_mtime_ns,
-            "sha256": hashlib.sha256(flat.read_bytes()).hexdigest(),
-        }]}
-    (bucket / sl.MANIFEST).write_text(json.dumps(manifest))
 
 
 def test_a_flat_source_and_its_derived_bucket_are_one_source(tmp_path):

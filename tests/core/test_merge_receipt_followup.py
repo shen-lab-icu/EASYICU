@@ -103,11 +103,14 @@ def test_a_failed_attempts_fills_are_dropped_before_the_retry(tmp_path, monkeypa
         return pd.DataFrame({"stay_id": ids, "charttime": [0.0, 0.0], "test_signal": [1.0, 2.0]})
 
     monkeypatch.setattr(easyicu, "load_concepts", fake_load_concepts)
+    source, export = tmp_path / "source", tmp_path / "export"
+    source.mkdir()
+    export.mkdir()
     api._run_module_extraction(
-        "test_module", ["test_signal"], "miiv", str(tmp_path), {"stay_id": [1, 2]}, None,
-        str(tmp_path), stream_output_batches=False,
+        "test_module", ["test_signal"], "miiv", str(source), {"stay_id": [1, 2]}, None,
+        str(export), stream_output_batches=False,
     )
-    manifest = json.loads((tmp_path / "_manifest.json").read_text())
+    manifest = json.loads((export / "_manifest.json").read_text())
     assert len(calls) == 2
     assert manifest["merge_empty_index_filled"] == [{"batch_id": None, "concept": c} for c in second_fills]
 
@@ -132,8 +135,9 @@ class _Run:
 def test_a_missing_sidecar_is_a_typed_stream_failure(tmp_path, monkeypatch, kind):
     real = api._write_isolated_stream_batch
 
-    def drop_sidecar(module, concepts, load_kwargs, patient_ids, destination):
-        real(module, concepts, load_kwargs, patient_ids, destination)
+    def drop_sidecar(*args):
+        real(*args)
+        destination = args[-1]
         sidecar = (api._stream_batch_bounds_sidecar if kind == "bounds" else api._stream_batch_fill_sidecar)
         sidecar(destination).unlink()
 
@@ -149,11 +153,14 @@ def test_a_missing_sidecar_is_a_typed_stream_failure(tmp_path, monkeypatch, kind
     monkeypatch.setattr(api, "_ISOLATED_STREAM_BATCH_TARGETS", frozenset({("eicu", "test_module")}))
     monkeypatch.setattr(api, "_cgroup_oom_kills", lambda: None)
     monkeypatch.setattr(api, "_host_reports_oom_kills", lambda: False)
+    source, export = tmp_path / "source", tmp_path / "export"
+    source.mkdir()
+    export.mkdir()
     api._run_module_extraction(
-        "test_module", ["test_signal"], "eicu", str(tmp_path), {"stay_id": list(range(1, 5))}, 2,
-        str(tmp_path), stream_output_batches=True,
+        "test_module", ["test_signal"], "eicu", str(source), {"stay_id": list(range(1, 5))}, 2,
+        str(export), stream_output_batches=True,
     )
-    manifest = json.loads((tmp_path / "_manifest.json").read_text())
+    manifest = json.loads((export / "_manifest.json").read_text())
     failure = manifest["stream_failure"]
     assert failure["exception_type"] == "StreamBatchReceiptMissing"
     assert failure["failure_class"] == "batch_receipt_missing"

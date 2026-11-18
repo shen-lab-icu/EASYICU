@@ -284,12 +284,22 @@ test('persisted recovery replay marks only its assistant explanation after a rel
 async function realSidecarRecovery({ unstarted = false } = {}) {
   const temp = fs.mkdtempSync(path.join(os.tmpdir(), 'easyicu-reply-continuation-'));
   const artifact = path.join(temp, 'brief.html');
+  const originalCalls = unstarted ? 4 : 2;
+  const recoveryCalls = unstarted ? 2 : 1;
+  const maxCalls = originalCalls + recoveryCalls;
   const events = []; const requests = []; let recovered = false; let writes = 0; let checks = 0;
   const server = http.createServer(async (req, res) => {
     let text = ''; for await (const part of req) text += part;
     const body = JSON.parse(text); requests.push(body);
     const writeDecision = unstarted ? recovered && !body.messages.some(message => message.role === 'tool') : requests.length === 1;
-    if (!recovered && (unstarted || requests.length > 1)) { res.writeHead(503); res.end('Synthetic upstream unavailable'); return; }
+    if (!recovered && (unstarted || requests.length > 1)) {
+      // The pre-tool turn retries an empty 503. End the scripted outage with a
+      // non-retryable 5xx so the resumed turn still has its original allowance.
+      const status = unstarted && requests.length >= originalCalls ? 501 : 503;
+      res.writeHead(status, { 'content-type': 'application/json' });
+      res.end(JSON.stringify({ error: { message: 'Synthetic upstream unavailable' } }));
+      return;
+    }
     res.writeHead(200, { 'content-type': 'text/event-stream' });
     const delta = writeDecision ? { role: 'assistant', tool_calls: [
       { index: 0, id: 'write-1', type: 'function', function: { name: 'easyicu_write_project_file', arguments: JSON.stringify({ file: 'brief.html', content: '<!doctype html><title>Saved once</title><p>synthetic</p>' }) } },
@@ -302,11 +312,11 @@ async function realSidecarRecovery({ unstarted = false } = {}) {
     res.end('data: [DONE]\n\n');
   });
   await new Promise(resolve => server.listen(0, '127.0.0.1', resolve));
-  const env = { PATH: process.env.PATH, EASYICU_PI_API_KEY: 'local-synthetic-only',
+  const env = { PATH: process.env.PATH, HOME: temp, USERPROFILE: temp, TMPDIR: temp, EASYICU_PI_API_KEY: 'local-synthetic-only',
     EASYICU_PI_BASE_URL: `http://127.0.0.1:${server.address().port}/v1`,
     EASYICU_PI_MODEL: 'local-recovery', EASYICU_PI_PROVIDER: 'local', EASYICU_PI_API: 'openai-completions',
     EASYICU_PI_SESSION_DIR: path.join(temp, 'sessions'), EASYICU_PI_CWD: temp,
-    EASYICU_PI_MAX_TOKENS: '256', EASYICU_PI_MAX_PROVIDER_CALLS_PER_MESSAGE: '6' };
+    EASYICU_PI_MAX_TOKENS: '256', EASYICU_PI_MAX_PROVIDER_CALLS_PER_MESSAGE: String(maxCalls) };
   let child; let sequence = 0; let pending;
   function start() {
     child = spawn(process.execPath, [path.join(app, 'src/main.mjs')], { cwd: app, env, stdio: ['pipe', 'pipe', 'pipe'] });
@@ -349,10 +359,12 @@ async function realSidecarRecovery({ unstarted = false } = {}) {
     await rpc('session.create', { session_id: 'recovery-test', agent_mode: 'workspace', language: 'zh' });
     const failed = await rpc('session.prompt', { session_id: 'recovery-test', message: '保存并检查 brief.html，然后说明结果。' });
     assert.equal(writes, unstarted ? 0 : 1); assert.equal(checks, unstarted ? 0 : 1);
-    assert.equal(requests.length, unstarted ? 4 : 5, 'each empty Provider failure consumes its original guarded attempt');
+    assert.equal(requests.length, originalCalls, unstarted
+      ? 'each empty pre-tool failure consumes a guarded attempt'
+      : 'the committed tool turn stops at its first provider failure');
     assert.equal(failed.reply_continuation.available, true, JSON.stringify(failed.reply_continuation));
     assert.equal(failed.reply_continuation.recovery_kind, unstarted ? 'retry_unstarted' : 'continue_explanation');
-    assert.equal(failed.shell_usage.message_provider_calls, unstarted ? 4 : 5);
+    assert.equal(failed.shell_usage.message_provider_calls, originalCalls);
     const savedHash = unstarted ? null : hash(artifact); const originalErrorId = failed.reply_continuation.source_error_entry_id;
     assert.ok(failed.transcript.some(row => row.error_code === 'pi_model_provider_unavailable'));
     await stop(); start();
@@ -364,7 +376,7 @@ async function realSidecarRecovery({ unstarted = false } = {}) {
       ...(unstarted ? {} : { validation_context: { status: 'failed', summary: 'Synthetic current runtime acceptance failed' } }) });
     assert.equal(writes, 1); assert.equal(checks, 1);
     if (!unstarted) assert.equal(hash(artifact), savedHash);
-    assert.equal(requests.length, 6);
+    assert.equal(requests.length, maxCalls);
     if (unstarted) {
       const tools = (requests.at(-1).tools || []).map(tool => tool.function?.name);
       assert.ok(tools.includes('easyicu_write_project_file'));
@@ -374,8 +386,8 @@ async function realSidecarRecovery({ unstarted = false } = {}) {
       assert.equal((requests.at(-1).tools || []).length, 0, 'continuation request has zero tool capability');
       assert.match(JSON.stringify(requests.at(-1).messages), /"status\\":\\"failed/);
     }
-    assert.equal(continued.shell_usage.message_provider_calls, 6, 'original message budget accumulates rather than resetting');
-    assert.equal(continued.shell_usage.provider_calls, 6);
+    assert.equal(continued.shell_usage.message_provider_calls, maxCalls, 'original message budget accumulates rather than resetting');
+    assert.equal(continued.shell_usage.provider_calls, maxCalls);
     assert.equal(continued.reply_continuation.available, false, 'successful explanation cannot be continued again');
     assert.ok(continued.transcript.some(row => row.error_code === 'pi_model_provider_unavailable' && row.entry_id === originalErrorId), 'the original failure is retained');
     assert.ok(continued.transcript.some(row => JSON.stringify(row.content).includes(unstarted ? '原任务的文件现已保存' : '当前运行时验收失败')));
@@ -385,7 +397,7 @@ async function realSidecarRecovery({ unstarted = false } = {}) {
     const jsonl = fs.readFileSync(failed.session_file, 'utf8').trim().split('\n').map(JSON.parse);
     assert.ok(jsonl.some(row => row.customType === (unstarted ? 'easyicu.workspace-retry/1' : 'easyicu.reply-continuation/1') && row.data.state === 'completed'));
     await assert.rejects(rpc(rpcMethod, { session_id: 'recovery-test', source_error_entry_id: originalErrorId }));
-    assert.equal(requests.length, 6);
+    assert.equal(requests.length, maxCalls);
     const outDir = process.env.EASYICU_REPLY_RECOVERY_RECEIPT_DIR;
     if (outDir) {
       fs.mkdirSync(outDir, { recursive: true });

@@ -18,7 +18,7 @@ from collections import defaultdict
 import numpy as np
 import pandas as pd
 
-from .datasource import ICUDataSource
+from .datasource import ICUDataSource, registered_source_config
 from .concept import ConceptResolver, ConceptDictionary, defer_until_resolver_idle, resolver_is_idle
 from .value_failures import TYPED_VALUE_FAILURES
 from .resolver_pool import ResolverPool, call_resolver, resolver_call_scope
@@ -28,7 +28,7 @@ from .databases.detection import (
     detect_database_identity,
     peek_table_columns as _peek_table_columns,
 )
-from .resources import load_data_sources, load_dictionary
+from .resources import load_dictionary
 from .storage_layout import StorageIntegrityError
 from .runtime.cache_manager import get_cache_manager
 from .runtime.parallel_config import get_global_config, get_runtime_load_strategy
@@ -91,7 +91,7 @@ class BaseICULoader:
         assert_roots_published([data_path])
         # 检测数据库类型 - 如果用户没有指定，先尝试从路径推断
         self.database = self._detect_database(database, data_path)
-        config = load_data_sources().get(self.database)
+        config = registered_source_config(self.database)
         if config is not None and data_path is not None:
             assert_roots_published(configured_publication_roots(config, data_path))
         self.data_path = self._setup_data_path(data_path, self.database)
@@ -109,7 +109,7 @@ class BaseICULoader:
         self._ensure_data_ready()
 
         # Initialize data source
-        self._init_datasource()
+        self._init_datasource(config)
 
         # Initialize concept system
         self._init_concept_system(dict_path, use_sofa2)
@@ -384,11 +384,9 @@ class BaseICULoader:
             if self.verbose:
                 logger.warning(f"Data preparation check failed: {e}")
 
-    def _init_datasource(self):
-        """Initialize the data source"""
+    def _init_datasource(self, config):
+        """Initialize the data source with the configuration checked at startup."""
         try:
-            registry = load_data_sources()
-            config = registry.get(self.database)
             if not config:
                 raise ValueError(f"Unknown database: {self.database}")
 

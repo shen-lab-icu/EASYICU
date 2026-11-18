@@ -29,17 +29,11 @@ from easyicu.storage_seal_publication import (
     assert_install_published,
     assert_seal_published,
 )
-from tests.support.bucket_storage import write_contract
-
-
-def _bucket(install: Path, table: str = "chartevents") -> Path:
-    root = install / f"{table}_bucket"
-    (root / "bucket_id=0").mkdir(parents=True)
-    pd.DataFrame({"itemid": [220045], "valuenum": [71.0]}).to_parquet(
-        root / "bucket_id=0" / "1.parquet"
-    )
-    write_contract(root, key="itemid")
-    return root
+from tests.support.seal_publication import (
+    publication_bucket as _bucket,
+    publication_receipt as _receipt,
+    sealed_install as _sealed,
+)
 
 
 def _flat(install: Path, table: str = "chartevents") -> Path:
@@ -59,22 +53,6 @@ def _mark(install: Path, suffix: str) -> Path:
 
 def _sha(path: Path) -> str:
     return hashlib.sha256(path.read_bytes()).hexdigest()
-
-
-def _receipt(install: Path, **fields) -> dict:
-    receipt = {"schema": "lead_r13.seal_build_receipt/2", "verdict": "PASS"}
-    receipt.update(fields)
-    (install / IN_ROOT_RECEIPT).write_text(json.dumps(receipt))
-    return receipt
-
-
-def _sealed(install: Path, table: str = "chartevents") -> Path:
-    root = _bucket(install, table)
-    _receipt(
-        install,
-        tables={table: {"manifest_sha256": _sha(root / MANIFEST), "qc_findings": []}},
-    )
-    return root
 
 
 def _source(install: Path) -> ICUDataSource:

@@ -15,7 +15,7 @@ import pytest
 
 from easyicu import formal_inputs as inputs
 from easyicu import storage_seal_publication as publication
-from tests.core.test_r13_formal_run_receipt import receipt
+from tests.support.formal_run_receipts import receipt
 
 REPO = Path(__file__).resolve().parents[2]
 

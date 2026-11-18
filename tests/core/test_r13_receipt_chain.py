@@ -34,7 +34,11 @@ from easyicu.storage_seal_publication import (
     sealed_bucket_tables,
     sealed_link_target,
 )
-from tests.core.test_storage_seal_publication import _bucket, _receipt, _sealed
+from tests.support.seal_publication import (
+    publication_bucket as _bucket,
+    publication_receipt as _receipt,
+    sealed_install as _sealed,
+)
 
 
 def _farm_entry(target: Path, source: Path) -> dict:

@@ -25,6 +25,7 @@ from easyicu.config import load_src_cfg
 from easyicu.datasource import ICUDataSource
 from easyicu.storage_binding import binding_unit
 from easyicu.storage_layout import TableScanError
+from tests.support.mimic_storage import constant_chart_csv as _csv
 
 LONG_READ_NS = 3_000_000_000
 
@@ -68,20 +69,6 @@ def test_a_long_read_that_started_racy_is_not_cached(tmp_path, monkeypatch):
     with binding_unit():
         source._load_raw_frame("chartevents", None)
     assert not source._table_cache
-
-
-def _csv(root):
-    header = (
-        "ROW_ID,SUBJECT_ID,HADM_ID,ICUSTAY_ID,ITEMID,CHARTTIME,STORETIME,CGID,VALUE,"
-        "VALUENUM,VALUEUOM,WARNING,ERROR,RESULTSTATUS,STOPPED"
-    )
-    rows = [
-        f"{i},1,11,101,220045,2140-01-02 01:00:00,2140-01-02 01:05:00,17,60,60,bpm,0,0,,"
-        for i in range(1, 6)
-    ]
-    path = root / "CHARTEVENTS.csv"
-    path.write_text("\n".join([header, *rows]) + "\n")
-    return path
 
 
 def test_a_validation_scan_that_started_racy_is_not_memoized(tmp_path, monkeypatch):

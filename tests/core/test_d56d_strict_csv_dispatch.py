@@ -10,7 +10,7 @@ import pytest
 from easyicu.config import load_src_cfg
 from easyicu.datasource import FilterOp, FilterSpec, ICUDataSource
 from easyicu.storage_layout import TableScanError
-from tests.core.test_d25d_csv_projection import HEADER, _row
+from tests.support.mimic_storage import HEADER, chart_row as _row
 
 
 def _source(root, suffix, *, bad_unselected=False):

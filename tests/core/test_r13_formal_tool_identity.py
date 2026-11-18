@@ -26,16 +26,19 @@ from pathlib import Path
 
 import pytest
 
+from tests.support.formal_tools import (
+    bash as _bash,
+    git as _git,
+    stage_formal_tools as _stage,
+    tool_identity_receipt as receipt,
+)
+
 REPO = Path(__file__).resolve().parents[2]
 TOOL = REPO / "tools" / "formal_run_receipt.py"
 FORMAL = REPO / "tools" / "formal"
 WRAPPER = FORMAL / "bench7v3f.sh"
 BOOT = FORMAL / "formal_boot.py"
-SPEC = importlib.util.spec_from_file_location("formal_run_receipt_tool_identity", TOOL)
-assert SPEC and SPEC.loader
-receipt = importlib.util.module_from_spec(SPEC)
-sys.modules[SPEC.name] = receipt
-SPEC.loader.exec_module(receipt)
+
 
 INSTALLED = {  # sha256 of the installed server copies these were committed from
     "bench7v3e.sh": "3222d90bfc20a913bda77b48e862b29f559237142c236a69b7d5c5900760b9dd",
@@ -49,11 +52,6 @@ TOOL_SET = {"bench7v3f.sh", "formal_boot.py", "v2_bench_local.py", "inputs_bench
 
 def _sha(data: bytes) -> str:
     return hashlib.sha256(data).hexdigest()
-
-
-def _git(cwd: Path, *args: str) -> str:
-    return subprocess.run(["git", "-C", str(cwd), *args], check=True, capture_output=True,
-                          text=True).stdout.strip()
 
 
 def _manifest() -> dict:
@@ -113,18 +111,6 @@ def _seal_repo(tmp_path: Path, files: dict, name: str = "seal") -> tuple[Path, s
     _git(repo, "add", "-A")
     _git(repo, "-c", "user.name=t", "-c", "user.email=t@t", "commit", "-q", "-m", "seal")
     return repo, _git(repo, "rev-parse", "HEAD")
-
-
-def _bash(script: str, *args: str, env: dict | None = None, cwd: Path | None = None):
-    return subprocess.run(["bash", "-c", script, "_", *args], capture_output=True, text=True,
-                          env=env, cwd=cwd)
-
-
-def _stage(run: Path, repo: Path, sha: str) -> subprocess.CompletedProcess:
-    """The wrapper's own stage_tools (the script sourced: its functions only)."""
-    run.mkdir(exist_ok=True)
-    return _bash('source "$1"; R=$2; FT=$2/.formal_tools; K=$3; SHA=$4; PY=$5; stage_tools',
-                 str(WRAPPER), str(run), str(repo / ".git"), sha, sys.executable)
 
 
 @pytest.fixture

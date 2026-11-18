@@ -17,7 +17,17 @@ from easyicu import storage_layout as sl
 from easyicu.api import get_all_patient_ids
 from easyicu.config import load_src_cfg
 from easyicu.datasource import ICUDataSource
-from tests.core.test_d39d_table_source_matcher import IDS, _bucket, _parquet
+from easyicu.storage_seal_publication import SealPublicationError
+from tests.support.bucket_storage import legacy_aumc as _legacy_aumc
+from tests.support.mimic_storage import (
+    IDS,
+    SERVICES as _SERVICES,
+    constant_chart_csv as chart_csv,
+    converted_mimic as _converted_mimic,
+    icustays_bucket as _bucket,
+    icustays_parquet as _parquet,
+    load_services as _services,
+)
 
 
 def _source(root, database="mimic"):
@@ -112,20 +122,30 @@ def test_unreadable_nested_directory_never_becomes_absent_csv(tmp_path, monkeypa
             tmp_path / "GENERAL_TABLE" / "part.parquet", index=False,
         )
     if denial == "chmod":
+        # A real filesystem denial is caught by the startup seal before table selection.
         blocked.chmod(0)
-    else:
-        real = sl.os.listdir
+        try:
+            for read in (
+                lambda: _source(tmp_path, database),
+                lambda: get_all_patient_ids(tmp_path, database=database),
+            ):
+                with pytest.raises(SealPublicationError, match="cannot inspect publication closure") as error:
+                    read()
+                assert error.value.reason == "bucket_install_unaccepted"
+                assert error.value.install == blocked
+        finally:
+            blocked.chmod(0o700)
+        return
 
-        def listing(path):
-            if os.path.realpath(path) == str(blocked):
-                raise PermissionError("synthetic listing denial")
-            return real(path)
+    real = sl.os.listdir
 
-        monkeypatch.setattr(sl.os, "listdir", listing)
-    try:
-        assert _refusals(tmp_path, database) == [sl.FILE_UNREADABLE] * 5
-    finally:
-        blocked.chmod(0o700)
+    def listing(path):
+        if os.path.realpath(path) == str(blocked):
+            raise PermissionError("synthetic listing denial")
+        return real(path)
+
+    monkeypatch.setattr(sl.os, "listdir", listing)
+    assert _refusals(tmp_path, database) == [sl.FILE_UNREADABLE] * 5
 
 
 def test_a_supplied_loader_cannot_override_the_shared_absent_decision(tmp_path):
@@ -223,7 +243,6 @@ def test_racy_csv_alias_stays_unmemoized_after_the_window(tmp_path, monkeypatch,
 
 
 def test_services_automatic_selection_prefers_parquet_to_its_old_csv_exception(tmp_path):
-    from tests.core.test_d9p_consumed_files import _converted_mimic, _services, _SERVICES
 
     root = _converted_mimic(tmp_path / "mimic")
     _SERVICES.assign(CURR_SERVICE=["CSURG", "NSURG"]).to_csv(root / "SERVICES.csv.gz", index=False)
@@ -235,7 +254,6 @@ def test_services_automatic_selection_prefers_parquet_to_its_old_csv_exception(t
 @pytest.mark.parametrize("alias", [False, True])
 def test_owner_selected_chart_csv_keeps_strict_validation_without_an_item_filter(tmp_path, alias):
     import copy
-    from tests.core.test_d30d_racy_age import _csv as chart_csv
 
     path = chart_csv(tmp_path)
     config = copy.deepcopy(load_src_cfg("mimic"))
@@ -252,7 +270,6 @@ def test_owner_selected_chart_csv_keeps_strict_validation_without_an_item_filter
 
 def test_owner_selected_chart_csv_alias_keeps_declared_value_strings(tmp_path):
     import copy
-    from tests.core.test_d30d_racy_age import _csv as chart_csv
 
     path = chart_csv(tmp_path).rename(tmp_path / "custom_chart.csv")
     config = copy.deepcopy(load_src_cfg("mimic"))
@@ -328,7 +345,6 @@ def test_configured_stem_directory_never_hides_a_nested_inventory_part(tmp_path)
 
 def test_verified_legacy_adoption_records_the_flat_source_binding(tmp_path):
     from scripts import build_itemid_bucket_cache as builder
-    from tests.core.test_bucket_storage_b6 import _legacy_aumc
 
     source, bucket = _legacy_aumc(tmp_path)
     expected = builder._derived_from(

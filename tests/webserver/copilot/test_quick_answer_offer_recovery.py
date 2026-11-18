@@ -7,7 +7,7 @@ import pytest
 from easyicu.webserver.pi_copilot import service as service_module
 from easyicu.webserver.pi_copilot.contracts import ToolExecutionContext
 from tests.support.wait import wait_until
-from tests.webserver.copilot.test_a_saved_numerical_question_offers_its_quick_card_after_the_source_click import (
+from tests.support.quick_answer_conversation import (
     QUESTION,
     TRANSITION,
     confirm_source_and_continue,
