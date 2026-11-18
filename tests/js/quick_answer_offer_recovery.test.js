@@ -16,9 +16,9 @@ const sandbox = { createAssistantMessageEventStream: () => {
   const events = [];
   return { push: event => events.push(event), async *[Symbol.asyncIterator]() { yield* events; } };
 } };
-vm.runInNewContext(source + '\nthis.owner = {settleQuickAnswerOffer, quickAnswerOfferRetryAvailable: '
+vm.runInNewContext(source + '\nthis.owner = {settleQuickAnswerOffer, hostPostToolFinalization, quickAnswerReadingNeedsRepair, quickAnswerOfferRetryAvailable: '
   + 'typeof quickAnswerOfferRetryAvailable === "function" ? quickAnswerOfferRetryAvailable : () => false};', sandbox);
-const { settleQuickAnswerOffer, quickAnswerOfferRetryAvailable } = sandbox.owner;
+const { settleQuickAnswerOffer, hostPostToolFinalization, quickAnswerReadingNeedsRepair, quickAnswerOfferRetryAvailable } = sandbox.owner;
 const model = { api: 'test', provider: 'synthetic', id: 'scripted' };
 const ack = '已确认使用模拟数据。';
 const message = (stopReason, content = []) => ({ role: 'assistant', stopReason, content, usage: { input: 3 } });
@@ -42,7 +42,10 @@ test('an exhausted quick-answer decision remains failed, including its usage', a
 test('transport exceptions and missing terminal events cannot become a successful decline', async () => {
   const thrown = new Error('503: synthetic unavailable');
   await assert.rejects(settleQuickAnswerOffer(model, () => { throw thrown; }, ack), error => error === thrown);
-  await assert.rejects(settleQuickAnswerOffer(model, () => stream([]), ack));
+  const incomplete = { ...stream([{ type: 'done', message: undefined }]), result: async () => undefined };
+  await assert.rejects(settleQuickAnswerOffer(model, () => incomplete, 'The synthetic export is selected.'), {
+    name: 'Error', message: 'Quick-answer decision ended without a terminal message',
+  });
 });
 
 test('a failed partial tool call is never replayed', async () => {
@@ -76,6 +79,44 @@ test('a completed decision preserves only its first quick-answer tool call', asy
   assert.equal(terminal.content[0].text, ack);
   assert.equal(terminal.content[1], first);
   assert.equal(terminal.usage, result.usage);
+});
+
+test('a typed reading issue opens one re-read on source confirmation and on direct questions', async () => {
+  const feedback = { role: 'toolResult', toolName: 'easyicu_quick_answer', details: {
+    code: 'quick_reading_concept_unregistered',
+    details: { reading_issues: [{ field: 'measure.concept', received: 'quartz_metric_zz',
+      message: 'not a registered concept id', candidates: [] }] },
+  } };
+  const repair = { type: 'toolCall', id: 'repair', name: feedback.toolName,
+    arguments: { reading: { measure: { concept: 'lact' } } } };
+  const unexpectedText = { type: 'text', text: 'Only the host card should appear' };
+  const response = message('toolUse', [unexpectedText, repair, { ...repair, id: 'duplicate' }]);
+  const terminalFailure = { ...feedback, isError: true, details: { code: 'quick_reading_invalid' } };
+  const terminalHandoff = { ...feedback, details: {
+    code: feedback.details.code, details: { quick_answer: { proposal: { status: 'full_study' } } },
+  } };
+  for (const content of [host.content, 'Describe a synthetic measure.']) {
+    const context = { messages: [{ role: 'user', content }, feedback] };
+    assert.equal(quickAnswerReadingNeedsRepair(feedback), true);
+    assert.equal(hostPostToolFinalization(model, context, 'en'), null);
+    let opens = 0;
+    const events = await collect(await settleQuickAnswerOffer(model, () => {
+      opens += 1;
+      return stream([{ type: 'done', message: response }]);
+    }, ''));
+    assert.equal(opens, 1);
+    const reread = events.at(-1).message;
+    assert.equal(reread.content.filter(part => part.type === 'toolCall').length, 1);
+    assert.equal(reread.content.find(part => part.type === 'toolCall'), repair);
+    assert.ok(!JSON.stringify(events).includes(unexpectedText.text));
+    for (const terminal of [terminalFailure, terminalHandoff]) {
+      assert.equal(quickAnswerReadingNeedsRepair(terminal), false);
+      const settled = await collect(hostPostToolFinalization(model, {
+        messages: [...context.messages, reread, terminal],
+      }, 'en'));
+      assert.equal(settled.at(-1).message.stopReason, 'stop');
+    }
+  }
 });
 
 test('an aborted decision remains aborted', async () => {

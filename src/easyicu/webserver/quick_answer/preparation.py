@@ -20,7 +20,7 @@ from easyicu.research_agent.research_context.builder import build_research_conte
 from easyicu.webserver import dataio, source_identity_authority, sources
 
 from .contracts import QuickProposal, QuickReading, QuickStop, StudyHandoff
-from .planning import _effective, _requirements, bind_concept_names, prepare_quick_answer, qualification_stop
+from .planning import _effective, _requirements, bind_concept_names, prepare_quick_answer, reading_fallback
 from .source import PreparedSource, bind_prepared_source
 
 MAX_PREPARATION_BYTES = 256 * 1024 * 1024
@@ -89,14 +89,15 @@ def prepare_registered_question(
     if identity.database != database:
         raise QuickStop("quick_source_identity_mismatch")
     reading = bind_concept_names(reading)
-    if question != reading.question:
+    question_mismatch = question != reading.question
+    if question_mismatch:
         reading = reading.model_copy(update={
             "question": question, "ambiguities": (*reading.ambiguities, "question_mismatch"),
         })
     handoff = StudyHandoff(reading=reading, source=identity.to_dict())
-    reason = qualification_stop(reading)
-    if reason:
-        return QuickProposal(status="full_study", reason=reason, expand=handoff), None
+    fallback = reading_fallback(handoff, question_mismatch=question_mismatch)
+    if fallback:
+        return fallback, None
     # The same provider owner as study setup must clear the source before any
     # materialization. Public-demo provenance is scoped by the caller.
     from easyicu.research_agent.providers.client_trust import ProviderConfigurationError, source_requires_clearance
@@ -108,6 +109,9 @@ def prepare_registered_question(
         decision = assess_study(research_capability_profile(database), _requirements(reading))
         if decision.status == "refusal":
             return QuickProposal(status="stopped", reason="quick_capability_refused", expand=handoff,
+                                 capability=decision), None
+        if decision.unassessed_concepts:
+            return QuickProposal(status="stopped", reason="quick_capability_unassessed", expand=handoff,
                                  capability=decision), None
         effective = _effective(reading, decision)
         receipt = dataio.validate_research_pipeline_source(export_path, database=database)

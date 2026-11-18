@@ -94,12 +94,20 @@ class QuickCard(Contract):
     approval_action: Literal["approve_quick_answer"] = "approve_quick_answer"
 
 
+class UnregisteredConcept(Contract):
+    field: str
+    received: str
+    message: Literal["not a registered concept id"] = "not a registered concept id"
+    candidates: tuple[str, ...] = ()
+
+
 class QuickProposal(Contract):
     status: Literal["approval_required", "full_study", "stopped"]
     reason: str
     expand: StudyHandoff
     card: QuickCard | None = None
     capability: CapabilityDecision | None = None
+    reading_issues: tuple[UnregisteredConcept, ...] = Field(default=(), exclude_if=lambda issues: not issues)
 
 
 class QuickApproval(Contract):

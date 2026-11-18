@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import re
+from functools import lru_cache
 
 from easyicu.databases.research_capabilities import research_capability_profile
 from easyicu.databases.research_requirements import (
@@ -15,7 +16,9 @@ from easyicu.research_agent.planning.population_compile import compile_populatio
 from easyicu.research_agent.research_context.materialization_window import context_column_windows
 from easyicu.webserver.design_variance_basis import counts_only_request
 
-from .contracts import QuickCard, QuickPlan, QuickProposal, QuickReading, QuickStop, StudyHandoff
+from .contracts import (
+    QuickCard, QuickPlan, QuickProposal, QuickReading, QuickStop, StudyHandoff, UnregisteredConcept,
+)
 from .source import PreparedSource, require_source
 
 
@@ -39,26 +42,28 @@ _OUTCOMES = {"hospital_death", "icu_death", "death_within_72h_after_icu_discharg
 # Group label for groups pooled under the small-count rule (analysis owner).
 POOLED_GROUP = "Other groups (pooled)"
 
-def bind_concept_names(reading: QuickReading) -> QuickReading:
-    """Name the reading's measure and groups by their EasyICU concept ids.
 
-    The interpreter sees no concept roster, so it may type a clinical name
-    ("lactate", "gender") where the materializer and the prepared source take
-    an id (``lact``, ``sex``); pilot1 10-26 stopped a fully typed reading that
-    way. An id stays as typed. Any other name binds only when the question
-    reader reads it as exactly one concept (``concept_named_by``). For
-    grouping, that includes the catalog's display labels. Unresolved names
-    stay as typed for the normal qualification and source checks.
-    """
-    from easyicu.concept.loader import load_concept_dict_cached
+@lru_cache(maxsize=1)
+def _registered_concepts() -> frozenset[str]:
+    from easyicu.concept_output_sources import COMPOSITE_CONCEPT_OUTPUT_SOURCES
+    from easyicu.outcome_availability import OUTCOME_CONCEPT_SUPPORTED_DATABASES
+    from easyicu.resources import SIC_CASE_OVERLAY_CONCEPTS, load_dictionary
+
+    return frozenset((*load_dictionary(include_sofa2=True).keys(), *SIC_CASE_OVERLAY_CONCEPTS,
+                      *OUTCOME_CONCEPT_SUPPORTED_DATABASES, *COMPOSITE_CONCEPT_OUTPUT_SOURCES, *_OUTCOMES))
+
+
+def bind_concept_names(reading: QuickReading) -> QuickReading:
+    """Bind one registered concept per name, including catalog labels for grouping."""
     from easyicu.webserver.study_intent import concept_named_by
 
-    known = load_concept_dict_cached().keys() | _OUTCOMES
+    known = _registered_concepts()
 
     def bind(name: str, *, include_catalog_labels: bool = False) -> str:
         if not name or name in known:
             return name
-        return concept_named_by(name, include_catalog_labels=include_catalog_labels) or name
+        concept = concept_named_by(name, include_catalog_labels=include_catalog_labels)
+        return concept if concept in known else name
 
     concept = bind(reading.measure.concept)
     grouping = tuple(bind(name, include_catalog_labels=True) for name in reading.grouping)
@@ -67,6 +72,39 @@ def bind_concept_names(reading: QuickReading) -> QuickReading:
     return reading.model_copy(update={
         "measure": reading.measure.model_copy(update={"concept": concept}), "grouping": grouping,
     })
+
+
+def _unregistered_concepts(reading: QuickReading) -> tuple[UnregisteredConcept, ...]:
+    from easyicu.webserver.study_intent import StudyIntentError, catalog_named_concepts
+
+    fields = [("measure.concept", reading.measure.concept)] if reading.measure.concept else []
+    fields.extend((f"grouping[{index}]", name) for index, name in enumerate(reading.grouping))
+    known = _registered_concepts()
+    issues = []
+    for field, received in fields:
+        if received in known:
+            continue
+        try:
+            names = catalog_named_concepts(received.replace("_", " "))
+        except StudyIntentError:
+            names = ()
+        candidates = tuple(name for name in names if name in known)[:8]
+        issues.append(UnregisteredConcept(field=field, received=received, candidates=candidates))
+    return tuple(issues)
+
+
+def reading_fallback(handoff: StudyHandoff, *, question_mismatch: bool) -> QuickProposal | None:
+    if question_mismatch:
+        return QuickProposal(status="full_study", reason="quick_reading_ambiguous", expand=handoff)
+    reading = handoff.reading
+    issues = _unregistered_concepts(reading)
+    if issues:
+        return QuickProposal(status="full_study", reason="quick_reading_concept_unregistered",
+                             expand=handoff, reading_issues=issues)
+    reason = qualification_stop(reading)
+    if reason is None and not _registered_concepts().issuperset(population_spec_concepts(reading.population)):
+        reason = "quick_population_unresolved"
+    return QuickProposal(status="full_study", reason=reason, expand=handoff) if reason else None
 
 
 def qualification_stop(reading: QuickReading) -> str | None:
@@ -267,9 +305,9 @@ def prepare_quick_answer(reading: QuickReading, *, source: PreparedSource, provi
     if question_mismatch:
         reading = reading.model_copy(update={"question": question, "ambiguities": (*reading.ambiguities, "question_mismatch")})
     handoff = StudyHandoff(reading=reading, source=source.identity.to_dict())
-    reason = "quick_reading_ambiguous" if question_mismatch else qualification_stop(reading)
-    if reason:
-        return QuickProposal(status="full_study", reason=reason, expand=handoff)
+    fallback = reading_fallback(handoff, question_mismatch=question_mismatch)
+    if fallback:
+        return fallback
     decision = None
     try:
         require_source(source, provider)

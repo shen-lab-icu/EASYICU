@@ -55,6 +55,7 @@ function lazyStream(_model, factory) {
           if (event.type === 'done') result = event.message;
           yield event;
         }
+        if (stream.result) result = await stream.result();
       } catch (error) {
         result = message([], 'error', error.message);
         yield { type: 'error', reason: 'error', error: result };
@@ -66,7 +67,19 @@ function lazyStream(_model, factory) {
 
 const sdkInstalled = fs.existsSync(
   path.join(path.dirname(budgetFile), '../node_modules/@earendil-works/pi-ai/package.json'));
-const needsSdk = { skip: sdkInstalled ? false : 'Pinned Pi dependencies are not installed in this checkout' };
+const finalizerFile = path.join(path.dirname(budgetFile), 'post-tool-finalization.mjs');
+
+function offlineFinalizer() {
+  const source = fs.readFileSync(finalizerFile, 'utf8');
+  const names = [...source.matchAll(/^export (?:async )?(?:function\*?|const) (\w+)/gm)].map(match => match[1]);
+  return vm.runInNewContext(source.replace(/^import .*?;\n/m, '').replace(/^export /gm, '')
+    + '\n({' + names.join(', ') + '});', {
+    createAssistantMessageEventStream() {
+      const events = [];
+      return { push: event => events.push(event), async *[Symbol.asyncIterator]() { yield* events; } };
+    },
+  }, { filename: finalizerFile });
+}
 
 const imports = Promise.all([
   import(pathToFileURL(budgetFile)),
@@ -74,15 +87,13 @@ const imports = Promise.all([
   import(pathToFileURL(retryFile)),
   // The usage ledger sits beside the budget guard and wraps each attempt.
   import(pathToFileURL(path.join(path.dirname(budgetFile), 'shell-usage.mjs'))),
-  // The data-source transition's quick-answer offer settles the decision call
-  // through the pinned SDK, which only the Pi workspace security lane installs.
-  sdkInstalled
-    ? import(pathToFileURL(path.join(path.dirname(budgetFile), 'post-tool-finalization.mjs')))
-    : null,
+  // On offline checkouts, replace only the SDK event queue.
+  sdkInstalled ? import(pathToFileURL(finalizerFile)) : offlineFinalizer(),
 ]);
 
 async function harness(attempts, config = {}) {
   const [{ ShellBudgetGuard }, projection, retry, { ShellUsageLedger }, finalization] = await imports;
+  const turnContext = config.context || context;
   const guard = new ShellBudgetGuard({
     tokenBudget: 100000, maxOutputTokens: 1000,
     maxProviderCallsPerMessage: 8, maxProviderCallsPerSession: 128,
@@ -120,7 +131,9 @@ async function harness(attempts, config = {}) {
   const originalStreamFunction = async (selected, suppliedContext, options) => {
     order.push('provider');
     assert.equal(selected, model);
-    assert.equal(suppliedContext, context);
+    assert.equal(suppliedContext, egressReceipts.at(-1).suppliedContext);
+    if (config.checkContext) config.checkContext(suppliedContext);
+    else assert.equal(suppliedContext, turnContext);
     assert.equal(options.maxRetries, 0, 'SDK retries stay disabled for each attempt');
     calls.push(options);
     elapsed += config.callDuration || 0;
@@ -162,21 +175,20 @@ async function harness(attempts, config = {}) {
       assert.equal(root, 'synthetic-session-root');
       assert.equal(sessionId, 'synthetic-session');
       assert.equal(selected, model);
-      assert.equal(suppliedContext, context);
       egressReceipts.push({ selected, suppliedContext });
       assert.equal(calls.length + 1, egressReceipts.length, 'receipt precedes transport');
     },
     activeRequestBySession: new Map(config.activeRequest === false ? [] : [['synthetic-session', 'synthetic-request']]),
     normalizePiEvent: projection.normalizePiEvent,
     emit: envelope => { order.push('retry'); notices.push(envelope); },
-    hostPostToolFinalization: () => config.finalization || null,
-    quickAnswerOfferReply: () => config.quickOfferReply || '',
-    settleQuickAnswerOffer: finalization?.settleQuickAnswerOffer,
+    ...finalization,
+    hostPostToolFinalization: config.finalization ? () => config.finalization : finalization.hostPostToolFinalization,
+    quickAnswerOfferReply: config.quickOfferReply ? () => config.quickOfferReply : finalization.quickAnswerOfferReply,
     ...retry, retryTransientProviderStream: retryWithFastSleep,
   }, { filename: mainFile });
   if (config.sessionEvent) subscribed(config.sessionEvent);
   const events = [];
-  const stream = session.agent.streamFunction(model, context, { maxTokens: 1000, ...config.options });
+  const stream = session.agent.streamFunction(model, turnContext, { maxTokens: 1000, ...config.options });
   for await (const event of stream) {
     events.push(event);
     config.onEvent?.(event, calls);
@@ -497,6 +509,7 @@ test('successful streams are forwarded while content is still arriving', async (
     timer = setTimeout(() => reject(new Error('Content was buffered until completion')), 500);
   });
   const result = await harness([first], {
+    context: { ...context, tools: quickTools },
     beforeEvent: event => event.type === 'done' ? Promise.race([gate, deadline]) : undefined,
     onEvent: event => { if (event.type === 'text_delta') { clearTimeout(timer); release(); } },
   });
@@ -614,7 +627,7 @@ const decided = (content, stopReason, usage) => [
   { type: 'done', reason: stopReason, message: { ...message(content, stopReason), usage } },
 ];
 
-test('a quick-answer offer the model declines shows only the host acknowledgement', needsSdk, async () => {
+test('a quick-answer offer the model declines shows only the host acknowledgement', async () => {
   const usage = { input: 40, output: 9, cacheRead: 0, cacheWrite: 0, totalTokens: 49, cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 } };
   const result = await harness([decided([{ type: 'text', text: 'Model prose with a number 2.1' }], 'stop', usage)], { quickOfferReply: ACK });
   assert.equal(result.calls.length, 1);
@@ -625,7 +638,7 @@ test('a quick-answer offer the model declines shows only the host acknowledgemen
   assert.deepEqual(result.usage.filter(row => row.state !== 'in_flight').map(row => row.state), ['completed']);
 });
 
-test('a quick-answer offer keeps the first reading call behind the acknowledgement', needsSdk, async () => {
+test('a quick-answer offer keeps the first reading call behind the acknowledgement', async () => {
   const first = { type: 'toolCall', id: 'call-quick', name: 'easyicu_quick_answer', arguments: { reading } };
   const result = await harness([decided([
     { type: 'text', text: 'I will submit it.' }, first,
@@ -639,7 +652,7 @@ test('a quick-answer offer keeps the first reading call behind the acknowledgeme
   ]);
 });
 
-test('a failed or aborted quick-answer decision keeps the transition safe', needsSdk, async () => {
+test('a failed or aborted quick-answer decision keeps the transition safe', async () => {
   const failedCall = await harness([[opened(1), failed('HTTP 401: authentication failed')]], { quickOfferReply: ACK });
   assert.equal(failedCall.result.stopReason, 'error');
   assert.equal(failedCall.projected.error_code, 'pi_model_provider_error');
@@ -647,6 +660,140 @@ test('a failed or aborted quick-answer decision keeps the transition safe', need
   const aborted = await harness([[opened(1), { type: 'error', reason: 'aborted', error: message([], 'aborted') }]], { quickOfferReply: ACK });
   assert.equal(aborted.result.stopReason, 'aborted');
   assert.deepEqual(aborted.events.map(event => event.type), ['error']);
+});
+
+const QUICK = 'easyicu_quick_answer';
+const CATALOG = 'easyicu_list_data_sources';
+const quickTools = [{ name: QUICK }, { name: CATALOG }];
+const reviewQuestion = 'Could you summarize typical peak lactate in the opening six hours?';
+const initial = { type: 'toolCall', id: 'initial', name: QUICK,
+  arguments: { reading: { question: reviewQuestion, measure: { concept: 'quartz_metric_zz', statistic: 'median' } } } };
+const corrected = { ...initial, id: 'corrected',
+  arguments: { reading: { question: reviewQuestion, measure: { concept: 'lact', statistic: 'median' } } } };
+const catalogCall = { type: 'toolCall', id: 'catalog', name: CATALOG, arguments: {} };
+const toolResult = (call, details, isError = false) => ({
+  role: 'toolResult', toolName: call.name, toolCallId: call.id, details, isError, content: [],
+});
+const readingIssue = toolResult(initial, { status: 'ok', code: 'quick_reading_concept_unregistered',
+  details: { reading_issues: [{ field: 'measure.concept', received: 'quartz_metric_zz', candidates: [] }] } });
+const catalogResult = toolResult(catalogCall, { status: 'ok', code: 'easyicu_data_sources_listed' });
+const stop = toolResult(corrected, { status: 'blocked', code: 'quick_qualifying_provider_required' }, true);
+const readerProse = { type: 'text', text: 'I estimate a median of 2.3.' };
+const transition = {
+  role: 'user',
+  content: 'Use the selected synthetic export.\n\n[EASYICU_HOST_TRANSITION_V1]\n'
+    + '[EASYICU_DATA_SOURCE_CONFIRMED_V1]\n[EASYICU_QUICK_ANSWER_OFFER_V1]\n'
+    + '\n\n[EASYICU_CURRENT_TURN_OWNER_CONTEXT_V1]\n'
+    + JSON.stringify([{ code: 'easyicu_research_workflow_projected', details: {
+      workflow: { study_setup_receipt: { configuration: { question: reviewQuestion,
+        data_source: { label: 'Synthetic export' } } } },
+    } }]),
+};
+const direct = { role: 'user', content: reviewQuestion };
+
+for (const user of [transition, direct]) {
+  test(`main.mjs opens one filtered re-read after ${user === transition ? 'source confirmation' : 'a direct question'}`, async () => {
+    const first = await harness([decided([initial], 'toolUse')], {
+      context: { messages: [user], tools: user === transition ? [quickTools[0]] : quickTools },
+    });
+    assert.deepEqual(Array.from(first.result.content.filter(part => part.type === 'toolCall')), [initial]);
+    assert.equal(first.result.content.some(part => part.type === 'text' && part.text.includes('Synthetic export')),
+      user === transition, 'only source confirmation writes the acknowledgement');
+    const history = [user, first.result, readingIssue];
+    const response = await harness([decided([readerProse, corrected, { ...corrected, id: 'extra' }, catalogCall], 'toolUse')], {
+      context: { messages: history, tools: quickTools },
+      checkContext: supplied => {
+        assert.equal(supplied.messages, history);
+        assert.deepEqual(Array.from(supplied.tools, tool => tool.name), [QUICK]);
+      },
+    });
+    assert.equal(response.calls.length, 1);
+    const reread = response.result;
+    assert.deepEqual(Array.from(reread.content.filter(part => part.type === 'toolCall')), [corrected]);
+    assert.ok(!JSON.stringify(response.events).includes(readerProse.text));
+    assert.ok(!JSON.stringify(response.events).includes('Synthetic export'), 'the acknowledgement is written once');
+    const card = toolResult(corrected, { status: 'ok', details: {
+      quick_answer: { proposal: { status: 'approval_required' } },
+    } });
+    const finished = await harness([success(1)], { context: { messages: [...history, reread, card], tools: quickTools } });
+    assert.equal(finished.calls.length, 0);
+    assert.equal(finished.result.stopReason, 'stop');
+  });
+}
+
+for (const user of [direct, transition]) {
+  test(`a typed stop after ${user === direct ? 'a direct' : 'an offered'} re-read gets a visible reply`, async () => {
+    const prior = user === direct
+      ? [message([initial], 'toolUse'), readingIssue]
+      : [message([initial, catalogCall], 'toolUse'), readingIssue, catalogResult];
+    const history = [user, ...prior, message([corrected], 'toolUse'), stop];
+    const finished = await harness([success(1)], { context: { messages: history, tools: quickTools } });
+    assert.equal(finished.calls.length, 0);
+    assert.equal(finished.result.stopReason, 'stop');
+    assert.match(finished.result.content.map(part => part.text || '').join(''), /quick_qualifying_provider_required/);
+  });
+}
+
+for (const user of [direct, transition]) {
+  for (const [validator, details] of [
+    ['Pi SDK', undefined],
+    ['quick-question owner', { status: 'blocked', code: 'quick_reading_invalid', details: {} }],
+  ]) {
+    test(`a re-read rejected by ${validator} leaves ${user === direct ? 'the direct turn' : 'the host acknowledgement'} to the handoff`, async () => {
+      const first = await harness([decided([initial], 'toolUse')], {
+        context: { messages: [user], tools: user === transition ? [quickTools[0]] : quickTools },
+      });
+      const malformed = { ...corrected, arguments: { reading: { question: reviewQuestion, measure: { statistic: 'typical' } } } };
+      const rejection = toolResult(malformed, details, true);
+      const history = [user, first.result, readingIssue, message([malformed], 'toolUse'), rejection];
+      const finished = await harness([success(1)], { context: { messages: history, tools: quickTools } });
+      assert.equal(finished.calls.length, 0);
+      assert.equal(finished.result.stopReason, 'stop');
+      assert.equal(finished.result.content.map(part => part.text || '').join(''), '');
+    });
+  }
+}
+
+test('a direct assistant turn submits only its first quick reading even with other tools', async () => {
+  const calls = [catalogCall, initial, { ...corrected, id: 'same-turn' }];
+  const events = [
+    opened(1),
+    ...calls.map((call, contentIndex) => ({ type: 'toolcall_end', toolCall: call, contentIndex, partial: message(calls) })),
+    { type: 'done', reason: 'toolUse', message: message(calls, 'toolUse') },
+  ];
+  const result = await harness([events], { context: { messages: [direct], tools: quickTools } });
+  assert.deepEqual(Array.from(result.result.content.filter(part => part.type === 'toolCall')), [initial]);
+  assert.deepEqual(result.events.filter(event => event.type === 'toolcall_end').map(event => event.toolCall.id), [initial.id]);
+});
+
+test('a batch without a quick-answer call keeps its ordinary tools', async () => {
+  const inspect = { type: 'toolCall', id: 'inspect', name: 'easyicu_inspect_workflow', arguments: {} };
+  const events = decided([catalogCall, inspect], 'toolUse');
+  const result = await harness([events], { context: {
+    messages: [{ role: 'user', content: 'Which export and setup stage does this study use?' }],
+    tools: [...quickTools, { name: inspect.name }],
+  } });
+  assert.deepEqual(result.events, events);
+  assert.equal(result.result, events.at(-1).message);
+});
+
+test('a trailing catalogue receipt cannot hide reading feedback or a terminal quick card', async () => {
+  const history = [direct, message([initial, catalogCall], 'toolUse'), readingIssue, catalogResult];
+  const repaired = await harness([decided([readerProse, corrected], 'toolUse')], {
+    context: { messages: history, tools: quickTools },
+    checkContext: supplied => assert.deepEqual(Array.from(supplied.tools, tool => tool.name), [QUICK]),
+  });
+  assert.deepEqual(Array.from(repaired.result.content.filter(part => part.type === 'toolCall')), [corrected]);
+  assert.ok(!JSON.stringify(repaired.events).includes(readerProse.text));
+
+  const card = toolResult(corrected, { status: 'ok', details: {
+    quick_answer: { proposal: { status: 'approval_required' } },
+  } });
+  const finished = await harness([success(1)], { context: {
+    messages: [...history, message([corrected, catalogCall], 'toolUse'), card, catalogResult], tools: quickTools,
+  } });
+  assert.equal(finished.calls.length, 0);
+  assert.equal(finished.result.stopReason, 'stop');
 });
 
 
