@@ -147,7 +147,8 @@ from ..planning.progressive_module_ids import (
 from ..providers.capabilities import llm_supports_strict_json_schema
 from ..providers.llm import llm_is_mockish
 from ..planning.prompt_projection import (
-    PlannerPromptBlock, PlannerPromptBlocks,
+    OUTLINE_COMPACTION, PlannerPromptBlock, PlannerPromptBlocks, outline_authority_block,
+    outline_action_blocks, outline_article_roles_block, outline_design_selection_block,
     project_planner_request, protected_planner_variable_names,
     planner_prompt_byte_limit,
     project_plan_revision_prompt,
@@ -1346,77 +1347,43 @@ class ProgressivePlannerAgent:
             json.dumps(projected_data_cards, ensure_ascii=False, separators=(",", ":"), sort_keys=True),
             1,
         )
+        action_menu, action_matrix = outline_action_blocks(action_rows, module_ids_by_analysis_type)
+        shape_arguments = {
+            "analysis_types": analysis_types,
+            "module_ids_by_analysis_type": module_ids_by_analysis_type,
+            "literature_design_card_keys_by_dimension": reviewed_design_card_keys_by_dimension,
+        }
         blocks = PlannerPromptBlocks([
             "PROGRESSIVE PLANNER RUN AUTHORITY",
             "Candidate analysis families (choose exactly one; the order is the "
             "host's reading of the question's wording, not a ruling, so choose "
             "the family the question asks for):\n"
             + json.dumps(list(analysis_types), ensure_ascii=False, sort_keys=True),
-            "Allowed ProgressiveOutlineStep.module_id values by candidate "
-            "analysis family (use only these exact strings):\n"
-            + json.dumps(
-                module_ids_by_analysis_type,
-                ensure_ascii=False,
-                separators=(",", ":"),
-                sort_keys=True,
+            outline_authority_block(
+                "response_shape",
+                "Allowed ProgressiveOutlineStep.module_id values by candidate "
+                "analysis family (use only these exact strings):\n"
+                + canonical_json_bytes(module_ids_by_analysis_type).decode("utf-8"),
+                "",
             ),
-            _outline_shape_contract(
-                analysis_types=analysis_types,
-                module_ids_by_analysis_type=module_ids_by_analysis_type,
-                literature_design_card_keys_by_dimension=(
-                    reviewed_design_card_keys_by_dimension
-                ),
+            outline_authority_block(
+                "response_shape", _outline_shape_contract(**shape_arguments),
+                _outline_shape_contract(**shape_arguments, compact=True),
             ),
-            PlannerPromptBlock("action_rows", "Retrieved scientific actions (only these may be selected):\n"
-            + json.dumps(list(action_rows), ensure_ascii=False, separators=(",", ":"), sort_keys=True)),
+            action_menu,
             "Sealed literature citation keys:\n"
             + json.dumps(list(allowed_literature_citation_keys), ensure_ascii=False, sort_keys=True),
-            "Host-known method layers for sealed citation keys:\n"
-            + json.dumps(
-                [
-                    {
-                        "citation_key": key,
-                        "method_layers": list(method_layers_for_source_keys((key,))),
-                    }
+            outline_authority_block(
+                "response_shape",
+                "Host-known method layers for sealed citation keys:\n"
+                + canonical_json_bytes([
+                    {"citation_key": key, "method_layers": list(layers)}
                     for key in allowed_literature_citation_keys
-                    if method_layers_for_source_keys((key,))
-                ],
-                ensure_ascii=False,
-                separators=(",", ":"),
-                sort_keys=True,
+                    if (layers := method_layers_for_source_keys((key,)))
+                ]).decode("utf-8"),
+                "",
             ),
-            PlannerPromptBlock("action_rows", "Analysis-family action matrix (do not cross family boundaries):\n"
-            + json.dumps(
-                [
-                    {
-                        "analysis_type": analysis_type,
-                        "available_modules": list(
-                            progressive_module_ids_for_analysis_types((analysis_type,))
-                        ),
-                        "scientific_action_ids": [
-                            str(row.get("action_id") or "")
-                            for row in action_rows
-                            if row.get("analysis_type") == analysis_type
-                        ],
-                    }
-                    for analysis_type in analysis_types
-                ],
-                ensure_ascii=False,
-                separators=(",", ":"),
-                sort_keys=True,
-            )
-            + "\nAfter selecting analysis_type, use only that row's action ids. "
-            "The adjusted_association module may use only "
-            "association.adjusted_association (or null). The "
-            "robustness_replay module must always set scientific_action_id to "
-            "null because it replays the sealed sensitivity specifications; a "
-            "separate scientific action needs its own custom_analysis step. "
-            "Cohort-definition, measurement_audit, absolute_risk_context, raw-distribution, "
-            "visualization, and report support steps must also set "
-            "scientific_action_id to null. A table_one step must bind "
-            "descriptive.table_one when that exact action appears in the "
-            "selected analysis family's scientific_action_ids; otherwise it "
-            "must use null."),
+            action_matrix,
             PlannerPromptBlock("action_rows", "Fixed host module action compatibility:\n"
             + json.dumps(PROGRESSIVE_FIXED_MODULE_ACTION_IDS, separators=(",", ":"), sort_keys=True)
             + "\nAn empty action list requires null. A null action does not "
@@ -1455,15 +1422,16 @@ class ProgressivePlannerAgent:
             "design-card decisions. If adjusted_association uses any continuous "
             "variable, its step citations must cover both interpretation and "
             "functional_form method layers.",
-            DESIGN_SELECTION_CONTRACT,
-            PlannerPromptBlock("article_question_context", "Candidate-specific host article role contracts:\n"
-            + json.dumps(article_contracts, ensure_ascii=False, separators=(",", ":"), sort_keys=True)
-            + "\nThese requirements apply only after selecting a family that "
-            "answers the original question. They do not expand its scope. "
-            "Grouped prevalence, counts, or outcome rates do not by themselves "
-            "request adjusted association, prediction, or causal effects. Do not "
-            "reject a sufficient descriptive design for lacking another family's "
-            "model or robustness roles."),
+            outline_design_selection_block(DESIGN_SELECTION_CONTRACT),
+            outline_article_roles_block(
+                article_contracts, module_ids_by_analysis_type,
+                "\nThese requirements apply only after selecting a family that "
+                "answers the original question. They do not expand its scope. "
+                "Grouped prevalence, counts, or outcome rates do not by themselves "
+                "request adjusted association, prediction, or causal effects. Do not "
+                "reject a sufficient descriptive design for lacking another family's "
+                "model or robustness roles.",
+            ),
             "Executable module ownership for required article result roles:\n"
             + json.dumps(
                 {
@@ -4571,6 +4539,10 @@ class ProgressivePlannerAgent:
                     messages,
                     _outline_shape_contract(
                         analysis_types=analysis_types,
+                        compact=any(
+                            receipt["reason"] == OUTLINE_COMPACTION
+                            for receipt in prompt_request.metrics["prompt_projection_receipts"]
+                        ),
                         module_ids_by_analysis_type={
                             analysis_type: progressive_module_ids_for_analysis_types(
                                 (analysis_type,)

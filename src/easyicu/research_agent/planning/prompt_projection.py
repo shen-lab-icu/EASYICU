@@ -3,10 +3,11 @@
 from __future__ import annotations
 
 import copy
-from dataclasses import dataclass, replace
 import json
 import re
-from typing import Any, Literal, Sequence
+from collections import Counter
+from dataclasses import dataclass, replace
+from typing import Any, Literal, Mapping, Sequence
 
 from ..canonical_json import canonical_json_bytes, canonical_sha256, sha256_bytes
 from ..providers.prompt_budget import (
@@ -533,11 +534,13 @@ PLANNER_PROMPT_BLOCK_NAMES = (
     "response_shape",
     "schema",
 )
+OUTLINE_COMPACTION = "outline_authority_compacted"
 _PLANNER_PROJECTION_LADDER = (
     "ancestor_replan_superseded",
     "optional_variable_descriptions_omitted",
     "advisory_guidance_projected",
     "literature_provenance_projected",
+    OUTLINE_COMPACTION,
 )
 
 
@@ -545,14 +548,234 @@ _PLANNER_PROJECTION_LADDER = (
 class PlannerPromptBlock:
     """An assembly boundary and owner-supplied, semantically safe alternatives.
 
-    Unannotated text is authority. Alternatives are whole advisory projections,
-    never slices of binding text. The plan-revision alternative is provided by
-    project_plan_revision_prompt, which verifies the surviving requirements.
+    Unannotated text is authority. Each alternative is a complete version of
+    the block for this stage, supplied by the owner of the prompt content.
     """
 
     name: str
     text: str
     projections: tuple[tuple[str, str], ...] = ()
+
+
+def outline_authority_block(name: str, text: str, compact: str) -> PlannerPromptBlock:
+    """Register an alternate layout of a host-authored outline block."""
+    return PlannerPromptBlock(name, text, ((OUTLINE_COMPACTION, compact),))
+
+
+_ACTION_HEADER = "Retrieved scientific actions (only these may be selected):\n"
+_ACTION_COLUMNS = (
+    "action_id", "name", "purpose", "produces", "execution_mode",
+    "notes", "required_inputs", "runtime_contract", "outline_position",
+)
+_RUNTIME_COLUMNS = (
+    "outputs", "required_product_inputs", "article_roles", "execution_parameters",
+)
+_ACTION_TAIL_DEFAULTS = {"notes": "", "required_inputs": [], "runtime_contract": None,
+                         "outline_position": None}
+_ACTION_FIELDS = {"analysis_type", *_ACTION_COLUMNS}
+_ACTION_REQUIRED_FIELDS = _ACTION_FIELDS - {"outline_position"}
+_ACTION_MODE_CODES = {"host_owned": "H", "coder_generated": "C"}
+
+
+def _prompt_json(value: Any) -> str:
+    return canonical_json_bytes(value).decode("utf-8")
+
+
+def _outline_action_table(rows: Sequence[Mapping[str, Any]], full: str) -> str:
+    """Keep action choice, scientific constraints and dependencies in each row.
+
+    The step request carries the executor identifier and product semantic
+    roles. The outline can only select an action and name its dependencies;
+    the host fills those two runtime fields during materialization.
+    """
+    if any(
+        not _ACTION_REQUIRED_FIELDS <= row.keys() <= _ACTION_FIELDS
+        or not isinstance(row["execution_mode"], str)
+        or ("outline_position" in row and not isinstance(row["outline_position"], str))
+        for row in rows
+    ):
+        return full
+    positions = Counter(row["outline_position"] for row in rows if "outline_position" in row)
+    shared_positions = [text for text, count in positions.items() if count > 1]
+    position_indexes = {text: index for index, text in enumerate(shared_positions)}
+    families: dict[str, list[list[Any]]] = {}
+    for row in rows:
+        mode = row["execution_mode"]
+        if mode in _ACTION_MODE_CODES.values():
+            return full
+        position = row.get("outline_position")
+        compact = {
+            **row,
+            "execution_mode": _ACTION_MODE_CODES.get(mode, mode),
+            "outline_position": position_indexes.get(position, position),
+        }
+        runtime = row["runtime_contract"]
+        if runtime is not None:
+            if (
+                not isinstance(runtime, Mapping)
+                or set(runtime) != {*_RUNTIME_COLUMNS, "standard_executor"}
+                or not isinstance(runtime["outputs"], (list, tuple))
+                or any(
+                    not isinstance(output, Mapping)
+                    or set(output) != {"product_id", "semantic_role"}
+                    for output in runtime["outputs"]
+                )
+            ):
+                return full
+            compact["runtime_contract"] = [
+                [output["product_id"] for output in runtime["outputs"]],
+                *(runtime[field] for field in _RUNTIME_COLUMNS[1:]),
+            ]
+        columns = list(_ACTION_COLUMNS)
+        while (field := columns[-1]) in _ACTION_TAIL_DEFAULTS and (
+            compact[field] == _ACTION_TAIL_DEFAULTS[field]
+        ):
+            columns.pop()
+        values = [compact[field] for field in columns]
+        families.setdefault(row["analysis_type"], []).append(values)
+    return (
+        _ACTION_HEADER
+        + "Rows grouped by analysis_type. Read each row in this column order: "
+        + _prompt_json(_ACTION_COLUMNS)
+        + ". execution_mode H=host_owned, C=coder_generated. "
+        "Omitted trailing cells mean empty notes, empty required_inputs, "
+        "null runtime_contract or absent outline_position. Runtime contract columns: "
+        + _prompt_json(_RUNTIME_COLUMNS)
+        + ". The host binds executor and product role details during step materialization."
+        + (
+            " Integer outline_position cells index this list from zero: "
+            + _prompt_json(shared_positions) + "."
+            if shared_positions else ""
+        )
+        + "\n" + _prompt_json(families)
+    )
+
+
+def outline_action_blocks(
+    rows: Sequence[Mapping[str, Any]],
+    module_ids_by_analysis_type: Mapping[str, Sequence[str]],
+) -> tuple[PlannerPromptBlock, PlannerPromptBlock]:
+    """Keep the action roster and module compatibility rules in either layout."""
+    menu = _ACTION_HEADER + _prompt_json(list(rows))
+    matrix = [
+        {
+            "analysis_type": analysis_type,
+            "available_modules": list(modules),
+            "scientific_action_ids": [
+                str(row.get("action_id") or "")
+                for row in rows
+                if row.get("analysis_type") == analysis_type
+            ],
+        }
+        for analysis_type, modules in module_ids_by_analysis_type.items()
+    ]
+    compatibility = (
+        "The adjusted_association module may use only "
+        "association.adjusted_association (or null). The "
+        "robustness_replay module must always set scientific_action_id to "
+        "null because it replays the sealed sensitivity specifications; a "
+        "separate scientific action needs its own custom_analysis step. "
+        "Cohort-definition, measurement_audit, absolute_risk_context, raw-distribution, "
+        "visualization, and report support steps must also set "
+        "scientific_action_id to null. A table_one step must bind "
+        "descriptive.table_one when that exact action appears in the "
+        "selected analysis family's scientific_action_ids; otherwise it "
+        "must use null."
+    )
+    return (
+        outline_authority_block("action_rows", menu, _outline_action_table(rows, menu)),
+        outline_authority_block(
+            "action_rows",
+            "Analysis-family action matrix (do not cross family boundaries):\n"
+            + _prompt_json(matrix)
+            + "\nAfter selecting analysis_type, use only that row's action ids. "
+            + compatibility,
+            "Use only the scientific action ids listed for the selected analysis_type. "
+            + compatibility,
+        ),
+    )
+
+
+def compact_outline_shape(
+    template: dict[str, Any],
+    analysis_types: Sequence[str],
+    module_ids_by_analysis_type: Mapping[str, Sequence[str]],
+) -> str:
+    """Render shared candidate fields and shared family module rosters once."""
+    design = template["design_selection"]
+    selected, rejected = design["candidates"]
+    overrides = {key: value for key, value in rejected.items() if selected[key] != value}
+    example = {
+        **template, "design_selection": {**design, "candidates": [selected]}
+    }
+    module_rosters: dict[tuple[str, ...], list[str]] = {}
+    for analysis_type in analysis_types:
+        modules = tuple(module_ids_by_analysis_type[analysis_type])
+        module_rosters.setdefault(modules, []).append(analysis_type)
+    return (
+        _prompt_json(example)
+        + "\nFor each rejected candidate use all the same fields, with these overrides: "
+        + _prompt_json(overrides)
+        + ". Fill placeholders separately for each candidate.\n"
+        "Allowed module_id roster by analysis_type ([families, module_ids]): "
+        + _prompt_json([(families, modules) for modules, families in module_rosters.items()])
+    )
+
+
+def outline_design_selection_block(full: str) -> PlannerPromptBlock:
+    """Reference the complete candidate shape and retain the decision rules."""
+    return outline_authority_block(
+        "response_shape", full,
+        "Pre-result design selection contract:\nCompare 2-4 scientifically "
+        "distinct designs for this exact question. Select exactly one and "
+        "give a scientific reason for each rejection. Never select using "
+        "observed results, significance, AIC/BIC, or predictive performance. "
+        "Use only retrieved variables and sealed citations. With reviewed "
+        "comparator cards, resolve the seven dimensions for every candidate "
+        "with the designated source keys and a case-specific rationale. "
+        "Use the six reviewable_plan items in the question's language, each at "
+        "least 8 characters. Recommend the choices before asking the researcher; "
+        "label them recommended, never user-confirmed, and name the data checks "
+        "that could trigger revision. For description, item 2 includes requested "
+        "grouping; in items 3 and 4 explain any inapplicability in lieu of a bare N/A.",
+    )
+
+
+_ARTICLE_ROLE_COLUMNS = ("article_requirement_id", "role", "required")
+
+
+def outline_article_roles_block(
+    contracts: Sequence[Mapping[str, Any]],
+    module_ids_by_analysis_type: Mapping[str, Sequence[str]],
+    guidance: str,
+) -> PlannerPromptBlock:
+    """Share the module roster and label the article requirement columns once."""
+    header = "Candidate-specific host article role contracts:\n"
+    full = header + _prompt_json(list(contracts)) + guidance
+    if any(
+        contract["available_modules"] != list(module_ids_by_analysis_type[contract["analysis_type"]])
+        or any(set(item) != set(_ARTICLE_ROLE_COLUMNS) for item in contract["requirements"])
+        for contract in contracts
+    ):
+        return PlannerPromptBlock("article_question_context", full)
+    compact = [
+        {
+            **{key: value for key, value in contract.items()
+               if key not in {"available_modules", "requirements"}},
+            "requirements": [
+                [item[key] for key in _ARTICLE_ROLE_COLUMNS]
+                for item in contract["requirements"]
+            ],
+        }
+        for contract in contracts
+    ]
+    return outline_authority_block(
+        "article_question_context",
+        full,
+        header + "Each requirements row is [article_requirement_id,role,required]. "
+        "Use the allowed module_id roster for that analysis_type.\n"
+        + _prompt_json(compact) + guidance,
+    )
 
 
 class PlannerPromptBlocks:
@@ -760,7 +983,7 @@ def project_planner_request(
     byte_limit: int,
     schema_bytes: int = 0,
 ) -> PlannerPromptRequest:
-    """Measure the complete request, then take ordered advisory rungs as needed.
+    """Measure the complete request, then take ordered projections as needed.
 
     Neither limit nor schema is projected. Receipts expose sizes and hashes,
     never prompt text or input-derived names. Original sources and checkpoint
@@ -779,11 +1002,20 @@ def project_planner_request(
     for reason in _PLANNER_PROJECTION_LADDER:
         if sum(counts.values()) <= byte_limit:
             break
+        alternatives = [
+            dict(block.projections).get(reason, block.text) for block in current
+        ]
+        atomic = reason == OUTLINE_COMPACTION
+        # The outline alternatives share rosters. Apply all of them together
+        # even if an early replacement already puts the request under budget.
+        if atomic and sum(len(text.encode("utf-8")) for text in alternatives) >= sum(
+            len(block.text.encode("utf-8")) for block in current
+        ):
+            continue
         tried.append(reason)
-        for index, block in enumerate(current):
-            candidate = dict(block.projections).get(reason)
-            if candidate is None or len(candidate.encode("utf-8")) >= len(
-                block.text.encode("utf-8")
+        for index, (block, candidate) in enumerate(zip(current, alternatives)):
+            if candidate == block.text or (
+                not atomic and len(candidate.encode("utf-8")) >= len(block.text.encode("utf-8"))
             ):
                 continue
             source, projected = block.text.encode("utf-8"), candidate.encode("utf-8")
@@ -803,7 +1035,7 @@ def project_planner_request(
                 *current[index + 1 :],
             )
             counts = _planner_block_bytes(system, current, schema_bytes)
-            if sum(counts.values()) <= byte_limit:
+            if not atomic and sum(counts.values()) <= byte_limit:
                 break
     total = sum(counts.values())
     return PlannerPromptRequest(

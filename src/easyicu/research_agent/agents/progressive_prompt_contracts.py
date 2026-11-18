@@ -23,6 +23,7 @@ from ..contracts.trajectory_design import TRAJECTORY_OWNER_PLANNER_RULE
 from ..planning.outline_action_rules import replay_producer_rule_text
 from ..planning.capability_gap import fixed_window_association_facts, metadata_continuous_association_options
 from ..planning.literature_design_authority import LITERATURE_DESIGN_DIMENSIONS
+from ..planning.prompt_projection import compact_outline_shape
 from .population_spec_transport import population_spec_contract, population_spec_shape
 
 
@@ -185,6 +186,7 @@ def outline_shape_contract(
     analysis_types: Sequence[str],
     module_ids_by_analysis_type: Mapping[str, Sequence[str]],
     literature_design_card_keys_by_dimension: Mapping[str, Sequence[str]] | None = None,
+    compact: bool = False,
 ) -> str:
     """Render the exact small outline shape for schema-imperfect transports."""
 
@@ -296,17 +298,22 @@ def outline_shape_contract(
     return (
         "Exact ProgressivePlanOutline JSON shape (replace every angle-bracket "
         "placeholder; preserve every key; add no other keys):\n"
-        + json.dumps(template, ensure_ascii=False, separators=(",", ":"))
-        + "\nCandidate analysis_type values: "
-        + json.dumps(list(analysis_types), ensure_ascii=False, separators=(",", ":"))
-        + "\nAllowed module_id values by analysis_type: "
-        + json.dumps(
-            {
-                analysis_type: list(module_ids_by_analysis_type[analysis_type])
-                for analysis_type in analysis_types
-            },
-            ensure_ascii=False,
-            separators=(",", ":"),
+        + (
+            compact_outline_shape(template, analysis_types, module_ids_by_analysis_type)
+            if compact else (
+                json.dumps(template, ensure_ascii=False, separators=(",", ":"))
+                + "\nCandidate analysis_type values: "
+                + json.dumps(list(analysis_types), ensure_ascii=False, separators=(",", ":"))
+                + "\nAllowed module_id values by analysis_type: "
+                + json.dumps(
+                    {
+                        analysis_type: list(module_ids_by_analysis_type[analysis_type])
+                        for analysis_type in analysis_types
+                    },
+                    ensure_ascii=False,
+                    separators=(",", ":"),
+                )
+            )
         )
         + "\nplanned_analysis_role must be exactly one of: primary, secondary, "
         "sensitivity, auxiliary. depends_on, variable_names, and "
