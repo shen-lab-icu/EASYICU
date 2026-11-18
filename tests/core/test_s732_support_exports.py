@@ -6,6 +6,7 @@ import math
 import os
 import tempfile
 
+import numpy as np
 import pandas as pd
 import pytest
 
@@ -484,6 +485,7 @@ def test_support_selectors_are_applied_before_publication(tmp_path, module, sele
 
     if selector == "sequence":
         assert set(load([72, 18]).patientunitstayid) == {72, 18}
+        assert set(load(iter([72, 18])).patientunitstayid) == {72, 18}
     elif selector == "intersection":
         assert load({"patientunitstayid": [33, 72], "hospitalid": [86]}).patientunitstayid.tolist() == [72]
     elif selector == "absent-column":
@@ -493,6 +495,51 @@ def test_support_selectors_are_applied_before_publication(tmp_path, module, sele
         with pytest.raises(ConceptTableReadError) as error:
             load({"patientunitstayid": {72: "selected"}})
         assert error.value.stage == "patient_ids"
+
+
+@pytest.mark.parametrize("consumer", ["cohort", "stay_identity", "imv_first_episode"])
+@pytest.mark.parametrize(
+    "selection,message",
+    [
+        pytest.param([False, True], "boolean values", id="python-flags"),
+        pytest.param([86, np.bool_(True)], "boolean values", id="id-mixed-with-numpy-flag"),
+        pytest.param(
+            {"patientunitstayid": pd.Series([False, pd.NA, True], dtype="boolean")},
+            "boolean values", id="nullable-row-mask",
+        ),
+        pytest.param(pd.Series([], dtype=bool), "boolean values", id="zero-length-mask"),
+        pytest.param(
+            {"patientunitstayid": [1, 86], "hospitalid": [np.bool_(True)]},
+            "boolean values", id="flag-on-secondary-filter-column",
+        ),
+        pytest.param(
+            {"patientunitstayid": [1, 86], "hospitalid": pd.DataFrame([[False, True], [False, False]])},
+            "requires a sequence of IDs", id="table-mask-with-integer-column-labels",
+        ),
+        pytest.param({1, 86}, "requires a sequence of IDs", id="unordered-direct-ids"),
+        pytest.param(
+            {"patientunitstayid": frozenset({1, 86})},
+            "requires a sequence of IDs", id="unordered-mapped-ids",
+        ),
+    ],
+)
+def test_support_filters_reject_boolean_and_unordered_members(tmp_path, consumer, selection, message):
+    _write(pd.DataFrame({
+        "patientunitstayid": [0, 1, 86], "uniquepid": ["a", "b", "c"],
+        "patienthealthsystemstayid": [16, 25, 34], "hospitaldischargeyear": 2018,
+        "unitvisitnumber": 1, "hospitaladmitoffset": -35, "hospitalid": [44, 1, 91],
+    }), tmp_path / "patient.parquet")
+
+    with pytest.raises(ConceptTableReadError, match=message) as error:
+        if consumer == "cohort":
+            with binding_unit():
+                support_exports.select_support_cohort("eicu", tmp_path, selection)
+        else:
+            _load_module_concepts(None, module_name=consumer, load_kwargs={
+                "concepts": EXTRACT_MODULES[consumer], "database": "eicu", "data_path": tmp_path,
+                "patient_ids": selection,
+            })
+    assert error.value.stage == "patient_ids"
 
 
 @pytest.mark.parametrize(
@@ -748,7 +795,7 @@ def test_sic_episode_uses_exact_partial_hours_and_rule(tmp_path):
     ids=["no-measurement", "no-specimen-status-column", "zero-observation-rows"],
 )
 def test_hourly_min_handles_a_missing_status_column(measurements):
-    data = pd.DataFrame({"stay_id": 57, "charttime": 1.25, "po2": pd.Series(measurements, dtype="float64")})
+    data = pd.DataFrame({"stay_id": 57, "charttime": 1.25, "po2": measurements})
 
     def load(*, merge, **kwargs):
         return data if merge else {"po2": TsTbl(data, "stay_id", "charttime")}
@@ -757,11 +804,49 @@ def test_hourly_min_handles_a_missing_status_column(measurements):
         "concepts": ["po2"], "database": "miiv", "merge": True,
     })
     assert list(result.columns) == ["stay_id", "charttime", "po2", "po2_specimen_status"]
-    assert isinstance(result.po2_specimen_status.dtype, pd.StringDtype)
+    assert result.dtypes.astype(str).to_dict() == {
+        "stay_id": "int64", "charttime": "float64", "po2": "float64", "po2_specimen_status": "string",
+    }
     assert result.po2.tolist() == data.po2.dropna().tolist()
     if not result.empty:
         assert result.charttime.tolist() == [1.]
         assert result.po2_specimen_status.isna().all()
+
+
+@pytest.mark.parametrize(
+    "frame",
+    [
+        pytest.param(
+            pd.DataFrame(columns=["admissionid", "measuredat", "po2", "po2_specimen_status"]),
+            id="zero-rows-with-untyped-columns",
+        ),
+        pytest.param(
+            pd.DataFrame(columns=["measuredat", "po2", "po2_specimen_status"]),
+            id="zero-rows-without-admission-key",
+        ),
+        pytest.param(pd.DataFrame({
+            "admissionid": [62], "measuredat": [3.5], "po2": [None],
+            "po2_specimen_status": [None],
+        }), id="null-reading-and-status"),
+        pytest.param(pd.DataFrame({
+            "admissionid": [62], "measuredat": [3.5], "po2": [float("nan")],
+            "po2_specimen_status": ["label_defined_arterial"],
+        }), id="labeled-specimen-without-a-reading"),
+        pytest.param(pd.DataFrame({
+            "admissionid": [62], "measuredat": [3.5], "po2": [float("nan")],
+            "po2_specimen_status": [float("nan")],
+        }), id="all-nan-status"),
+    ],
+)
+def test_hourly_min_empty_frames_have_canonical_dtypes(frame):
+    result = _load_module_concepts(lambda **_: {"po2": frame}, module_name=SUPPORT_MODULES[2], load_kwargs={
+        "concepts": ["po2"], "database": "aumc",
+    })
+    assert result.empty
+    assert list(result.columns) == ["admissionid", "charttime", "po2", "po2_specimen_status"]
+    assert result.dtypes.astype(str).to_dict() == {
+        "admissionid": "int64", "charttime": "float64", "po2": "float64", "po2_specimen_status": "string",
+    }
 
 
 @pytest.mark.parametrize("observed", [True, False], ids=["concatenated-native-clock", "all-parts-empty"])

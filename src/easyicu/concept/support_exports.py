@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from collections.abc import Mapping
+from collections.abc import Iterator, Mapping
 
 import numpy as np
 import pandas as pd
@@ -41,13 +41,25 @@ def _normalise_stay_filters(database, patient_ids):
     config = DATABASE_ID_CONFIG[database]
     if not isinstance(patient_ids, Mapping):
         patient_ids = {config["id_col"]: patient_ids}
+    filters = {}
     for key, members in patient_ids.items():
-        if isinstance(members, Mapping) or not pd.api.types.is_list_like(members):
+        if (
+            isinstance(members, (Mapping, pd.DataFrame))
+            or not pd.api.types.is_list_like(members, allow_sets=False)
+        ):
             raise ConceptTableReadError(
                 database=database, table=config["table"], stage="patient_ids",
                 detail=f"filter {key!r} requires a sequence of IDs",
             )
-    return patient_ids
+        if isinstance(members, Iterator):
+            members = list(members)
+        if pd.api.types.is_bool_dtype(members) or any(isinstance(value, (bool, np.bool_)) for value in members):
+            raise ConceptTableReadError(
+                database=database, table=config["table"], stage="patient_ids",
+                detail=f"filter {key!r} contains boolean values",
+            )
+        filters[key] = members
+    return filters
 
 
 def _stay_table(database, data_path, columns, *, filters, optional=()):
@@ -456,27 +468,31 @@ def load_pao2_arterial_hourly_min(load_concepts, *, native_charttime_axis, **kwa
     stay = DATABASE_ID_CONFIG[kwargs["database"]]["id_col"]
     status, = SPECIMEN_STATUS_OUTPUT_COLUMNS["po2"]
     columns = [stay, "charttime", "po2", status]
+
+    def empty_hourly_min():
+        return pd.DataFrame({
+            stay: pd.Series(dtype="int64"),
+            "charttime": pd.Series(dtype="float64"),
+            "po2": pd.Series(dtype="float64"),
+            status: pd.Series(dtype="string"),
+        })
+
     if isinstance(loaded, Mapping):
         if not loaded:
-            return pd.DataFrame({
-                stay: pd.Series(dtype="int64"),
-                "charttime": pd.Series(dtype="float64"),
-                "po2": pd.Series(dtype="float64"),
-                status: pd.Series(dtype="string"),
-            })
+            return empty_hourly_min()
         loaded = loaded["po2"]
     if isinstance(loaded, pd.DataFrame):
         loaded = native_charttime_axis(loaded)
     else:
         loaded = loaded.data.rename(columns={loaded.index_column: "charttime"})
+    if loaded.empty:
+        return empty_hourly_min()
     if status not in loaded:
         loaded = loaded.assign(**{status: pd.Series(pd.NA, index=loaded.index, dtype="string")})
-    if loaded.empty:
-        return loaded.reindex(columns=columns)
 
     observed = loaded.loc[loaded.po2.notna(), columns].copy()
     if observed.empty:
-        return observed
+        return empty_hourly_min()
     if not pd.api.types.is_numeric_dtype(observed.charttime) or not np.isfinite(observed.charttime).fillna(False).all():
         raise ValueError("po2 did not return a finite numeric ICU-hour clock")
 
