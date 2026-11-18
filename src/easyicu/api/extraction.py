@@ -2783,16 +2783,11 @@ def _load_module_concepts(load_concepts_fn, *, module_name: str, load_kwargs: Di
         kwargs.pop("merge", None)
         return load_imv_first_episode(load_concepts_fn, **kwargs)
     if module_name == PAO2_ARTERIAL_HOURLY_MIN:
-        result = _native_charttime_axis(load_concepts_fn(**{
-            **kwargs, "interval": "1h", "aggregate": {"po2": "min"}, "r_compatible": False,
-        }))
-        if result.empty:
-            return result
-        from ..concept_output_sources import SPECIMEN_STATUS_OUTPUT_COLUMNS
+        from ..concept.support_exports import load_pao2_arterial_hourly_min
 
-        status, = SPECIMEN_STATUS_OUTPUT_COLUMNS["po2"]
-        identity = next(column for column in _NATIVE_EXPORT_ID_COLUMNS if column in result)
-        return result.loc[result.po2.notna(), [identity, "charttime", "po2", status]]
+        return load_pao2_arterial_hourly_min(
+            load_concepts_fn, native_charttime_axis=_native_charttime_axis, **kwargs,
+        )
     if module_name == "renal_urine_chem":
         # Native lab rows are observations, never a display grid. In SICdb
         # only the id_tbl flag is mapped; the display merge would fill an
@@ -6183,7 +6178,11 @@ def _native_longitudinal_aggregation_policy(module: str) -> Dict[str, str]:
             "all_six_owner_available_for_complete_case_sensitivity"
         )
     if module == PAO2_ARTERIAL_HOURLY_MIN:
-        return {"po2": "min_at_load_time", "duplicate_stay_hours": "reject"}
+        return {
+            "po2": "min_at_load_time",
+            "po2_specimen_status": "status_of_selected_minimum_measurement",
+            "duplicate_stay_hours": "reject",
+        }
     return policy
 
 
@@ -9093,7 +9092,8 @@ def extract_database(
             )
     data_path = str(data_path)
 
-    # 获取患者 ID
+    # Resolve support-export selectors before the planner splits a single stay-key cohort.
+    support_stay_binding = None
     if patient_ids is None:
         all_ids, id_col = _get_all_patient_ids(data_path, database, max_patients)
         if not all_ids:
@@ -9101,6 +9101,14 @@ def extract_database(
                 f"无法获取 {database} 的患者ID，请检查 data_path: {data_path}"
             )
         patient_ids_filter = {id_col: all_ids}
+    elif PAO2_ARTERIAL_HOURLY_MIN in modules or STAY_LEVEL_SUPPORT_MODULES.keys() & set(modules):
+        from ..concept.support_exports import select_support_cohort
+        from ..storage_binding import binding_unit, child_binding
+
+        with binding_unit():
+            patient_ids_filter = select_support_cohort(database, data_path, patient_ids)
+            support_stay_binding = child_binding(storage_source(database, data_path))
+        id_col, all_ids = next(iter(patient_ids_filter.items()))
     else:
         patient_ids_filter = _normalize_patient_ids_for_db(database, patient_ids)
         id_col = list(patient_ids_filter.keys())[0]
@@ -9277,7 +9285,7 @@ def extract_database(
     from ..storage_binding import child_binding
     from ..datasource import storage_source
 
-    run_stay_binding = (
+    run_stay_binding = support_stay_binding or (
         child_binding(storage_source(database, data_path)) if data_path else None
     )
     if (automatic_batch or normalized_module_batch_sizes) and not group_flag:
