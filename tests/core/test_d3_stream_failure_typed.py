@@ -57,6 +57,8 @@ class _Run:
 
 def _module_run(monkeypatch, out, kill_at, *, counter):
     started: list = []
+    source = out.parent / f"{out.name}_source"
+    source.mkdir()
 
     class Context:
         @staticmethod
@@ -72,7 +74,7 @@ def _module_run(monkeypatch, out, kill_at, *, counter):
     monkeypatch.setattr(api, "_cgroup_oom_kills", counter)
     monkeypatch.setattr(api, "_host_reports_oom_kills", lambda: counter() is not None)
     api._run_module_extraction(
-        "test_module", ["test_signal"], "eicu", str(out), {"stay_id": STAYS}, 8,
+        "test_module", ["test_signal"], "eicu", str(source), {"stay_id": STAYS}, 8,
         str(out), stream_output_batches=True,
     )
     return json.loads((out / "_manifest.json").read_text()), started

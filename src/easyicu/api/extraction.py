@@ -28,6 +28,7 @@ from ..source_bounds import (
     public_bounds,
     strip_private_ledgers,
 )
+from ..concept.availability_signal import ConceptAvailabilityRecord
 from ..concept.catalog import (
     CONCEPT_GROUPS_INTERNAL,
     OPT_IN_MODULE_CONCEPTS,
@@ -2879,6 +2880,16 @@ def _load_module_concepts(load_concepts_fn, *, module_name: str, load_kwargs: Di
     return result
 
 
+def _typed_absence_codes(
+    availability: Mapping[str, ConceptAvailabilityRecord],
+) -> Dict[str, str]:
+    return {
+        concept: record.reason_code
+        for concept, record in availability.items()
+        if record.evaluation_status == "not_evaluable" and record.reason_code is not None
+    }
+
+
 def _stream_batch_bounds_sidecar(part: Path) -> Path:
     """Where an isolated batch process leaves its bounds counts for the parent."""
     return Path(part).with_name(f".{Path(part).name}.bounds.json")
@@ -2889,7 +2900,8 @@ def _stream_batch_fill_sidecar(part: Path) -> Path:
 
     ``{"merge_empty_index_filled": [...], "loader_concepts": [...]}``: the
     concepts whose empty slice took the batch index, and the concepts the
-    loader itself returned (before Arrow adds structural nulls).
+    loader itself returned (before Arrow adds structural nulls). The optional
+    ``typed_absence_reasons`` field carries the loader's reason codes.
     """
     return Path(part).with_name(f".{Path(part).name}.merge_fill.json")
 
@@ -3007,11 +3019,15 @@ def _write_isolated_stream_batch(
                 pyarrow_module=pa,
             )
         frame, export_counts = _normalise_counted(batch, concepts, reorder=False)
+        receipt = {
+            "merge_empty_index_filled": sorted(set(batch_fills)),
+            "loader_concepts": [c for c in concepts if frame is not None and c in frame.columns],
+        }
+        absence_codes = _typed_absence_codes(load_kwargs.get("availability_sink") or {})
+        if absence_codes:
+            receipt["typed_absence_reasons"] = absence_codes
         if frame is None:
-            _write_json_atomic(fill_sidecar, {
-                "merge_empty_index_filled": sorted(set(batch_fills)),
-                "loader_concepts": [],
-            })
+            _write_json_atomic(fill_sidecar, receipt)
             with source_bounds_accounting("isolated_batch_hand_off"):
                 _write_json_atomic(
                     bounds_sidecar, merge_bounds_drops(bounds_totals(bounds_records), export_counts)
@@ -3035,10 +3051,7 @@ def _write_isolated_stream_batch(
         )
         pq.write_table(table, partial, compression="snappy")
         os.replace(partial, target)
-        _write_json_atomic(fill_sidecar, {
-            "merge_empty_index_filled": sorted(set(batch_fills)),
-            "loader_concepts": [c for c in concepts if c in frame.columns],
-        })
+        _write_json_atomic(fill_sidecar, receipt)
         with source_bounds_accounting("isolated_batch_hand_off"):
             _write_json_atomic(
                 bounds_sidecar, merge_bounds_drops(bounds_totals(bounds_records), export_counts)
@@ -3389,6 +3402,7 @@ def _stream_module_batches_to_parquet(
     loader=None,
     adaptive_batch_growth: bool = False,
     replay_boundaries: Optional[Sequence[int]] = None,
+    typed_absence_reasons: Optional[Dict[str, str]] = None,
 ) -> Optional[Dict]:
     """Write bounded patient batches as committed parts, then one module file.
 
@@ -3410,6 +3424,9 @@ def _stream_module_batches_to_parquet(
     An isolated batch whose child ran out of memory (evidence, see
     ``_worker_memory_evidence``) is retried from the same offset at half the
     size, down to one stay.
+
+    When supplied, ``typed_absence_reasons`` receives the codes agreed upon by
+    every committed batch, including when there are no parts to assemble.
     """
     import json
     import multiprocessing as mp
@@ -3604,6 +3621,9 @@ def _stream_module_batches_to_parquet(
             # Keep the inner ``load_concepts`` boundary identical to the outer
             # writer boundary.
             batch_load_kwargs["batch_size"] = len(batch_ids)
+            batch_availability: Dict[str, ConceptAvailabilityRecord] = {}
+            if typed_absence_reasons is not None:
+                batch_load_kwargs["availability_sink"] = batch_availability
             batch_sampler = _RSSPeakSampler().start()
             frame = None
             output_rows = 0
@@ -3765,6 +3785,7 @@ def _stream_module_batches_to_parquet(
                     fill_sidecar.unlink()
                     batch_fills = list(batch_receipt["merge_empty_index_filled"])
                     batch_loader_concepts = list(batch_receipt["loader_concepts"])
+                    batch_absence = batch_receipt.get("typed_absence_reasons", {})
                     if batch_part.exists():
                         part_name = batch_part.name
                         output_rows = int(pq.ParquetFile(batch_part).metadata.num_rows)
@@ -3783,6 +3804,7 @@ def _stream_module_batches_to_parquet(
                         )
                     with source_bounds_accounting(f"stream_batch_commit[{module_name}:{index}]"):
                         batch_bounds = bounds_totals(bounds_records)
+                    batch_absence = _typed_absence_codes(batch_availability)
                     frame, export_counts = _normalise_counted(batch, concepts, reorder=False)
                     with source_bounds_accounting(f"stream_batch_commit[{module_name}:{index}]"):
                         batch_bounds = merge_bounds_drops(batch_bounds, export_counts)
@@ -3836,6 +3858,7 @@ def _stream_module_batches_to_parquet(
                     # Concepts the loader returned for this batch; Arrow's
                     # structural nulls do not make a concept produced.
                     "loader_concepts": batch_loader_concepts,
+                    **({"typed_absence_reasons": batch_absence} if batch_absence else {}),
                     **worker_attempt,
                     **batch_memory,
                 }
@@ -3875,6 +3898,15 @@ def _stream_module_batches_to_parquet(
             destination.with_name(entry["part"]).unlink(missing_ok=True)
         ledger_path.unlink(missing_ok=True)
         order_path.unlink(missing_ok=True)
+        if typed_absence_reasons is not None and batch_telemetry:
+            first, *remaining = [
+                batch.get("typed_absence_reasons", {}) for batch in batch_telemetry
+            ]
+            typed_absence_reasons.update({
+                concept: reason
+                for concept, reason in first.items()
+                if all(codes.get(concept) == reason for codes in remaining)
+            })
         if not parts:
             return None
     except BaseException as exc:
@@ -3905,7 +3937,10 @@ def _stream_module_batches_to_parquet(
         "rows": rows,
         "concepts": [name for name in concepts if name in produced_concepts],
         "stream_batches": [
-            {k: v for k, v in b.items() if k not in ("part", "source_bounds")}
+            {
+                k: v for k, v in b.items()
+                if k not in ("part", "source_bounds", "typed_absence_reasons")
+            }
             for b in batch_telemetry
         ],
         "source_bounds": merge_bounds_drops(
@@ -4023,6 +4058,11 @@ def _run_module_extraction(
     result = None
     memory_exhausted = False
     stream_failure = None
+    # C565 opts in to publishing its source-level absence codes. Availability
+    # collection can materialize extra frames in other modules' load paths.
+    typed_absence_reasons: Optional[Dict[str, str]] = (
+        {} if module_name == "c565_renal_history" else None
+    )
     # Bounds counts of a whole-module load (a streamed module commits its
     # own per batch); a retried load starts its counts afresh.
     module_bounds_scope = bounds_scope()
@@ -4052,10 +4092,13 @@ def _run_module_extraction(
                     output_dir,
                     loader=loader,
                     adaptive_batch_growth=adaptive_stream_batches,
+                    typed_absence_reasons=typed_absence_reasons,
                 )
             if stream_info is not None:
                 saved[module_name] = stream_info
         else:
+            if typed_absence_reasons is not None:
+                kwargs["availability_sink"] = {}
             result = _load_module_concepts(_lc, module_name=module_name, load_kwargs=kwargs)
     except MemoryError:
         traceback.print_exc()
@@ -4092,6 +4135,8 @@ def _run_module_extraction(
             # and merge fills are dropped before the retry.
             module_bounds_records.clear()
             module_fills.clear()
+            if "availability_sink" in kwargs:
+                kwargs["availability_sink"].clear()
             try:
                 result = _load_module_concepts(_lc, module_name=module_name, load_kwargs=kwargs)
             except Exception as e:
@@ -4162,6 +4207,9 @@ def _run_module_extraction(
     memory_stats = module_memory_sampler.stop()
     from ..storage_layout import module_unavailability
 
+    if typed_absence_reasons is not None and not streamed:
+        typed_absence_reasons = _typed_absence_codes(kwargs.get("availability_sink") or {})
+
     manifest = {
         "module": module_name,
         "saved": saved,
@@ -4173,6 +4221,8 @@ def _run_module_extraction(
         "storage_unavailable": module_unavailability(module_name),
         **memory_stats,
     }
+    if typed_absence_reasons and not errors:
+        manifest["typed_absence_reasons"] = typed_absence_reasons
     # (batch, concept) pairs whose empty slice took the batch index; a
     # whole-module load has no batch id (r13mergeidx).
     manifest["merge_empty_index_filled"] = (
@@ -7999,8 +8049,8 @@ def module_results_from_producer_manifests(
     The one path by which a recovery or republication passes each module's
     full counts to :func:`_publish_native_export_v2`: ``errors`` and
     ``source_bounds`` (published counts, without ledgers) plus the runtime
-    receipts. A manifest without ``source_bounds`` gives a result without it,
-    which the publisher records as ``audit_unknown`` (never as zero).
+    receipts, including typed absence codes. The publisher records missing
+    ``source_bounds`` as ``audit_unknown``.
     """
     import json
 
@@ -8018,6 +8068,8 @@ def module_results_from_producer_manifests(
         }
         if isinstance(manifest.get("source_bounds"), Mapping):
             entry["source_bounds"] = dict(manifest["source_bounds"])
+        if isinstance(manifest.get("typed_absence_reasons"), Mapping):
+            entry["typed_absence_reasons"] = dict(manifest["typed_absence_reasons"])
         if manifest.get("resource_plan") is not None:
             entry["resource_plan"] = manifest["resource_plan"]
         results[module] = entry
@@ -8199,11 +8251,18 @@ def _publish_native_export_v2(
         whole_module_unavailable = physical_output_missing or (
             source_rows == 0 and produced_concepts == set()
         )
+        typed_absences = (result["modules"].get(module) or {}).get("typed_absence_reasons") or {}
+        shared_reason = None
         if whole_module_unavailable:
+            reasons = {
+                typed_absences.get(concept) for concept in requested_concept_plan[module]
+            }
+            if len(reasons) == 1:
+                shared_reason = reasons.pop()
             unavailable_modules.append(
                 {
                     "module": module,
-                    "reason": "producer_returned_no_physical_output",
+                    "reason": shared_reason or "producer_returned_no_physical_output",
                     "concept_ids": list(EXTRACT_MODULES[module]),
                 }
             )
@@ -8217,15 +8276,16 @@ def _publish_native_export_v2(
             for concept in requested_concept_plan[module]
             if concept not in structurally_unavailable
         ]
-        if not whole_module_unavailable:
+        if shared_reason is None:
             unavailable_concepts.extend(
                 {
                     "module": module,
                     "concept": concept,
-                    "reason": "producer_returned_no_physical_column",
+                    "reason": typed_absences.get(concept) or "producer_returned_no_physical_column",
                 }
                 for concept in requested_concept_plan[module]
                 if concept in structurally_unavailable
+                and (not whole_module_unavailable or concept in typed_absences)
             )
         # A module manifest is the only producer-owned evidence that a concept
         # is structurally unavailable. Without that evidence, a missing selected
@@ -9364,6 +9424,9 @@ def extract_database(
             "resource_plan": module_resource_plans[mod_name].to_dict(),
             "resource_execution_limits": resource_execution_limits,
         }
+        if manifest.get("typed_absence_reasons"):
+            mod_result["typed_absence_reasons"] = dict(manifest["typed_absence_reasons"])
+            output_manifest["typed_absence_reasons"] = mod_result["typed_absence_reasons"]
         if not native_export_v2 and output_dir is not None and not mod_result["errors"]:
             # A flat (non-native) export commits each module here: the same
             # classless gate as every publication runs before its file and

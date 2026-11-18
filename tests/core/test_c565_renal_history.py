@@ -407,3 +407,36 @@ def test_static_module_can_publish_without_longitudinal_stay_bounds(tmp_path):
     ]
     with open_export_package(output) as package:
         assert set(FIELDS) <= set(package.concept_index)
+
+
+@pytest.mark.parametrize(("database", "reason"), [
+    ("aumc", "no_icd_diagnosis_source"),
+    ("hirid", "no_icd_diagnosis_source"),
+    ("sic", "no prior-history diagnosis source"),
+    ("mimic", "carevue_view_required"),
+])
+@pytest.mark.parametrize("stream", [False, True], ids=["whole-module", "streamed"])
+def test_native_export_preserves_typed_renal_history_absence(tmp_path, database, reason, stream):
+    from easyicu.api.extraction import extract_database
+
+    source = mortality_source(tmp_path / "source", database)
+    if database == "mimic":
+        _write(source, "diagnoses_icd", [(11, "5856")], ["hadm_id", "icd9_code"])
+    output = tmp_path / "output"
+    module = "c565_renal_history"
+    extract_database(
+        database=database, data_path=source, output_dir=output, modules=[module],
+        patient_ids=[1, 2], batch_size=1 if stream else None,
+        resource_budget_mb=2048 if stream else None, max_workers=1,
+        native_export_v2=True, stream_output_batches=stream, verbose=False,
+    )
+
+    manifest = json.loads((output / "_manifest.json").read_text(encoding="utf-8"))
+    assert manifest["concept_selection"]["modules"][module] == []
+    assert manifest["unavailable_concepts"] == []
+    assert manifest["unavailable_modules"] == [
+        {"module": module, "reason": reason, "concept_ids": list(FIELDS)},
+    ]
+    frame = pd.read_parquet(output / f"{module}.parquet")
+    assert frame.empty
+    assert all(str(frame[field].dtype) == "boolean" for field in FIELDS)

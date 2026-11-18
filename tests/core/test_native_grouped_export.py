@@ -986,27 +986,20 @@ def test_grouped_export_records_structural_unavailability_without_selecting_it(
         assert set(package.concept_index) == {"age"}
 
 
+@pytest.mark.parametrize("typed_reason", [None, "required_source_table_missing"])
 def test_grouped_export_records_missing_concept_inside_physical_module(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, typed_reason: str | None
 ) -> None:
     output = tmp_path / "out"
     output.mkdir()
     pd.DataFrame({"stay_id": [1], "mort_28d": [False]}).to_parquet(
         output / "outcome.parquet", index=False
     )
-    (output / "outcome.manifest.json").write_text(
-        json.dumps(
-            {
-                "saved": {
-                    "outcome": {
-                        "concepts": ["mort_28d"],
-                    }
-                }
-            }
-        ),
-        encoding="utf-8",
-    )
-    result = {"modules": {"outcome": {"errors": []}}}
+    producer = {"saved": {"outcome": {"concepts": ["mort_28d"]}}}
+    if typed_reason is not None:
+        producer["typed_absence_reasons"] = {"vent_free_days_28": typed_reason}
+    (output / "outcome.manifest.json").write_text(json.dumps(producer), encoding="utf-8")
+    result = {"modules": api.module_results_from_producer_manifests(output, ["outcome"])}
     monkeypatch.setitem(
         api.EXTRACT_MODULES, "outcome", ["mort_28d", "vent_free_days_28"]
     )
@@ -1026,7 +1019,7 @@ def test_grouped_export_records_missing_concept_inside_physical_module(
         {
             "module": "outcome",
             "concept": "vent_free_days_28",
-            "reason": "producer_returned_no_physical_column",
+            "reason": typed_reason or "producer_returned_no_physical_column",
         }
     ]
     exported = pd.read_parquet(output / "outcome.parquet")
