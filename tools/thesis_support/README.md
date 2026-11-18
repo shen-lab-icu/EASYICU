@@ -26,16 +26,23 @@ the missing inputs under `missing_inputs`.
 
 ## Equivalence check
 
-Run with an approved raw sample root and stay cohort. The tool imports the
-named frozen `sources.py` or `new_sources.py` from the approved path
-read-only. It binds the frozen PEEP SQL to the same raw files and cohort
-as the EasyICU rebuild.
+Use an approved raw sample root. The tool reads the SHA-256-pinned
+`sources.py` or `new_sources.py` from the default frozen checkout or from
+a checkout supplied with `--frozen-src-dir`. It binds the frozen PEEP SQL
+to the same raw files and cohort as the EasyICU rebuild.
 
 ```bash
 PYTHONPATH=src python tools/thesis_support/frozen_equivalence.py \
-  --database sic --db-root "$DB_ROOT" --stay-ids 101 102 \
+  --database miiv --db-root "$DB_ROOT" --stay-ids-file "$PRIVATE_COHORT_FILE" \
   --module observed_peep_set
 ```
+
+Keep real stay IDs in an approved file in the private layer. Parquet
+cohorts use a non-null integer column named for the database's native
+stay key or `stay_id`, with the native key taking precedence. Text
+cohorts use one integer per line. `--stay-ids` accepts synthetic IDs and
+is mutually exclusive with `--stay-ids-file`. MIIV requires a cohort.
+Omitting both options for other databases selects all raw stays.
 
 The tool compares every column by stay and hour and includes duplicate
 row multiplicity. It prints status and aggregate counts only. Counts

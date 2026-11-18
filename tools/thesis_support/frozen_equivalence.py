@@ -17,6 +17,7 @@ from importlib.util import module_from_spec, spec_from_file_location
 from io import TextIOBase
 import json
 import logging
+import os
 from pathlib import Path
 import sys
 from types import ModuleType, SimpleNamespace
@@ -60,9 +61,9 @@ class _ReadOnlyFrozenLoader(SourceFileLoader):
 @contextmanager
 def _frozen_module(source_dir, name):
     """Execute a named frozen file without importing the rest of its checkout."""
-    if Path(source_dir) != _FROZEN_SOURCE_DIR or name not in _FROZEN_DIGESTS:
+    if name not in _FROZEN_DIGESTS:
         raise ValueError("unexpected frozen source path")
-    path = _FROZEN_SOURCE_DIR / f"{name}.py"
+    path = Path(os.path.abspath(source_dir)) / f"{name}.py"
     if path.resolve() != path:
         raise ValueError("frozen source path redirects")
     package = ModuleType(f"_thesis_frozen_{uuid4().hex}")
@@ -143,21 +144,32 @@ def _peep_reference(sql, rel, source, database, relations):
     """).df()
 
 
-def _reference(source, family, stay, ids, frozen_dir, tables):
+def _reference(source, family, stay, ids, frozen_dir, tables, *, empty):
+    files = [support_input_files(source, table, stay, ids) for table in tables]
+    if any(paths is None for paths in files):
+        raise ValueError("reference input table unavailable")
+    if ids == [] or any(not paths for paths in files):
+        return empty
+
     virtual = Path("/__thesis_frozen__")
     rel = SimpleNamespace(
         raw=lambda db: virtual / "raw" / db,
         common_dir=virtual,
         corrected={"aumc_pao2_view": virtual / "unrelated_pao2"},
     )
-    files = [support_input_files(source, table, stay, ids) for table in tables]
-    if any(not paths for paths in files):
-        raise ValueError("no reference input files for these stays")
     relations = [parquet_relation(paths, ordered=False) for paths in files]
     with duckdb_spill.connection() as con:
-        con.register("selected", pd.DataFrame({
-            "stay_id": pd.Series(ids, dtype="int64"), "database": family,
-        }))
+        if ids is None:
+            # The first input is the raw stay table for each frozen PEEP builder.
+            con.execute(f"""
+                CREATE TEMP VIEW selected AS
+                SELECT DISTINCT {stay} AS stay_id, {_quote(family)} AS database
+                FROM {relations[0]}
+            """)
+        else:
+            con.register("selected", pd.DataFrame({
+                "stay_id": pd.Series(ids, dtype="int64"), "database": family,
+            }))
         name = "new_sources" if family == "sic" else "sources"
         with _frozen_module(frozen_dir, name) as frozen:
             return _peep_reference(_FrozenSQL(con), rel, frozen, family, relations)
@@ -217,8 +229,8 @@ def compare_rows(actual, expected, *, key_columns):
     }
 
 
-def run_equivalence(*, database, db_root, stay_ids, module, frozen_src_dir=_FROZEN_SOURCE_DIR):
-    """Run both implementations against the same tables and selected stay IDs."""
+def run_equivalence(*, database, db_root, stay_ids=None, module, frozen_src_dir=_FROZEN_SOURCE_DIR):
+    """Compare the selected stays, defaulting to all raw stays outside MIIV."""
     stay = DATABASE_ID_CONFIG[database]["id_col"]
     family = database.removesuffix("_demo")
     with binding_unit():
@@ -226,11 +238,13 @@ def run_equivalence(*, database, db_root, stay_ids, module, frozen_src_dir=_FROZ
         receipt = thesis_support_manifest(module, database, actual.attrs["available_fields"])
         if receipt["status"] != "projected":
             return {"status": receipt["status"]}
-        ids = select_support_cohort(database, db_root, stay_ids)[stay]
+        selection = select_support_cohort(database, db_root, stay_ids)
+        ids = None if selection is None else selection[stay]
+        actual = actual.rename(columns={stay: "stay_id"})
         expected = _reference(
             storage_source(database, db_root), family, stay, ids, frozen_src_dir, receipt["input_tables"],
+            empty=actual.iloc[:0],
         )
-    actual = actual.rename(columns={stay: "stay_id"})
     expected = expected.astype(actual.dtypes)
     return compare_rows(actual, expected, key_columns=["stay_id", "charttime"])
 
@@ -246,22 +260,53 @@ class _PrivateArgumentParser(argparse.ArgumentParser):
         raise SystemExit(2)
 
 
+def _read_cohort_file(path, database):
+    if path.suffix.lower() in {".parquet", ".pq"}:
+        import pyarrow as pa
+        import pyarrow.parquet as pq
+
+        with pq.ParquetFile(path) as parquet:
+            schema = parquet.schema_arrow
+            native = DATABASE_ID_CONFIG[database]["id_col"]
+            column = native if native in schema.names else "stay_id"
+            if column not in schema.names or not pa.types.is_integer(schema.field(column).type):
+                raise ValueError("cohort Parquet requires an integer stay ID column")
+            values = parquet.read(columns=[column]).column(column)
+            if values.null_count:
+                raise ValueError("cohort stay IDs must be non-null")
+            ids = values.to_pylist()
+    else:
+        with path.open(encoding="utf-8") as cohort:
+            ids = [int(line) for line in cohort if line.strip()]
+    if any(not -(2**63) <= value < 2**63 for value in ids):
+        raise ValueError("cohort stay IDs must fit a signed 64-bit integer")
+    return ids
+
+
 def main(argv=None):
     parser = _PrivateArgumentParser(description=__doc__)
     parser.add_argument("--database", choices=("aumc", "eicu", "hirid", "miiv", "mimic", "sic"), required=True)
     parser.add_argument("--db-root", type=Path, required=True)
-    parser.add_argument("--stay-ids", type=int, nargs="+", required=True)
+    cohort = parser.add_mutually_exclusive_group()
+    cohort.add_argument("--stay-ids", type=int, nargs="+", help="explicit synthetic stay IDs")
+    cohort.add_argument("--stay-ids-file", type=Path, help="approved private Parquet or text cohort file")
     parser.add_argument("--module", choices=THESIS_SUPPORT_MODULES, required=True)
     parser.add_argument("--frozen-src-dir", type=Path, default=_FROZEN_SOURCE_DIR,
-                        help="approved directory containing frozen sources.py and new_sources.py")
+                        help="directory containing SHA-256-pinned frozen sources.py and new_sources.py")
     args = parser.parse_args(argv)
+    if args.database == "miiv" and args.stay_ids is None and args.stay_ids_file is None:
+        parser.error("MIIV requires an explicit stay cohort")
     # A backend exception can contain a raw SQL value or path. Keep its
     # diagnostic private and emit a fixed status code at this boundary.
     with _DiscardOutput() as sink, redirect_stdout(sink), redirect_stderr(sink):
         prior_level = logging.root.manager.disable
         logging.disable(logging.CRITICAL)
         try:
-            result = run_equivalence(**vars(args))
+            options = vars(args)
+            cohort_file = options.pop("stay_ids_file")
+            if cohort_file is not None:
+                options["stay_ids"] = _read_cohort_file(cohort_file, args.database)
+            result = run_equivalence(**options)
         except Exception as error:
             result = {"status": "comparison_failed", "error_type": type(error).__name__}
         finally:

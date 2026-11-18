@@ -1,5 +1,6 @@
 """Synthetic stay/hour fixtures for the r15 support projections."""
 
+import hashlib
 import json
 import os
 from pathlib import Path
@@ -7,7 +8,9 @@ from pathlib import Path
 import pandas as pd
 import pytest
 
-from easyicu.api.extraction import EXTRACT_MODULE_ORDER, EXTRACT_MODULES, extract_database
+from easyicu.api.extraction import (
+    EXTRACT_MODULE_ORDER, EXTRACT_MODULES, _load_module_concepts, extract_database,
+)
 from easyicu.concept import thesis_support
 from easyicu.concept.thesis_support import load_thesis_support, thesis_support_manifest
 from easyicu.config import DATABASE_ID_CONFIG
@@ -125,6 +128,24 @@ def test_typed_absence_without_any_source_reads(tmp_path, monkeypatch, database,
     assert report == {"status": receipt["status"]}
 
 
+def test_unknown_support_module_fails_at_both_entry_points(tmp_path):
+    name = "recorded_airway_events"
+    with pytest.raises(KeyError, match=name):
+        load_thesis_support(module=name, database="hirid", data_path=tmp_path)
+    with pytest.raises(KeyError, match=name):
+        thesis_support_manifest(name, "hirid", [])
+
+
+def test_hirid_imv_only_request_reports_no_producer(tmp_path):
+    assert _load_module_concepts(
+        None, module_name="imv_recorded_compat",
+        load_kwargs={
+            "database": "hirid", "data_path": tmp_path, "patient_ids": [_OTHER],
+            "concepts": ["imv"],
+        },
+    ) is None
+
+
 def test_miiv_thesis_export_requires_explicit_stay_selection(tmp_path):
     with pytest.raises(ValueError, match="explicit allowed stay cohort"):
         extract_database("miiv", data_path=tmp_path, modules=["rrt_time"])
@@ -134,14 +155,18 @@ def test_miiv_thesis_export_requires_explicit_stay_selection(tmp_path):
 def test_native_export_is_opt_in_and_seals_typed_support_receipts(tmp_path, stream):
     source = tmp_path / "source"
     source.mkdir()
-    _peep_source(source, "sic")
+    _stays(source, "sic", ICUOffset=733)
+    _write(source, "data_float_h", {
+        "CaseID": [_OTHER] * 4, "Offset": [732, 733, 743, 4333],
+        "Val": [6., 0., 10., 40.], "DataID": 2278,
+    })
     # The old authority path would fail if it tried to read this file.
     (source / "sic_hourly_core.parquet").write_bytes(b"unused staged input")
     assert all(name in EXTRACT_MODULES and name not in EXTRACT_MODULE_ORDER for name in _MODULES)
     output = tmp_path / "out"
     extract_database(
         "sic", data_path=source, output_dir=output, modules=list(_MODULES),
-        patient_ids=[_STAY], stream_output_batches=stream, batch_size=1,
+        patient_ids=[_STAY, _OTHER], stream_output_batches=stream, batch_size=1,
         native_export_v2=True, max_workers=1,
     )
     manifest = json.loads((output / "_manifest.json").read_text())
@@ -158,6 +183,10 @@ def test_native_export_is_opt_in_and_seals_typed_support_receipts(tmp_path, stre
     rrt = pd.read_parquet(output / "rrt_time.parquet")
     assert rrt.empty and str(rrt.rrt_active.dtype) == "boolean"
     peep = pd.read_parquet(output / "observed_peep_set.parquet")
+    if stream:
+        batches = manifest["stream_batches"]["observed_peep_set"]
+        assert [batch["output_rows"] for batch in batches] == [0, 3]
+    assert peep.stay_id.tolist() == [_OTHER] * 3
     assert peep.charttime.tolist() == [-1., 0., 1.]
     assert peep.observed_peep_set.tolist() == [6., 5., 40.]
     assert entries["observed_peep_set"]["availability"] == "available"
@@ -197,12 +226,15 @@ def test_available_peep_source_with_no_qualifying_rows(tmp_path, stream, has_sou
     output = tmp_path / "out"
     extract_database(
         "sic", data_path=source, output_dir=output, modules=["observed_peep_set"],
-        patient_ids=[_STAY], stream_output_batches=stream, batch_size=1,
+        patient_ids=[_STAY, _OTHER], stream_output_batches=stream, batch_size=1,
         native_export_v2=True, max_workers=1,
     )
     manifest = json.loads((output / "_manifest.json").read_text())
     entry, = manifest["files"]
     assert entry["rows"] == 0
+    if stream and has_source:
+        batches = manifest["stream_batches"]["observed_peep_set"]
+        assert [batch["output_rows"] for batch in batches] == [0, 0]
     assert entry["thesis_support"]["status"] == ("projected" if has_source else "authority_unavailable")
     assert entry["availability"] == ("available" if has_source else "structurally_unavailable")
 
@@ -210,16 +242,63 @@ def test_available_peep_source_with_no_qualifying_rows(tmp_path, stream, has_sou
 @pytest.fixture
 def frozen_src_dir():
     value = os.environ.get("THESIS_FROZEN_SOURCE_DIR")
-    if not value:
+    path = Path(value) if value else frozen_equivalence._FROZEN_SOURCE_DIR
+    if not value and not path.is_dir():
         pytest.skip("frozen reference checkout is external")
-    return Path(value)
+    return path
+
+
+@pytest.mark.parametrize("name", sorted(frozen_equivalence._FROZEN_DIGESTS))
+def test_pinned_frozen_source_digest_is_complete_and_matches_local_copy(name):
+    digest = frozen_equivalence._FROZEN_DIGESTS[name]
+    assert len(digest) == 64 and all(char in "0123456789abcdef" for char in digest)
+    path = frozen_equivalence._FROZEN_SOURCE_DIR / f"{name}.py"
+    if path.is_file():
+        assert hashlib.sha256(path.read_bytes()).hexdigest() == digest
+
+
+def test_frozen_fixture_discovers_default_checkout(monkeypatch, request):
+    path = frozen_equivalence._FROZEN_SOURCE_DIR
+    if not path.is_dir():
+        pytest.skip("frozen reference checkout is external")
+    monkeypatch.delenv("THESIS_FROZEN_SOURCE_DIR", raising=False)
+    try:
+        discovered = request.getfixturevalue("frozen_src_dir")
+    except pytest.skip.Exception:
+        pytest.fail("fixture skipped despite an installed frozen checkout")
+    assert discovered == path
+
+
+@pytest.mark.parametrize("location", ["relative", "alternate"])
+def test_cli_accepts_digest_verified_frozen_checkout(tmp_path, frozen_src_dir, capsys, location):
+    _peep_source(tmp_path, "sic")
+    if location == "relative":
+        checkout = os.path.relpath(frozen_src_dir)
+    else:
+        checkout = tmp_path / "frozen"
+        checkout.mkdir()
+        (checkout / "new_sources.py").write_bytes((frozen_src_dir / "new_sources.py").read_bytes())
+    status = frozen_equivalence.main([
+        "--database", "sic", "--db-root", str(tmp_path), "--stay-ids", str(_STAY),
+        "--module", "observed_peep_set", "--frozen-src-dir", str(checkout),
+    ])
+    assert json.loads(capsys.readouterr().out)["status"] == "agree"
+    assert status == 0
+
+
+def test_alternate_frozen_checkout_checks_digest_before_execution(tmp_path):
+    path = tmp_path / "sources.py"
+    path.write_text("raise AssertionError('unpinned source ran')", encoding="utf-8")
+    with pytest.raises(ValueError, match="unexpected frozen source digest"):
+        with frozen_equivalence._frozen_module(tmp_path, "sources"):
+            pytest.fail("unpinned source loaded")
 
 
 @pytest.mark.parametrize("database", ["aumc", "hirid", "miiv", "sic"])
 def test_harness_agrees_with_frozen_sql_for_identical_synthetic_inputs(tmp_path, frozen_src_dir, database):
     _peep_source(tmp_path, database)
     report = frozen_equivalence.run_equivalence(
-        database=database, db_root=tmp_path, stay_ids=[_STAY],
+        database=database, db_root=tmp_path, stay_ids=[_STAY, _OTHER] if database == "hirid" else [_STAY],
         module="observed_peep_set", frozen_src_dir=frozen_src_dir,
     )
     assert report["status"] == "agree"
@@ -250,6 +329,90 @@ def test_harness_detects_a_planted_difference_and_prints_aggregates_only(
     assert report["module"] == report["frozen"] == {"rows": None, "stays": None}
     assert str(_STAY) not in out.out and "332929.5" not in out.out
     assert not out.err
+
+
+@pytest.mark.parametrize(("database", "column"), [("miiv", None), ("miiv", "stay_id"), ("sic", "CaseID"), ("sic", "stay_id")])
+def test_cli_loads_explicit_cohort_file(tmp_path, frozen_src_dir, capsys, monkeypatch, database, column):
+    _peep_source(tmp_path, database)
+    if column is None:
+        cohort = tmp_path / "requested.txt"
+        cohort.write_text(f"  {_OTHER}\n\n{_OTHER}\n", encoding="utf-8")
+    else:
+        cohort = tmp_path / "requested.parquet"
+        _write(tmp_path, "requested", {column: [_OTHER], "unused": ["second"]})
+
+    compare = frozen_equivalence.compare_rows
+
+    def compare_cohort(actual, expected, **kwargs):
+        assert actual.stay_id.unique().tolist() == [_OTHER]
+        return compare(actual, expected, **kwargs)
+
+    monkeypatch.setattr(frozen_equivalence, "compare_rows", compare_cohort)
+    status = frozen_equivalence.main([
+        "--database", database, "--db-root", str(tmp_path),
+        "--stay-ids-file", str(cohort), "--module", "observed_peep_set",
+        "--frozen-src-dir", str(frozen_src_dir),
+    ])
+    out = capsys.readouterr()
+    assert json.loads(out.out)["status"] == "agree"
+    assert status == 0
+    assert str(_STAY) not in out.out and str(_OTHER) not in out.out and not out.err
+
+
+@pytest.mark.parametrize("database", ["aumc", "hirid", "sic"])
+def test_cli_defaults_to_all_stays_outside_miiv(tmp_path, frozen_src_dir, capsys, database):
+    _peep_source(tmp_path, database)
+    status = frozen_equivalence.main([
+        "--database", database, "--db-root", str(tmp_path),
+        "--module", "observed_peep_set", "--frozen-src-dir", str(frozen_src_dir),
+    ])
+    assert json.loads(capsys.readouterr().out)["status"] == "agree"
+    assert status == 0
+
+
+@pytest.mark.parametrize("case", ["miiv_without_cohort", "both_options", "malformed_cohort"])
+def test_cli_cohort_errors_hide_input_values(tmp_path, capsys, case):
+    cohort = tmp_path / "cohort.txt"
+    token = "invalid-stay-720054"
+    cohort.write_text(token, encoding="utf-8")
+    args = [
+        "--database", "miiv" if case == "miiv_without_cohort" else "sic",
+        "--db-root", str(tmp_path), "--module", "observed_peep_set",
+    ]
+    if case != "miiv_without_cohort":
+        args += ["--stay-ids-file", str(cohort)]
+    if case == "both_options":
+        args += ["--stay-ids", str(_STAY)]
+    if case == "malformed_cohort":
+        assert frozen_equivalence.main(args) == 2
+        report = {"status": "comparison_failed", "error_type": "ValueError"}
+    else:
+        with pytest.raises(SystemExit) as exit_info:
+            frozen_equivalence.main(args)
+        assert exit_info.value.code == 2
+        report = {"status": "invalid_arguments"}
+    out = capsys.readouterr()
+    assert json.loads(out.out) == report and not out.err
+
+
+@pytest.mark.parametrize("shard_pruned", [False, True], ids=["empty_cohort", "empty_shard_selection"])
+def test_harness_compares_empty_selections(tmp_path, monkeypatch, shard_pruned):
+    _peep_source(tmp_path, "sic")
+    if shard_pruned:
+        resolve = thesis_support.resolve_table_files
+
+        def resolve_without_matching_shards(source, table, **kwargs):
+            if table == "data_float_h" and kwargs.get("stay_values") == [_OTHER]:
+                return ()
+            return resolve(source, table, **kwargs)
+
+        monkeypatch.setattr(thesis_support, "resolve_table_files", resolve_without_matching_shards)
+    report = frozen_equivalence.run_equivalence(
+        database="sic", db_root=tmp_path, stay_ids=[_OTHER] if shard_pruned else [],
+        module="observed_peep_set", frozen_src_dir=tmp_path / "unused_reference",
+    )
+    assert report["status"] == "agree"
+    assert report["module"] == report["frozen"] == {"rows": None, "stays": None}
 
 
 def test_aggregate_comparison_counts_larger_differences_per_column():

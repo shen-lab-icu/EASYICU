@@ -73,6 +73,8 @@ _NO_RAW_PRODUCER = {
 
 def thesis_support_manifest(module: str, database: str, fields: Collection[str]) -> dict:
     """Report raw input provenance or the frozen producer's missing inputs."""
+    if module not in THESIS_SUPPORT_MODULES:
+        raise KeyError(module)
     family = database.removesuffix("_demo")
     missing = _NO_RAW_PRODUCER.get(module, {}).get(family)
     if missing is not None:
