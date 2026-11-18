@@ -51,6 +51,35 @@ def test_miiv_normalizes_before_filtering_on_icu_relative_hours(tmp_path):
     assert _hour_values(_load(tmp_path, "miiv")) == {-1.0: 21.0, 0.0: 35.5, 1.0: 100.0}
 
 
+@pytest.mark.parametrize("missing", ["icustays", "chartevents"])
+def test_miiv_refuses_a_missing_fio2_input(tmp_path, missing):
+    start = pd.Timestamp("2023-06-12 15:26")
+    if missing != "icustays":
+        _write(tmp_path, "icustays", [(37, start)], ["stay_id", "intime"])
+    if missing != "chartevents":
+        _write(tmp_path, "chartevents", [(37, start, 223835, 35.0)],
+               ["stay_id", "charttime", "itemid", "valuenum"])
+
+    availability = {}
+    assert _load(tmp_path, "miiv", stay=37, availability_sink=availability).empty
+    record = availability["fio2_set"]
+    assert record.reason == "source_unavailable"
+    assert record.evaluation_status == "not_evaluable"
+    assert record.reason_code == "required_source_table_missing"
+    assert record.missing_tables == (missing,)
+
+
+def test_miiv_present_chart_with_no_setting_for_requested_stay_is_empty(tmp_path):
+    start = pd.Timestamp("2023-06-12 15:26")
+    _write(tmp_path, "icustays", [(37, start), (38, start)], ["stay_id", "intime"])
+    _write(tmp_path, "chartevents", [(38, start, 223835, 35.0)],
+           ["stay_id", "charttime", "itemid", "valuenum"])
+    availability = {}
+
+    assert _load(tmp_path, "miiv", stay=37, availability_sink=availability).empty
+    assert availability["fio2_set"].reason == "data_missing"
+
+
 def test_aumc_pools_all_raw_items_and_keeps_exact_millisecond_boundaries(tmp_path):
     admit = 2_400_000_001
     _write(tmp_path, "admissions", [(1, admit)], ["admissionid", "admittedat"])
@@ -129,6 +158,22 @@ def test_carevue_view_and_chart_error_gate(tmp_path, view_name, other_stay_sourc
     else:
         assert frame.empty
         assert availability["fio2_set"].reason_code == "carevue_view_required"
+
+
+def test_mimic_demo_reports_carevue_view_required_even_at_a_view_named_path(tmp_path):
+    root = tmp_path / "mimic_cv_dir_r13"
+    root.mkdir()
+    start = pd.Timestamp("2018-04-18 08:04")
+    _write(root, "icustays", [(1, start, "carevue")], ["ICUSTAY_ID", "INTIME", "DBSOURCE"])
+    _write(root, "chartevents", [(1, start, 190, 50.0)], ["ICUSTAY_ID", "CHARTTIME", "ITEMID", "VALUENUM"])
+    availability = {}
+
+    assert _load(root, "mimic_demo", availability_sink=availability).empty
+    record = availability["fio2_set"]
+    assert record.database == "mimic_demo"
+    assert record.reason == "source_unavailable"
+    assert record.evaluation_status == "not_evaluable"
+    assert record.reason_code == "carevue_view_required"
 
 
 def test_fio2_set_has_its_own_opt_in_module():

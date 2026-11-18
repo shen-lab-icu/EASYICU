@@ -8,7 +8,7 @@ from pathlib import Path
 import numpy as np
 import pandas as pd
 
-from ..datasource import FilterOp, FilterSpec, drop_mimic_chart_errors
+from ..datasource import FilterOp, FilterSpec, MissingTableSourceError, drop_mimic_chart_errors
 from ..table import ICUTable
 from .availability_signal import ConceptAvailabilityRecord, set_table_availability
 from .merge_time_index import RELATIVE_HOURS
@@ -37,7 +37,7 @@ def _hourly_result(frame, stay_column):
     )
 
 
-def _carevue_absence(database, stay_column, table):
+def _settings_absence(database, stay_column, table, reason_code, *, missing_tables=()):
     result = _hourly_result(pd.DataFrame({
         stay_column: pd.Series(dtype="int64"),
         "charttime": pd.Series(dtype="float64"),
@@ -45,10 +45,20 @@ def _carevue_absence(database, stay_column, table):
     }), stay_column)
     set_table_availability(result, ConceptAvailabilityRecord(
         concept="fio2_set", database=database, reason="source_unavailable", n_rows=0,
-        sources_defined=(table,), evaluation_status="not_evaluable",
-        reason_code="carevue_view_required",
+        sources_defined=(table,), missing_tables=missing_tables,
+        evaluation_status="not_evaluable", reason_code=reason_code,
     ))
     return result
+
+
+def _read_settings_input(data_source, table, columns, filters=None):
+    try:
+        frame = data_source.load_table(table, columns=columns, filters=filters).data
+    except (FileNotFoundError, MissingTableSourceError):
+        return None
+    if frame.empty and not data_source.has_table_source(table):
+        return None
+    return frame
 
 
 def _icu_hours(rows, source_time, origin_time, database):
@@ -68,16 +78,15 @@ def _icu_hours(rows, source_time, origin_time, database):
 
 def load_fio2_set(definition, source, data_source, patient_ids):
     """Filter raw settings on the source clock and pool one median per hour."""
-    database = data_source.config.name
-    if database == "eicu_demo":
-        database = "eicu"
+    source_database = data_source.config.name
+    database = "eicu" if source_database == "eicu_demo" else source_database
     stay_column = data_source.config.id_configs["icustay"].id
     selected = selected_stay_ids(patient_ids, stay_column)
     stay_filters = [] if selected is None else [FilterSpec(stay_column, FilterOp.IN, selected)]
 
     if database in {"mimic", "mimic_demo"}:
         if database != "mimic" or not is_carevue_extraction_root(data_source.base_path):
-            return _carevue_absence(database, stay_column, source.table)
+            return _settings_absence(database, stay_column, source.table, "carevue_view_required")
 
     origins = None
     origin_time = None
@@ -86,15 +95,21 @@ def load_fio2_set(definition, source, data_source, patient_ids):
         columns = [stay_column, origin_time]
         if database == "mimic":
             # Verify the entire view before applying any patient-batch filter.
-            origins = data_source.load_table(origin_table, columns=[*columns, "dbsource"]).data
+            origins = _read_settings_input(data_source, origin_table, [*columns, "dbsource"])
+        else:
+            origins = _read_settings_input(data_source, origin_table, columns, stay_filters or None)
+        if origins is None:
+            return _settings_absence(
+                source_database, stay_column, source.table, "required_source_table_missing",
+                missing_tables=(origin_table,),
+            )
+        if database == "mimic":
             if (
                 "dbsource" not in origins
                 or not origins["dbsource"].astype("string").str.lower().eq("carevue").fillna(False).all()
             ):
-                return _carevue_absence(database, stay_column, source.table)
+                return _settings_absence(database, stay_column, source.table, "carevue_view_required")
             origins = origins[columns]
-        else:
-            origins = data_source.load_table(origin_table, columns=columns, filters=stay_filters or None).data
 
     columns = [stay_column, source.index_var, source.value_var, source.sub_var]
     filters = [FilterSpec(source.sub_var, FilterOp.IN, source.ids), *stay_filters]
@@ -104,7 +119,12 @@ def load_fio2_set(definition, source, data_source, patient_ids):
     if database == "mimic":
         columns.append("error")
 
-    rows = data_source.load_table(source.table, columns=columns, filters=filters).data
+    rows = _read_settings_input(data_source, source.table, columns, filters)
+    if rows is None:
+        return _settings_absence(
+            source_database, stay_column, source.table, "required_source_table_missing",
+            missing_tables=(source.table,),
+        )
     if database == "mimic":
         rows = drop_mimic_chart_errors(rows, database, source.table)
     if origins is not None:

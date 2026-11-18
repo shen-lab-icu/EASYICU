@@ -22,6 +22,8 @@ class ConceptDataSourceStorage(Protocol):
         self, table_name: str
     ) -> Optional[Callable[[], pd.DataFrame] | Path]: ...
 
+    def has_table_source(self, table_name: str) -> bool: ...
+
     def resolve_target_files(
         self, table_name: str, selector_column: Optional[str] = None,
         selector_values: Optional[Iterable[object]] = None,

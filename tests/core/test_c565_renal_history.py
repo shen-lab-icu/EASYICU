@@ -8,7 +8,9 @@ import pytest
 
 from easyicu.api import EXTRACT_MODULE_ORDER, EXTRACT_MODULES
 from easyicu.api.concepts import clear_global_loader, load_concepts
+from easyicu.concept import c565_renal_history
 from easyicu.concept.c565_renal_history import FIELDS
+from easyicu.datasource import ICUDataSource
 from tests.support.bucket_storage import write_contract
 from tests.support.source_mortality import source as mortality_source
 
@@ -95,6 +97,36 @@ def test_eicu_all_sibling_units_contribute_codes_and_past_history(tmp_path):
     ]
 
 
+@pytest.mark.parametrize("database", ["eicu", "eicu_demo"])
+@pytest.mark.parametrize("diagnosis_stay", [25, 31], ids=["no-matching-diagnoses", "uncoded-sibling"])
+def test_eicu_single_stay_can_use_past_history_without_icd_codes(
+    tmp_path, monkeypatch, database, diagnosis_stay,
+):
+    _write(tmp_path, "patient", [(24, 7), (25, 8), (31, 7)],
+           ["patientunitstayid", "patienthealthsystemstayid"])
+    _write(tmp_path, "diagnosis", [
+        (diagnosis_stay, None, "cardiovascular | rhythm disturbance"),
+        (25, "V42.0", "kidney transplant"),
+    ], ["patientunitstayid", "icd9code", "diagnosisstring"])
+    _write(tmp_path, "pasthistory", [(31, "prior treatment / renal failure - Hemodialysis")],
+           ["patientunitstayid", "pasthistorypath"])
+    code_flags = c565_renal_history._code_flags
+    code_dtypes = []
+
+    def record_code_dtype(codes):
+        code_dtypes.append(codes.dtype)
+        return code_flags(codes)
+
+    monkeypatch.setattr(c565_renal_history, "_code_flags", record_code_dtype)
+
+    with pd.option_context("mode.string_storage", "python"):
+        result = _load(tmp_path, database, [24])
+
+    assert result["patientunitstayid"].tolist() == [24]
+    assert result[list(FIELDS)].values.tolist() == [[False, False, True, False, True]]
+    assert code_dtypes and all(isinstance(dtype, pd.StringDtype) for dtype in code_dtypes)
+
+
 @pytest.mark.parametrize("database,reason", [
     ("aumc", "no_icd_diagnosis_source"),
     ("hirid", "no_icd_diagnosis_source"),
@@ -144,11 +176,12 @@ def _carevue_history(root, stays, diagnoses, *, dbsource=True):
 
 
 @pytest.mark.parametrize("r_compatible", [False, True])
-def test_carevue_era_and_admittime_window(carevue_view, r_compatible):
+@pytest.mark.parametrize("mv_source", ["metavision", " BOTH "], ids=["mv", "dual-system"])
+def test_carevue_era_and_admittime_window(carevue_view, r_compatible, mv_source):
     _carevue_history(carevue_view, [
         (1, 100, 10, "carevue"), (11, 100, 11, "carevue"),
         (12, 100, 12, "carevue"), (13, 100, 13, "carevue"),
-        (14, 100, 14, "carevue"), (140, 100, 14, "metavision"),
+        (14, 100, 14, "carevue"), (140, 100, 14, mv_source),
         (2, 200, 20, "CAREVue"),
     ], [
         (11, "585.6"), (12, "v42.0"), (13, "99681"), (14, "99681"),
@@ -170,6 +203,7 @@ def test_carevue_era_and_admittime_window(carevue_view, r_compatible):
     assert result["prior_window_note"].isna().all()
     for field in FIELDS:
         assert availability[field].prior_window == "view_admissions_only"
+        assert availability[field].prior_window_note is None
         assert availability[field].note == "EXTENSION beyond frozen C565."
 
     # The equally timed admission is the only eligible transplant source.
@@ -309,6 +343,25 @@ def test_missing_miiv_diagnosis_table_is_not_a_negative(tmp_path):
     _write(tmp_path, "admissions", [(101, 10, pd.Timestamp("2023-05-01"))],
            ["hadm_id", "subject_id", "admittime"])
     _assert_absent(tmp_path, "miiv", "required_source_table_missing", ("diagnoses_icd",))
+
+
+def test_missing_miiv_stay_table_can_have_a_complete_default_projection(tmp_path, monkeypatch):
+    _write(tmp_path, "admissions", [(101, 10, pd.Timestamp("2023-05-01"))],
+           ["hadm_id", "subject_id", "admittime"])
+    _write(tmp_path, "diagnoses_icd", [(101, "Z99.2", 10)],
+           ["hadm_id", "icd_code", "icd_version"])
+    load_table = ICUDataSource.load_table
+
+    def load_with_admission_and_subject_defaults(self, table, *args, **kwargs):
+        result = load_table(self, table, *args, **kwargs)
+        if table == "icustays":
+            assert result.data.empty
+            result.data["hadm_id"] = pd.Series(dtype="int64")
+            result.data["subject_id"] = pd.Series(dtype="int64")
+        return result
+
+    monkeypatch.setattr(ICUDataSource, "load_table", load_with_admission_and_subject_defaults)
+    _assert_absent(tmp_path, "miiv", "required_source_table_missing", ("icustays",))
 
 
 def _assert_absent(root, database, reason, missing=()):

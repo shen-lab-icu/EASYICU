@@ -1821,6 +1821,14 @@ class ICUDataSource:
 
         return self._resolve_loader_from_disk(table_name)
 
+    def has_table_source(self, table_name: str) -> bool:
+        """Check for a registered, configured dataset, or on-disk table source."""
+        return (
+            self._table_sources.get(table_name) is not None
+            or table_name in self._dataset_sources
+            or self.resolve_loader_from_disk(table_name) is not None
+        )
+
     def _resolve_bucket_directory(self, table_name: str) -> Optional[Path]:
         """Return the bucket selected by the shared, complete decision owner."""
         decision = storage_layout.table_decision(self, table_name)

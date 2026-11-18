@@ -47,14 +47,14 @@ def _history(data_source, table, columns, *, optional_columns=(), **selections):
         frame = _read(data_source, table, [*columns, *optional_columns], **selections)
     except (FileNotFoundError, MissingTableSourceError) as exc:
         raise _MissingHistoryTable(table) from exc
-    present_optional = [column for column in optional_columns if column in frame.columns]
-    projection = [*columns, *present_optional]
     # The generic MIIV reader can return a zero-row default projection for
     # an absent table. Distinguish that case from a readable empty table.
+    if frame.empty and not data_source.has_table_source(table):
+        raise _MissingHistoryTable(table)
+    present_optional = [column for column in optional_columns if column in frame.columns]
+    projection = [*columns, *present_optional]
+    # An empty IN selection can skip the disk read and return no columns.
     if frame.empty and set(columns).difference(frame.columns):
-        if data_source.resolve_loader_from_disk(table) is None:
-            raise _MissingHistoryTable(table)
-        # An empty IN selection can skip the disk read and return no columns.
         if any(ids is not None and not ids for ids in selections.values()):
             return frame.reindex(columns=projection)
     # The reader can return a wider, case-normalized frame. Keep only the
@@ -141,17 +141,18 @@ def _carevue_flags(data_source, stay_column, selected):
     source = stays.get("dbsource", pd.Series(pd.NA, index=stays.index, dtype="string"))
     source = source.astype("string").str.strip().str.lower()
     carevue = source.eq("carevue").fillna(False)
-    metavision = source.eq("metavision").fillna(False)
-    unknown = ~(carevue | metavision)
-    has_any_mv_stay = stays["hadm_id"].isin(_ids(stays.loc[metavision], "hadm_id"))
-    candidates = carevue if (carevue | metavision).any() else unknown
+    mv_present = source.isin({"metavision", "both"})
+    known = carevue | mv_present
+    unknown = ~known
+    has_any_mv_stay = stays["hadm_id"].isin(_ids(stays.loc[mv_present], "hadm_id"))
+    candidates = carevue if known.any() else unknown
     eligible = stays.loc[candidates & ~has_any_mv_stay]
     prior_admissions = _ids(eligible, "hadm_id")
     if selected is not None:
         eligible = eligible.loc[eligible[stay_column].isin(selected)]
     # A CareVue-only view can establish membership but cannot reveal
     # MetaVision siblings the view has already removed.
-    era_note = CAREVUE_ERA_NOTE if unknown.any() or not metavision.any() else None
+    era_note = CAREVUE_ERA_NOTE if unknown.any() or not mv_present.any() else None
     flags = _mimic_flags(data_source, stay_column, eligible, carevue_admissions=prior_admissions)
     return flags, era_note
 
@@ -175,7 +176,7 @@ def _eicu_flags(data_source, stay_column, selected):
     scope = {stay_column: _ids(siblings, stay_column)}
 
     diagnoses = _history(data_source, "diagnosis", [stay_column, "icd9code"], **scope).reset_index(drop=True)
-    codes = diagnoses["icd9code"].astype("string").str.split(",").explode()
+    codes = diagnoses["icd9code"].astype("string").str.split(",").explode().astype("string")
     codes = codes.str.strip().str.replace(r"[^0-9A-Za-z]", "", regex=True)
     esrd, transplant = _code_flags(codes)
     coded = pd.DataFrame({
