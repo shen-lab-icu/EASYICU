@@ -1,4 +1,4 @@
-"""One bounded, fail-closed repair pass over STRICT-rejected manuscript prose.
+"""Bounded, fail-closed repair over STRICT-rejected manuscript prose.
 
 The write phase used to own the decision call, deterministic fallback, repair
 application, and STRICT revalidation while ``manuscript_post`` owned the text
@@ -11,10 +11,11 @@ as a :class:`WriterRepairDecision`.
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Any, Callable, Dict, List, Mapping, Optional, Sequence, Tuple
 
 from ..authority.evidence_store import EvidenceEnforcementError
+from ..bounded_repair import BoundedRepair, RepairFeedback
 from ..providers.structured_retry import StructuredResponseFailure
 from .writer_repair_decision import WriterRepairDecision, drop_every_sentence
 from .manuscript_sentence_context import contextual_sentence_deletion
@@ -35,6 +36,7 @@ class ManuscriptRepairResult:
     fallback_detail: Optional[Mapping[str, Any]] = None
     residual_strict_drops: tuple[Mapping[str, object], ...] = ()
     residual_drop_detail: Optional[Mapping[str, Any]] = None
+    repair_receipt: Mapping[str, Any] = field(default_factory=dict)
 
     def finding_detail(self) -> Dict[str, object]:
         detail: Dict[str, object] = {
@@ -43,6 +45,8 @@ class ManuscriptRepairResult:
                 dict(item) for item in self.residual_strict_drops
             ],
         }
+        if self.repair_receipt:
+            detail["repair_receipt"] = dict(self.repair_receipt)
         if self.fallback_detail is not None:
             detail["fallback"] = dict(self.fallback_detail)
         if self.residual_drop_detail is not None:
@@ -102,44 +106,61 @@ class ManuscriptRepairPass:
         claim_required_sentences: Sequence[str],
         allowed_claim_refs: Sequence[str],
         language: str,
+        receipt: dict[str, Any] | None = None,
     ) -> tuple[str, List[Dict[str, object]], Optional[Dict[str, Any]]]:
-        """Apply legal decisions or conservatively drop the rejected sentences."""
+        """Require valid decisions before falling back to conservative removal."""
 
-        fallback_detail: Optional[Dict[str, Any]] = None
-        original_scaffold = scaffold
-        try:
-            repair_decisions = self.decision_provider(
-                llm,
-                evidence_ids=evidence_ids,
-                evidence_digest=evidence_digest,
-                missing_sentences=rejected_sentences,
-                scientific_claims=scientific_claims,
-                claim_required_sentences=claim_required_sentences,
-                language=language,
-            )
-            repaired, applied = self.decision_applier(
-                original_scaffold,
-                missing_sentences=rejected_sentences,
-                decisions=repair_decisions,
-                allowed_evidence_ids=evidence_ids,
-                allowed_claim_refs=allowed_claim_refs,
-            )
-        except (StructuredResponseFailure, ValueError) as exc:
-            repaired, applied = self._deterministically_drop(
-                original_scaffold,
-                rejected_sentences,
-            )
-            raw_attempts = getattr(exc, "easyicu_structured_attempt_metadata", [])
-            safe_attempts = [
-                dict(item) for item in raw_attempts if isinstance(item, dict)
-            ][:4]
-            fallback_detail = {
-                "reason_code": "writer_evidence_repair_deterministic_drop",
-                "exception_type": type(exc).__name__,
-                "rejected_sentence_count": len(rejected_sentences),
-                "structured_attempts": safe_attempts,
-            }
-        return repaired, applied, fallback_detail
+        repair = BoundedRepair()
+        if receipt is not None:
+            receipt.update(repair.receipt)
+        initial = RepairFeedback("writer_evidence_citation_required", "decisions", {
+            "rejected_sentence_count": len(rejected_sentences),
+        })
+        feedback = (initial,)
+        while repair.available:
+            repair.begin(feedback)
+            try:
+                repair_decisions = self.decision_provider(
+                    llm,
+                    evidence_ids=evidence_ids,
+                    evidence_digest=evidence_digest,
+                    missing_sentences=rejected_sentences,
+                    scientific_claims=scientific_claims,
+                    claim_required_sentences=claim_required_sentences,
+                    language=language,
+                    repair_feedback=feedback,
+                )
+                repaired, applied = self.decision_applier(
+                    scaffold,
+                    missing_sentences=rejected_sentences,
+                    decisions=repair_decisions,
+                    allowed_evidence_ids=evidence_ids,
+                    allowed_claim_refs=allowed_claim_refs,
+                )
+            except (StructuredResponseFailure, ValueError) as exc:
+                rejection = RepairFeedback("writer_evidence_decision_rejected", "decisions", {
+                    "error_type": type(exc).__name__,
+                    "validation": "Use each requested index once with an allowed action and its required fields.",
+                })
+                repair.finish("rejected", findings=(rejection,))
+                feedback = (initial, rejection)
+                failure = exc
+            except BaseException as exc:
+                repair.finish("rejected", findings=(RepairFeedback(
+                    "writer_evidence_repair_interrupted", "decisions", {"error_type": type(exc).__name__},
+                ),))
+                raise
+            else:
+                repair.finish("resolved")
+                return repaired, applied, None
+        repaired, applied = self._deterministically_drop(scaffold, rejected_sentences)
+        raw_attempts = getattr(failure, "easyicu_structured_attempt_metadata", [])
+        return repaired, applied, {
+            "reason_code": "writer_evidence_repair_deterministic_drop",
+            "exception_type": type(failure).__name__,
+            "rejected_sentence_count": len(rejected_sentences),
+            "structured_attempts": [dict(item) for item in raw_attempts if isinstance(item, dict)][:4],
+        }
 
     def drop_residual(
         self,
@@ -203,6 +224,7 @@ class ManuscriptRepairPass:
     ) -> ManuscriptRepairResult:
         """Run the complete pass and return one typed, attributable receipt."""
 
+        receipt: dict[str, Any] = {}
         repaired, applied, fallback = self.repair_rejected(
             scaffold,
             llm=llm,
@@ -213,6 +235,7 @@ class ManuscriptRepairPass:
             claim_required_sentences=claim_required_sentences,
             allowed_claim_refs=allowed_claim_refs,
             language=language,
+            receipt=receipt,
         )
         cleaned, residual, residual_detail = self.drop_residual(
             repaired,
@@ -224,4 +247,5 @@ class ManuscriptRepairPass:
             fallback_detail=fallback,
             residual_strict_drops=tuple(residual),
             residual_drop_detail=residual_detail,
+            repair_receipt=receipt,
         )

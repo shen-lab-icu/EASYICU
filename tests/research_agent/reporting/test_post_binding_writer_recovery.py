@@ -24,14 +24,14 @@ from .test_manuscript_quality import _valid_manuscript
 
 
 @pytest.mark.parametrize("still_broken", [False, True])
-def test_final_quality_failure_repairs_once_and_revalidates_without_analysis(
+def test_final_quality_failure_revalidates_within_the_bound_without_analysis(
     tmp_path, monkeypatch, still_broken,
 ):
     good = _valid_manuscript()
     bad = good.replace("## Results", "## Missing results", 1)
     drafts, bindings, publications = [], [], []
     evidence = EvidenceStore(tmp_path)
-    plan = AnalysisPlan(research_question="ICU cohort description", steps=[])
+    plan = AnalysisPlan(research_question="ICU cohort description", analysis_type="association_study", steps=[])
     for name in ("_activate_publication_figure", "_activate_publication_inputs", "_write_reproducibility_artifacts"):
         monkeypatch.setattr(write_phase, name, lambda *args, **kwargs: None)
     monkeypatch.setattr(write_phase, "execution_gate_status", lambda **kwargs: {"execution_complete": True})
@@ -63,7 +63,7 @@ def test_final_quality_failure_repairs_once_and_revalidates_without_analysis(
         manuscript_title=None, manuscript_authors=None, run_language="en",
         emit_progress=lambda *args, **kwargs: None,
     )
-    assert len(drafts) == len(bindings) == 2
+    assert len(drafts) == len(bindings) == (4 if still_broken else 2)
     assert drafts[0] is None
     assert drafts[1][0] == good  # Repair source remains raw, never rendered citations.
     assert "results" in drafts[1][1]
@@ -309,7 +309,7 @@ def test_final_audit_repairs_only_the_failing_section_and_records_attempt(tmp_pa
     assert "The cohort comprised {manuscript_value:" in client.calls[0][0][1].content
     receipt = json.loads((tmp_path / "manuscript_audit_repair.json").read_text())
     assert receipt["status"] == "pass"
-    assert receipt["max_attempts"] == 1 and len(receipt["attempts"]) == 1
+    assert receipt["max_attempts"] == 3 and len(receipt["attempts"]) == 1
     assert receipt["attempts"][0]["numeric_checks"] == "pass"
     assert receipt["attempts"][0]["evidence_checks"] == "pass"
 
@@ -349,14 +349,14 @@ def test_repeated_sentence_joins_callout_repair_and_must_keep_its_citation(
         }
     receipt = json.loads((tmp_path / "manuscript_audit_repair.json").read_text())
     assert receipt["status"] == ("pass" if keep_citation else "rejected")
-    assert receipt["max_attempts"] == len(receipt["attempts"]) == 1
+    assert receipt["max_attempts"] == 3 and len(receipt["attempts"]) == 1
     assert receipt["attempts"][0]["audit_codes"] == [
         "MANUSCRIPT_REPEATED_SENTENCE", "MANUSCRIPT_RESULT_SUBSECTION_CALLOUT_ONLY",
     ]
 
 
-@pytest.mark.parametrize(("severity", "status"), [("warning", "pass"), ("error", "non_repairable")])
-def test_unrepairable_code_blocks_a_repair_only_at_error_severity(tmp_path, monkeypatch, severity, status):
+@pytest.mark.parametrize(("severity", "status"), [("warning", "pass"), ("error", "exhausted")])
+def test_previously_unlisted_editorial_error_gets_the_same_bounded_repair(tmp_path, monkeypatch, severity, status):
     from dataclasses import replace
 
     from easyicu.research_agent.reporting import manuscript_quality
@@ -375,7 +375,10 @@ def test_unrepairable_code_blocks_a_repair_only_at_error_severity(tmp_path, monk
         "The AUROC was 0.74 {evidence:renal_summary}.", "See Figure 1 {evidence:renal_summary}.",
     )
     _, client, drafts, bindings, _ = _exercise(
-        tmp_path, monkeypatch, bad, ["## Results\n\n" + _section(GOOD, "Results")],
+        tmp_path, monkeypatch, bad, [
+            "## Results\n\n" + _section(GOOD, "Results"),
+            "## Discussion\n\n" + _section(GOOD, "Discussion"),
+        ] + ["## Discussion\n\n" + _section(GOOD, "Discussion")] * 2,
     )
     receipt = json.loads((tmp_path / "manuscript_audit_repair.json").read_text())
     assert receipt["status"] == status
@@ -384,9 +387,9 @@ def test_unrepairable_code_blocks_a_repair_only_at_error_severity(tmp_path, monk
         assert len(receipt["attempts"]) == 1
         assert receipt["attempts"][0]["audit_codes"] == ["MANUSCRIPT_RESULT_SUBSECTION_CALLOUT_ONLY"]
     else:
-        assert len(drafts) == len(bindings) == 1 and client.calls == []
-        assert receipt["attempts"] == []
-        assert receipt["remaining_codes"] == ["MANUSCRIPT_RESULT_SUBSECTION_CALLOUT_ONLY", code]
+        assert len(drafts) == len(bindings) == 4 and len(client.calls) == 4
+        assert len(receipt["attempts"]) == 3
+        assert receipt["remaining_codes"] == [code]
 
 
 def test_repeated_sentence_warning_alone_does_not_spend_a_writer_attempt(tmp_path, monkeypatch):
@@ -403,7 +406,7 @@ def test_final_audit_repair_is_bounded_and_retains_typed_codes(tmp_path, monkeyp
     bad = GOOD.replace("### Model performance\nThe AUROC was 0.74 {evidence:renal_summary}.",
                        "### Model performance\nSee Figure 1 {evidence:renal_summary}.")
     _, client, drafts, _, _ = _exercise(tmp_path, monkeypatch, bad, ["## Results\n\n" + _section(bad, "Results")])
-    assert len(client.calls) == 1 and len(drafts) == 2
+    assert len(client.calls) == 3 and len(drafts) == 4
     receipt = json.loads((tmp_path / "manuscript_audit_repair.json").read_text())
     assert receipt["status"] == "exhausted"
     assert "MANUSCRIPT_RESULT_SUBSECTION_CALLOUT_ONLY" in receipt["remaining_codes"]
@@ -533,12 +536,12 @@ def test_a_routine_filter_warning_without_audit_findings_keeps_the_draft(tmp_pat
     assert calls == [None] and result[0].scaffold == GOOD and len(findings) == 1
 
 
-def test_incomplete_repair_stops_with_typed_codes_and_a_receipt(tmp_path, monkeypatch):
+def test_incomplete_repair_exhausts_with_typed_codes_and_a_receipt(tmp_path, monkeypatch):
     bad = GOOD.replace("The AUROC was 0.74 {evidence:renal_summary}.", "See Figure 1 {evidence:renal_summary}.")
     with pytest.raises(EvidenceEnforcementError, match="MANUSCRIPT_SUBSECTION_MISSING_OR_EMPTY"):
         _exercise(tmp_path, monkeypatch, bad, ["## Results\nIncomplete response."])
     receipt = json.loads((tmp_path / "manuscript_audit_repair.json").read_text())
-    assert receipt["status"] == "rejected" and len(receipt["attempts"]) == 1
+    assert receipt["status"] == "exhausted" and len(receipt["attempts"]) == 3
     assert "MANUSCRIPT_RESULT_SUBSECTION_CALLOUT_ONLY" in receipt["remaining_codes"]
     assert "MANUSCRIPT_SUBSECTION_MISSING_OR_EMPTY" in receipt["remaining_codes"]
 
@@ -636,9 +639,9 @@ def test_cited_paraphrases_do_not_block_repair_of_a_callout_only_subsection(tmp_
     contrast = ("The contrast was serum potassium of 4.0 mmol/L or higher versus below 4.0 mmol/L, "
                 "with the under-4.0 group as the reference {evidence:research_context} {evidence:renal_summary}.")
     bad = GOOD.replace("The AUROC was 0.74 {evidence:renal_summary}.", "See Figure 1 {evidence:renal_summary}.")
-    bad = bad.replace("## Introduction\n\n", "## Introduction\n\n" + definition + "\n\n")
+    bad = bad.replace("## Introduction\n\n", "## Introduction\n\n" + "For clinical context, " + definition[0].lower() + definition[1:] + "\n\n")
     bad = bad.replace("### Variables\n", "### Variables\n" + definition + "\n\n" + contrast + "\n\n")
-    bad = bad.replace("## Limitations\n\n", "## Limitations\n\n" + definition + "\n\n")
+    bad = bad.replace("## Limitations\n\n", "## Limitations\n\n" + "In this setting, " + definition[0].lower() + definition[1:] + "\n\n")
     result, client, drafts, bindings, findings = _exercise(
         tmp_path, monkeypatch, bad, ["## Results\n\n" + _section(GOOD, "Results")],
         grouping=_grouping("potassium", 4, "mmol/L"),
@@ -652,3 +655,39 @@ def test_cited_paraphrases_do_not_block_repair_of_a_callout_only_subsection(tmp_
     receipt = json.loads((tmp_path / "manuscript_audit_repair.json").read_text())
     assert receipt["status"] == "pass" and len(receipt["attempts"]) == 1
     assert receipt["attempts"][0]["numeric_checks"] == "pass"
+
+
+def test_final_audit_retries_rejected_candidate_with_typed_feedback(tmp_path, monkeypatch):
+    bad = GOOD.replace("The AUROC was 0.74 {evidence:renal_summary}.", "See Figure 1 {evidence:renal_summary}.")
+    results = "## Results\n\n" + _section(GOOD, "Results")
+    missing_heading = results.replace("### Secondary analyses", "### Extra detail")
+
+    (draft, binding), client, _, _, _ = _exercise(
+        tmp_path, monkeypatch, bad, [missing_heading, results],
+    )
+
+    assert binding.manuscript_critique.status == "pass"
+    assert _section(draft.scaffold, "Results") == _section(GOOD, "Results")
+    assert "MANUSCRIPT_SUBSECTION_MISSING_OR_EMPTY" in client.calls[1][0][-1].content
+    receipt = json.loads((tmp_path / "manuscript_audit_repair.json").read_text())
+    assert [row["status"] for row in receipt["attempts"]] == ["rejected", "pass"]
+
+
+def test_an_unsupported_dictionary_definition_never_reaches_editorial_repair():
+    from easyicu.research_agent.reporting.manuscript_audit_repair import run_manuscript_audit_repair
+
+    semantics = SimpleNamespace(kind="positive_only_event")
+    context = SimpleNamespace(variables=[SimpleNamespace(observation_semantics=semantics)])
+    scaffold = GOOD.replace("## Introduction\n", "## Introduction\n\nWe used the diagnosis status from intake records.\n")
+    drafted = []
+
+    def draft(request):
+        drafted.append(request)
+        return SimpleNamespace(scaffold=scaffold, writer_error_message=None)
+
+    with pytest.raises(EvidenceEnforcementError, match="MANUSCRIPT_DEFINITION_NOT_FROM_DICTIONARY"):
+        run_manuscript_audit_repair(
+            draft=draft, bind=lambda _: SimpleNamespace(bound=scaffold),
+            section_errors=lambda *_: {}, findings=[], run_dir=None, evidence=None, context=context,
+        )
+    assert drafted == [None]

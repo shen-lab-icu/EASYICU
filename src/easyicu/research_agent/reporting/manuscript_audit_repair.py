@@ -1,4 +1,4 @@
-"""One final-audit repair budget, with immutable scientific authority.
+"""Bounded final manuscript audit repair with immutable scientific authority.
 
 The normal Writer owns section dispatch; the normal binding stage owns STRICT
 numeric/evidence checks. This owner only feeds repairable audit findings back
@@ -15,10 +15,15 @@ import re
 from typing import Any, Callable, Mapping, Sequence
 
 from ..authority.evidence_store import EvidenceEnforcementError
-from .manuscript_sections import ManuscriptSectionContractError, manuscript_binding_tokens
+from ..bounded_repair import BoundedRepair, RepairFeedback
+from .manuscript_labels import recorded_definition_section_errors
+from .manuscript_sections import (
+    ManuscriptSectionContractError,
+    manuscript_binding_tokens,
+    manuscript_repair_feedback,
+    manuscript_repair_regressions,
+)
 
-# Preserve the final-quality path's existing one-revision budget.
-MAX_MANUSCRIPT_AUDIT_REPAIRS = 1
 REPAIRABLE_MANUSCRIPT_CODES = frozenset({
     "MANUSCRIPT_TITLE_MISSING", "MANUSCRIPT_KEYWORDS_MISSING",
     "MANUSCRIPT_SECTION_MISSING", "MANUSCRIPT_SECTION_EMPTY",
@@ -69,9 +74,10 @@ def _numeric_authority(binding: Any) -> Counter:
 def _require_preserved_sections(before: str, after: str, keys: Sequence[str]) -> None:
     original, candidate = _sections(before), _sections(after)
     names = set(keys)
-    for section, text in original.items():
+    for section in original.keys() | candidate.keys():
+        text = original.get(section, "")
         if section not in names:
-            if candidate.get(section) != text:
+            if candidate.get(section) != original.get(section):
                 raise EvidenceEnforcementError(
                     "MANUSCRIPT_REPAIR_AUTHORITY_CHANGED: an unaffected section changed.",
                     detail={"check": "unaffected_section", "section": section},
@@ -98,7 +104,7 @@ def _authority_failed(findings: Sequence[Any], binding: Any) -> bool:
     )
 
 
-def _non_repairable(findings: Sequence[Any], binding: Any) -> bool:
+def _binding_invariant_failed(findings: Sequence[Any], binding: Any) -> bool:
     """A failure, or a filtered numeric sentence, that no revision may paper over."""
     return _authority_failed(findings, binding) or any(
         finding.validator == "manuscript_numeric_auditor"
@@ -123,89 +129,138 @@ def run_manuscript_audit_repair(
     *, draft: Callable[[Any], Any], bind: Callable[[Any], Any],
     section_errors: Callable[[Any, Any], Mapping[str, tuple[str, ...]]],
     findings: list[Any], run_dir: Path | None, evidence: Any, skip_repair: bool = False,
+    context: Any = None,
 ) -> tuple[Any, Any]:
-    """Re-enter the existing Writer and binding owners at most once.
-
-    Existing bound numbers and their evidence identities may not disappear or
-    change. A missing section may acquire additional facts only through the
-    unchanged STRICT binder. Evidence/numeric failures never fund a rewrite.
-    """
+    """Repair section-owned findings before the normal final manuscript gates."""
     start = len(findings)
-    receipt: dict[str, Any] = {
-        "schema_version": "easyicu.manuscript_audit_repair/1",
-        "max_attempts": MAX_MANUSCRIPT_AUDIT_REPAIRS, "attempts": [], "status": "not_needed",
-    }
-    # A draft that needs no revision keeps its normal path: a STRICT-filter
-    # warning is routine there and the final gates judge it as before.  Only a
-    # draft that asks for a revision is refused one after a numeric/evidence
-    # failure, so filtering can never make that failure editorially repairable.
+    repair = BoundedRepair()
+    receipt = repair.receipt
+    receipt.update(schema_version="easyicu.manuscript_audit_repair/1", status="not_needed")
     current = draft(None)
     binding = bind(current)
-    if skip_repair or current.writer_error_message:
+    if skip_repair:
         _persist(run_dir, evidence, receipt)
         return current, binding
-    errors = section_errors(current, binding)
-    if not errors:
+    errors = section_errors(current, binding) if not current.writer_error_message else {}
+    definition_errors = recorded_definition_section_errors(binding.bound, context)
+    if definition_errors:
+        receipt.update(status="non_repairable", remaining_codes=["MANUSCRIPT_DEFINITION_NOT_FROM_DICTIONARY"])
         _persist(run_dir, evidence, receipt)
-        return current, binding
-    if _non_repairable(findings[start:], binding):
+        raise EvidenceEnforcementError(
+            "MANUSCRIPT_DEFINITION_NOT_FROM_DICTIONARY: prose changes the sealed definition.",
+            detail={"sections": sorted(definition_errors)},
+        )
+    if errors and _binding_invariant_failed(findings[start:], binding):
         receipt.update(status="non_repairable", remaining_codes=["MANUSCRIPT_AUDIT_NON_REPAIRABLE", *_codes(errors)])
         _persist(run_dir, evidence, receipt)
         raise EvidenceEnforcementError("MANUSCRIPT_AUDIT_NON_REPAIRABLE: numeric or evidence checks failed.")
-    codes = _codes(errors)
-    if not codes or set(codes) - REPAIRABLE_MANUSCRIPT_CODES:
-        receipt.update(status="non_repairable", remaining_codes=codes)
+    if not errors:
         _persist(run_dir, evidence, receipt)
         return current, binding
-    original_authority = _numeric_authority(binding)
-    for attempt in range(MAX_MANUSCRIPT_AUDIT_REPAIRS):
-        row: dict[str, Any] = {
-            "attempt": attempt + 1, "section_keys": list(errors), "audit_codes": _codes(errors),
-            "input_sha256": hashlib.sha256(current.scaffold.encode()).hexdigest(),
-            "input_bound_sha256": hashlib.sha256(binding.bound.encode()).hexdigest(),
-            "protected_numeric_occurrences": sum(original_authority.values()),
-            "numeric_checks": "pending", "evidence_checks": "pending", "status": "running",
-        }
-        receipt["attempts"].append(row)
+
+    last_rejection: tuple[RepairFeedback, ...] = ()
+    while errors and repair.available:
+        request = dict(errors)
+        for item in last_rejection:
+            keys = (item.path,) if item.path in errors else tuple(errors)
+            for key in keys:
+                names = item.facts.get("missing_subsections", ())
+                if names:
+                    detail = ", ".join(names)
+                elif finding := item.facts.get("finding"):
+                    detail = f"Last attempt introduced {finding} in {item.path}. Preserve sections that passed."
+                else:
+                    detail = "Check the reported section against the previous draft."
+                request[key] = (*request[key], f"{item.code}: {detail}")
+        prior_feedback = manuscript_repair_feedback(errors)
+        protected = _numeric_authority(binding)
+        row = repair.begin(
+            (*prior_feedback, *last_rejection),
+            section_keys=list(errors), audit_codes=_codes(errors),
+            input_sha256=hashlib.sha256(current.scaffold.encode()).hexdigest(),
+            input_bound_sha256=hashlib.sha256(binding.bound.encode()).hexdigest(),
+            protected_numeric_occurrences=sum(protected.values()),
+            numeric_checks="pending", evidence_checks="pending",
+        )
         receipt["status"] = "running"
         _persist(run_dir, evidence, receipt)
         candidate_start = len(findings)
         try:
-            candidate = draft((current.scaffold, errors))
+            candidate = draft((current.scaffold, request))
             if candidate.writer_error_message:
-                raise EvidenceEnforcementError(
-                    "MANUSCRIPT_AUDIT_REPAIR_FAILED: " + ", ".join(_codes(errors)),
-                    detail={"code": "MANUSCRIPT_AUDIT_REPAIR_FAILED", "audit_codes": _codes(errors)},
-                )
-            _require_preserved_sections(current.scaffold, candidate.scaffold, tuple(errors))
-            checked = bind(candidate)
-            if _non_repairable(findings[candidate_start:], checked):
-                raise EvidenceEnforcementError("MANUSCRIPT_AUDIT_NON_REPAIRABLE: repaired evidence or numeric checks failed.")
-            if original_authority - _numeric_authority(checked):
-                raise EvidenceEnforcementError("MANUSCRIPT_REPAIR_AUTHORITY_CHANGED: an existing bound number or source changed.")
+                last_rejection = (RepairFeedback("MANUSCRIPT_AUDIT_REPAIR_FAILED", "manuscript"),)
+                repair.finish("rejected", findings=last_rejection)
+            else:
+                _require_preserved_sections(current.scaffold, candidate.scaffold, tuple(errors))
+                checked = bind(candidate)
+                definition_errors = recorded_definition_section_errors(checked.bound, context)
+                if definition_errors:
+                    raise EvidenceEnforcementError(
+                        "MANUSCRIPT_DEFINITION_NOT_FROM_DICTIONARY: prose changes the sealed definition.",
+                        detail={"sections": sorted(definition_errors)},
+                    )
+                if _binding_invariant_failed(findings[candidate_start:], checked):
+                    raise EvidenceEnforcementError("MANUSCRIPT_AUDIT_NON_REPAIRABLE: repaired evidence or numeric checks failed.")
+                if protected - _numeric_authority(checked):
+                    raise EvidenceEnforcementError("MANUSCRIPT_REPAIR_AUTHORITY_CHANGED: an existing bound number or source changed.")
+                next_errors = section_errors(candidate, checked)
+                next_feedback = manuscript_repair_feedback(next_errors)
+                last_rejection = manuscript_repair_regressions(prior_feedback, next_feedback)
+                if repair.finish(
+                    "unresolved" if next_errors else "resolved",
+                    findings=next_feedback, regressions=last_rejection,
+                    numeric_checks="pass", evidence_checks="pass",
+                    output_sha256=hashlib.sha256(candidate.scaffold.encode()).hexdigest(),
+                    output_bound_sha256=hashlib.sha256(checked.bound.encode()).hexdigest(),
+                ):
+                    current, binding, errors = candidate, checked, next_errors
+        except ManuscriptSectionContractError as exc:
+            last_rejection = (RepairFeedback(
+                "MANUSCRIPT_SUBSECTION_MISSING_OR_EMPTY", exc.section_name.lower(),
+                {"missing_subsections": list(exc.missing_subsections)},
+            ),)
+            repair.finish("rejected", findings=last_rejection)
+        except EvidenceEnforcementError as exc:
+            detail = exc.detail or {}
+            if detail.get("check") == "unaffected_section":
+                last_rejection = (RepairFeedback(
+                    "MANUSCRIPT_REPAIR_REGRESSION", detail["section"], {"finding": "unaffected_section"},
+                ),)
+                repair.finish("rejected", regressions=last_rejection)
+            else:
+                codes = _CODE.findall(str(exc)) or ["MANUSCRIPT_AUDIT_NON_REPAIRABLE"]
+                repair.finish("hard_stop", findings=tuple(RepairFeedback(code, "manuscript") for code in codes))
+                row.update(status="rejected", invariant_stop=True, error_type=type(exc).__name__)
+                if detail:
+                    row["authority_failure"] = detail
+                receipt.update(status="rejected", remaining_codes=codes)
+                _persist(run_dir, evidence, receipt)
+                raise
         except Exception as exc:
-            row.update(status="rejected", error_type=type(exc).__name__,
-                       error_codes=_CODE.findall(str(exc)))
+            codes = _CODE.findall(str(exc)) or ["MANUSCRIPT_AUDIT_REPAIR_FAILED"]
+            invariant_stop = isinstance(exc, EvidenceEnforcementError) or "MANUSCRIPT_REPAIR_AUTHORITY_CHANGED" in codes
+            repair.finish("hard_stop" if invariant_stop else "rejected",
+                          findings=tuple(RepairFeedback(code, "manuscript") for code in codes),
+                          error_type=type(exc).__name__)
             if isinstance(exc, EvidenceEnforcementError) and exc.detail:
                 row["authority_failure"] = exc.detail
-            receipt.update(status="rejected", remaining_codes=row["error_codes"] or _codes(errors))
-            if isinstance(exc, ManuscriptSectionContractError):
-                receipt["remaining_codes"] = sorted(set(receipt["remaining_codes"]) | {"MANUSCRIPT_SUBSECTION_MISSING_OR_EMPTY"})
-                _persist(run_dir, evidence, receipt)
-                raise EvidenceEnforcementError(
-                    "MANUSCRIPT_AUDIT_REPAIR_FAILED: " + ", ".join(receipt["remaining_codes"]),
-                    detail={"code": "MANUSCRIPT_AUDIT_REPAIR_FAILED", "audit_codes": receipt["remaining_codes"]},
-                ) from exc
+            row["status"] = "rejected"
+            row["invariant_stop"] = invariant_stop
+            receipt.update(status="rejected", remaining_codes=codes)
             _persist(run_dir, evidence, receipt)
             raise
-        row.update(status="checked", numeric_checks="pass", evidence_checks="pass",
-                   output_sha256=hashlib.sha256(candidate.scaffold.encode()).hexdigest(),
-                   output_bound_sha256=hashlib.sha256(checked.bound.encode()).hexdigest())
-        current, binding = candidate, checked
-        errors = section_errors(current, binding)
-        receipt.update(status="exhausted" if errors else "pass", remaining_codes=_codes(errors))
-        row["status"] = receipt["status"]
-        _persist(run_dir, evidence, receipt)
+        if last_rejection:
+            del findings[candidate_start:]
         if not errors:
-            break
+            row["status"] = "pass"
+        receipt.update(
+            status="exhausted" if errors and not repair.available else row["status"],
+            remaining_codes=sorted(set(_codes(errors)) | {item.code for item in last_rejection}),
+        )
+        _persist(run_dir, evidence, receipt)
+    if last_rejection:
+        raise EvidenceEnforcementError(
+            "MANUSCRIPT_AUDIT_REPAIR_FAILED: " + ", ".join(receipt["remaining_codes"]),
+            detail={"code": "MANUSCRIPT_AUDIT_REPAIR_FAILED", "audit_codes": receipt["remaining_codes"]},
+        )
     return current, binding

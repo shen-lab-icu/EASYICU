@@ -261,7 +261,7 @@ def test_incomplete_required_subsection_fails_closed_after_retry() -> None:
 
     with pytest.raises(
         ManuscriptSectionContractError,
-        match="missing or empty required subsections after one targeted retry",
+        match="missing or empty required subsections",
     ):
         render_manuscript_sections(call_section=call_section, common={})
 
@@ -269,8 +269,7 @@ def test_incomplete_required_subsection_fails_closed_after_retry() -> None:
         "Title and Keywords",
         "Abstract",
         "Introduction",
-        "Methods",
-        "Methods",
+        *["Methods"] * 4,
     ]
 
 
@@ -789,3 +788,26 @@ def test_retained_numbers_never_rewrite_audit_tokens_or_echo_comment_counts():
     for marker, value in retained.items():
         restored = restored.replace(marker, value)
     assert restored == raw
+
+
+def test_structural_repair_can_close_a_second_located_omission():
+    calls = []
+
+    def writer(**kwargs):
+        section = kwargs["section_name"]
+        good = _minimal_valid_section(section)
+        if section != "Methods":
+            return good
+        calls.append(kwargs["instruction"])
+        if len(calls) == 1:
+            return good.replace("Evidence-bound variable prose.", "")
+        if len(calls) == 2:
+            return good.replace("Evidence-bound software prose.", "")
+        return good
+
+    manuscript = render_manuscript_sections(call_section=writer, common={})
+
+    assert len(calls) == 3
+    assert "MANUSCRIPT_SUBSECTION_MISSING_OR_EMPTY" in calls[-1]
+    assert "Software and reproducibility" in calls[-1]
+    assert "Evidence-bound variable prose." in manuscript

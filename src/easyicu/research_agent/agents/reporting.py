@@ -439,9 +439,9 @@ class WriterAgent:
         analysis_plan: AnalysisPlan | None = None,
         checkpoint: Callable[[str], None] | None = None,
     ) -> str:
+        self.structural_repair_receipts = []
         return render_manuscript_sections(
-            checkpoint=checkpoint,
-            call_section=self._call_section,
+            checkpoint=checkpoint, call_section=self._call_section, repair_receipts=self.structural_repair_receipts,
             common={
                 "context": context,
                 "analysis_plan": analysis_plan,

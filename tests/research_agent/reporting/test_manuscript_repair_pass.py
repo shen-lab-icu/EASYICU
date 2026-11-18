@@ -182,3 +182,20 @@ def test_write_phase_repair_callback_uses_current_step_ledger(tmp_path):
     assert detail["reason_code"] == "writer_evidence_repair_residual_strict_drop"
     assert "Median age" not in cleaned
     evidence.enforce_evidence_bound_scaffold(cleaned, per_step_records=[])
+
+
+def test_invalid_citation_decision_reaches_writer_again_with_a_typed_reason():
+    calls = []
+
+    def writer(*_args, **kwargs):
+        calls.append(kwargs)
+        if len(calls) == 1:
+            return [WriterRepairDecision.drop(9)]
+        return [WriterRepairDecision.cite(0, ["registered_result"])]
+
+    result = _run(_repair_pass(writer))
+
+    assert len(calls) == 2
+    assert calls[1]["repair_feedback"][-1].code == "writer_evidence_decision_rejected"
+    assert result.evidence_repairs[0]["action"] == "cite"
+    assert [row["status"] for row in result.repair_receipt["attempts"]] == ["rejected", "resolved"]

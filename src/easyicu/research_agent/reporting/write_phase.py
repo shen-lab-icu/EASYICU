@@ -1904,8 +1904,10 @@ def _draft_manuscript(
                 detail={"reason_code": "post_binding_section_repair", "section_keys": list(repaired_keys)},
             ))
     except Exception as exc:
-        from .manuscript_sections import completed_section_repair_candidate
+        from .manuscript_sections import ManuscriptSectionContractError, completed_section_repair_candidate
 
+        if section_repair is not None and isinstance(exc, ManuscriptSectionContractError):
+            raise
         candidate = completed_section_repair_candidate(exc)
         if candidate is not None:
             scaffold, repaired_keys = candidate
@@ -1936,6 +1938,12 @@ def _draft_manuscript(
                     ),
                 )
             )
+    if repair_receipts := getattr(writer, "structural_repair_receipts", ()):
+        findings.append(ValidationFinding(
+            validator="writer_recovery", severity="info",
+            message="Recorded Writer section structure repair attempts.",
+            detail={"reason_code": "writer_section_structure_repairs", "receipts": repair_receipts},
+        ))
     scaffold = _repair_robustness_reader_prose(
         scaffold=scaffold,
         run_dir=run_dir,
@@ -3798,7 +3806,7 @@ def _draft_bind_and_repair_manuscript(
 
     draft, binding = run_manuscript_audit_repair(
         draft=draft_candidate, bind=bind_candidate, section_errors=section_errors,
-        findings=findings, run_dir=run_dir, evidence=evidence, skip_repair=writer_probe_mode,
+        findings=findings, run_dir=run_dir, evidence=evidence, skip_repair=writer_probe_mode, context=context,
     )
     _report_absent_owner_claim_targets(draft.absent_owner_claim_targets, findings)
     return draft, binding

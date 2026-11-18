@@ -1,7 +1,9 @@
 from __future__ import annotations
 
 import hashlib
+from dataclasses import replace
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 
@@ -454,13 +456,16 @@ def test_completed_reader_failure_enters_remaining_final_audit_pass(tmp_path, mo
 
     writer = Writer()
     if still_broken:
-        with pytest.raises(WriterOnlyMigrationError, match="AUTHORITY_REPAIR_EXHAUSTED"):
+        with pytest.raises(WriterOnlyMigrationError, match="AUTHORITY_REPAIR_EXHAUSTED") as caught:
             repair_writer_only(prepared, writer=writer)
+        receipt = caught.value.repair_receipt
+        assert len(receipt["attempts"]) == receipt["max_attempts"] == 3
+        assert writer.calls == 3
     else:
         result = repair_writer_only(prepared, writer=writer)
         assert result.quality_audit.status == "pass"
         assert result.authority_repaired_section_keys == ("methods",)
-    assert writer.calls == 2
+        assert writer.calls == 2
     assert (prepared.source_run_dir / "manuscript_scaffold.md").read_text() == bad
 
 
@@ -677,3 +682,80 @@ def test_bound_manuscript_stays_outside_the_sealed_input_hash_guard() -> None:
 
     assert "manuscript_scaffold.md" in owner._INPUT_NAMES
     assert "manuscript_scaffold_bound.md" not in owner._INPUT_NAMES
+
+
+def test_authority_repair_retries_an_incomplete_section_and_records_the_attempts(tmp_path, monkeypatch):
+    from easyicu.research_agent.reporting import writer_only_migration as owner
+    from easyicu.research_agent.reporting.manuscript_sections import ManuscriptSectionContractError
+
+    software = "Analyses used versioned software and registered artifacts."
+    bad = _manuscript().replace(software, "")
+    prepared = _prepared(tmp_path, bad)
+    monkeypatch.setattr(owner, "_claim_policy_projection", lambda _run, text: (text, {}))
+
+    class Writer:
+        requests = []
+
+        def repair_existing(self, text, **kwargs):
+            return text, ()
+
+        def repair_sections(self, text, *, section_errors, **kwargs):
+            self.requests.append(section_errors)
+            if len(self.requests) < 3:
+                raise ManuscriptSectionContractError(
+                    section_name="Methods", missing_subsections=("Software and reproducibility",),
+                )
+            return text.replace("### Software and reproducibility", "### Software and reproducibility\n\n" + software), ("methods",)
+
+    writer = Writer()
+    result = repair_writer_only(prepared, writer=writer)
+
+    assert len(writer.requests) == 3
+    assert "MANUSCRIPT_SUBSECTION_MISSING_OR_EMPTY" in " ".join(writer.requests[-1]["methods"])
+    assert [row["status"] for row in result.authority_repair_receipt["attempts"]] == ["rejected", "rejected", "resolved"]
+    assert (prepared.source_run_dir / "manuscript_scaffold.md").read_text() == bad
+
+
+@pytest.mark.parametrize(("injected", "hard_stop_code"), [
+    ("The result remained host-bound.", None),
+    ("The archive retained 741 measurements.", "MANUSCRIPT_REPAIR_AUTHORITY_CHANGED"),
+    ("We used the diagnosis status from intake records.", "MANUSCRIPT_DEFINITION_NOT_FROM_DICTIONARY"),
+])
+def test_report_only_repair_rejects_regression_and_stops_on_authority_breach(
+    tmp_path, monkeypatch, injected, hard_stop_code,
+):
+    from easyicu.research_agent.reporting import writer_only_migration as owner
+
+    software = "Analyses used versioned software and registered artifacts."
+    source = _manuscript().replace(software, "")
+    semantics = SimpleNamespace(kind="positive_only_event")
+    variable = SimpleNamespace(name="record_flag", description="Recorded flag", observation_semantics=semantics)
+    prepared = replace(_prepared(tmp_path, source), context=SimpleNamespace(variables=[variable]))
+    monkeypatch.setattr(owner, "_claim_policy_projection", lambda _run, text: (text, {}))
+
+    class Writer:
+        requests = []
+
+        def repair_existing(self, text, **kwargs):
+            return text, ()
+
+        def repair_sections(self, text, *, section_errors, **kwargs):
+            self.requests.append(section_errors)
+            assert injected not in text
+            candidate = text.replace("### Software and reproducibility", "### Software and reproducibility\n\n" + software)
+            if len(self.requests) == 1:
+                candidate = candidate.replace("## Discussion\n", f"## Discussion\n\n{injected}\n")
+            return candidate, ("methods",)
+
+    writer = Writer()
+    if hard_stop_code:
+        with pytest.raises(WriterOnlyMigrationError, match=hard_stop_code) as caught:
+            repair_writer_only(prepared, writer=writer)
+        assert len(writer.requests) == 1
+        assert [row["status"] for row in caught.value.repair_receipt["attempts"]] == ["hard_stop"]
+    else:
+        result = repair_writer_only(prepared, writer=writer)
+        assert len(writer.requests) == 2
+        assert "MANUSCRIPT_REPAIR_REGRESSION" in " ".join(writer.requests[1]["methods"])
+        assert [row["status"] for row in result.authority_repair_receipt["attempts"]] == ["rejected", "resolved"]
+    assert (prepared.source_run_dir / "manuscript_scaffold.md").read_text() == source

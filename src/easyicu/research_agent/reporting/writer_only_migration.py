@@ -8,7 +8,7 @@ and it never writes into the sealed source run.
 
 from __future__ import annotations
 
-from dataclasses import asdict, dataclass
+from dataclasses import asdict, dataclass, field
 from datetime import datetime, timezone
 import hashlib
 import json
@@ -26,6 +26,7 @@ from ..authority.manuscript_claim_policy import (
 )
 from ..authority.scientific_claim_registry import load_registered_scientific_claims
 from ..authority.manuscript_method_facts import load_manuscript_method_facts
+from ..bounded_repair import BoundedRepair, RepairFeedback
 from ..literature import LiteratureBundle
 from ..planning.cohort_contract import (
     cohort_concept_id_scope,
@@ -55,10 +56,16 @@ from .manuscript_quality import (
     render_reader_manuscript,
 )
 from .manuscript_sections import (
+    MANUSCRIPT_SECTION_SPECS,
+    ManuscriptReaderQualityContractError,
+    ManuscriptSectionContractError,
     completed_section_repair_candidate,
+    manuscript_repair_feedback,
+    manuscript_repair_regressions,
     manuscript_writer_contract_sha256,
     quality_repair_section_keys,
     quality_repair_section_errors,
+    report_only_authority_changes,
 )
 from .manuscript_quality import repair_section_opening_connectors
 from .manuscript_labels import (
@@ -102,9 +109,12 @@ _BOUND_MANUSCRIPT_FILENAME = "manuscript_scaffold_bound.md"
 class WriterOnlyMigrationError(RuntimeError):
     """A report-only migration failed its owner contract."""
 
-    def __init__(self, *, code: str, detail: str) -> None:
+    def __init__(
+        self, *, code: str, detail: str, repair_receipt: Mapping[str, Any] | None = None,
+    ) -> None:
         self.code = str(code)
         self.detail = str(detail)
+        self.repair_receipt = repair_receipt
         super().__init__(f"{self.code}: {self.detail}")
 
 
@@ -149,6 +159,7 @@ class WriterOnlyMigrationResult:
     removed_unresolved_evidence_token_count: int
     normalized_claim_token_count: int
     abstract_conclusion_boundary_repaired: bool
+    authority_repair_receipt: Mapping[str, Any] = field(default_factory=dict)
 
 
 @dataclass(frozen=True)
@@ -699,6 +710,69 @@ def writer_only_preflight_payload(
     return payload
 
 
+def _review_authority_candidate(
+    prepared: PreparedWriterOnlyMigration, manuscript: str,
+) -> tuple[str, dict[str, tuple[str, ...]], dict[str, tuple[str, ...]]]:
+    canonical, filtered = _claim_policy_projection(prepared.source_run_dir, manuscript)
+    canonical = place_descriptive_report_facts(canonical, prepared.host_result_facts)
+    canonical = place_primary_result_summaries(canonical, prepared.host_result_facts)
+    canonical, _ = repair_registered_display_callouts(
+        canonical, expected_display_labels=prepared.expected_display_labels,
+        analysis_plan=prepared.plan,
+    )
+    canonical = repair_section_opening_connectors(remove_empty_optional_subsections(canonical))
+    reader_view = _claim_reader_view(
+        prepared.source_run_dir, canonical, reader_labels=_migration_claim_labels(prepared),
+    )
+    definition_errors = (
+        recorded_definition_section_errors(manuscript, prepared.context)
+        or recorded_definition_section_errors(reader_view, prepared.context)
+    )
+    if definition_errors:
+        raise WriterOnlyMigrationError(
+            code="MANUSCRIPT_DEFINITION_NOT_FROM_DICTIONARY",
+            detail=", ".join(sorted(definition_errors)),
+        )
+    literature = audit_manuscript_literature(reader_view, prepared.literature)
+    if prepared.literature.citations and not literature.direct_comparator_keys_available:
+        boundary = (
+            "The literature assembled for this report did not include a verified direct comparator; "
+            "a like-for-like comparison with published estimates is not supported by the available sources "
+            "{evidence:preplan_literature_bundle}."
+        )
+        if boundary not in canonical:
+            canonical = re.sub(
+                r"(?ms)(^## Limitations\s*\n.*?)(?=^## |\Z)",
+                lambda match: match.group(1).rstrip() + "\n\n" + boundary + "\n\n",
+                canonical, count=1,
+            )
+    quality_inputs = {
+        "analysis_plan": prepared.plan,
+        "expected_primary_result_facts": prepared.host_result_facts,
+        "expected_display_labels": prepared.expected_display_labels,
+        "reader_display_labels": prepared.plan.display_labels if prepared.plan else None,
+        "expected_baseline_mentions": baseline_reporting_mentions(
+            prepared.context, prepared.plan.display_labels if prepared.plan else None,
+        ),
+    }
+    if audit_manuscript_quality(reader_view, **quality_inputs).status == "pass" and literature.status == "pass":
+        return canonical, filtered, {}
+    errors = quality_repair_section_errors(reader_view, **quality_inputs)
+    for key in (
+        *literature.missing_required_citation_sections,
+        *literature.direct_comparator_sections_missing,
+        *(("methods",) if literature.methods_method_source_missing else ()),
+    ):
+        owner = str(key).lower()
+        errors[owner] = (*errors.get(owner, ()), f"MANUSCRIPT_LITERATURE_REQUIREMENT: {literature.message}")
+    if not errors:
+        raise WriterOnlyMigrationError(
+            code="WRITER_ONLY_REPAIR_OWNER_UNRESOLVED",
+            detail="The canonical report failed a gate with no section-owned repair.",
+        )
+    return canonical, filtered, errors
+
+
 def repair_writer_only(
     prepared: PreparedWriterOnlyMigration,
     *,
@@ -815,128 +889,105 @@ def repair_writer_only(
         manuscript, abstract_conclusion_boundary_repaired = _repair_abstract_conclusion_boundary(
             manuscript, prepared.literature, rejected_sentences=initial_errors["abstract"],
         )
-    # Two model repair passes, each followed by a real validation. A successful
-    # final repair must not fall through a for/else and be reported exhausted.
-    # Deterministic normalization and callout placement consume no model pass.
-    for _attempt in range(3):
-        canonical, section_errors = _claim_policy_projection(
-            prepared.source_run_dir,
-            manuscript,
-        )
-        canonical = place_descriptive_report_facts(canonical, prepared.host_result_facts)
-        canonical = place_primary_result_summaries(canonical, prepared.host_result_facts)
-        canonical, _ = repair_registered_display_callouts(
-            canonical, expected_display_labels=prepared.expected_display_labels,
-            analysis_plan=prepared.plan,
-        )
-        canonical = remove_empty_optional_subsections(canonical)
-        canonical = repair_section_opening_connectors(canonical)
-        reader_view = _claim_reader_view(
-            prepared.source_run_dir, canonical,
-            reader_labels=_migration_claim_labels(prepared),
-        )
-        canonical_quality = audit_manuscript_quality(
-            reader_view,
-            analysis_plan=prepared.plan,
-            expected_primary_result_facts=prepared.host_result_facts,
-            expected_display_labels=prepared.expected_display_labels,
-            reader_display_labels=prepared.plan.display_labels if prepared.plan else None,
-            expected_baseline_mentions=baseline_reporting_mentions(prepared.context, prepared.plan.display_labels if prepared.plan else None),
-        )
-        canonical_literature = audit_manuscript_literature(
-            reader_view,
-            prepared.literature,
-        )
-        if prepared.literature.citations and not canonical_literature.direct_comparator_keys_available:
-            boundary = (
-                "The literature assembled for this report did not include a verified direct comparator; "
-                "a like-for-like comparison with published estimates is not supported by the available sources "
-                "{evidence:preplan_literature_bundle}."
+    repair = BoundedRepair()
+    rejection: tuple[RepairFeedback, ...] = ()
+    manuscript, filtered, errors = _review_authority_candidate(prepared, manuscript)
+    authority_filtered.extend(filtered)
+    while errors and repair.available:
+        feedback = manuscript_repair_feedback(errors)
+        request = {key: (*details, *filtered.get(key, ())) for key, details in errors.items()}
+        for item in rejection:
+            keys = (item.path,) if item.path in request else tuple(request)
+            detail = (
+                ", ".join(item.facts["missing_subsections"])
+                if "missing_subsections" in item.facts else
+                f"Preserve sections that passed. Last attempt introduced {item.facts.get('finding', item.code)} in {item.path}."
             )
-            if boundary not in canonical:
-                canonical = re.sub(r"(?ms)(^## Limitations\s*\n.*?)(?=^## |\Z)",
-                                   lambda match: match.group(1).rstrip() + "\n\n" + boundary + "\n\n",
-                                   canonical, count=1)
-        recording_errors = recorded_definition_section_errors(reader_view, prepared.context)
-        if (
-            canonical_quality.status == "pass"
-            and canonical_literature.status == "pass"
-            and not recording_errors
-        ):
-            manuscript = canonical
-            authority_filtered.extend(
-                key for key in section_errors if key not in authority_filtered
-            )
-            break
-        if _attempt == 2:
-            raise WriterOnlyMigrationError(
-                code="WRITER_ONLY_AUTHORITY_REPAIR_EXHAUSTED_PRIOR_PRESERVED",
-                detail=", ".join(sorted(section_errors)),
-            )
-        repair_errors = quality_repair_section_errors(
-            reader_view,
-            analysis_plan=prepared.plan,
-            expected_primary_result_facts=prepared.host_result_facts,
-            expected_display_labels=prepared.expected_display_labels,
-            reader_display_labels=prepared.plan.display_labels if prepared.plan else None,
-            expected_baseline_mentions=baseline_reporting_mentions(
-                prepared.context, prepared.plan.display_labels if prepared.plan else None,
-            ),
-        )
-        repair_errors.update(recording_errors)
-        for key in (
-            *canonical_literature.missing_required_citation_sections,
-            *canonical_literature.direct_comparator_sections_missing,
-            *(("methods",) if canonical_literature.methods_method_source_missing else ()),
-        ):
-            repair_errors[str(key).lower()] = (canonical_literature.message,)
-        if not repair_errors:
-            raise WriterOnlyMigrationError(
-                code="WRITER_ONLY_REPAIR_OWNER_UNRESOLVED",
-                detail="The canonical report failed a gate with no section-owned repair.",
-            )
-        # Reject unsupported sentences once. Do not rewrite an otherwise valid
-        # section merely because its unsupported optional prose was removed.
-        repair_errors = {
-            key: (*details, *section_errors.get(key, ()))
-            for key, details in repair_errors.items()
-        }
-        authority_filtered.extend(
-            key for key in section_errors if key not in authority_filtered
-        )
+            for key in keys:
+                request[key] = (*request[key], f"{item.code}: {detail}")
         repair_sections = getattr(writer, "repair_sections", None)
         if not callable(repair_sections):
             raise WriterOnlyMigrationError(
                 code="WRITER_ONLY_AUTHORITY_REPAIR_UNAVAILABLE",
-                detail=", ".join(sorted(repair_errors)),
+                detail=", ".join(sorted(request)),
             )
+        repair.begin((*feedback, *rejection), section_keys=list(request))
         try:
-            manuscript, repaired_authority_keys = repair_sections(
-                canonical,
-                analysis_plan=prepared.plan,
-                section_errors=repair_errors,
-                context=prepared.context,
-                evidence_ids=prepared.evidence_ids,
-                evidence_digest=prepared.evidence_digest,
-                literature_digest=prepared.literature_digest,
-                reader_display_labels=reader_labels,
-                administrative_authority=prepared.administrative_authority,
-            )
-        except WriterOnlyMigrationError:
+            try:
+                candidate, repaired_keys_now = repair_sections(
+                    manuscript,
+                    analysis_plan=prepared.plan,
+                    section_errors=request,
+                    context=prepared.context,
+                    evidence_ids=prepared.evidence_ids,
+                    evidence_digest=prepared.evidence_digest,
+                    literature_digest=prepared.literature_digest,
+                    reader_display_labels=reader_labels,
+                    administrative_authority=prepared.administrative_authority,
+                )
+            except ManuscriptSectionContractError as exc:
+                owner = next(
+                    (spec.key for spec in MANUSCRIPT_SECTION_SPECS if spec.section_name == exc.section_name),
+                    exc.section_name.lower(),
+                )
+                rejection = (RepairFeedback(
+                    "MANUSCRIPT_SUBSECTION_MISSING_OR_EMPTY", owner,
+                    {"missing_subsections": list(exc.missing_subsections)},
+                ),)
+                repair.finish("rejected", findings=rejection)
+                continue
+            except ManuscriptReaderQualityContractError as exc:
+                completed = completed_section_repair_candidate(exc, expected_section_keys=tuple(request))
+                if completed is None:
+                    rejection = tuple(
+                        RepairFeedback(code, section.lower()) for code, section, _ in exc.findings
+                    ) or (RepairFeedback("MANUSCRIPT_REPAIR_CANDIDATE_INCOMPLETE", "manuscript"),)
+                    repair.finish("rejected", findings=rejection)
+                    continue
+                candidate, repaired_keys_now = completed
+            changed_sections = report_only_authority_changes(manuscript, candidate)
+            if changed_sections:
+                raise WriterOnlyMigrationError(
+                    code="MANUSCRIPT_REPAIR_AUTHORITY_CHANGED",
+                    detail=", ".join(changed_sections),
+                )
+            if _input_hashes(prepared.source_run_dir) != dict(prepared.source_hashes):
+                raise WriterOnlyMigrationError(
+                    code="WRITER_ONLY_SOURCE_CHANGED_DURING_REPAIR",
+                    detail="one or more sealed source inputs changed during migration",
+                )
+            next_manuscript, next_filtered, next_errors = _review_authority_candidate(prepared, candidate)
+        except WriterOnlyMigrationError as exc:
+            if exc.code == "WRITER_ONLY_REPAIR_OWNER_UNRESOLVED":
+                rejection = (RepairFeedback(
+                    "MANUSCRIPT_REPAIR_REGRESSION", "manuscript", {"finding": exc.code},
+                ),)
+                repair.finish("rejected", regressions=rejection)
+                continue
+            repair.finish("hard_stop", findings=(RepairFeedback(exc.code, "manuscript"),))
+            exc.repair_receipt = repair.receipt
             raise
         except Exception as exc:
-            candidate = completed_section_repair_candidate(
-                exc, expected_section_keys=tuple(repair_errors),
-            )
-            if candidate is None:
-                raise WriterOnlyMigrationError(
-                    code="WRITER_ONLY_AUTHORITY_REPAIR_FAILED_PRIOR_PRESERVED",
-                    detail=f"{type(exc).__name__}: {exc}",
-                ) from exc
-            manuscript, repaired_authority_keys = candidate
-        for key in repaired_authority_keys:
-            if key not in authority_repaired:
-                authority_repaired.append(key)
+            code = "WRITER_ONLY_AUTHORITY_REPAIR_FAILED_PRIOR_PRESERVED"
+            repair.finish("rejected", findings=(RepairFeedback(code, "manuscript"),))
+            raise WriterOnlyMigrationError(
+                code=code, detail=f"{type(exc).__name__}: {exc}", repair_receipt=repair.receipt,
+            ) from exc
+        next_feedback = manuscript_repair_feedback(next_errors)
+        rejection = manuscript_repair_regressions(feedback, next_feedback)
+        if repair.finish(
+            "unresolved" if next_errors else "resolved",
+            findings=next_feedback, regressions=rejection,
+        ):
+            manuscript, filtered, errors = next_manuscript, next_filtered, next_errors
+            authority_filtered.extend(key for key in filtered if key not in authority_filtered)
+            authority_repaired.extend(key for key in repaired_keys_now if key not in authority_repaired)
+    if errors:
+        raise WriterOnlyMigrationError(
+            code="WRITER_ONLY_AUTHORITY_REPAIR_EXHAUSTED_PRIOR_PRESERVED",
+            detail=", ".join(sorted(errors)),
+            repair_receipt=repair.receipt,
+        )
     reader_view = _claim_reader_view(
         prepared.source_run_dir, manuscript,
         reader_labels=_migration_claim_labels(prepared),
@@ -978,6 +1029,7 @@ def repair_writer_only(
         abstract_conclusion_boundary_repaired=(
             abstract_conclusion_boundary_repaired
         ),
+        authority_repair_receipt=repair.receipt,
     )
 
 
@@ -1178,6 +1230,7 @@ def publish_writer_only_result(
         "authority_filtered_section_keys": list(
             result.authority_filtered_section_keys
         ),
+        "authority_repair_receipt": dict(result.authority_repair_receipt),
         "removed_unresolved_evidence_refs": list(
             result.removed_unresolved_evidence_refs
         ),
@@ -1255,6 +1308,8 @@ def publish_writer_only_failure(
         "claim_ceiling": "analysis_only",
         "publication_authorized": False,
     }
+    if isinstance(error, WriterOnlyMigrationError) and error.repair_receipt is not None:
+        receipt["authority_repair_receipt"] = dict(error.repair_receipt)
     _atomic_write(
         output / "writer_only_migration_receipt.json",
         (json.dumps(receipt, ensure_ascii=False, indent=2) + "\n").encode(),
