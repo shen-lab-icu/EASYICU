@@ -35,6 +35,9 @@ _METHOD_POLICIES = frozenset({
     "binary_effect_measure", "descriptive.exposure_outcome_distribution", "model_term",
     "multiple_imputation", EXTERNAL_ACTION,
 })
+_GRADING_SOURCE_LABELS = {
+    ("kdigo_aki_2012", "2012", "KDIGO 2012 AKI guideline", "kdigo_creat"): "kdigo 2012",
+}
 
 
 @lru_cache(maxsize=4)
@@ -48,6 +51,7 @@ def contract_registry_sha256() -> str:
         "intake": "easyicu.requirement_intake/2",
         "grading": sorted((item.contract_id, item.version, item.source_id, item.concepts)
                           for item in load_clinical_contracts().values()),
+        "grading_source_labels": sorted((*key, label) for key, label in _GRADING_SOURCE_LABELS.items()),
         "method_policies": sorted(_METHOD_POLICIES),
         "delivery": (RUN_DELIVERY_SCHEMA_VERSION, sorted(RUN_DELIVERABLES)),
     })
@@ -146,4 +150,11 @@ def registered_grading(variable: ConceptDescriptor, dictionary: DictionarySnapsh
         and (definition.version, definition.source_id) == (owner.version, owner.source_id)
     ):
         return Grading(contract_id=owner.contract_id, version=owner.version)
+    return None
+
+
+def registered_grading_source_label(facet: Grading, concept_id: str) -> str | None:
+    owner = load_clinical_contracts().get(facet.contract_id)
+    if owner and facet.version == owner.version and concept_id in owner.concepts:
+        return _GRADING_SOURCE_LABELS.get((owner.contract_id, owner.version, owner.source_id, concept_id))
     return None

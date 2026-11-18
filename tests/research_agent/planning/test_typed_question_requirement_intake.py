@@ -192,7 +192,7 @@ def _pairs():
         "Specify the creatinine grading according to KDIGO 2012",
         "明确肌酐的KDIGO 2012分级",
         key(Grading(contract_id=owner.contract_id, version=owner.version), bind("kdigo_creat")),
-        partial(_grading, "kdigo_creat", owner.contract_id), state="unknown", origin=None,
+        partial(_grading, "kdigo_creat", owner.contract_id),
         legacy_concepts=("kdigo_creat",), bucket="v2_under_typing",
     )
     for concept, english, chinese, unit in (
@@ -308,9 +308,11 @@ def test_larger_bilingual_fixture(pair, language, quote, monkeypatch, caplog) ->
         dictionary = registered_dictionary(context.cohort.database)
         assert pair.key in {proof.key for proof in project_facts(plan, context=context, dictionary=dictionary).facts}
         assert row["v1"] == "covered"
-    print("P1B", json.dumps({
+    print("RC1C_ROW", json.dumps({
+        "dataset": 72,
         "id": pair.id, "language": language, "facet": pair.key.facet.kind, "v1": row["v1"],
-        "v2": row["v2"], "reason": row["v1_reason"], "bucket": pair.bucket,
+        "v2": row["v2"], "reason": row["v1_reason"],
+        "bucket": pair.bucket if row["v1"] == "covered" and row["v2"] != "covered" else None,
     }))
 
 
@@ -639,3 +641,25 @@ def test_rejected_family_response_does_not_publish_typings(refusal, monkeypatch)
     with pytest.raises(StructuredResponseFailure) as error:
         _run(context, [json.dumps(payload), "[]", "[]"])
     assert progressive_planner_failure_facts(error.value).question_requirement_typings == ()
+
+
+@pytest.mark.parametrize(("quote", "is_requested"), [
+    ("Specify the creatinine grading according to KDIGO 2012", True),
+    ("明确肌酐的KDIGO 2012分级", True),
+    ("Specify the urine output grading according to KDIGO 2012", False),
+    ("明确肌酐的KDIGO 2024分级", False),
+], ids=["en", "zh", "wrong-criterion", "wrong-version"])
+def test_kdigo_paraphrase_binds_the_exact_registered_grading(quote, is_requested, monkeypatch, caplog) -> None:
+    monkeypatch.setenv(FLAG, "shadow")
+    caplog.set_level(logging.DEBUG, logger=LOGGER.name)
+    context, plan = _grading("kdigo_creat", "kdigo_aki_2012")
+    expected = key(Grading(contract_id="kdigo_aki_2012", version="2012"), bind("kdigo_creat"))
+    dictionary = registered_dictionary(context.cohort.database)
+    projected = project_facts(plan, context=context, dictionary=dictionary)
+    [receipt] = [item for item in projected.facts if item.key == expected]
+    assert receipt.provenance.source_field == "context.variables[0].clinical_definition"
+    for proposals in ((), [proposal("r1", quote, expected)]):
+        caplog.clear()
+        _judge(quote, context, plan, concepts=("kdigo_creat",), proposals=proposals)
+        [row] = _shadow_event(caplog)["parts"]
+        assert (row["v2"] == "covered") == is_requested

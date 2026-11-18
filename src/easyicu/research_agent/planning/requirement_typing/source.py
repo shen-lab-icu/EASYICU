@@ -30,7 +30,7 @@ from .contract import (
     Unit,
     Window,
 )
-from .registry import registered_concept_id
+from .registry import registered_concept_id, registered_grading_source_label
 
 if TYPE_CHECKING:
     from ...schema import ResearchContext
@@ -283,5 +283,10 @@ def source_supports(
     if isinstance(facet, Grading) and isinstance(time, NotApplicable):
         contract = re.escape(facet.contract_id.casefold())
         version = re.escape(facet.version.casefold())
-        return _matches(text, rf"{subject} grading {contract} version {version}|{subject}按{contract}版本{version}分级")
+        if _matches(text, rf"{subject} grading {contract} version {version}|{subject}按{contract}版本{version}分级"):
+            return True
+        source_label = registered_grading_source_label(facet, scope[0].concept_id)
+        if source_label:
+            label = re.escape(source_label)
+            return _matches(text, rf"(?:the )?{subject} grading according to {label}|{subject}的{label}分级")
     return False

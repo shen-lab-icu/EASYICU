@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 import logging
 from collections import Counter
 from types import SimpleNamespace
@@ -138,22 +139,31 @@ def test_same_18_parts_with_scripted_intake(monkeypatch, caplog) -> None:
     caplog.set_level(logging.DEBUG, logger=LOGGER.name)
     counts = {facet: Counter() for facet, _, _ in BILINGUAL_CASES}
     differences = Counter()
+    unknown_by_language = Counter()
     for facet, english, chinese in BILINGUAL_CASES:
-        for quote in (english, chinese):
+        for language, quote in (("en", english), ("zh", chinese)):
             caplog.clear()
             proposals = [] if facet == "delivery" else [proposal("r1", quote, _SCRIPTED_KEYS.get(facet), facet=facet)]
             _legacy(facet, quote, proposals)()
             [row] = _shadow_event(caplog)["parts"]
             counts[facet][row["v2"]] += 1
+            if row["v2"] == "unknown":
+                unknown_by_language[language] += 1
+            bucket = None
             if row["v1"] == "covered" and row["v2"] != "covered":
                 assert facet in {"method", "time_zero"}
-                differences["prose_proven" if row["v1_reason"] == "plan_declared" else "true_false_pass"] += 1
+                bucket = "prose_proven" if row["v1_reason"] == "plan_declared" else "true_false_pass"
+                differences[bucket] += 1
+            print("RC1C_ROW", json.dumps({
+                "dataset": 18, "id": facet, "language": language, "facet": facet,
+                "v1": row["v1"], "v2": row["v2"], "reason": row["v1_reason"], "bucket": bucket,
+            }))
     assert sum(group["unknown"] for group in counts.values()) <= 4
+    assert unknown_by_language == {"en": 2, "zh": 2}
     assert counts["delivery"] == {"covered": 2}
     assert counts["time_zero"] == {"unknown": 2}
+    assert counts["unit"] == {"unknown": 2}
     assert differences == {"true_false_pass": 1, "prose_proven": 2}
-    print("same 18 v2 per facet", {facet: dict(count) for facet, count in counts.items()})
-    print("same 18 shadow differences", dict(differences))
 
 
 def test_legacy_plan_without_a_typed_contract_reports_unknown(monkeypatch, caplog) -> None:
