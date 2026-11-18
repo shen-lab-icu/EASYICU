@@ -140,7 +140,7 @@ def test_an_analysis_the_plan_cannot_do_says_a_new_plan_may_stop_again() -> None
 
 def test_a_plan_never_checked_against_its_question_offers_a_fresh_plan() -> None:
     # The owner's stops are exactly the three this file reads.
-    assert set(QUESTION_REQUIREMENT_STOP_CODES) == set(QUESTION_STOPS)
+    assert set(QUESTION_REQUIREMENT_STOP_CODES) == {*QUESTION_STOPS, "host_delivery_request_ambiguous"}
     assert set(QUESTION_STOPS) <= set(PLAN_APPROVAL_STOPS)
     card = _card(UNREADABLE)
 
