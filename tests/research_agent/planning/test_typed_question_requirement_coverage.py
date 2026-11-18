@@ -74,8 +74,12 @@ from easyicu.research_agent.schema import (
 
 from .test_typed_question_requirement_regressions import (
     AUTHORITY,
+    CLUSTER,
     DICTIONARY,
     DIALYSIS16,
+    EXTERNAL,
+    IMPUTATION,
+    KDIGO_48,
     ICU,
     MAX_POTASSIUM,
     bind,
@@ -422,7 +426,10 @@ def test_imputation_external_validation_and_delivery_project_from_contracts() ->
     ))
     context = _context()
     _, projected = _evaluate(MAX_POTASSIUM, plan, context=context)
-    methods = {item.key.facet.action_id: item.key for item in projected.facts if isinstance(item.key.facet, Method)}
+    methods = {
+        item.key.facet.action_id: item.key for item in projected.facts
+        if isinstance(item.key.facet, Method) and len(item.key.facet.parameters) > 2
+    }
     imputation, validation = methods["multiple_imputation"], methods[EXTERNAL_ACTION]
     assert imputation.bindings == (bind("k"),)
     assert {item.name for item in imputation.facet.parameters} == {
@@ -485,3 +492,170 @@ def test_derived_lineage_does_not_supply_a_concept_binding() -> None:
         source_concept="k", derived_from_concepts=["k", "crea"],
     )])
     assert _evaluate(key(Unit(code="mmol/L"), bind("k")), plan, context=context)[0].state == "not_covered"
+
+
+@pytest.mark.parametrize("asked", ["imputation", "external"])
+def test_question_method_keys_match_applied_plan_contracts(asked) -> None:
+    plan = _model_plan(DataPreparationPlan(missing_data=MissingDataPlan(
+        strategy="multiple_imputation", m=20,
+        variables=(ImputationVariable(name="lact", method="pmm"), ImputationVariable(name="k", method="pmm")),
+    )))
+    plan.steps[0].inputs.append("lact")
+    plan.steps[0].model_requirements = [_model().model_copy(update={"covariates": ["lact"]})]
+    spec = ExternalValidationSpec(
+        development_database="miiv", validation_databases=["eicu"], frozen_model_sha256="a" * 64,
+        predictor_concepts=["lact"], outcome_concept="death", recalibration="none",
+    )
+    plan.steps.append(AnalysisStep(
+        step_id="validate", intent="validation", method=external_validation_method(spec),
+        scientific_action_id=EXTERNAL_ACTION, planned_analysis_role="secondary",
+        inputs=[FROZEN_MODEL_INPUT, external_cohort_input("eicu")], expected_outputs=list(EXTERNAL_OUTPUTS),
+    ))
+    request = {"imputation": IMPUTATION, "external": EXTERNAL}[asked]
+    decision, _ = _evaluate(request, plan, context=_context())
+    assert decision.state == "covered"
+    if asked == "imputation":
+        assert decision.provenance.source_field == "plan.steps[0].method.data_preparation.missing_data"
+        incorrect = key(Method(action_id="multiple_imputation", parameters=(Parameter(name="m", value=5),)),
+                        bind("lact", "covariate"))
+        assert _evaluate(incorrect, plan, context=_context())[0].state == "not_covered"
+        plan.steps[0].method = "adjusted_association_models"
+    else:
+        assert decision.provenance.source_field == "plan.steps[1].method.external_validation_spec"
+        spec = spec.model_copy(update={"predictor_concepts": ["lact", "k"]})
+        plan.steps[1].method = external_validation_method(spec)
+        assert _evaluate(request, plan, context=_context())[0].state == "not_covered"
+        plan.steps.pop()
+    assert _evaluate(request, plan, context=_context())[0].state == "not_covered"
+
+
+def test_question_kdigo_48_key_requires_applied_staging_and_exact_window() -> None:
+    owner = load_clinical_contracts()["kdigo_aki_2012"]
+    context = _context(variables=[ConceptDescriptor(
+        name="kdigo_creat", dtype="int64", clinical_definition=ClinicalDefinitionReference(
+            contract_id=owner.contract_id, version=owner.version, source_id=owner.source_id,
+            status=owner.status, definition=owner.definition, validation_status=owner.validation_status,
+            canonical_definition=owner.canonical_definition,
+        ),
+    )])
+    window = WindowAggregation(
+        variable="kdigo_creat", group_column="stay_id", time_column="clock",
+        start_hours=0, end_hours=48, function="max",
+    )
+    clocks = (TimeCoordinate("clock", ICU, "hours"),)
+
+    def evaluate(applied_window, context=context, clocks=clocks):
+        plan = _model_plan(DataPreparationPlan(windows=(applied_window,)) if applied_window else None)
+        plan.steps[0].inputs[0] = "kdigo_creat"
+        plan.steps[0].model_requirements = [_model(exposure="kdigo_creat")]
+        return _evaluate(KDIGO_48, plan, context=context, clocks=clocks)[0].state
+
+    assert evaluate(window) == "covered"
+    assert evaluate(None) == "not_covered"
+    assert evaluate(window, context=_context()) == "not_covered"
+    assert evaluate(window, clocks=(TimeCoordinate("clock", "hospital_admission", "hours"),)) == "not_covered"
+    assert evaluate(window.model_copy(update={"end_hours": 168})) == "not_covered"
+    assert evaluate(window.model_copy(update={"function": "mean"})) == "not_covered"
+
+
+def test_imputation_only_auxiliaries_resolve_to_sorted_concepts() -> None:
+    plan = _model_plan(DataPreparationPlan(missing_data=MissingDataPlan(
+        strategy="multiple_imputation", variables=(ImputationVariable(name="k", method="pmm"),),
+        auxiliaries=("sex", "age_years"),
+    )))
+    plan.steps[0].inputs.extend(("sex", "age_years"))
+    context = _context()
+    context.variables.append(ConceptDescriptor(name="age_years", dtype="float64", source_concept="age"))
+    _, projected = _evaluate(MAX_POTASSIUM, plan, context=context)
+    [detail] = [
+        item.key for item in projected.facts if isinstance(item.key.facet, Method)
+        and item.key.facet.action_id == "multiple_imputation"
+        and any(param.name == "auxiliaries" for param in item.key.facet.parameters)
+    ]
+    assert detail.bindings == (bind("k"),)
+    assert Parameter(name="auxiliaries", value=("age", "sex")) in detail.facet.parameters
+
+
+def test_repeated_stay_policy_does_not_credit_only_the_last_primary() -> None:
+    from easyicu.research_agent.planning.dependence_authority import context_dependence_authority
+
+    context = _context(preferences=UserPreferences(data_constraints=json.dumps({"analysis_design": {
+        "analysis_unit": "icu_stay", "cluster_unit": "patient", "variance_estimator": "cluster_robust",
+    }})))
+    plan = _model_plan()
+    second = plan.steps[0].model_copy(update={
+        "step_id": "second",
+        "model_requirements": [_model(dependence=context_dependence_authority(context))],
+    })
+    plan.steps.append(second)
+    for requirements in (second.model_requirements, []):
+        second.model_requirements = requirements
+        assert _evaluate(CLUSTER, plan, context=context)[0].state == "not_covered"
+
+
+def test_separate_binary_model_requirements_project_their_own_pairs() -> None:
+    plan = _model_plan()
+    plan.steps[0].inputs.extend(("mg", "kdigo_aki"))
+    plan.steps[0].model_requirements.append(_model(exposure="mg").model_copy(update={
+        "requirement_id": "m2", "outcome": "kdigo_aki",
+    }))
+    facet = Method(action_id="binary_effect_measure", parameters=(Parameter(name="measure", value="odds_ratio"),))
+    for index, (exposure, outcome) in enumerate((("k", "death"), ("mg", "kdigo_aki"))):
+        decision, _ = _evaluate(key(facet, bind(exposure), bind(outcome, "outcome")), plan, context=_context())
+        assert decision.state == "covered"
+        assert decision.provenance.source_field == f"plan.steps[0].model_requirements[{index}].method_family"
+    assert _evaluate(key(facet, bind("mg"), bind("death", "outcome")), plan)[0].state == "not_covered"
+
+
+@pytest.mark.parametrize("variable", [
+    ConceptDescriptor(name="k", dtype="float64", unit="mmol/L", source_concept="k",
+                      derived_from_concepts=["k", "crea"]),
+    ConceptDescriptor(name="k", dtype="float64", unit="mmol/L", source_concept="na"),
+], ids=["derived", "renamed"])
+def test_registered_column_name_cannot_mask_conflicting_source_identity(variable) -> None:
+    asked = key(Unit(code="mmol/L"), bind("k"))
+    assert _evaluate(asked, _model_plan(), context=_context(variables=[variable]))[0].state == "not_covered"
+
+
+def test_aliases_that_repeat_one_imputed_concept_do_not_abort_projection() -> None:
+    context = _context()
+    context.variables.append(ConceptDescriptor(name="k_alias", dtype="float64", source_concept="k"))
+    plan = _model_plan(DataPreparationPlan(missing_data=MissingDataPlan(
+        strategy="multiple_imputation",
+        variables=(ImputationVariable(name="k", method="pmm"), ImputationVariable(name="k_alias", method="pmm")),
+    )))
+    plan.steps[0].inputs.append("k_alias")
+    plan.steps[0].model_requirements = [_model().model_copy(update={"covariates": ["k_alias"]})]
+    delivery = key(Delivery(output_id="figures"), STUDY_POPULATION)
+    decision, projected = _evaluate(delivery, plan, context=context)
+    assert decision.state == "covered"
+    assert not any(
+        isinstance(item.key.facet, Method) and item.key.facet.action_id == "multiple_imputation"
+        for item in projected.facts
+    )
+
+
+@pytest.mark.parametrize("change", [{"function": "unsupported"}, {"end_hours": 0}])
+def test_invalid_aggregation_window_is_refused_before_typed_fact_construction(change) -> None:
+    window = WindowAggregation(
+        variable="k", group_column="stay_id", time_column="clock",
+        start_hours=0, end_hours=6, function="max",
+    )
+    plan = _model_plan()
+    plan.steps[0].method = plan.steps[0].method + " with easyicu.data_preparation/1:" + json.dumps({
+        "windows": [{**window.model_dump(), **change}],
+    })
+    delivery = key(Delivery(output_id="figures"), STUDY_POPULATION)
+    decision, projected = _evaluate(
+        delivery, plan, context=_context(), clocks=(TimeCoordinate("clock", ICU, "hours"),),
+    )
+    assert decision.state == "covered"
+    assert not any(isinstance(item.key.facet, Window) for item in projected.facts)
+
+
+@pytest.mark.parametrize("hours", [float("inf"), float("-inf"), float("nan")])
+def test_sensitivity_schema_rejects_nonfinite_landmark_before_projection(hours) -> None:
+    with pytest.raises(ValidationError, match="landmark_hours"):
+        PrespecifiedSensitivitySpec(
+            spec_id="invalid", axis="timing", strategy="landmark", landmark_hours=hours,
+        )

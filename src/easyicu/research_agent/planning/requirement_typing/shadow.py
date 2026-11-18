@@ -104,6 +104,8 @@ def _observe(
             container = None
         start = max(offsets.get(parent, 0), container.start if container else 0)
         span = source.find(item.quote, offset=start) if item.quote else None
+        if container and item.quote and (span is None or span.end > container.end):
+            span = source.find(item.quote, offset=container.start)
         if span and item.parent_quote and (container is None or span.end > container.end):
             span = None
         if span and not item.parent_quote and source.find(item.quote, offset=span.end):
@@ -114,7 +116,7 @@ def _observe(
         )
         if span is not None:
             if item.parent_quote:
-                offsets[parent] = span.end
+                offsets[parent] = max(offsets.get(parent, 0), span.end)
             part = AtomicPart(
                 part_id=item.part_id, source_span=SourceSpan(start=span.start, end=span.end),
                 key=None, facet_hint=item.facet_hint,

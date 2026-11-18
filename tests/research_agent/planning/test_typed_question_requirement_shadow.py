@@ -175,3 +175,59 @@ def test_legacy_plan_without_a_typed_contract_reports_unknown(monkeypatch, caplo
     assert event["authority"] is None
     assert row["v2"] == "unknown"
     assert row["v2_reason"] == "plan_contract_unavailable"
+
+
+@pytest.mark.parametrize("quote", ["Report the odds ratio", "Report the odds ratio for magnesium and kdigo_aki"])
+def test_legacy_secondary_effect_measure_never_inherits_primary_pair(quote, monkeypatch, caplog) -> None:
+    primary = "Report the odds ratio for potassium and mortality"
+    question = f"{primary}. {quote}."
+    plan = _model_plan().model_copy(update={"research_question": question})
+    items = [
+        QuestionRequirement(id="r1", kind="estimand", quote=primary, concepts=["k", "death"],
+                            effect_measure="odds_ratio", coverage="plan"),
+        QuestionRequirement(id="r2", kind="estimand", quote=quote, concepts=["mg", "kdigo_aki"],
+                            effect_measure="odds_ratio", coverage="plan"),
+    ]
+    if quote == "Report the odds ratio":
+        question = question.replace(f"{primary}. ", "Primary analysis. ")
+        items = items[1:]
+    monkeypatch.setenv(FLAG, "shadow")
+    caplog.set_level(logging.DEBUG, logger=LOGGER.name)
+    judge_question_requirements(
+        items, plan=plan, family_template=True, relatives=lambda concept: frozenset({concept}),
+        check_gap=lambda gap: pytest.fail("fixture declared no gap"), question=question, shadow_context=_context(),
+    )
+    row = _shadow_event(caplog)["parts"][-1]
+    assert row["source_span"] is not None
+    assert row["v2"] == "unknown"
+    assert row["result"]["part"]["key"] is None
+
+
+def test_legacy_effect_measures_on_delivery_and_hazard_ratio_are_invalid() -> None:
+    from pydantic import ValidationError
+
+    for kind, measure in (("delivery", "odds_ratio"), ("estimand", "hazard_ratio")):
+        with pytest.raises(ValidationError, match="effect_measure|effect measure"):
+            QuestionRequirement(id="r1", quote="Report the effect", kind=kind, coverage="plan", effect_measure=measure)
+
+
+@pytest.mark.parametrize(("parent", "clauses"), [
+    ("external validation, calibration", ("calibration", "external validation")),
+    ("calibration of predictions", ("calibration of predictions", "calibration")),
+])
+def test_reordered_or_overlapping_clauses_keep_their_source_spans(parent, clauses, monkeypatch, caplog) -> None:
+    from easyicu.research_agent.planning.question_requirements import JudgedRequirement
+    from easyicu.research_agent.planning.requirement_typing.shadow import observe_requirements
+
+    entry = JudgedRequirement(
+        requirement=QuestionRequirement(id="r1", kind="analysis", quote=parent, coverage="plan"),
+        disposition="covered", reason_code="plan_declared",
+        clauses=tuple({"quote": clause, "disposition": "covered"} for clause in clauses),
+    )
+    monkeypatch.setenv(FLAG, "shadow")
+    caplog.set_level(logging.DEBUG, logger=LOGGER.name)
+    observe_requirements([entry], plan=_model_plan(), question=f"Methods. {parent}.", context=_context())
+    rows = _shadow_event(caplog)["parts"]
+    assert [row["source_span"] for row in rows] == [
+        {"start": 9 + parent.index(clause), "end": 9 + parent.index(clause) + len(clause)} for clause in clauses
+    ]

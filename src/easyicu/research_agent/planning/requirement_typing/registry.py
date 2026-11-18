@@ -45,7 +45,7 @@ def _dictionary(source_name: str | None) -> ConceptDictionary:
 @lru_cache(maxsize=1)
 def contract_registry_sha256() -> str:
     return canonical_sha256({
-        "intake": "easyicu.requirement_intake/1",
+        "intake": "easyicu.requirement_intake/2",
         "grading": sorted((item.contract_id, item.version, item.source_id, item.concepts)
                           for item in load_clinical_contracts().values()),
         "method_policies": sorted(_METHOD_POLICIES),
@@ -122,14 +122,28 @@ def registered_anchor(raw: str | None, dictionary: DictionarySnapshot) -> str | 
 def registered_concept_id(
     column: str, variable: ConceptDescriptor | None, dictionary: DictionarySnapshot,
 ) -> str | None:
-    if variable and variable.concept_enrichment_degraded:
+    if variable is None:
+        return column if column in dictionary.concept_ids else None
+    if variable.concept_enrichment_degraded:
         return None
-    if column in dictionary.concept_ids:
-        return column
-    # A source identity can bind a physical alias. Lineage with more than
-    # that identity can describe a derived feature and cannot substitute.
-    if variable and variable.source_concept in dictionary.concept_ids and (
-        set(variable.derived_from_concepts) <= {variable.source_concept}
+    concept = column if column in dictionary.concept_ids else variable.source_concept
+    if (
+        concept in dictionary.concept_ids
+        and variable.source_concept in (None, concept)
+        and set(variable.derived_from_concepts) <= {concept}
     ):
-        return variable.source_concept
+        return concept
+    return None
+
+
+def registered_grading(variable: ConceptDescriptor, dictionary: DictionarySnapshot) -> Grading | None:
+    definition = variable.clinical_definition
+    if definition is None:
+        return None
+    owner = load_clinical_contracts().get(definition.contract_id)
+    if (
+        owner and registered_concept_id(variable.name, variable, dictionary) in owner.concepts
+        and (definition.version, definition.source_id) == (owner.version, owner.source_id)
+    ):
+        return Grading(contract_id=owner.contract_id, version=owner.version)
     return None

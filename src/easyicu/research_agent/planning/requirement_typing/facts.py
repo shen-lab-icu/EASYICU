@@ -9,7 +9,6 @@ from math import isfinite
 
 from pydantic import ValidationError
 
-from easyicu.clinical_contracts import load_clinical_contracts
 from easyicu.concept.metadata_sidecar import TimeCoordinate
 
 from ...canonical_json import canonical_sha256
@@ -25,6 +24,7 @@ from ...contracts.model_terms import (
     preparation_for_step,
     validate_model_term_roster,
 )
+from ...contracts.model_tokens import binary_effect_measure
 from ...contracts.prediction_validation import external_validation_spec_for_step, external_validation_step_matches
 from ...contracts.product_files import RUN_DELIVERABLES
 from ...schema import AnalysisPlan, AnalysisStep, ResearchContext
@@ -47,7 +47,6 @@ from .contract import (
     DictionarySnapshot,
     Facet,
     FactAuthority,
-    Grading,
     HostFact,
     Interval,
     Method,
@@ -64,7 +63,13 @@ from .contract import (
     Unit,
     Window,
 )
-from .registry import STUDY_POPULATION, contract_registry_sha256, registered_anchor, registered_concept_id
+from .registry import (
+    STUDY_POPULATION,
+    contract_registry_sha256,
+    registered_anchor,
+    registered_concept_id,
+    registered_grading,
+)
 
 _ANALYSIS_ROLES = {"primary", "secondary", "sensitivity"}
 _HOUR_UNITS = {"h", "hours"}
@@ -183,15 +188,12 @@ class _Projection:
     def clinical(self, roles: Mapping[str, set[Role]]) -> None:
         if not self.context:
             return
-        contracts = load_clinical_contracts()
         for column, scientific_roles in roles.items():
             variable = self.variables.get(column)
             if variable is None:
                 continue
-            concept = registered_concept_id(column, self.variables.get(column), self.dictionary)
             source = f"context.variables[{self.variable_positions[column]}]"
-            definition = variable.clinical_definition
-            contract = contracts.get(definition.contract_id) if definition else None
+            grading = registered_grading(variable, self.dictionary)
             for role in sorted(scientific_roles):
                 bindings = self.bind(((column, role),))
                 if variable.unit:
@@ -201,15 +203,8 @@ class _Projection:
                         pass
                     else:
                         self.add(f"{source}.unit", bindings, unit)
-                if (
-                    definition and contract and concept in contract.concepts
-                    and definition.version == contract.version
-                    and definition.source_id == contract.source_id
-                ):
-                    self.add(
-                        f"{source}.clinical_definition", bindings,
-                        Grading(contract_id=contract.contract_id, version=contract.version),
-                    )
+                if grading:
+                    self.add(f"{source}.clinical_definition", bindings, grading)
 
     def preparation(self, step: AnalysisStep, roles: Mapping[str, set[Role]], source: str) -> None:
         try:
@@ -229,30 +224,48 @@ class _Projection:
                 or not all(map(isfinite, (window.start_hours, window.end_hours)))
             ):
                 continue
-            self.add(
-                f"{source}.windows[{index}]",
-                self.bind(((window.variable, next(iter(scientific_roles))),)),
-                Window(purpose="aggregation", operation=window.function),
-                Interval(
-                    anchor=anchor, unit="h", start=window.start_hours, end=window.end_hours,
-                    start_inclusive=True, end_inclusive=False,
-                ),
+            time = Interval(
+                anchor=anchor, unit="h", start=window.start_hours, end=window.end_hours,
+                start_inclusive=True, end_inclusive=False,
             )
+            field = f"{source}.windows[{index}]"
+            bindings = self.bind(((window.variable, next(iter(scientific_roles))),))
+            self.add(field, bindings, Window(purpose="aggregation", operation=window.function), time)
+            # The maximum of an existing stage series is the stage reported
+            # within this applied window. Its baseline lookback is independent.
+            variable = self.variables.get(window.variable)
+            if window.function == "max" and variable and bindings:
+                grading = registered_grading(variable, self.dictionary)
+                if (
+                    grading and grading.contract_id == "kdigo_aki_2012"
+                    and bindings[0].concept_id in {"kdigo_creat", "kdigo_uo", "kdigo_aki"}
+                ):
+                    self.add(field, bindings, grading, time)
         missing = preparation.missing_data
         if missing and missing.strategy == "multiple_imputation" and missing.variables:
-            columns = {item.name for item in missing.variables} | set(missing.auxiliaries)
-            if not columns <= inputs or any(len(roles.get(column, ())) != 1 for column in columns):
+            columns = sorted(item.name for item in missing.variables)
+            if (
+                not set(columns).union(missing.auxiliaries) <= inputs
+                or any(len(roles.get(column, ())) != 1 for column in columns)
+            ):
                 return
-            bindings = self.bind(tuple((column, next(iter(roles[column]))) for column in sorted(columns)))
-            if not bindings:
+            bindings = self.bind(tuple((column, next(iter(roles[column]))) for column in columns))
+            if not bindings or len({item.concept_id for item in bindings}) != len(bindings):
                 return
-            concept_by_column = dict(zip(sorted(columns), (item.concept_id for item in bindings), strict=True))
+            auxiliaries = []
+            for column in missing.auxiliaries:
+                concept = registered_concept_id(column, self.variables.get(column), self.dictionary)
+                if concept is None:
+                    return
+                auxiliaries.append(concept)
+            concept_by_column = dict(zip(columns, (item.concept_id for item in bindings), strict=True))
+            m = Parameter(name="m", value=missing.m)
             parameters = (
-                Parameter(name="m", value=missing.m),
+                m,
                 Parameter(name="iterations", value=missing.iterations),
                 Parameter(name="donors", value=missing.donors),
                 Parameter(name="seed", value=missing.seed),
-                Parameter(name="auxiliaries", value=tuple(concept_by_column[name] for name in missing.auxiliaries)),
+                Parameter(name="auxiliaries", value=tuple(sorted(auxiliaries))),
                 *(Parameter(name=f"impute/{concept_by_column[item.name]}", value=(item.method, *item.levels))
                   for item in missing.variables),
             )
@@ -260,6 +273,11 @@ class _Projection:
                 f"{source}.missing_data", bindings,
                 Method(action_id="multiple_imputation", parameters=parameters),
             )
+            for binding in bindings:
+                self.add(
+                    f"{source}.missing_data", (binding,),
+                    Method(action_id="multiple_imputation", parameters=(m,)),
+                )
 
     def landmarks(self, step: AnalysisStep, source: str) -> None:
         preferences = self.context.user_preferences if self.context else None
@@ -425,18 +443,54 @@ class _Projection:
             (spec.outcome_concept, "outcome"),
             *((column, "covariate") for column in spec.predictor_concepts),
         ))
+        field = f"{source}.method.external_validation_spec"
+        scope_parameters = (
+            Parameter(name="validation_databases", value=tuple(sorted(spec.validation_databases))),
+            Parameter(name="recalibration", value=spec.recalibration),
+        )
         self.add(
-            f"{source}.method.external_validation_spec", bindings,
+            field, bindings,
             Method(action_id="prediction.external_validation", parameters=(
+                *scope_parameters,
                 Parameter(name="development_database", value=spec.development_database),
-                Parameter(name="validation_databases", value=tuple(sorted(spec.validation_databases))),
                 Parameter(name="frozen_model_sha256", value=spec.frozen_model_sha256),
-                Parameter(name="recalibration", value=spec.recalibration),
                 Parameter(name="confirmed_meaning_changes", value=tuple(sorted(
                     f"{change.database}/{change.concept}" for change in spec.confirmed_changes
                 ))),
             )),
         )
+        self.add(field, bindings, Method(action_id="prediction.external_validation", parameters=scope_parameters))
+
+    def binary_measures(self, step: AnalysisStep, roles: Mapping[str, set[Role]], source: str) -> None:
+        def add(field: str, coordinates: tuple[tuple[str, Role], ...], measure: str) -> None:
+            self.add(
+                f"{source}.{field}", self.bind(coordinates),
+                Method(action_id="binary_effect_measure", parameters=(Parameter(name="measure", value=measure),)),
+            )
+
+        if step.scientific_capability == LANDMARK_SPLINE_ASSOCIATION_CAPABILITY_ID:
+            measure = primary_binary_effect_measure(step)
+            coordinates = tuple(
+                (column, role) for column, declared in roles.items()
+                for role in sorted(declared) if role in {"exposure", "outcome"}
+            )
+            if measure and len(coordinates) == 2 and {role for _, role in coordinates} == {"exposure", "outcome"}:
+                add("scientific_capability", coordinates, measure)
+            return
+        inputs = set(step.inputs)
+        for index, requirement in enumerate(step.model_requirements):
+            if (
+                requirement.analysis_role != "primary" or requirement.outcome_type != "binary"
+                or not {requirement.exposure_source, requirement.outcome} <= inputs
+            ):
+                continue
+            measure = binary_effect_measure(requirement.method_family)
+            if measure:
+                add(
+                    f"model_requirements[{index}].method_family",
+                    ((requirement.exposure_source, "exposure"), (requirement.outcome, "outcome")),
+                    measure,
+                )
 
 
 def _step_roles(step: AnalysisStep) -> Iterator[tuple[str, Role]]:
@@ -489,23 +543,7 @@ def project_facts(
         if step.planned_analysis_role == "primary":
             primary_steps.append((index, step))
             projection.endpoint_origin(step, source)
-            measure = primary_binary_effect_measure(step)
-            coordinates = tuple(
-                (column, role) for column, declared in roles.items()
-                for role in sorted(declared) if role in {"exposure", "outcome"}
-            )
-            if measure and {role for _, role in coordinates} == {"exposure", "outcome"}:
-                field = (
-                    "scientific_capability"
-                    if step.scientific_capability == LANDMARK_SPLINE_ASSOCIATION_CAPABILITY_ID
-                    else "model_requirements[0].method_family"
-                )
-                projection.add(
-                    f"{source}.{field}", projection.bind(coordinates),
-                    Method(action_id="binary_effect_measure", parameters=(
-                        Parameter(name="measure", value=measure),
-                    )),
-                )
+            projection.binary_measures(step, roles, source)
     projection.clinical(all_roles)
     projection.repeat_stays(primary_steps[0] if len(primary_steps) == 1 else None)
     for output_id in RUN_DELIVERABLES:
