@@ -16,7 +16,7 @@ const modules = window.EasyICU.guidedPi;
 const { esc } = window.EU_HTML;
 const stub = (overrides = {}) => new Proxy(overrides, { get: (item, key) => item[key] || (() => '') });
 
-function render(language, workflow, sessionPatch, ideaExplored = true, hostPatch = {}) {
+function render(language, workflow, sessionPatch, ideaExplored = true, hostPatch = {}, statePatch = {}) {
   window.EU_LANG = language;
   const tr = (en, zh) => language === 'zh' ? zh : en;
   const session = {
@@ -31,6 +31,7 @@ function render(language, workflow, sessionPatch, ideaExplored = true, hostPatch
       ...(ideaExplored ? [{ role: 'activity', steps: [{ kind: 'tool', status: 'complete', toolName: 'easyicu_mine_ideas' }] }] : []),
       { role: 'assistant', complete: true, text: 'Setup recorded.\n\nNext step:\n- Unrelated suggestion' },
     ],
+    ...statePatch,
   };
   const host = { tr, esc, iconHtml: () => '', resourceButton: () => '', session: () => session,
     workflow: () => workflow, sessionIsStale: () => false, busy: () => false, ...hostPatch };
@@ -47,7 +48,7 @@ function render(language, workflow, sessionPatch, ideaExplored = true, hostPatch
     workflowConfirmationHtml: confirmation.workflowConfirmationHtml,
     workflowConfirmation: confirmation.workflowConfirmation,
   });
-  return { html: view.sessionPanel(), confirmation };
+  return { html: view.sessionPanel(), confirmation, state };
 }
 
 for (const language of ['en', 'zh']) {
@@ -123,6 +124,113 @@ function conversationLog(html) {
 
 function primaryButtons(html) {
   return html.match(/<button\b[^>]*class="btn [^"]*\bprimary\b[^"]*"[^>]*>/g) || [];
+}
+
+const cohortSelection = {
+  present: true, stated: false, blocker_code: 'cohort_eligibility_confirmation_required',
+  options: [{ id: 'no_eligibility_filter' }, { id: 'first_admission_only' }],
+};
+
+function m3Workflow(shape) {
+  const populationStop = shape === 'C';
+  const nextAction = populationStop
+    ? 'population_criterion_decision_unconfirmed' : 'question_requirement_not_covered';
+  const items = (shape === 'B'
+    ? [['not_covered', 'host_verified'], ['attested', 'plan_declared'], ['attested', 'plan_declared']]
+    : [['not_covered', 'host_verified'], ['not_covered', 'host_verified']]
+  ).map(([disposition, source], index) => ({
+    id: `r${index + 1}`, kind: 'analysis', disposition, source, quote: `示例分析 ${index + 1}`,
+  }));
+  return {
+    current_stage: 'plan',
+    next_action_code: nextAction,
+    next_actions: [{
+      action_id: 'edit_plan_0123456789abcdef', kind: 'edit_plan', label_key: 'stop_next_actions.edit_plan',
+      params: { route: 'plan_edit', intent: 'candidate_plan', planner_start_mode: 'fresh',
+        requires_explicit_choice: true, requires_plan_approval: true },
+    }],
+    plan_decision: null,
+    stages: [
+      { id: 'idea', status: 'complete' },
+      { id: 'question', status: 'complete' },
+      populationStop ? { id: 'setup', status: 'complete' }
+        : { id: 'setup', status: 'ready', reason_code: 'cohort_eligibility_confirmation_required' },
+      { id: 'plan', status: 'review_required', reason_code: nextAction },
+      populationStop ? { id: 'extraction', status: 'complete', reason_code: 'bound_research_input_prepared' }
+        : { id: 'extraction', status: 'blocked', reason_code: 'metadata_only_input_not_prepared' },
+    ],
+    plan_review_summary: {
+      status: 'analysis_only', run_id: 'synthetic-m3-review',
+      question_requirements: { status: 'shown', judged_on_plan_under_review: true, items },
+      ...(populationStop ? { reviewed_population_spec: {
+        schema_version: 'easyicu.reviewed_population_spec_projection/1',
+        criteria: [{
+          criterion: { kind: 'condition_present', role: 'include', quote: '示例纳入条件',
+            concepts_all_of: ['sample_condition'], window: null, missing_policy: null },
+          disposition: 'not_applied',
+        }],
+      } } : {}),
+    },
+  };
+}
+
+for (const [shape, recording] of [['A', 's15'], ['B', 's15b'], ['C', 's15c']]) {
+  test(`Dev9 M3 shape ${shape} (${recording}) offers one inline revision action after confirmation`, () => {
+    const workflow = m3Workflow(shape);
+    const researchProvider = { provider: 'synthetic', model: 'scripted', credential_source: 'pi_verified' };
+    const readiness = modules.require('runReadiness').create({
+      tr: (en, zh) => zh,
+      state: { workflow, session: { research_provider: researchProvider },
+        runtime: { status: 'ready', api_transport: 'openai-completions' } },
+    });
+    const { html, confirmation, state } = render('zh', workflow, {
+      research_provider: researchProvider,
+      ...(shape === 'C' ? {} : { cohort_eligibility_selection: cohortSelection }),
+    }, false, { runReadiness: readiness.forAction }, {
+      messages: [
+        { role: 'user', text: '请为两个示例指标设计分析。' },
+        { role: 'user', text: '使用这份数据' },
+        { role: 'user', text: '确认结局' },
+        ...(shape === 'C' ? [{ role: 'user', text: '确认方案并准备数据' }] : []),
+        { role: 'assistant', complete: true, text: '候选计划已保存。' },
+      ],
+    });
+    const log = conversationLog(html);
+    assert.match(log, shape === 'C' ? /请明确人群条件的判定方式/ : /题面要求的一项分析，这份计划没有回答/);
+    if (shape === 'C') {
+      assert.match(log, /示例纳入条件/);
+      assert.match(log, /无法判定时: 未注明/);
+    }
+    assert.doesNotMatch(log, /data-gpi-aside-pending|data-gpi-cohort-option|data-gpi-exposure-arrangement/);
+    const primary = primaryButtons(log);
+    assert.equal(primary.length, 1, 'the conversation must contain exactly one primary forward action');
+    assert.match(primary[0], /data-gpi-confirm-edit>/, 'the primary action must open the existing edit path');
+    assert.match(log, /data-gpi-confirm-edit>提出修改<\/button>/);
+    assert.doesNotMatch(log, /data-gpi-confirm-action/);
+
+    const handlers = {};
+    state.host = { addEventListener: (name, handler) => { handlers[name] = handler; } };
+    modules.require('events').create({
+      state, COHORT_ELIGIBILITY: stub(), MESSAGE_ACTIONS: stub(),
+      confirmWorkflowAction: () => assert.fail('Revision must not submit approval or regenerate automatically'),
+      editWorkflow: () => { state.draft = confirmation.planChangeDraft(); },
+      sendMessage: () => {
+        assert.match(state.draft, /请补全示例要求。$/);
+        state.workflowReceipts.push({ role: 'assistant', text: '已收到示例修订意见。', complete: true });
+      },
+    }).wire();
+    const click = button => handlers.click({
+      target: { closest: selector => button.includes(selector.slice(1, -1)) ? { dataset: {} } : null },
+    });
+    assert.equal(state.draft, '');
+    click(primary[0]);
+    assert.match(state.draft, /请根据以下审阅意见修订整份研究计划/);
+    assert.match(state.draft, /不要开始分析/);
+    assert.deepEqual(state.workflowReceipts, []);
+    state.draft += '请补全示例要求。';
+    click(html.match(/<button\b[^>]*data-gpi-send[^>]*>/)[0]);
+    assert.equal(state.workflowReceipts[0].text, '已收到示例修订意见。');
+  });
 }
 
 const trialProposal = {

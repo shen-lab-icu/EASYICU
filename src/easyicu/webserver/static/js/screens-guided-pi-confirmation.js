@@ -48,7 +48,7 @@
     function workflowConfirmation() {
       const confirmation = currentWorkflowConfirmation();
       if (!confirmation) return null;
-      const readiness = host.runReadiness?.(confirmation.code);
+      const readiness = !confirmation.primaryEdit && host.runReadiness?.(confirmation.code);
       if (readiness) return { ...confirmation, readiness, approveDisabled: true,
         nonApprovable: readiness.connect || confirmation.nonApprovable };
       if (!confirmation.retryPlanRevision && deferredScopeRejected(host.workflow()?.plan_review_summary)) {
@@ -452,9 +452,11 @@
         { kind: 'research_artifact', run_id: reviewedPlanRunId, artifact: 'agent_plan.json', label: tr('Open the complete plan', '打开完整计划'), media_type: 'application/json' },
         { kind: 'research_artifact', run_id: reviewedPlanRunId, artifact: 'scientific_plan_review.json', label: tr('View review details', '查看审阅详情'), media_type: 'application/json' },
       ] : [];
+      const editPlanOffered = Array.isArray(workflow.next_actions) && workflow.next_actions.some(action =>
+        action?.kind === 'edit_plan' && action.label_key === 'stop_next_actions.edit_plan');
       const populationAcceptance = (workflow.plan_review_summary || {}).population_acceptance;
       if (code === 'population_criterion_decision_unconfirmed') return {
-        code, grants: [], nonApprovable: true,
+        code, grants: [], nonApprovable: true, primaryEdit: editPlanOffered,
         title: tr('Decide how to apply the population criteria', '请明确人群条件的判定方式'),
         note: tr(
           'The plan needs an explicit choice for missing or unmeasurable values, and the unit for any measurement threshold that needs one. Open the complete plan to review the criteria, then request a revised plan; analysis has not started.',
@@ -535,6 +537,12 @@
         title: tr('Confirm the exposure arrangement', '确认暴露安排'),
         note: arrangement.note,
         approve: tr('Continue', '继续'),
+        reviewResources: questionStopResources,
+      };
+      if (code === 'question_requirement_not_covered' && editPlanOffered) return {
+        code, grants: [], nonApprovable: true, primaryEdit: true,
+        title: tr('This plan does not answer an analysis the question asks for', '题面要求的一项分析，这份计划没有回答'),
+        reviewMaterialsTitle: tr('View the plan and review evidence', '查看计划与审阅依据'),
         reviewResources: questionStopResources,
       };
       if (code === 'question_requirement_not_covered') return {
@@ -966,7 +974,7 @@
       const { readiness, retryPlanRevision } = confirmation;
       const showPrimaryAction = !readiness?.connect && (retryPlanRevision || !confirmation.nonApprovable);
       const editPrimary = !readiness?.connect && !showPrimaryAction
-        && (confirmation.clarification || confirmation.code === 'plan_scientific_changes_required');
+        && (confirmation.primaryEdit || confirmation.clarification || confirmation.code === 'plan_scientific_changes_required');
       const primaryLabel = retryPlanRevision ? confirmation.retryLabel : confirmation.approve;
       const primaryDisabled = confirmation.approveDisabled ? ' disabled' : '';
       return `${planConversation}<section class="gpi-confirmation${confirmation.code === 'plan_scientific_changes_required' ? ' is-science-review' : ''}${confirmation.compactApproval ? ' is-plan-approval' : ''}" ${confirmation.clarification ? 'data-gpi-clarification ' : ''}aria-label="${tr('Workflow confirmation required', '需要确认科研流程')}">
