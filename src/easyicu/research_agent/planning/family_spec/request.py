@@ -2486,7 +2486,7 @@ def _build_trajectory_request(
             or name in sealed.descriptive_only_concepts
         )
     ]
-    if not outcome and not set(sealed.coordinate_concepts).intersection(measurement_audit_columns):
+    if not set(sealed.coordinate_concepts).intersection(measurement_audit_columns):
         raise FamilySpecError(
             "family_spec_trajectory_roster_empty",
             "Include a usable column for at least one of the sealed trajectory coordinates "

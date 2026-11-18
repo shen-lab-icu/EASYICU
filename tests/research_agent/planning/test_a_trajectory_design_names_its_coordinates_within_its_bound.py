@@ -36,7 +36,7 @@ from easyicu.research_agent.orchestration.scientific_runtime import (
 )
 from easyicu.research_agent.planning import figure_plan_shaping as _figure_plan
 from easyicu.research_agent.planning import final_plan_shape as _final_plan
-from easyicu.research_agent.planning.family_spec import build_family_spec_request
+from easyicu.research_agent.planning.family_spec import build_family_spec_request, trajectory_template
 from easyicu.research_agent.planning.family_spec.contract import (
     SpecReaderLabel,
     design_field_max_length,
@@ -271,12 +271,13 @@ def test_the_longest_roster_and_labels_the_contracts_allow_still_compile() -> No
     assert all(label.casefold() in named for label in labels.values())
 
 
+@pytest.mark.parametrize("outcome", [None, "hosp_mort"])
 @pytest.mark.parametrize("question", [
     "Cluster the repeated measurements of heart rate and lactate on the same grid.",
     "按固定时间网格对心率与乳酸的重复测量进行轨迹分型。",
 ])
-def test_sealed_fit_coordinates_bind_the_design_when_the_scalar_anchor_is_unused(question):
-    context = _context([*_SHORT, "age"], outcome=None, question=question).model_copy(
+def test_sealed_fit_coordinates_bind_the_design_when_the_scalar_anchor_is_unused(question, outcome):
+    context = _context([*_SHORT, "age"], outcome=outcome, question=question).model_copy(
         update={"primary_exposure": "age"}
     )
     disclosure = _authorities(_SHORT).planning_contract_context()
@@ -285,10 +286,13 @@ def test_sealed_fit_coordinates_bind_the_design_when_the_scalar_anchor_is_unused
         variable_roster=select_progressive_variables(context),
         allowed_literature_citation_keys=_CITATIONS, planning_contract_context=disclosure,
     )
+    labels = dict(_SHORT)
+    if outcome:
+        labels[outcome] = "In-hospital death"
     llm = ScriptedMockLLMClient([json.dumps({
         "adjustment_set": [],
         "reader_display_labels": [
-            {"key": key, "value": _SHORT[key]} for key in request.required_reader_label_keys
+            {"key": key, "value": labels[key]} for key in request.required_reader_label_keys
         ],
         "comparator_applications": [],
         "roster_decision_note": "The signed design supplies the fitting coordinates.",
@@ -306,11 +310,46 @@ def test_sealed_fit_coordinates_bind_the_design_when_the_scalar_anchor_is_unused
 
     assert len(llm.calls) == 1
     assert found.facts.compile_receipt is not None
-    assert found.output.design_selection.selected.required_variables == ["stay_id", *_SHORT]
+    outcome_columns = [outcome] if outcome else []
+    assert found.output.design_selection.selected.required_variables == [
+        "stay_id", *outcome_columns, *_SHORT,
+    ]
 
 
-def test_no_offered_trajectory_anchor_stops_before_the_provider():
-    context = _context(["age"], outcome=None).model_copy(update={"primary_exposure": "age"})
+def test_a_trajectory_outline_with_only_the_outcome_and_identity_is_refused(monkeypatch):
+    project_design = trajectory_template._design_selection
+
+    def omit_coordinates(request, spec, **kwargs):
+        selection = project_design(request, spec, **kwargs)
+        candidates = [
+            candidate.model_copy(update={"required_variables": ["stay_id", "hosp_mort"]})
+            if candidate.disposition == "selected"
+            else candidate
+            for candidate in selection.candidates
+        ]
+        return selection.model_copy(update={"candidates": candidates})
+
+    monkeypatch.setattr(trajectory_template, "_design_selection", omit_coordinates)
+    labels = {"hr": _SHORT["hr"], "lact": _SHORT["lact"]}
+    requirement = QuestionRequirement(
+        id="r1", kind="analysis", coverage="plan", concepts=list(labels),
+        quote="Sort stays into groups based on how heart rate and lactate change over time.",
+    )
+
+    with pytest.raises(ProgressivePlanCompileError) as refused:
+        _plan(labels, outcome="hosp_mort", requirement=requirement)
+
+    assert refused.value.reason_code == "progressive_design_selection_question_anchor_missing"
+    assert refused.value.path == "design_selection.candidates.required_variables"
+    assert refused.value.details["findings"] == [{"question_anchors": list(labels)}]
+
+
+@pytest.mark.parametrize("outcome", [None, "hosp_mort"])
+def test_no_offered_trajectory_anchor_stops_before_the_provider(outcome):
+    context = _context(
+        ["age"], outcome=outcome,
+        question="Use four-hour summaries to group stays by how heart rate and lactate change.",
+    ).model_copy(update={"primary_exposure": "age"})
     disclosure = _authorities(_SHORT).planning_contract_context()
     llm = ScriptedMockLLMClient([])
 

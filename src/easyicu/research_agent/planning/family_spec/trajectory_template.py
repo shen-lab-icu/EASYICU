@@ -163,23 +163,22 @@ def _design_selection(
     comparator_keys = [
         key for key in request.comparison_literature_keys if key in request.allowed_literature_citation_keys
     ]
-    # Without an outcome the design names what it describes: the audited
-    # coordinates beside the identity, as the outcome-free feasibility family does.
-    required_variables = (
-        [request.identity_column, request.outcome]
-        if request.outcome
-        else [
-            request.identity_column,
-            *(name for name in request.measurement_audit_columns if name != request.identity_column),
-        ]
-    )
-    if len(required_variables) < 2:
+    audit_columns = [
+        name for name in request.measurement_audit_columns if name != request.identity_column
+    ]
+    fit_columns = [name for name in audit_columns if name in sealed.coordinate_concepts]
+    if not fit_columns:
         raise FamilySpecError(
             "family_spec_trajectory_roster_empty",
-            "a trajectory suite without an outcome needs at least one audited coordinate "
-            "beside the identity column",
+            "a trajectory suite needs at least one audited fitting coordinate",
             path="measurement_audit_columns",
         )
+    # An outcome-free design lists every column it describes in the audit.
+    required_variables = (
+        [request.identity_column, request.outcome, *fit_columns]
+        if request.outcome
+        else [request.identity_column, *audit_columns]
+    )
     selected = ResearchDesignCandidate(
         design_id="fixed_window_trajectory_suite",
         analysis_type="trajectory_clustering",

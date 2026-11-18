@@ -1521,10 +1521,9 @@ def run_family_spec_attempt(
             }
         )
 
-    # The signed fit coordinates and optional outcome own the anchor set
-    # for this template. Its spec cannot change either of them.
+    # The signed fitting coordinates anchor the trajectory design.
     sealed = request.sealed_trajectory
-    question_anchors = (*sealed.coordinate_concepts, request.outcome) if sealed else None
+    question_anchors = tuple(sealed.coordinate_concepts) if sealed else None
     parse_attempts = 0
 
     def parse_spec(raw: str) -> tuple[FamilyPlanSpec, FamilySkeletonDraft]:
