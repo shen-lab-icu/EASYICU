@@ -38,7 +38,7 @@ from easyicu.webserver import (
 from easyicu.webserver.data_package_review import DataPackageReviewSnapshotStore
 from easyicu.webserver.host_action_contracts import host_action_id
 from easyicu.webserver.personal_preferences import PersonalPreferencesStore
-from easyicu.webserver.target_trial_setup import TARGET_TRIAL_COMPILE_SUBMITTED
+from easyicu.webserver.target_trial_setup import TARGET_TRIAL_COMPILE_SUBMITTED, TargetTrialSetupError
 from easyicu.webserver.copilot_data_workbench import (
     CopilotDataWorkbenchError,
     CopilotDataWorkbenchSnapshotStore,
@@ -2680,13 +2680,15 @@ class PiCopilotService(SkillAttachmentService, QuickAnswerService):
             gateway=self._conversation_gateway(record),
             exclude_session_id=record.session_id,
         )
-        opened_state = self._ensure_open(record)
         revision_run_id = ""
+        exposure_confirmation = message_intent == "confirm_exposure_arrangement"
         if (
             record.agent_mode == "research"
             and not regenerate_user_entry_id
-            and not message_intent
-            and message_origin == "typed"
+            and (
+                (not message_intent and message_origin == "typed")
+                or (exposure_confirmation and message_origin == "host_prompt")
+            )
             and "provider_run" in inferred_actions
         ):
             from .plan_revision_intent import requested_candidate_run
@@ -2699,6 +2701,13 @@ class PiCopilotService(SkillAttachmentService, QuickAnswerService):
             )
             if revision_run_id:
                 message_intent = "request_candidate_plan_revision"
+        if exposure_confirmation and not revision_run_id:
+            raise PiCopilotError(
+                "plan_revision_source_changed",
+                "The exposure arrangement changed. Review the current candidate.",
+                status_code=409,
+            )
+        opened_state = self._ensure_open(record)
         if record.agent_mode == "research" and not regenerate_user_entry_id and not message_intent:
             workflow = build_project_workflow_projection(
                 study_context_id=record.binding.study_context_id,
@@ -3391,6 +3400,40 @@ class PiCopilotService(SkillAttachmentService, QuickAnswerService):
         from easyicu.webserver.research_multi_followup import RegisteredDatabaseOwner
 
         return RegisteredDatabaseOwner()
+
+    def compile_target_trial_proposal(
+        self,
+        session_id: str,
+        *,
+        project_id: str,
+        study_context_id: str,
+        expected_revision: int,
+        proposal_sha256: str,
+    ) -> Dict[str, Any]:
+        record = self._scoped_record(session_id, project_id=project_id)
+        self.host_action_session(
+            session_id, project_id=project_id, study_context_id=study_context_id
+        )
+        from .tools import _data_source_confirmation_block, require_copilot_data_clearance
+
+        context = ToolExecutionContext(
+            session=record, data_handling=self._data_handling_for_session(record),
+            note_credentialed_history=lambda: self._note_credentialed_history(record.session_id),
+        )
+        if _data_source_confirmation_block(context) is not None:
+            raise PiCopilotError(
+                "pi_session_data_source_confirmation_required",
+                "Confirm the study data source before compiling the target trial.",
+                status_code=409,
+            )
+        require_copilot_data_clearance(context)
+        try:
+            return target_trial_card.compile_target_trial_proposal(
+                study_context_id, expected_revision=expected_revision,
+                proposal_sha256=proposal_sha256,
+            )
+        except TargetTrialSetupError as exc:
+            raise PiCopilotError(exc.code, str(exc), status_code=exc.status_code) from exc
 
     def approve_target_trial(
         self,

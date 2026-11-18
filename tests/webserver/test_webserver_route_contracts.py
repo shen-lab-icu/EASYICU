@@ -390,6 +390,11 @@ EXPECTED_PI_COPILOT_ROUTES = [
     ),
     (
         "POST",
+        "/api/copilot/pi/sessions/{session_id}/target-trial-proposal",
+        "post_pi_copilot_target_trial_proposal",
+    ),
+    (
+        "POST",
         "/api/copilot/pi/sessions/{session_id}/target-trial-approval",
         "post_pi_copilot_target_trial_approval",
     ),

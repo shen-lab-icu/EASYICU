@@ -218,13 +218,13 @@
         && nextOwner && typeof nextOwner.project === 'function'
         ? nextOwner.project(publicRow.text) : null;
       const interactive = Boolean(options && options.interactive);
-      const visibleText = nextStep ? nextOwner.bodyText(nextStep, { live: interactive }) : row.role === 'user' ? messageView.text : publicRow.text;
+      const visibleText = nextStep ? nextOwner.bodyText(nextStep, { live: interactive && !options?.hostContinuation }) : row.role === 'user' ? messageView.text : publicRow.text;
       const historicalChoiceAnswered = Boolean(options && options.historicalChoiceAnswered);
       const nextStepHtml = !nextStep
         ? ''
         : !interactive
           ? (historicalChoiceAnswered ? '' : nextOwner.renderPast(nextStep, window.EU_LANG))
-          : typeof nextOwner.render === 'function'
+          : !options?.hostContinuation && typeof nextOwner.render === 'function'
         ? nextOwner.render(nextStep, {
           language: window.EU_LANG,
           disabled: state.busy || sessionIsStale(),
@@ -364,9 +364,19 @@
       const freshTask = !state.messages.length;
       const ideaExplorationTurn = !workspace
         && TRANSCRIPT.latestTurnCompletedIdeaExploration(state.messages);
-      const showProjectContinuationCards = !workspace && !lightweight && !freshTask && !ideaExplorationTurn;
-      const dataConsentRequired = showProjectContinuationCards
+      const showProjectResults = !workspace && !lightweight && !freshTask && !ideaExplorationTurn;
+      // Exploration can coexist with a new host-owned decision. The trace
+      // hides historical results, while the current decision leads the log.
+      const showHostDecision = !workspace && !lightweight && (!freshTask
+        || Boolean(state.workflow?.study_setup_receipt?.configuration?.question));
+      const dataConsentRequired = showHostDecision
         && DATA_CONSENT && DATA_CONSENT.requiresConfirmation(session);
+      const continuation = showHostDecision && !dataConsentRequired ? continuationCardsHtml() : '';
+      const discussionDraft = MODULES.optional('researchDraft')?.current(state.messages);
+      const namedDemo = HOST_JOBS?.namedDemo?.();
+      const namedDatabase = HOST_JOBS?.namedDatabase?.();
+      const sourceDecision = dataConsentRequired && (namedDemo || namedDatabase
+        || DATA_CONSENT.authorization(session).reason === 'project_source_confirmation_required');
       const fullTimeline = freshTask ? [] : withQuickAnswers(withDecisionRecords(RUN_FILES.timeline(state.messages.concat(state.workflowReceipts))));
       const timeline = state.regenerating && REGENERATION
         ? REGENERATION.visibleRows(fullTimeline, state.regeneration)
@@ -450,6 +460,7 @@
           budgetState: state.session && state.session.reply_continuation && state.session.reply_continuation.budget_state,
           hostFailedAttempt,
           historicalDataConsent,
+          hostContinuation: Boolean(sourceDecision || continuation),
           historicalChoiceAnswered: row.role === 'assistant'
             && answeredAssistantIds.has(String(row.id || '')),
           trace,
@@ -461,12 +472,12 @@
         }
         return html;
       }, renderSegment);
-      const outcome = showProjectContinuationCards ? RUN_OUTCOME.render(state.latestRun, state.workflow) : '';
-      const emptyResearch = !workspace && !lightweight && !messages && !outcome;
+      const outcome = showProjectResults ? RUN_OUTCOME.render(state.latestRun, state.workflow) : '';
+      const emptyResearch = !workspace && !lightweight && !messages && !outcome && !continuation && !dataConsentRequired;
       const resultsView = Boolean(outcome) && !dataConsentRequired;
       // Workflow completion may arrive before the separate run-file catalog.
       // Use its authoritative stop until that run has a stop in the timeline.
-      const pendingStop = showProjectContinuationCards && RUN_STOP
+      const pendingStop = showProjectResults && RUN_STOP
         ? (state.workflow && Array.isArray(state.workflow.runs) ? state.workflow.runs : []).find(run => (
           run.authoritative && RUN_STOP.stopped(run)
           && !timeline.some(row => (row.savedRuns || []).some(saved => (
@@ -478,9 +489,7 @@
       const dataConsentHtml = dataConsentRequired
         ? DATA_CONSENT.render(session, {
           tr, esc, icon: iconHtml,
-          discussionDraft: MODULES.optional('researchDraft')?.current(state.messages),
-          namedDemo: HOST_JOBS && typeof HOST_JOBS.namedDemo === 'function' ? HOST_JOBS.namedDemo() : null,
-          namedDatabase: HOST_JOBS && typeof HOST_JOBS.namedDatabase === 'function' ? HOST_JOBS.namedDatabase() : null,
+          discussionDraft: sourceDecision ? null : discussionDraft, namedDemo, namedDatabase,
         }) + (DATA_BINDING && DATA_BINDING.waitingAction()
           ? `<p class="gpi-data-consent-waiting" role="status">${tr('Noted. This opens as soon as the current step finishes.', '已记下，当前这一步结束后会自动打开。')}</p>`
           : '')
@@ -561,16 +570,16 @@
           ${!workspace && !lightweight && DATA_CONSENT && typeof DATA_CONSENT.renderSelectedSource === 'function'
             ? DATA_CONSENT.renderSelectedSource(session, { tr, esc, icon: iconHtml }) : ''}
           </div>
-          ${stale && !interactionLocked && !studyJobRunning ? `<div class="gpi-stale"><strong>${tr('Authority changed', '权威状态已变化')}</strong><span>${tr('The EasyICU study binding, revision, or active run changed. Rebind before continuing.', 'EasyICU 研究绑定、版本或活动运行已变化，请先重新绑定。')}</span><button class="btn sm" type="button" data-gpi-rebind>${tr('Rebind current state', '重新绑定当前状态')}</button></div>` : ''}
+          ${stale && !interactionLocked && !studyJobRunning ? `<div class="gpi-stale"><strong>${tr('Authority changed', '权威状态已变化')}</strong><span>${tr('The EasyICU study binding, revision, or active run changed. Rebind before continuing.', 'EasyICU 研究绑定、版本或活动运行已变化，请先重新绑定。')}</span><button class="btn primary sm" type="button" data-gpi-rebind>${tr('Rebind current state', '重新绑定当前状态')}</button></div>` : ''}
           <div class="gpi-log${messages ? '' : ' gpi-log-start'}" data-gpi-log>
             ${RUN_FILES.notice()}
             ${freshTask && !chosenStart && !workspace && !lightweight ? projectContinuityHtml() : ''}
-            ${conversation || (resultsView ? '' : workspace
+            ${conversation || (resultsView || continuation || dataConsentRequired ? '' : workspace
                 ? `<div class="gpi-empty"><strong>${tr('Build something in this project', '在当前项目中创建产物')}</strong><span>${tr('EasyICU Copilot can read, write, edit, check, and preview files in this project’s isolated workspace, while retaining EasyICU research tools.', 'EasyICU 研究助手可以在当前项目的隔离工作区中读取、写入、编辑、检查并预览文件，同时保留 EasyICU 研究工具。')}</span></div>`
                 : emptyResearchHtml)}
             ${outcome}
-            ${showProjectContinuationCards ? dataConsentHtml : ''}
-            ${showProjectContinuationCards && !dataConsentRequired ? continuationCardsHtml() : ''}
+            ${dataConsentHtml}
+            ${continuation}
           </div>
           ${state.error ? `<div class="gpi-error" role="alert"><span>${esc(state.error)}</span><button type="button" class="gpi-error-close" data-gpi-dismiss-error aria-label="${tr('Dismiss', '关闭提示')}">×</button></div>${MODULES.optional('skillAttach')?.defaultRecoveryControl?.(projectId()) || ''}` : ''}
           ${emptyResearch ? '' : `${activeChild ? serverNoteHtml : ''}<div class="gpi-compose">${actionAskHtml}${composerCardHtml}</div>`}

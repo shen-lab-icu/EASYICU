@@ -398,7 +398,8 @@ def test_a_question_that_names_an_official_demo_is_offered_that_demo() -> None:
     events = _read("js/screens-guided-pi-events.js")
     assert "return Object.freeze({ confirmDemoDirectory, handleAction, namedDatabase, namedDemo, noteToolResult, renderNotice, stopAll, sync, useNamedDemo, watchDemoSourceJob });" in host_jobs
     assert "const caller = api().startOfficialDemoSourcePrepare;" in host_jobs
-    assert "namedDemo: HOST_JOBS && typeof HOST_JOBS.namedDemo === 'function' ? HOST_JOBS.namedDemo() : null" in view
+    assert "const namedDemo = HOST_JOBS?.namedDemo?.();" in view
+    assert "discussionDraft: sourceDecision ? null : discussionDraft, namedDemo, namedDatabase" in view
     assert "if (namedDemo && HOST_JOBS && typeof HOST_JOBS.useNamedDemo === 'function') { void HOST_JOBS.useNamedDemo(namedDemo.dataset.gpiNamedDemo); return; }" in events
     assert events.index("[data-gpi-named-demo]") < events.index("const dataSourceAction = DATA_CONSENT && DATA_CONSENT.actionFromEvent(event);")
     script = f"""

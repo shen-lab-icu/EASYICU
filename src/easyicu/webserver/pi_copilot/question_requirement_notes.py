@@ -16,9 +16,11 @@ but cannot be read is reported as unavailable, never dropped.
 
 from __future__ import annotations
 
+import re
 from typing import Any, Dict, Iterable, List, Mapping, Optional, Tuple
 
 from easyicu.research_agent.planning.question_requirements import (
+    MAX_REQUIREMENT_CONCEPTS,
     QUESTION_REQUIREMENTS_FILENAME,
     QUESTION_REQUIREMENTS_REVIEW_FILENAME,
 )
@@ -63,7 +65,10 @@ def _item(row: Mapping[str, Any]) -> Dict[str, Any]:
     if isinstance(choice, Mapping):
         item["exposure_choice"] = {
             "primary_exposure": _text(choice.get("primary_exposure"), 128),
-            "additional_exposures": [_text(value, 128) for value in list(choice.get("additional_exposures") or ())[:3]],
+            "additional_exposures": [
+                _text(value, 128)
+                for value in list(choice.get("additional_exposures") or ())[:MAX_REQUIREMENT_CONCEPTS - 1]
+            ],
         }
     return item
 
@@ -154,4 +159,56 @@ def project_question_requirement_notes(
     }
 
 
-__all__ = ["UNREADABLE_REASON", "project_question_requirement_notes"]
+def exposure_arrangement_offer(workflow_code: str, review: Mapping[str, Any]) -> dict[str, Any] | None:
+    """The current plan's unfulfilled exposure decision, with an explicit default."""
+    if workflow_code != "question_requirement_not_covered":
+        return None
+    notes = review.get("question_requirements") or {}
+    if not review.get("run_id") or notes.get("judged_on_plan_under_review") is not True:
+        return None
+    offers = {}
+    for item in notes.get("items") or ():
+        choice = item.get("exposure_choice")
+        if item.get("disposition") == "not_covered" and item.get("source") == "host_verified" and choice:
+            coordinate = (choice["primary_exposure"], *choice["additional_exposures"])
+            offers.setdefault(coordinate, []).append(str(item.get("quote") or ""))
+    # Multiple distinct arrangements need individual scientific review.
+    if len(offers) != 1:
+        return None
+    ((primary, *others), quotes), = offers.items()
+    if not others or len(set([primary, *others])) != len(others) + 1 or any(
+        not re.fullmatch(r"[A-Za-z][A-Za-z0-9_]{0,127}", concept) for concept in [primary, *others]
+    ):
+        return None
+    additional = ", ".join(others)
+    arrangements = {
+        "primary_and_secondary": (
+            f"Keep {primary} as the primary exposure and analyse {additional} separately as secondary exposures.",
+            f"保留 {primary} 为主要暴露，分别对 {additional} 进行次要暴露分析。",
+        ),
+        "analyse_both": (
+            f"Analyse {primary} and {additional} as parallel exposure analyses and report separate results.",
+            f"对 {primary} 和 {additional} 分别进行平行的暴露分析并报告各自结果。",
+        ),
+        "only_primary": (
+            f"Change my exposure scope to analyse {primary} only. Drop the exposure analyses of {additional}.",
+            f"将我的暴露分析范围缩小到 {primary}，将 {additional} 移出本研究的暴露范围。",
+        ),
+    }
+    return {
+        "primary": primary,
+        "additional": others,
+        "default_option": "analyse_both" if re.search(
+            r"co[- ]?primary|equally primary|共同主要|同等主要", " ".join(quotes), re.I
+        ) else "primary_and_secondary",
+        "options": {
+            key: {
+                "en": f"I approve this exposure arrangement. Please revise the research plan for review. {en}",
+                "zh": f"我确认这项暴露安排。{zh} 请修订研究计划供我审阅。",
+            }
+            for key, (en, zh) in arrangements.items()
+        },
+    }
+
+
+__all__ = ["UNREADABLE_REASON", "exposure_arrangement_offer", "project_question_requirement_notes"]

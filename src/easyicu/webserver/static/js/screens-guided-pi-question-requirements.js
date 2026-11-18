@@ -67,6 +67,35 @@
       );
   }
 
+  function exposureArrangement(workflow, tr) {
+    if (workflow?.next_action_code !== 'question_requirement_not_covered') return null;
+    const offer = workflow.plan_review_summary?.exposure_arrangement;
+    if (!offer?.primary || !Array.isArray(offer.additional) || !offer.additional.length) return null;
+    const labels = {
+      primary_and_secondary: tr('Use primary and secondary exposures', '区分主要和次要暴露'),
+      analyse_both: tr('Analyse all exposures', '分析所有暴露'),
+      only_primary: tr('Analyse only the primary exposure', '仅分析主要暴露'),
+    };
+    const options = Object.fromEntries(Object.keys(labels).map(id => [
+      id, tr(offer.options?.[id]?.en, offer.options?.[id]?.zh),
+    ]).filter(([, message]) => message));
+    const defaultOption = offer.default_option;
+    if (!Object.hasOwn(options, defaultOption)) return null;
+    const conceptName = concept => {
+      const row = window.EU_CATALOG?.dict?.[concept];
+      return row ? tr(row[0], row[1]) || concept : concept;
+    };
+    const primary = clip(conceptName(offer.primary), 128);
+    const additional = offer.additional.map(concept => clip(conceptName(concept), 128)).join(tr(', ', '、'));
+    return {
+      defaultOption, options,
+      note: defaultOption === 'analyse_both'
+        ? tr(`EasyICU proposes separate analyses for ${primary} and ${additional}.`, `EasyICU 建议分别分析 ${primary} 和 ${additional}。`)
+        : tr(`EasyICU proposes ${primary} as the primary exposure and ${additional} as secondary exposures.`, `EasyICU 建议将 ${primary} 作为主要暴露，将 ${additional} 作为次要暴露。`),
+      alternatives: Object.keys(options).filter(id => id !== defaultOption).map(id => ({ id, label: labels[id] })),
+    };
+  }
+
   function notesHtml(summary, { tr, esc, recordLink = () => '' }) {
     const notes = summary && summary.question_requirements;
     const lines = [];
@@ -112,7 +141,8 @@
     } else if (notes && notes.status === 'shown') {
       (Array.isArray(notes.items) ? notes.items : [])
         .filter(item => item && typeof item === 'object')
-        .forEach(item => lines.push(itemLine(item, tr)));
+        .forEach(item => lines.push(itemLine(summary.exposure_arrangement && item.exposure_choice
+          ? { ...item, exposure_choice: null } : item, tr)));
       (Array.isArray(notes.unstated) ? notes.unstated : [])
         .filter(row => row && typeof row === 'object')
         .forEach(row => lines.push(unstatedLine(row, tr)));
@@ -140,5 +170,5 @@
     return `<div class="gpi-question-requirements"><strong>${esc(heading)}</strong><ul>${lines.map(line => `<li>${esc(line)}</li>`).join('')}</ul>${link}</div>`;
   }
 
-  window.EasyICU.guidedPi.declare('questionRequirements', { notesHtml });
+  window.EasyICU.guidedPi.declare('questionRequirements', { exposureArrangement, notesHtml });
 })();

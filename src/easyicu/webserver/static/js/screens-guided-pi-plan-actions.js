@@ -843,6 +843,15 @@
 
     async function confirmWorkflow(confirmation) {
       if (!confirmation) return;
+      if (confirmation.compileTrialProposal) {
+        await compileTargetTrialProposal();
+        return;
+      }
+      if (confirmation.exposureArrangement) {
+        const proposal = confirmation.exposureArrangement;
+        await host.sendText(proposal.options[proposal.defaultOption], confirmation.grants, 'confirm_exposure_arrangement', true, 'host_prompt');
+        return;
+      }
       if (confirmation.code === 'approve_quick_answer' || confirmation.code === 'expand_into_full_study') {
         await quickAnswerAction(confirmation);
         return;
@@ -905,6 +914,33 @@
         return;
       }
       await host.sendText(confirmation.message, confirmation.grants, undefined, true, 'host_prompt');
+    }
+
+    async function compileTargetTrialProposal() {
+      if (unavailable()) return;
+      const owner = window.EasyICU.guidedPi.optional('targetTrial');
+      const session = host.session() || {};
+      const project = host.projectId();
+      const selection = host.selectionRevision ? host.selectionRevision() : null;
+      const isCurrent = () => host.projectId() === project && host.session()?.session_id === session.session_id
+        && (!host.selectionRevision || host.selectionRevision() === selection);
+      const body = owner?.proposalRequest(host.workflow(), session, project);
+      const api = host.api();
+      if (!body || typeof api.compilePiCopilotTargetTrialProposal !== 'function') return;
+      setPending(true);
+      try {
+        const result = await api.compilePiCopilotTargetTrialProposal(session.session_id, body);
+        if (!isCurrent()) return;
+        host.setBusy(false);
+        host.watchChildJob(result.job_id, 'easyicu_target_trial_compile_submitted');
+      } catch (error) {
+        if (!isCurrent()) return;
+        await Promise.resolve(host.loadWorkflow()).catch(() => null);
+        if (!isCurrent()) return;
+        host.setBusy(false);
+        host.setError(owner.refusalText(error, tr) || host.errorText(error));
+        host.render();
+      }
     }
 
     // The researcher's click on an approvable target trial card, every line
