@@ -1245,9 +1245,11 @@ class ProgressivePlannerCheckpoint(BaseModel):
 
     schema_version: Literal[
         "easyicu.progressive_planner_checkpoint/1", "easyicu.progressive_planner_checkpoint/2",
+        "easyicu.progressive_planner_checkpoint/3",
     ] = (
         "easyicu.progressive_planner_checkpoint/1"
     )
+    outline_repair_sequence: Optional[int] = Field(default=None, gt=0, exclude_if=lambda v: v is None)
     revision_offset: Optional[int] = Field(default=None, gt=0, exclude_if=lambda v: v is None)
     repair_start_index: Optional[int] = Field(default=None, ge=0, exclude_if=lambda v: v is None)
     sequence: int = Field(ge=0)
@@ -1265,28 +1267,29 @@ class ProgressivePlannerCheckpoint(BaseModel):
 
     @model_validator(mode="after")
     def _closed_checkpoint_chain(self) -> "ProgressivePlannerCheckpoint":
-        if self.schema_version.endswith("/1"):
-            if self.revision_offset is not None or self.repair_start_index is not None:
-                raise ValueError("legacy checkpoint cannot declare a suffix revision")
-        elif (
-            self.stage != "step" or self.revision_offset is None
-            or self.repair_start_index is None
+        repaired_outline = self.schema_version.endswith("/3")
+        if repaired_outline != (self.outline_repair_sequence is not None):
+            raise ValueError("only outline repair checkpoints carry an outline restart coordinate")
+        revision = self.revision_offset is not None and self.repair_start_index is not None
+        if (self.revision_offset is not None or self.repair_start_index is not None) and (
+            not revision or self.stage != "step" or self.schema_version.endswith("/1")
         ):
+            raise ValueError("suffix revisions require a typed step coordinate")
+        if self.schema_version.endswith("/2") and not revision:
             raise ValueError("revised checkpoint requires a typed suffix coordinate")
+        origin = self.outline_repair_sequence or 0
         if self.stage == "outline":
-            if self.sequence != 0 or self.foundation is not None or self.materializations:
-                raise ValueError("outline checkpoint must be sequence 0 without suffix")
-            if self.previous_checkpoint_sha256 is not None:
-                raise ValueError("outline checkpoint cannot name a predecessor")
+            if self.sequence != origin or self.foundation is not None or self.materializations:
+                raise ValueError("outline checkpoint must begin its generation without suffix")
+            if not origin and self.previous_checkpoint_sha256 is not None:
+                raise ValueError("initial outline checkpoint cannot name a predecessor")
         elif self.stage == "foundation":
-            if self.sequence != 1 or self.foundation is None or self.materializations:
-                raise ValueError(
-                    "foundation checkpoint must be sequence 1 without steps"
-                )
+            if self.sequence != origin + 1 or self.foundation is None or self.materializations:
+                raise ValueError("foundation checkpoint must follow its outline without steps")
         else:
             if self.foundation is None or not self.materializations:
                 raise ValueError("step checkpoint requires foundation and prefix")
-            if self.sequence != len(self.materializations) + 1 + (self.revision_offset or 0):
+            if self.sequence != origin + len(self.materializations) + 1 + (self.revision_offset or 0):
                 raise ValueError("step checkpoint sequence must follow prefix length")
             if self.repair_start_index is not None:
                 repairs = self.prompt_metrics.get("final_acceptance_repairs") or []

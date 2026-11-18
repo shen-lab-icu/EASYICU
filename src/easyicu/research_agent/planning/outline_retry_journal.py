@@ -312,6 +312,12 @@ class OutlineRetryJournal:
         from easyicu.research_agent.providers.capabilities import llm_supports_strict_json_schema
         return llm_supports_strict_json_schema(self._inner)
 
+    @property
+    def structured_retry_limit(self) -> int:
+        """Maximum rejections that can precede another response on this journal."""
+        self._verify_state()
+        return max(0, self._parse_attempt_limit - self._data["abandoned"] - 1)
+
     def complete(self, messages: Sequence[Any], **kwargs: Any) -> str:
         clear_provider_call_receipt()
         self._verify_state()

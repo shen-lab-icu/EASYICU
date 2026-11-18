@@ -139,7 +139,7 @@ def test_the_synthetic_typed_association_compiles_without_a_gap():
     assert ProgressivePlannerAgent(llm).run(_typed_association()).steps
 
 
-def test_an_unnamed_design_gap_gets_one_host_facts_confirmation_then_compiles():
+def test_an_unnamed_design_gap_gets_host_facts_then_compiles():
     """HEAD refuses on call one even though all the stated elements are typed."""
     responses = [_gap_outline("design_element_unsupported"), *_typed_association_responses()]
     llm = ScriptedMockLLMClient([json.dumps(item) for item in responses])
@@ -165,7 +165,7 @@ def test_an_unnamed_design_gap_gets_one_host_facts_confirmation_then_compiles():
 def test_an_unexpressible_design_kept_after_confirmation_still_stops(needed):
     outline = _gap_outline("design_element_unsupported")
     outline["rationale"] = f"The question requires {needed}, which none of the offered families expresses."
-    llm = ScriptedMockLLMClient([json.dumps(outline)] * 2)
+    llm = ScriptedMockLLMClient([json.dumps(outline)] * 4)
     llm.supports_strict_json_schema = True
     context = _typed_association().model_copy(update={
         "research_question": f"Estimate an effect using {needed} for the synthetic exposure and outcome.",
@@ -173,7 +173,7 @@ def test_an_unexpressible_design_kept_after_confirmation_still_stops(needed):
     with pytest.raises(ProgressivePlanCompileError) as caught:
         ProgressivePlannerAgent(llm).run(context)
 
-    assert len(llm.calls) == 2
+    assert len(llm.calls) == 4
     assert caught.value.reason_code == "progressive_capability_gap"
     assert caught.value.path == "capability_gap"
     assert caught.value.easyicu_safe_diagnostic["cause_code"] == "design_element_unsupported"
@@ -183,7 +183,7 @@ def test_an_unexpressible_design_kept_after_confirmation_still_stops(needed):
 @pytest.mark.parametrize("earlier_rejections", [0, 1, 2, 3])
 def test_confirmation_uses_only_the_remaining_outline_retry_budget(earlier_rejections):
     claim = json.dumps(_gap_outline("design_element_unsupported"))
-    llm = ScriptedMockLLMClient(["{}"] * earlier_rejections + [claim, claim])
+    llm = ScriptedMockLLMClient(["{}"] * earlier_rejections + [claim] * (4 - earlier_rejections))
     llm.supports_strict_json_schema = True
     progress = []
     checkpoints = []
@@ -193,24 +193,25 @@ def test_confirmation_uses_only_the_remaining_outline_retry_budget(earlier_rejec
         )
 
     assert caught.value.reason_code == "progressive_capability_gap"
-    assert len(llm.calls) == min(earlier_rejections + 2, 4)
+    assert len(llm.calls) == 4
     confirmations = [event for event in progress if event.reason_code == "progressive_capability_gap_confirmation_required"]
-    assert len(confirmations) == (1 if earlier_rejections < 3 else 0)
+    assert len(confirmations) == 3 - earlier_rejections
     assert checkpoints[0].prompt_metrics.get("capability_gap_confirmation_count", 0) == len(confirmations)
 
 
-def test_a_named_unverifiable_gap_is_not_an_unnamed_design_confirmation():
+def test_a_named_unverifiable_gap_gets_its_own_located_feedback():
     context = _typed_association()
     context = context.model_copy(update={"user_preferences": context.user_preferences.model_copy(update={
         "data_constraints": json.dumps({"stated_subgroups": [{
             "variable": "sex", "words": "within each sex", "concept": "sex_code", "source_status": "unbound",
         }]}),
     })})
-    llm = ScriptedMockLLMClient([json.dumps(_gap_outline("design_element_unsupported", "sex_code"))])
+    llm = ScriptedMockLLMClient([json.dumps(_gap_outline("design_element_unsupported", "sex_code"))] * 4)
     llm.supports_strict_json_schema = True
     with pytest.raises(ProgressivePlanCompileError) as caught:
         ProgressivePlannerAgent(llm).run(context)
-    assert len(llm.calls) == 1
+    assert len(llm.calls) == 4
+    assert "sex_code" in llm.calls[1][0][-1].content
     assert caught.value.details["findings"][0]["verification"] == "unverifiable"
 
 
@@ -249,7 +250,7 @@ def test_long_stated_requirements_are_not_clipped_out_of_confirmation():
         "data_constraints": json.dumps({"stated_subgroups": requirements}),
     })})
     claim = json.dumps(_gap_outline("design_element_unsupported"))
-    llm = ScriptedMockLLMClient([claim, claim])
+    llm = ScriptedMockLLMClient([claim] * 4)
     llm.supports_strict_json_schema = True
     with pytest.raises(ProgressivePlanCompileError):
         ProgressivePlannerAgent(llm).run(context)
@@ -393,7 +394,7 @@ def test_a_checked_gap_stops_planning_with_its_cause_and_outline_checkpoint() ->
 
 def test_a_gap_the_host_cannot_check_stops_as_unverifiable() -> None:
     with pytest.raises(ProgressivePlanCompileError) as caught:
-        _run([_gap_outline("estimand_unsupported")])
+        _run([_gap_outline("estimand_unsupported")] * 4)
 
     assert caught.value.details["findings"][0]["verification"] == "unverifiable"
 
@@ -461,3 +462,29 @@ def test_the_outline_shape_lists_the_gap_and_when_to_use_it() -> None:
         "do not change the analysis type, population or exposure to work around it"
         in prompt
     )
+
+
+def test_an_unverified_estimand_gets_typed_feedback_until_the_original_question_is_plannable():
+    context = _context().model_copy(update={
+        "research_question": "Does the admission flag relate to the recorded outcome during the same stay?",
+    })
+    gap = _gap_outline("estimand_unsupported")
+    llm = ScriptedMockLLMClient([json.dumps(item) for item in (gap, gap, _outline_payload())])
+    llm.supports_strict_json_schema = True
+    checkpoints = []
+
+    ProgressivePlannerAgent(llm).run(context, stop_after_outline=True, checkpoint_callback=checkpoints.append)
+
+    receipts = checkpoints[-1].prompt_metrics["capability_gap_repair"]["attempts"]
+    assert [item["status"] for item in receipts] == ["unresolved", "resolved"]
+    for messages, *_ in llm.calls[1:]:
+        prompt = messages[-1].content
+        assert all(word in prompt for word in ("estimand_unsupported", "offered_families", "typed evidence"))
+
+
+def test_a_verified_gap_names_the_user_action_without_spending_a_repair():
+    with pytest.raises(ProgressivePlanCompileError) as caught:
+        _run([_gap_outline("levels_from_thresholds_unavailable", "age_years")])
+    diagnostic = caught.value.easyicu_planning_capability_gap
+    assert diagnostic.next_action.kind == "request_user"
+    assert "age_years" in diagnostic.next_action.message

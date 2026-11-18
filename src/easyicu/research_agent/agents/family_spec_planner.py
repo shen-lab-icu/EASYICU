@@ -79,7 +79,10 @@ from ..planning.family_spec.contract import (
     population_required,
     validate_family_plan_spec,
 )
-from ..planning.capability_gap import check_capability_gap
+from ..bounded_repair import RepairFeedback
+from ..planning.capability_gap import (
+    CapabilityGapRepair, capability_gap_feedback, check_capability_gap,
+)
 from ..planning.family_spec.landmark_categorical_template import reconcile_population_grouping
 from ..planning.question_requirements import (
     QUESTION_REQUIREMENTS_GUIDE,
@@ -134,6 +137,7 @@ from .progressive_attempt import ProgressivePlannerAttemptState
 from .progressive_foundation_repair import (
     defer_foundation_label_repair,
     run_with_foundation_label_repair,
+    OutlineReplan,
 )
 
 FAMILY_SPEC_STRATEGY = "family_spec_v1"
@@ -1038,42 +1042,31 @@ def _question_requirement_schema_feedback(
     return records
 
 
-def check_question_requirement_gaps(
-    spec: FamilyPlanSpec,
-    *,
-    context: ResearchContext,
-    planning_contract_context: str = "",
-) -> None:
-    """Check scientific gap claims; the delivery contract owns output claims.
-
-    One the study's typed context contradicts goes back to the Planner with
-    what the context shows (``planning.capability_gap``), under the outline
-    route's code; a verified or unverifiable gap stands and is judged once the
-    plan exists. Host-covered output claims are retained for the requirement
-    owner's recorded override, independently of scientific capability checks.
-    """
-
+def question_requirement_gap_feedback(
+    spec: FamilyPlanSpec, *, request: FamilySpecRequest, context: ResearchContext,
+    planning_contract_context: str, offered_families: Sequence[str],
+) -> tuple[RepairFeedback, ...]:
+    """Reconsider scientific gaps that lack host verification."""
+    feedback = []
     for index, item in enumerate(spec.question_requirements):
-        if item.gap is None:
+        if item.gap is None or requirement_delivery_coverage(item) is not None:
             continue
-        if requirement_delivery_coverage(item) is not None:
-            # The requirement owner records the host override after compiling;
-            # the statistical capability checker does not own delivered files.
+        if item.effect_measure and item.effect_measure not in family_effect_measures(request):
+            # Spec validation already verified this family's estimand ceiling.
             continue
         check = check_capability_gap(
-            item.gap,
-            context=context,
-            planning_contract_context=planning_contract_context,
+            item.gap, context=context, planning_contract_context=planning_contract_context,
         )
-        if check.verification == "unverified":
-            raise ProgressivePlanCompileError(
-                "progressive_capability_gap_claim_unverified",
-                f"question requirement {item.id} declares a capability gap the study "
-                f"contradicts: {check.fact}; state what the plan answers, or a gap the "
-                "study shows",
+        if check.verification != "verified":
+            feedback.append(capability_gap_feedback(
+                item.gap, check, offered_families=offered_families,
                 path=f"question_requirements[{index}].gap",
-                cause_code=item.gap.requirement,
-            )
+            ))
+    return tuple(feedback)
+
+
+def _requirement_coordinates(spec: FamilyPlanSpec) -> set[tuple[str, str]]:
+    return {(item.quote.casefold(), item.kind) for item in spec.question_requirements}
 
 
 def family_spec_response_shape(request: FamilySpecRequest) -> str:
@@ -1290,6 +1283,7 @@ def run_family_spec_attempt(
         [FamilySkeletonDraft], tuple[AnalysisPlan, ProgressivePlanCompileReceipt, ProgressivePlanSkeleton]
     ],
     capture_efficiency_metrics: Callable[[], None],
+    outline_replan: OutlineReplan,
 ) -> AnalysisPlan:
     """One spec call, then a host-projected skeleton through the same gates.
 
@@ -1364,7 +1358,7 @@ def run_family_spec_attempt(
     )
     schema_bytes = schema.payload_bytes if schema is not None else 0
     prompt_request = project_planner_request(
-        messages, prompt_blocks, byte_limit=prompt_byte_limit, schema_bytes=schema_bytes,
+        outline_replan.prompt(messages, prompt_blocks), prompt_blocks, byte_limit=prompt_byte_limit, schema_bytes=schema_bytes,
     )
     messages = prompt_request.messages
     message_bytes = prompt_request.metrics["message_bytes"]
@@ -1424,6 +1418,8 @@ def run_family_spec_attempt(
         "plan_revision_projection": revision_projection,
         "foundation_plan_revision_projection": [],
     }
+
+    outline_replan.project_metrics(attempt.prompt_metrics)
 
     def project_spec(spec: FamilyPlanSpec) -> FamilySkeletonDraft:
         builder = {
@@ -1514,6 +1510,8 @@ def run_family_spec_attempt(
             or exc.reason_code in {
                 "progressive_population_quote_not_verbatim",
                 "progressive_capability_gap_claim_unverified",
+                "progressive_capability_gap_confirmation_required",
+                "progressive_question_requirement_repair_regression",
                 "progressive_distribution_spec_invalid",
                 "progressive_distribution_missingness_authority_invalid",
                 "progressive_question_named_exposure_demoted",
@@ -1522,15 +1520,18 @@ def run_family_spec_attempt(
         )
 
     parse_attempts = 0
+    offered_families = tuple(dict.fromkeys((request.family_id, *analysis_types)))
+    gap_repair = CapabilityGapRepair(offered_families, progress_callback, limit=max_parse_retries)
+    parse_limit = gap_repair.transport_retries(llm)
+    attempt.prompt_metrics["capability_gap_repair"] = gap_repair.loop.receipt
+    protected_requirements: set[tuple[str, str]] = set()
+    protected_plan_claims: set[tuple[str, str]] = set()
 
     def parse_spec(raw: str) -> tuple[FamilyPlanSpec, FamilySkeletonDraft]:
         nonlocal parse_attempts
         parse_attempts += 1
         try:
             spec = parse_family_plan_spec(raw, request)
-            check_question_requirement_gaps(
-                spec, context=context, planning_contract_context=planning_contract_context
-            )
             choices = {
                 item.id: list(exposures)
                 for item in spec.question_requirements
@@ -1540,7 +1541,7 @@ def run_family_spec_attempt(
                 ))
             }
             if choices:
-                if parse_attempts <= max_parse_retries:
+                if parse_attempts <= parse_limit:
                     raise ProgressivePlanCompileError(
                         "progressive_question_named_exposure_demoted",
                         f"The question asks to analyse these exposures together: {choices}. "
@@ -1565,6 +1566,27 @@ def run_family_spec_attempt(
                 # Progressive step/suffix repair lane, which recompiles below.
                 if retryable_parse_error(exc):
                     raise
+            feedback = question_requirement_gap_feedback(
+                spec, request=request, context=context,
+                planning_contract_context=planning_contract_context, offered_families=offered_families,
+            )
+            coordinates = _requirement_coordinates(spec)
+            plan_claims = {(item.quote.casefold(), item.kind) for item in spec.question_requirements
+                           if item.coverage == "plan"}
+            missing = (protected_requirements - coordinates) | (protected_plan_claims - plan_claims)
+            regressions = tuple(
+                RepairFeedback("progressive_question_requirement_repair_regression", "question_requirements",
+                               {"quote": quote, "kind": kind})
+                for quote, kind in sorted(missing)
+            )
+            if feedback and not regressions:
+                contradicted_paths = {item.path for item in feedback if item.facts["verification"] == "unverified"}
+                protected_requirements.update(
+                    (item.quote.casefold(), item.kind) for index, item in enumerate(spec.question_requirements)
+                    if f"question_requirements[{index}].gap" not in contradicted_paths
+                )
+                protected_plan_claims.update(plan_claims)
+            gap_repair.check(feedback, regressions=regressions)
             return spec, draft
         except ValueError as exc:
             if not retryable_parse_error(exc):
@@ -1590,14 +1612,14 @@ def run_family_spec_attempt(
         parser=parse_spec,
         retryable_parse_error=retryable_parse_error,
         role=FAMILY_SPEC_ROLE,
-        max_retries=max_parse_retries,
+        max_retries=parse_limit,
         max_tokens=FAMILY_SPEC_MAX_OUTPUT_TOKENS,
         temperature=0.2,
         # The spec is small: showing the rejected answer beside the
         # validator's reason lets the retry correct that answer instead of
         # regenerating it and failing on a different field.
         include_failed_response_on_retry=True,
-        progress_callback=progress_callback,
+        progress_callback=gap_repair.on_progress,
         structured_output=schema,
         format_reminder=response_shape,
     )
@@ -1878,7 +1900,7 @@ __all__ = [
     "FAMILY_SPEC_MAX_OUTPUT_TOKENS",
     "FAMILY_SPEC_ROLE",
     "FAMILY_SPEC_STRATEGY",
-    "check_question_requirement_gaps",
+    "question_requirement_gap_feedback",
     "family_result_stop",
     "family_spec_fallback_reason",
     "family_spec_messages",
