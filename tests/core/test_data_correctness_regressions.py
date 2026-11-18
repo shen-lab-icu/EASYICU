@@ -4,6 +4,7 @@ from easyicu.datasource import ICUDataSource
 
 import json
 import os
+from collections import UserDict
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -14,6 +15,7 @@ from easyicu import api
 from easyicu.api import concepts as concept_api
 from easyicu.api.cache import data_path_fingerprint
 from easyicu.api import extraction as extraction_api
+from easyicu.concept.availability_signal import TypedAbsenceSink
 from easyicu.config import load_src_cfg
 from easyicu.content_identity import file_content_receipt
 from easyicu.datasource import (
@@ -56,6 +58,80 @@ def test_explicit_empty_cohort_returns_all_requested_special_outputs(monkeypatch
 
     via_alias = api.load_concepts(["hr"], stay_id=[], merge=False, verbose=False)
     assert via_alias["hr"].empty
+
+
+@pytest.mark.parametrize("filters", [
+    {"patientunitstayid": [], "hospitalid": [31]},
+    UserDict({"patientunitstayid": [18], "PatientUnitStayID": [27]}),
+])
+def test_public_load_rejects_ambiguous_id_mappings(tmp_path, filters):
+    with pytest.raises(ValueError, match="Expected one patientunitstayid identifier list"):
+        api.load_concepts("fio2_set", database="eicu", data_path=tmp_path, patient_ids=filters)
+
+
+def test_public_load_preserves_a_user_mapping_with_a_non_miiv_id(tmp_path):
+    pd.DataFrame({
+        "patientunitstayid": [38, 62],
+        "patienthealthsystemstayid": [413, 716],
+    }).to_parquet(tmp_path / "patient.parquet", index=False)
+    pd.DataFrame({
+        "patientunitstayid": [38, 62],
+        "respchartoffset": [23, 23],
+        "respchartvaluelabel": "FiO2",
+        "respcharttypecat": "respFlowSettings",
+        "respchartvalue": ["43", "66"],
+    }).to_parquet(tmp_path / "respiratorycharting.parquet", index=False)
+
+    empty = api.load_concepts("hr", patient_ids=UserDict())
+    result = api.load_concepts(
+        "fio2_set", database="eicu", data_path=tmp_path,
+        patient_ids=UserDict({"patientunitstayid": [62]}), r_compatible=False,
+    )
+
+    assert empty.empty
+    assert result[["patientunitstayid", "fio2_set"]].values.tolist() == [[62, 66.0]]
+
+
+@pytest.mark.parametrize("unknown_exit", [1, -1, 0], ids=["crash", "timeout", "missing-receipt"])
+@pytest.mark.parametrize("unknown_stay", [48, 73], ids=["before-receipt", "after-receipt"])
+def test_subprocess_absence_agreement_uses_only_received_batches(monkeypatch, unknown_exit, unknown_stay):
+    import multiprocessing as mp
+
+    from easyicu.runtime import memory_manager
+
+    sink = TypedAbsenceSink()
+    monkeypatch.setattr(mp, "current_process", lambda: SimpleNamespace(daemon=True))
+
+    def fake_fork(worker, args):
+        stay = args["patient_ids"]["stay_id"][0]
+        if stay != unknown_stay:
+            receipt = Path(f"{args['output_prefix']}.absences.json")
+            receipt.write_text(json.dumps({"fio2_set": "carevue_view_required"}), encoding="utf-8")
+            return 0
+        return unknown_exit
+
+    monkeypatch.setattr(memory_manager, "_fork_and_run", fake_fork)
+    monkeypatch.setattr(memory_manager, "_popen_and_run", lambda args, *_: fake_fork(None, args))
+    result = memory_manager.subprocess_batch_load(
+        ["fio2_set"], "mimic", {"stay_id": [48, 73]}, batch_size=1, _typed_absence_sink=sink,
+    )
+
+    assert result.empty
+    assert sink.codes() == {"fio2_set": "carevue_view_required"}
+
+
+@pytest.mark.parametrize("reasons", [{}, {"fio2_set": "required_source_table_missing"}])
+@pytest.mark.parametrize("reverse", [False, True])
+def test_disagreeing_absence_receipts_clear_only_the_disputed_concept(reasons, reverse):
+    sink = TypedAbsenceSink()
+    agreed = {"fio2_set": "carevue_view_required", "renal_excl": "carevue_view_required"}
+    disputed = {**reasons, "renal_excl": "carevue_view_required"}
+    receipts = [disputed, agreed] if reverse else [agreed, disputed]
+
+    for receipt in [*receipts, agreed]:
+        sink.observe(agreed, receipt)
+
+    assert sink.codes() == {"renal_excl": "carevue_view_required"}
 
 
 def test_special_loaders_receive_resolved_source_and_patient_filter(

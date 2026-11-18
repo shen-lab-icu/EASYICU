@@ -1087,15 +1087,18 @@ def subprocess_batch_load(
                 else:
                     exitcode = proc.exitcode
             
-            if absence_sink is not None:
-                receipt = Path(f"{output_prefix}.absences.json")
-                codes = json.loads(receipt.read_text(encoding="utf-8")) if exitcode == 0 and receipt.is_file() else {}
-                absence_sink.observe(concepts, codes)
             if exitcode != 0:
                 logger.warning(f"Batch {batch_num} subprocess exit code: {exitcode}")
                 if verbose:
                     logger.debug(" ❌ (exit=%s)", exitcode)
                 continue
+
+            if absence_sink is not None:
+                receipt = Path(f"{output_prefix}.absences.json")
+                # A missing receipt leaves the batch's evidence unknown.
+                if receipt.is_file():
+                    codes = json.loads(receipt.read_text(encoding="utf-8"))
+                    absence_sink.observe(concepts, codes)
 
             output_files = [f for f in Path(temp_dir).glob(f"batch_{batch_num:04d}*.parquet")]
             if output_files:

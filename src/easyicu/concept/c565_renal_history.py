@@ -124,6 +124,8 @@ def _carevue_flags(data_source, stay_column, selected):
     has_any_mv_stay = stays["hadm_id"].isin(_ids(stays.loc[mv_present], "hadm_id"))
     candidates = carevue if known.any() else unknown
     eligible = stays.loc[candidates & ~has_any_mv_stay]
+    if mv_present.any() and eligible.empty:
+        return None, None
     prior_admissions = _ids(eligible, "hadm_id")
     if selected is not None:
         eligible = eligible.loc[eligible[stay_column].isin(selected)]
@@ -221,20 +223,28 @@ def load_renal_history_field(concept, data_source, patient_ids):
     carevue = database == "mimic"
     if database not in {"miiv", "eicu", "eicu_demo", "mimic"}:
         return renal_history_absence(concept, data_source)
-    if carevue:
-        if not is_carevue_view(data_source.base_path):
-            return renal_history_absence(concept, data_source)
+    if carevue and not is_carevue_view(data_source.base_path):
+        return renal_history_absence(concept, data_source)
+    if database in {"miiv", "mimic"}:
         required = (*MIMIC_HISTORY_TABLES, "icustays")
+    else:
+        required = ("patient", "diagnosis", "pasthistory")
+    # A stay selection with zero matches cannot establish source availability.
+    if carevue:
         missing = tuple(table for table in required if not carevue_view_has_table(data_source, table))
-        if missing:
-            return renal_history_absence(concept, data_source, missing=missing, carevue=True)
+    else:
+        missing = tuple(table for table in required if not data_source.has_table_source(table))
+    if missing:
+        return renal_history_absence(concept, data_source, missing=missing, carevue=carevue)
     stay_column = data_source.config.id_configs["icustay"].id
     selected = selected_stay_ids(patient_ids, stay_column)
-    if selected == []:
+    if selected == [] and not carevue:
         return _empty_renal_history(concept, stay_column)
     try:
         if carevue:
             flags, era_note = _carevue_flags(data_source, stay_column, selected)
+            if flags is None:
+                return renal_history_absence(concept, data_source, carevue=True)
         elif database == "miiv":
             stays = _history(
                 data_source, "icustays", [stay_column, "hadm_id", "subject_id"],

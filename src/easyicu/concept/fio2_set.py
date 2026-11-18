@@ -91,7 +91,15 @@ def load_fio2_set(definition, source, data_source, patient_ids):
                 missing_tables=missing,
             )
 
-    if selected == []:
+    elif selected == []:
+        origin = ORIGINS.get(database)
+        required = (origin[0], source.table) if origin else (source.table,)
+        missing = tuple(table for table in required if not data_source.has_table_source(table))
+        if missing:
+            return _settings_absence(
+                source_database, stay_column, source.table, "required_source_table_missing",
+                missing_tables=missing,
+            )
         return _empty_hourly_result(stay_column)
 
     origins = None
@@ -116,6 +124,9 @@ def load_fio2_set(definition, source, data_source, patient_ids):
             ):
                 return _settings_absence(database, stay_column, source.table, "carevue_view_required")
             origins = origins[columns]
+
+    if selected == []:
+        return _empty_hourly_result(stay_column)
 
     columns = [stay_column, source.index_var, source.value_var, source.sub_var]
     filters = [FilterSpec(source.sub_var, FilterOp.IN, source.ids), *stay_filters]

@@ -33,6 +33,7 @@ import os
 import re
 import threading
 from collections import OrderedDict
+from collections.abc import Mapping
 from contextlib import contextmanager
 import functools
 import numpy as np
@@ -40,6 +41,7 @@ import pandas as pd
 import logging
 
 from ..base import BaseICULoader
+from ..concept.catalog import C565_RENAL_HISTORY_CONCEPTS, VENT_SETTINGS_CONCEPTS
 from ..concept.data_source_contract import ConceptDataSourceStorage
 from ..concept.stay_tables import selected_stay_ids
 from ..storage_layout import StorageIntegrityError
@@ -104,11 +106,13 @@ def _patient_filter_values(patient_ids):
     """Return concrete IDs from either public patient-filter representation."""
     if patient_ids is None:
         return None
-    if isinstance(patient_ids, dict):
+    if isinstance(patient_ids, Mapping):
         if not patient_ids:
             return []
-        column, values = next(iter(patient_ids.items()))
-        return selected_stay_ids({str(column): values}, str(column))
+        column = str(next(iter(patient_ids)))
+        if len(patient_ids) != 1:
+            raise ValueError(f"Expected one {column} identifier list")
+        return selected_stay_ids(patient_ids, column)
     return selected_stay_ids(patient_ids, "stay_id")
 
 
@@ -1307,13 +1311,18 @@ def load_concepts(
                 patient_ids = {id_key: kwargs.pop(id_key)}
                 break
 
-    # An explicitly empty cohort means "no patients", never "all patients".
-    # Return before constructing a loader so every downstream fast path is
-    # fail-closed, including dedicated outcome/comorbidity loaders.
-    if patient_ids is not None and len(_patient_filter_values(patient_ids)) == 0:
-        if merge:
-            return pd.DataFrame()
-        return {name: pd.DataFrame() for name in requested_concepts}
+    if isinstance(patient_ids, Mapping) and not isinstance(patient_ids, dict):
+        patient_ids = dict(patient_ids)
+    empty_scope = patient_ids is not None and not _patient_filter_values(patient_ids)
+    if empty_scope:
+        empty_result = pd.DataFrame() if merge else {name: pd.DataFrame() for name in requested_concepts}
+        # These owners issue source-level refusals independently of cohort size.
+        source_checks = [
+            name for name in requested_concepts
+            if name in (*VENT_SETTINGS_CONCEPTS, *C565_RENAL_HISTORY_CONCEPTS)
+        ]
+        if not source_checks:
+            return empty_result
     if verbose:
         print(f"📊 使用统一API加载 {len(concepts_list)} 个概念...")
         print(f"   概念: {', '.join(concepts_list)}")
@@ -1326,6 +1335,13 @@ def load_concepts(
         use_sofa2=use_sofa2,
         verbose=verbose,
     )
+    if empty_scope:
+        loader.load_concepts(
+            source_checks, patient_ids=[], merge=False, r_compatible=r_compatible,
+            concept_workers=1, availability_sink=kwargs.get("availability_sink"),
+            _typed_absence_sink=kwargs.get("_typed_absence_sink"),
+        )
+        return empty_result
 
     # 🚀 从 kwargs 中提取患者 ID（支持通过 patientunitstayid=, admissionid=, stay_id= 等传入）
     from ..concept.provenance import record_resolver_inputs

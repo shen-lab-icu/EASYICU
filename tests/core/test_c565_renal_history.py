@@ -8,7 +8,9 @@ import pytest
 
 from easyicu.api import EXTRACT_MODULE_ORDER, EXTRACT_MODULES
 from easyicu.api.concepts import clear_global_loader, load_concepts
+from easyicu.base import BaseICULoader
 from easyicu.concept import c565_renal_history
+from easyicu.concept.availability_signal import TypedAbsenceSink, table_availability
 from easyicu.concept.c565_renal_history import FIELDS
 from easyicu.config import load_src_cfg
 from easyicu.datasource import ICUDataSource
@@ -134,6 +136,14 @@ def test_empty_cohort_returns_typed_history_from_bucketed_sources(
     }
     pd.DataFrame({stay_column: [41], **context}).to_parquet(shard / "stays.parquet", index=False)
     write_contract(bucket, key=stay_column)
+    if database == "miiv":
+        _write(tmp_path, "admissions", [(125, 20, pd.Timestamp("2021-06-03"))],
+               ["hadm_id", "subject_id", "admittime"])
+        _write(tmp_path, "diagnoses_icd", [(125, "Z99.2", 10)], ["hadm_id", "icd_code", "icd_version"])
+    else:
+        _write(tmp_path, "diagnosis", [(41, "585.6")], [stay_column, "icd9code"])
+        _write(tmp_path, "pasthistory", [(41, "background / renal failure - hemodialysis")],
+               [stay_column, "pasthistorypath"])
     source = ICUDataSource(load_src_cfg(database), base_path=tmp_path)
 
     with binding_unit():
@@ -144,6 +154,47 @@ def test_empty_cohort_returns_typed_history_from_bucketed_sources(
         stay_column: "int64", "renal_excl": "boolean",
     }
     assert "easyicu_availability" not in result.data.attrs
+
+
+@pytest.mark.parametrize(("database", "missing"), [
+    ("miiv", "diagnoses_icd"),
+    ("eicu", "pasthistory"),
+    ("eicu_demo", "diagnosis"),
+])
+@pytest.mark.parametrize("empty_scope", [False, True], ids=["process-chunks", "explicit-empty"])
+def test_history_source_refusal_survives_a_chunk_without_stays(tmp_path, database, missing, empty_scope):
+    if database == "miiv":
+        stay_column = "stay_id"
+        _write(tmp_path, "icustays", [(41, 16, 125)], [stay_column, "subject_id", "hadm_id"])
+        _write(tmp_path, "admissions", [(125, 16, pd.Timestamp("2021-06-03"))],
+               ["hadm_id", "subject_id", "admittime"])
+    else:
+        stay_column = "patientunitstayid"
+        _write(tmp_path, "patient", [(41, 125)], [stay_column, "patienthealthsystemstayid"])
+        if missing != "diagnosis":
+            _write(tmp_path, "diagnosis", [(41, "585.6")], [stay_column, "icd9code"])
+        if missing != "pasthistory":
+            _write(tmp_path, "pasthistory", [(41, "background / S/P renal transplant")],
+                   [stay_column, "pasthistorypath"])
+
+    sink = TypedAbsenceSink()
+    if empty_scope:
+        availability = {}
+        frame = load_concepts(
+            "renal_excl", patient_ids=[], database=database, data_path=tmp_path,
+            availability_sink=availability, _typed_absence_sink=sink,
+        )
+        assert availability["renal_excl"].missing_tables == (missing,)
+    else:
+        loader = BaseICULoader(database=database, data_path=tmp_path)
+        frame = loader.load_concepts(
+            ["renal_excl"], patient_ids={stay_column: [41, 97]}, chunk_size=1,
+            parallel_workers=2, parallel_backend="process", concept_workers=1,
+            r_compatible=False, _typed_absence_sink=sink,
+        )
+
+    assert frame.empty
+    assert sink.codes() == {"renal_excl": "required_source_table_missing"}
 
 
 @pytest.mark.parametrize("database", ["eicu", "eicu_demo"])
@@ -279,6 +330,30 @@ def test_carevue_reports_when_era_cannot_be_guaranteed(carevue_view, dbsource):
     assert result["prior_window"].tolist() == ["view_admissions_only"]
     assert result["prior_window_note"].tolist() == ["prior_window CareVue-era not guaranteed"]
     assert availability["esrd_dialysis"].prior_window_note == result["prior_window_note"].iloc[0]
+
+
+@pytest.mark.parametrize("source_label", [" MetaVision ", " CareVue ", None])
+def test_carevue_history_checks_source_era_with_no_requested_stays(carevue_view, source_label):
+    stay = (27, 100, 10)
+    if source_label is not None:
+        stay = (*stay, source_label)
+    _carevue_history(carevue_view, [stay], [(10, "585.6")], dbsource=source_label is not None)
+    source = ICUDataSource(load_src_cfg("mimic"), base_path=carevue_view)
+
+    with binding_unit():
+        result = c565_renal_history.load_renal_history_field("renal_excl", source, [])
+
+    assert result.data.empty
+    receipt = table_availability(result, "renal_excl")
+    assert receipt is not None
+    assert receipt.prior_window == "view_admissions_only"
+    if source_label == " MetaVision ":
+        assert receipt.reason_code == "carevue_view_required"
+        assert receipt.evaluation_status == "not_evaluable"
+    else:
+        assert receipt.reason == "data_missing"
+        assert receipt.evaluation_status == "evaluated"
+        assert receipt.prior_window_note == c565_renal_history.CAREVUE_ERA_NOTE
 
 
 @pytest.mark.parametrize("present", [(), ("admissions",), ("diagnoses_icd",)])

@@ -58,7 +58,8 @@ def test_miiv_normalizes_before_filtering_on_icu_relative_hours(tmp_path):
 
 
 @pytest.mark.parametrize("missing", ["icustays", "chartevents"])
-def test_miiv_refuses_a_missing_fio2_input(tmp_path, missing):
+@pytest.mark.parametrize("stays", [[37], []], ids=["requested-stay", "no-requested-stays"])
+def test_miiv_refuses_a_missing_fio2_input(tmp_path, missing, stays):
     start = pd.Timestamp("2023-06-12 15:26")
     if missing != "icustays":
         _write(tmp_path, "icustays", [(37, start)], ["stay_id", "intime"])
@@ -67,7 +68,12 @@ def test_miiv_refuses_a_missing_fio2_input(tmp_path, missing):
                ["stay_id", "charttime", "itemid", "valuenum"])
 
     availability = {}
-    assert _load(tmp_path, "miiv", stay=37, availability_sink=availability).empty
+    loader = BaseICULoader(database="miiv", data_path=tmp_path)
+    frame = loader.load_concepts(
+        ["fio2_set"], patient_ids={"stay_id": stays}, r_compatible=False,
+        availability_sink=availability,
+    )
+    assert frame.empty
     record = availability["fio2_set"]
     assert record.reason == "source_unavailable"
     assert record.evaluation_status == "not_evaluable"
@@ -229,6 +235,30 @@ def test_fio2_accepts_carevue_views_with_padded_source_labels(tmp_path, view):
     _carevue_chart(root)
 
     assert _hour_values(_load(root, "mimic", stay=17)) == {0.0: 62.0}
+
+
+@pytest.mark.parametrize("source_label", [" MetaVision ", None], ids=["other-system", "no-source-column"])
+def test_empty_fio2_scope_does_not_admit_an_unverified_view(tmp_path, source_label):
+    root = tmp_path / "mimic_cv_dir_r13"
+    root.mkdir()
+    _carevue_chart(root)
+    path = root / "icustays.parquet"
+    stays = pd.read_parquet(path)
+    if source_label is None:
+        stays = stays.drop(columns="DBSOURCE")
+    else:
+        stays = stays.assign(DBSOURCE=source_label)
+    stays.to_parquet(path, index=False)
+    availability = {}
+
+    result = load_concepts(
+        ["fio2_set", "mort_90d"], database="mimic", data_path=root, patient_ids=[],
+        merge=False, availability_sink=availability,
+    )
+
+    assert set(result) == {"fio2_set", "mort_90d"}
+    assert all(frame.empty for frame in result.values())
+    assert availability["fio2_set"].reason_code == "carevue_view_required"
 
 
 @pytest.mark.parametrize("linked", ["root", "icustays", "chartevents"])
