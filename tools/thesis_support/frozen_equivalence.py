@@ -1,7 +1,8 @@
 """Compare a thesis projection against the frozen L-COMMON reducer.
 
 Run from the checkout with PYTHONPATH=src. Both sides use the same raw input
-sample. Example command forms are documented in this directory's README.
+sample or the same explicitly pinned D0 module files. Example command
+forms are documented in this directory's README.
 The program writes one JSON object of aggregates to stdout. Exit status is
 0 for agreement, 1 for a mismatch, and 2 if the comparison could not run.
 """
@@ -9,6 +10,7 @@ The program writes one JSON object of aggregates to stdout. Exit status is
 from __future__ import annotations
 
 import argparse
+import ast
 from collections import Counter, defaultdict
 from contextlib import contextmanager, redirect_stderr, redirect_stdout
 import hashlib
@@ -25,10 +27,23 @@ from uuid import uuid4
 
 import numpy as np
 import pandas as pd
+import pyarrow.parquet as pq
 
 from easyicu.concept.catalog import FIRST_IN_HOSP_FROZEN, THESIS_SUPPORT_MODULES
 from easyicu.concept.support_exports import select_support_cohort
-from easyicu.concept.thesis_support import load_thesis_support, support_input_files, thesis_support_manifest
+from easyicu.concept.thesis_support import (
+    PINNED_SUPPORT_MODULES,
+    PinnedInputError,
+    PinnedModuleInput,
+    load_thesis_support,
+    open_pinned_modules,
+    pinned_stay_ids,
+    read_hourly_contract,
+    read_pinned_columns,
+    support_input_files,
+    thesis_support_manifest,
+    validate_pinned_inputs,
+)
 from easyicu.config import DATABASE_ID_CONFIG
 from easyicu.datasource import storage_source
 from easyicu.runtime import duckdb_spill
@@ -41,6 +56,20 @@ _FROZEN_SOURCE_DIR = Path(
 _FROZEN_DIGESTS = {
     "sources": "35f160b2d8105af7ed76a887ceb247117676b255b64a9f7a7537fc18f4a1bdc6",
     "new_sources": "d189e0ae1deefb19547332f269e72330a1eda54c95f23f55a69c0d119443258f",
+}
+_PINNED_REFERENCES = {
+    "hourly_core": (
+        Path("/home/zhuhb/workspace/claude-ws/_wt/rfrunL/L-HC/frozen/hc/src/data_processing/hourly_core.py"),
+        "5b073a7c9f899929ea4d823b6eb5d3b1ef2ac597e89f40afe70b59ef2858c759",
+    ),
+    "cohort": (
+        _FROZEN_SOURCE_DIR / "cohort.py",
+        "d8e529cdc8034c990c2ee97e3f0f9b2cf8866087b1c975f295a7d15ae628f9a1",
+    ),
+    "build_flat_tables": (
+        _FROZEN_SOURCE_DIR.parents[1] / "scripts" / "build_flat_tables.py",
+        "44b0f250132f90f7790e70092f02a4908b7cb25cb42340f92ba58afce860c990",
+    ),
 }
 
 
@@ -195,6 +224,127 @@ def _first_in_hosp_reference(source, family, stay, ids, table):
         return con.execute("SELECT stay_id, first_in_hosp AS first_in_hosp_frozen FROM ordk").df()
 
 
+def _pinned_reference_ast(name):
+    path, expected = _PINNED_REFERENCES[name]
+    if path.resolve() != path:
+        raise ValueError("frozen source path redirects")
+    source = path.read_bytes()
+    if hashlib.sha256(source).hexdigest() != expected:
+        raise ValueError("unexpected frozen source digest")
+    return path, ast.parse(source, filename=str(path))
+
+
+def _reference_functions(reference, names, **bindings):
+    """Execute the original selected definitions and constants from an exact source file."""
+    path, tree = reference
+    nodes = []
+    for node in tree.body:
+        if isinstance(node, ast.ImportFrom) and node.module == "__future__":
+            nodes.append(node)
+        elif isinstance(node, ast.FunctionDef) and node.name in names:
+            nodes.append(node)
+        elif isinstance(node, ast.Assign) and any(
+            isinstance(target, ast.Name) and target.id in names for target in node.targets
+        ):
+            nodes.append(node)
+    # Path and source bytes have already matched the frozen allowlist.
+    exec(compile(ast.Module(body=nodes, type_ignores=[]), str(path), "exec"), bindings)  # noqa: S102
+    if set(names) - bindings.keys():
+        raise ValueError("frozen reference definition missing")
+    return SimpleNamespace(**{name: bindings[name] for name in names})
+
+
+def _reference_sql(reference, fragment, **bindings):
+    """Evaluate a single frozen SQL f-string, preserving its SQL text."""
+    path, tree = reference
+    (query,) = [
+        node for node in ast.walk(tree)
+        if isinstance(node, ast.JoinedStr) and any(
+            isinstance(part, ast.Constant) and fragment in part.value for part in node.values
+        )
+    ]
+    return eval(compile(ast.Expression(query), str(path), "eval"), bindings)  # noqa: S307
+
+
+def _pinned_rrt_reference(con, database, opened, spine, hourly, cohort, contract):
+    renal = read_pinned_columns(opened["renal"], stays=spine["stay_id"].unique())
+    renal["stay_id"] = hourly._normalise_stay_id(renal["stay_id"], context="renal")
+    prepared, _ = hourly._prepare_dynamic(
+        renal, {"rrt": contract["dynamic"]["renal"]["rrt"]}, module="renal",
+    )
+    # The frozen spine's exact left join drops the same rows as its explicit range filter.
+    hc = spine.merge(prepared, on=hourly.KEY, how="left", validate="one_to_one", sort=False)
+    con.register("hc", hc)
+    query = cohort.rrt_hours_sql(SimpleNamespace(corrected={}), database)
+    return con.execute(f"""
+        SELECT stay_id, icu_hour AS charttime, TRUE AS rrt_active FROM ({query})
+    """).df()
+
+
+def _pinned_hirid_reference(con, opened, spine, ids, cohort_reference):
+    entry, handle = opened["respiratory"]
+    path = Path(entry.path)
+
+    def input_stream(requested):
+        if requested != path:
+            raise ValueError("unbound frozen respiratory input")
+        handle.seek(0)
+        return handle
+
+    def read_table(requested, *, columns, filters):
+        if set(columns) != set(entry.allowed_columns):
+            raise ValueError("unapproved frozen respiratory projection")
+        return pq.read_table(input_stream(requested), columns=columns, filters=filters)
+
+    flat = _reference_functions(
+        _pinned_reference_ast("build_flat_tables"),
+        ("VENT_ANCHOR_RULE", "VENT_ANCHOR_INCLUDES_NIV", "TIME_KEY", "_normalised_key_frame",
+         "_assert_unique_keys", "_read_cols", "build_vent_anchor"),
+        pd=pd, np=np, print=lambda *args: None, pq=SimpleNamespace(
+            read_schema=lambda requested: pq.read_schema(input_stream(requested)),
+            read_table=read_table,
+        ),
+    )
+    anchors, _ = flat.build_vent_anchor(path.parent, "hirid", ids)
+    con.register("anchor_input", anchors)
+    con.register("stays", spine[["stay_id", "icu_los_h"]].drop_duplicates())
+    sql = _FrozenSQL(con)
+    virtual = Path("/__thesis_frozen__")
+    sql.bind(virtual / "flat" / "hirid_vent_anchor.parquet", "anchor_input")
+    anchor = _reference_sql(
+        cohort_reference, "greatest(imv_t0_h, 0) AS anchor_t0_h",
+        q=_quote, rel=SimpleNamespace(derived_shared=virtual), db="hirid",
+    )
+    episode = _reference_sql(cohort_reference, "CAST(floor(a.anchor_t0_h) AS INTEGER) AS t0_hour")
+    return sql.execute(f"""
+        WITH anchor AS ({anchor}), {episode} projected AS (
+            SELECT e.stay_id, e.t0_hour AS charttime, TRUE AS imv,
+                   e.ep_end_hour AS imv_recorded_end_hour
+            FROM ep e JOIN stays s USING (stay_id)
+            WHERE e.t0_hour < s.icu_los_h
+        )
+        SELECT stay_id, charttime, imv, imv_recorded_end_hour FROM projected
+    """).df()
+
+
+def _pinned_reference(module, database, pinned_inputs, stay_ids, empty):
+    if stay_ids == set():
+        return empty
+    hourly = _reference_functions(
+        _pinned_reference_ast("hourly_core"),
+        ("KEY", "_normalise_stay_id", "_assert_unique", "build_hourly_spine", "_prepare_dynamic"),
+        np=np, pd=pd,
+    )
+    cohort_reference = _pinned_reference_ast("cohort")
+    with open_pinned_modules(module, database, pinned_inputs) as opened, duckdb_spill.connection() as con:
+        outcome = read_pinned_columns(opened["outcome"], stays=stay_ids)
+        spine, _ = hourly.build_hourly_spine(outcome, stay_ids=stay_ids)
+        if module == "rrt_time":
+            cohort = _reference_functions(cohort_reference, ("rrt_hours_sql",))
+            return _pinned_rrt_reference(con, database, opened, spine, hourly, cohort, read_hourly_contract())
+        return _pinned_hirid_reference(con, opened, spine, stay_ids, cohort_reference)
+
+
 def _rounded(count):
     return None if count < 10 else 10 * ((count + 5) // 10)
 
@@ -249,17 +399,36 @@ def compare_rows(actual, expected, *, key_columns):
     }
 
 
-def run_equivalence(*, database, db_root, stay_ids=None, module, frozen_src_dir=_FROZEN_SOURCE_DIR):
+def run_equivalence(
+    *, database, module, db_root=None, stay_ids=None, frozen_src_dir=_FROZEN_SOURCE_DIR,
+    pinned_inputs=None,
+):
     """Compare the selected stays, defaulting to all raw stays outside MIIV."""
     stay = DATABASE_ID_CONFIG[database]["id_col"]
     family = database.removesuffix("_demo")
     with binding_unit():
-        actual = load_thesis_support(module=module, database=database, data_path=db_root, patient_ids=stay_ids)
+        options = {} if pinned_inputs is None else {"pinned_inputs": tuple(pinned_inputs)}
+        if module in PINNED_SUPPORT_MODULES:
+            stay_ids = pinned_stay_ids(database, stay_ids)
+        actual = load_thesis_support(
+            module=module, database=database, data_path=db_root, patient_ids=stay_ids, **options,
+        )
         receipt = actual.attrs.get("thesis_support") or thesis_support_manifest(
             module, database, actual.attrs["available_fields"],
         )
         if receipt["status"] != "projected":
+            if module in PINNED_SUPPORT_MODULES:
+                return {key: receipt[key] for key in ("status", "reason", "missing_inputs") if key in receipt}
             return {"status": receipt["status"]}
+        if module in PINNED_SUPPORT_MODULES:
+            actual = actual.rename(columns={stay: "stay_id"})
+            try:
+                expected = _pinned_reference(module, database, options["pinned_inputs"], stay_ids, actual.iloc[:0])
+            except PinnedInputError:
+                raise
+            except (Exception, SystemExit) as error:
+                return {"status": "comparison_failed", "error_type": type(error).__name__}
+            return compare_rows(actual, expected.astype(actual.dtypes), key_columns=["stay_id", "charttime"])
         selection = select_support_cohort(database, db_root, stay_ids)
         ids = None if selection is None else selection[stay]
         actual = actual.rename(columns={stay: "stay_id"})
@@ -314,7 +483,11 @@ def _read_cohort_file(path, database):
 def main(argv=None):
     parser = _PrivateArgumentParser(description=__doc__)
     parser.add_argument("--database", choices=("aumc", "eicu", "hirid", "miiv", "mimic", "sic"), required=True)
-    parser.add_argument("--db-root", type=Path, required=True)
+    parser.add_argument("--db-root", type=Path)
+    parser.add_argument(
+        "--pinned-input", action="append", nargs=4, metavar=("MODULE", "PATH", "SHA256", "COLUMNS"),
+        help="D0 file, full expected SHA-256 and comma-separated projected columns; repeat per file",
+    )
     cohort = parser.add_mutually_exclusive_group()
     cohort.add_argument("--stay-ids", type=int, nargs="+", help="explicit synthetic stay IDs")
     cohort.add_argument("--stay-ids-file", type=Path, help="approved private Parquet or text cohort file")
@@ -322,6 +495,11 @@ def main(argv=None):
     parser.add_argument("--frozen-src-dir", type=Path, default=_FROZEN_SOURCE_DIR,
                         help="directory containing SHA-256-pinned frozen sources.py and new_sources.py")
     args = parser.parse_args(argv)
+    if args.module in PINNED_SUPPORT_MODULES:
+        if args.db_root is not None:
+            parser.error("pinned support does not use a raw database root")
+    elif args.db_root is None or args.pinned_input:
+        parser.error("raw support requires --db-root")
     if args.module == FIRST_IN_HOSP_FROZEN and args.stay_ids is not None:
         parser.error("first_in_hosp_frozen requires --stay-ids-file for explicit cohorts")
     if (args.database == "miiv" and args.module != FIRST_IN_HOSP_FROZEN
@@ -335,9 +513,18 @@ def main(argv=None):
         try:
             options = vars(args)
             cohort_file = options.pop("stay_ids_file")
+            pinned = options.pop("pinned_input")
+            if pinned is not None:
+                options["pinned_inputs"] = tuple(
+                    PinnedModuleInput(module, Path(path), digest, tuple(columns.split(",")))
+                    for module, path, digest, columns in pinned
+                )
+                validate_pinned_inputs(args.module, args.database, options["pinned_inputs"])
             if cohort_file is not None:
                 options["stay_ids"] = _read_cohort_file(cohort_file, args.database)
             result = run_equivalence(**options)
+        except PinnedInputError as error:
+            result = {"status": "comparison_failed", "reason": error.reason_code}
         except Exception as error:
             result = {"status": "comparison_failed", "error_type": type(error).__name__}
         finally:

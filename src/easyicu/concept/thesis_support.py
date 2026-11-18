@@ -2,11 +2,20 @@
 
 from __future__ import annotations
 
-from collections.abc import Collection
+from collections.abc import Collection, Mapping
+from contextlib import ExitStack, contextmanager
 from dataclasses import dataclass, replace
+from hashlib import file_digest, sha256
 import json
+from operator import index
+import os
+from pathlib import Path
+import re
+from stat import S_ISREG
 
+import numpy as np
 import pandas as pd
+import pyarrow.parquet as pq
 
 from ..config import DATABASE_ID_CONFIG
 from ..datasource import storage_source
@@ -92,39 +101,81 @@ def first_in_hosp_column_metadata(metadata, receipt):
         source_lineage=(lineage,),
     )
 
-# The frozen hourly builder reads native-v2 modules under an external contract.
-# These names explain the missing producer in the manifest and are never
-# passed to storage resolution.
-_NO_RAW_PRODUCER = {
-    "imv_recorded_compat": {
-        **{
-            db: (
-                f"{db}/respiratory.parquet:mech_vent",
-                f"{db}/outcome.parquet:los_icu",
-                "config/hourly_core_v7.json",
-            )
-            for db in ("aumc", "miiv", "sic")
-        },
-        "hirid": ("hirid/respiratory.parquet:mech_vent",),
-    },
-    "rrt_time": {
-        **{
-            db: (
-                f"{db}_hourly_core.parquet:rrt",
-                f"{db}/outcome.parquet:los_icu",
-                "config/hourly_core_v7.json:dynamic",
-            )
-            for db in ("aumc", "eicu", "hirid", "sic")
-        },
-        "miiv": ("miiv_rrt_time.parquet", "raw_timestamp_actual_end.parquet"),
-        "mimic": (
-            "mimiciii/icustays.parquet",
-            "mimiciii/chartevents/*.parquet",
-            "mimiciii/procedureevents_mv.parquet",
-            "hc_original.rrt",
-        ),
-    },
+PINNED_SUPPORT_MODULES = frozenset({"imv_recorded_compat", "rrt_time"})
+_PINNED_D0_RELEASE = "20261117_d93795ce4_default_r14"
+_PINNED_D0_MANIFEST_SHA16 = "7f14448b9d9d1870"
+_HOURLY_CONTRACT_PATH = Path(
+    "/home/zhuhb/workspace/claude-ws/_wt/rfrunL/L-HC/frozen/hc/config/hourly_core_v7.json"
+)
+_HOURLY_CONTRACT_SHA256 = "e937d67be3a335f491638c173179d6ec10f222c094e934f1a5bc474f2da971ae"
+_OUTCOME = ("stay_id", "los_icu")
+_RESPIRATORY = ("stay_id", "charttime", "mech_vent")
+_RENAL = ("stay_id", "charttime", "rrt")
+# cohort.py:69-70 reads this from release parameters. The pinned hourly JSON has no cohort section.
+_IMV_WITHOUT_GAP = frozenset({"aumc", "miiv", "sic"})
+_PINNED_COLUMNS = {
+    **{("imv_recorded_compat", db): {"respiratory": _RESPIRATORY, "outcome": _OUTCOME}
+       for db in (*_IMV_WITHOUT_GAP, "hirid")},
+    **{("rrt_time", db): {"renal": _RENAL, "outcome": _OUTCOME}
+       for db in ("aumc", "eicu", "hirid", "sic")},
 }
+
+
+@dataclass(frozen=True)
+class PinnedModuleInput:
+    """One D0 module file with the lead's full expected digest and read projection."""
+
+    module: str
+    path: Path
+    expected_sha256: str
+    allowed_columns: tuple[str, ...]
+
+
+class PinnedInputError(ValueError):
+    """A pinned input failed closed before any rows could be returned."""
+
+    def __init__(self, reason_code: str, module: str | None = None):
+        self.reason_code = reason_code
+        super().__init__(f"{reason_code}: {module}" if module else reason_code)
+
+
+def _pinned_manifest(module, family, *, inputs=()):
+    allowed = _PINNED_COLUMNS.get((module, family), {})
+    span = module == "imv_recorded_compat" and family == "hirid"
+    grain = {
+        "charttime_role": "first_recorded_hour" if span else "icu_hour",
+        "source_grain": "stay" if span else "stay_hour",
+    }
+    if module == "rrt_time" and family == "miiv":
+        return {
+            **grain, "source": None, "status": "UNAVAILABLE_IN_SCOPE",
+            "reason": "no_exact_producer",
+            "missing_inputs": ["miiv_rrt_time.parquet: treatment start and actual end through pre-ICU hour -24"],
+        }
+    if not allowed:
+        return {"source": None, "status": "no_frozen_reducer"}
+    if module == "imv_recorded_compat" and family in _IMV_WITHOUT_GAP:
+        missing = ["release.params.cohort.episode_gap_tolerance_h"]
+    else:
+        provided = {entry.module for entry in inputs}
+        missing = [f"{family}/{name}.parquet:{columns[-1]}" for name, columns in allowed.items()
+                   if name not in provided]
+    if missing:
+        return {
+            **grain, "source": None, "status": "UNAVAILABLE_IN_SCOPE",
+            "reason": "no_raw_producer", "missing_inputs": missing,
+        }
+    return {
+        **grain, "source": _PINNED_D0_RELEASE, "status": "projected",
+        "source_manifest_sha16": _PINNED_D0_MANIFEST_SHA16,
+        "hourly_contract_sha256": _HOURLY_CONTRACT_SHA256,
+        "inputs": {entry.module: {"sha256": entry.expected_sha256, "columns": list(entry.allowed_columns)}
+                   for entry in inputs},
+        "frozen_reference": (
+            "build_flat_tables.py:903-946; cohort.py:84-101,158" if span
+            else "hourly_core.py:108-160,245-315,920-934,964-1017; cohort.py:65"
+        ),
+    }
 
 
 def thesis_support_manifest(module: str, database: str, fields: Collection[str], *, source_file=None) -> dict:
@@ -134,20 +185,8 @@ def thesis_support_manifest(module: str, database: str, fields: Collection[str],
     family = database.removesuffix("_demo")
     if module == FIRST_IN_HOSP_FROZEN:
         return _first_in_hosp_manifest(family, fields, source_file)
-    missing = _NO_RAW_PRODUCER.get(module, {}).get(family)
-    if missing is not None:
-        span = module == "imv_recorded_compat" and family == "hirid"
-        receipt = {
-            "source": None,
-            "status": "UNAVAILABLE_IN_SCOPE",
-            "reason": "no_raw_producer",
-            "missing_inputs": list(missing),
-            "charttime_role": "first_recorded_hour" if span else "icu_hour",
-            "source_grain": "stay" if span else "stay_hour",
-        }
-        if family == "mimic":
-            receipt["detail"] = "The frozen cv_rrt producer requires raw MIMIC-III tables outside the approved #641 CareVue view."
-        return receipt
+    if module in PINNED_SUPPORT_MODULES:
+        return _pinned_manifest(module, family)
     raw = _PEEP.get(family) if module == "observed_peep_set" else None
     if raw is None:
         return {"source": None, "status": "no_frozen_reducer"}
@@ -170,6 +209,207 @@ def _empty(module: str, stay: str) -> pd.DataFrame:
             for name, (_, unit) in fields.items()
         },
     })
+
+
+def validate_pinned_inputs(module, database, inputs):
+    """Refuse forbidden declarations without resolving or opening any path."""
+    allowed = _PINNED_COLUMNS.get((module, database), {})
+    seen = set()
+    for entry in inputs:
+        if not isinstance(entry, PinnedModuleInput):
+            raise PinnedInputError("pinned_input_type_invalid")
+        name = entry.module
+        if name not in allowed:
+            raise PinnedInputError("pinned_module_not_allowed")
+        if name in seen:
+            raise PinnedInputError("pinned_module_duplicate", name)
+        seen.add(name)
+        if (len(entry.allowed_columns) != len(allowed[name])
+                or set(entry.allowed_columns) != set(allowed[name])):
+            raise PinnedInputError("pinned_columns_not_allowed", name)
+        path = Path(entry.path)
+        if path.name != f"{name}.parquet" or path.parent.name != database:
+            raise PinnedInputError("pinned_path_not_allowed", name)
+        if not re.fullmatch(r"[0-9a-f]{64}", entry.expected_sha256):
+            raise PinnedInputError("pinned_sha256_invalid", name)
+
+
+def _file_state(handle):
+    info = os.fstat(handle.fileno())
+    return info.st_dev, info.st_ino, info.st_size, info.st_mtime_ns, info.st_ctime_ns
+
+
+@contextmanager
+def open_pinned_modules(module, database, inputs):
+    """Verify every file before any Parquet decoder is called, then reuse its descriptor."""
+    inputs = tuple(inputs)
+    validate_pinned_inputs(module, database, inputs)
+    with ExitStack() as stack:
+        verified = {}
+        for entry in inputs:
+            path = Path(entry.path)
+            # Reject redirection to an unrelated input, including a parent-directory symlink.
+            if path.resolve() != Path(os.path.abspath(path)):
+                raise PinnedInputError("pinned_path_not_allowed", entry.module)
+            try:
+                handle = stack.enter_context(open(path, "rb", opener=_open_regular_pinned_file))
+            except FileNotFoundError:
+                raise PinnedInputError("pinned_file_missing", entry.module) from None
+            except OSError:
+                raise PinnedInputError("pinned_file_unreadable", entry.module) from None
+            before = _file_state(handle)
+            if file_digest(handle, "sha256").hexdigest() != entry.expected_sha256:
+                raise PinnedInputError("pinned_sha256_mismatch", entry.module)
+            if _file_state(handle) != before:
+                raise PinnedInputError("pinned_file_changed", entry.module)
+            handle.seek(0)
+            verified[entry.module] = (entry, handle, before)
+        yield {name: (entry, handle) for name, (entry, handle, _) in verified.items()}
+        for name, (_, handle, before) in verified.items():
+            if _file_state(handle) != before:
+                raise PinnedInputError("pinned_file_changed", name)
+
+
+def _open_regular_pinned_file(path, flags):
+    fd = os.open(path, flags | os.O_NOFOLLOW | os.O_NONBLOCK)
+    if not S_ISREG(os.fstat(fd).st_mode):
+        os.close(fd)
+        raise OSError("expected regular file")
+    return fd
+
+
+def read_pinned_columns(opened, *, stays=None):
+    """Decode the declared columns from the already verified descriptor."""
+    entry, handle = opened
+    handle.seek(0)
+    with pq.ParquetFile(handle) as parquet:
+        if not set(entry.allowed_columns).issubset(parquet.schema_arrow.names):
+            raise PinnedInputError("pinned_columns_missing", entry.module)
+    filters = None if stays is None else [("stay_id", "in", list(stays))]
+    handle.seek(0)
+    return pq.read_table(handle, columns=list(entry.allowed_columns), filters=filters).to_pandas()
+
+
+def pinned_stay_ids(database, patient_ids):
+    """Resolve explicit stay keys directly, without consulting a raw identity table."""
+    if patient_ids is None:
+        if database.removesuffix("_demo") == "miiv":
+            raise ValueError("MIIV thesis support requires an explicit allowed stay cohort")
+        return None
+    if isinstance(patient_ids, Mapping):
+        stay = DATABASE_ID_CONFIG[database]["id_col"]
+        if len(patient_ids) != 1 or next(iter(patient_ids)) not in {stay, "stay_id"}:
+            raise PinnedInputError("pinned_cohort_requires_stay_ids")
+        patient_ids = next(iter(patient_ids.values()))
+    try:
+        members = set()
+        for value in patient_ids:
+            if isinstance(value, (bool, np.bool_)):
+                raise TypeError
+            member = index(value)
+            if not -(2**63) <= member < 2**63:
+                raise ValueError
+            members.add(member)
+    except (TypeError, ValueError):
+        raise PinnedInputError("pinned_cohort_requires_stay_ids") from None
+    return members
+
+
+def read_hourly_contract():
+    """Load the exact S1338-authorized contract used by build_hourly_core.py:38-49."""
+    try:
+        if _HOURLY_CONTRACT_PATH.resolve() != _HOURLY_CONTRACT_PATH:
+            raise PinnedInputError("frozen_hourly_contract_path_redirects")
+        source = _HOURLY_CONTRACT_PATH.read_bytes()
+    except OSError:
+        raise PinnedInputError("frozen_hourly_contract_unreadable") from None
+    if sha256(source).hexdigest() != _HOURLY_CONTRACT_SHA256:
+        raise PinnedInputError("frozen_hourly_contract_sha256_mismatch")
+    return json.loads(source)
+
+
+def _valid_los_hours(outcome, clock):
+    # hourly_core.py:108-160. The hashed config declares the clock and spine source.
+    if (clock["spine_source"], clock["spine_source_unit"], clock["source_time"]) != (
+        "outcome.los_icu", "days", "ICU-relative charttime in hours",
+    ):
+        raise PinnedInputError("frozen_hourly_clock_unsupported")
+    require_unique_keys(outcome, ["stay_id"], table="outcome")
+    los = pd.to_numeric(outcome.set_index("stay_id")["los_icu"], errors="coerce")
+    return los[los.notna() & np.isfinite(los) & los.gt(0)].astype("float64") * 24.0
+
+
+def _rrt_hours(source, los_hours, contract):
+    # _prepare_dynamic checks target-bearing rows even when they lie outside the spine.
+    target = contract["dynamic"]["renal"]["rrt"]
+    source = source.rename(columns={"rrt": target})
+    source = source.loc[source[target].notna() & source["stay_id"].isin(los_hours.index)].copy()
+    time = pd.to_numeric(source["charttime"], errors="coerce")
+    hour = np.floor(time)
+    if not (np.isfinite(time) & np.isclose(time, hour)).all():
+        raise PinnedInputError("pinned_rrt_hour_invalid", "renal")
+    source["charttime"] = hour.astype("int32")
+    require_unique_keys(source, ["stay_id", "charttime"], table="renal")
+    clock = contract["time_contract"]
+    if clock["last_hour"] != "ceil(los_icu * 24) - 1":
+        raise PinnedInputError("frozen_hourly_clock_unsupported")
+    last = source["stay_id"].map(np.ceil(los_hours) - 1)
+    keep = source[target].astype("boolean").fillna(False) & source["charttime"].between(clock["first_hour"], last)
+    return source.loc[keep, ["stay_id", "charttime"]].assign(rrt_active=True)
+
+
+def _hirid_recorded_span(source, los_hours):
+    # build_flat_tables.py:903-946, then cohort.py:84-101,158.
+    original = source["charttime"]
+    time = pd.to_numeric(original, errors="coerce")
+    if (original.notna() & ~np.isfinite(time)).any():
+        raise PinnedInputError("pinned_vent_hour_invalid", "respiratory")
+    source = source.assign(charttime=time)
+    if source["stay_id"].isna().any() or source.duplicated(["stay_id", "charttime"]).any():
+        raise PinnedInputError("pinned_vent_key_invalid", "respiratory")
+    invasive = source.loc[source["mech_vent"].astype("string").str.lower().eq("invasive").fillna(False)]
+    if invasive["charttime"].dropna().empty:
+        raise PinnedInputError("pinned_vent_anchor_no_invasive_rows", "respiratory")
+    span = invasive.groupby("stay_id")["charttime"].agg(["min", "max"]).dropna()
+    start = span["min"].clip(lower=0)
+    span["charttime"] = np.floor(start)
+    span["imv_recorded_end_hour"] = np.floor(np.maximum(start, span["max"]))
+    keep = span["charttime"].lt(los_hours.reindex(span.index))
+    return span.loc[keep, ["charttime", "imv_recorded_end_hour"]].reset_index().assign(imv=True)
+
+
+def _load_pinned_support(frame, module, database, patient_ids, pinned_inputs):
+    inputs = tuple(pinned_inputs or ())
+    validate_pinned_inputs(module, database, inputs)
+    stays = pinned_stay_ids(database, patient_ids)
+    receipt = _pinned_manifest(module, database.removesuffix("_demo"), inputs=inputs)
+    frame.attrs["thesis_support"] = receipt
+    if receipt["status"] != "projected":
+        return frame
+
+    contract = read_hourly_contract()
+    stay = DATABASE_ID_CONFIG[database]["id_col"]
+    with open_pinned_modules(module, database, inputs) as opened:
+        if stays != set():
+            outcome = read_pinned_columns(opened["outcome"], stays=stays)
+            los = _valid_los_hours(outcome, contract["time_contract"])
+            if los.empty:
+                raise PinnedInputError("pinned_no_valid_icu_los", "outcome")
+            if module == "rrt_time":
+                source = read_pinned_columns(opened["renal"], stays=los.index)
+                rows = _rrt_hours(source, los, contract)
+            else:
+                source = read_pinned_columns(opened["respiratory"], stays=stays)
+                rows = _hirid_recorded_span(source, los)
+            rows = rows.rename(columns={"stay_id": stay}).reindex(columns=frame.columns).astype(frame.dtypes)
+            rows = rows.sort_values([stay, "charttime"], ignore_index=True)
+            rows.attrs["pinned_cohort_size"] = len(los)
+        else:
+            rows = frame
+            rows.attrs["pinned_cohort_size"] = 0
+    rows.attrs.update(frame.attrs)
+    rows.attrs["available_fields"] = list(THESIS_SUPPORT_MODULES[module])
+    return rows
 
 
 def support_input_files(source, table, stay, ids):
@@ -256,12 +496,19 @@ def _observed_peep_set(con, family, stays, events):
 
 
 @in_binding_unit
-def load_thesis_support(*, module, database, data_path, patient_ids=None) -> pd.DataFrame:
-    """Rebuild from raw inputs for selected stays, with a typed empty fallback."""
+def load_thesis_support(
+    *, module, database, data_path=None, patient_ids=None,
+    pinned_inputs: Collection[PinnedModuleInput] | None = None,
+) -> pd.DataFrame:
+    """Rebuild the frozen support projection for the explicitly selected input."""
     family = database.removesuffix("_demo")
     stay = DATABASE_ID_CONFIG[database]["id_col"]
     frame = _empty(module, stay)
     frame.attrs["available_fields"] = []
+    if module in PINNED_SUPPORT_MODULES:
+        return _load_pinned_support(frame, module, database, patient_ids, pinned_inputs)
+    if pinned_inputs is not None:
+        raise PinnedInputError("pinned_module_not_allowed")
     if module == FIRST_IN_HOSP_FROZEN:
         result = _load_first_in_hosp(frame, database, data_path, patient_ids, stay)
         result.attrs["thesis_support"] = thesis_support_manifest(

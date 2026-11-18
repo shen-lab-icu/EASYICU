@@ -14,7 +14,7 @@ import os
 from dataclasses import dataclass
 from functools import lru_cache
 from pathlib import Path
-from typing import Callable, Dict, List, Mapping, Optional, Sequence, Union
+from typing import TYPE_CHECKING, Callable, Dict, List, Mapping, Optional, Sequence, Union
 
 import pandas as pd
 
@@ -76,6 +76,9 @@ from .concepts import (
     _normalize_patient_ids_for_db,
     _sample_patient_ids,
 )
+
+if TYPE_CHECKING:
+    from ..concept.thesis_support import PinnedModuleInput
 
 
 def _get_all_patient_ids(
@@ -8237,6 +8240,13 @@ def _publish_native_export_v2(
         stay_time_upper_bounds=stay_time_upper_bounds,
         required=bool(require_stay_time_bounds),
     )
+    pinned_outcome_stays = result.get("pinned_outcome_stays")
+    if pinned_outcome_stays is not None:
+        time_window_authority = {
+            "required": True,
+            "source": "pinned_outcome.los_icu",
+            "bounded_stays": pinned_outcome_stays,
+        }
     eicu_tidal_volume_age_lookup = None
     if normalized_database == "eicu" and "ventilator" in published_modules:
         eicu_tidal_volume_age_lookup = _load_eicu_tidal_volume_age_lookup(output_root)
@@ -8260,6 +8270,7 @@ def _publish_native_export_v2(
         produced_concepts: Optional[set[str]] = (
             set() if physical_output_missing else None
         )
+        module_manifest = {}
         module_manifest_path = output_root / f"{module}.manifest.json"
         if (
             not physical_output_missing
@@ -8635,9 +8646,13 @@ def _publish_native_export_v2(
         if module in THESIS_SUPPORT_MODULES:
             from ..concept.thesis_support import thesis_support_manifest
 
-            files[-1]["thesis_support"] = metadata_frame.attrs.get("thesis_support") or thesis_support_manifest(
-                module, normalized_database,
-                produced_concepts if produced_concepts is not None else concept_plan[module],
+            files[-1]["thesis_support"] = (
+                module_manifest.get("pinned_thesis_support")
+                or metadata_frame.attrs.get("thesis_support")
+                or thesis_support_manifest(
+                    module, normalized_database,
+                    produced_concepts if produced_concepts is not None else concept_plan[module],
+                )
             )
         if module in SUBHOUR_MODULE_INTERVALS:
             # Resolution evidence for a sub-hour gate: per-signal gaps in
@@ -8729,7 +8744,9 @@ def _publish_native_export_v2(
                 "physical keys and do not certify a contiguous ICU-only episode."
             )} if sic_source_clock else {}),
             "time_window_policy": (
-                ("longitudinal modules: source care-unit interval with 24h pre/post allowance "
+                "frozen hourly spine or recorded-span eligibility from pinned outcome.los_icu"
+                if pinned_outcome_stays is not None
+                else ("longitudinal modules: source care-unit interval with 24h pre/post allowance "
                  "bound by outcome.los_icu; outcome: stay-level at first intensive or "
                  "intermediate care transfer" if sic_source_clock else
                  "longitudinal modules: ICU episode with 24h pre/post allowance "
@@ -8966,6 +8983,80 @@ def _keeps_storage_evidence(function):
 
     return wrapper
 
+def _extract_pinned_thesis_support(
+    database, modules, pinned_inputs, patient_ids, output_dir, native_export_v2,
+):
+    """Produce the pinned support modules without raw-table discovery or workers."""
+    import json
+
+    from ..concept.thesis_support import (
+        PINNED_SUPPORT_MODULES, PinnedInputError, load_thesis_support, pinned_stay_ids, validate_pinned_inputs,
+    )
+
+    selected = list(dict.fromkeys(pinned_inputs if modules is None else modules))
+    if (not selected or set(selected) - PINNED_SUPPORT_MODULES
+            or set(pinned_inputs) - set(selected)):
+        raise PinnedInputError("pinned_module_not_allowed")
+    declarations = {module: tuple(pinned_inputs.get(module, ())) for module in selected}
+    for module, entries in declarations.items():
+        validate_pinned_inputs(module, database, entries)
+    cohort = pinned_stay_ids(database, patient_ids)
+    if native_export_v2 and output_dir is None:
+        raise ValueError("native_export_v2 requires output_dir")
+
+    frames = {
+        module: load_thesis_support(module=module, database=database, patient_ids=cohort, pinned_inputs=entries)
+        for module, entries in declarations.items()
+    }
+    bounded_stays = max(frame.attrs.get("pinned_cohort_size", 0) for frame in frames.values())
+    result = {
+        "database": database,
+        "num_patients": len(cohort) if cohort is not None else bounded_stays,
+        "pinned_outcome_stays": bounded_stays,
+        "modules": {},
+        "output_dir": str(output_dir) if output_dir is not None else None,
+    }
+    for module, frame in frames.items():
+        result["modules"][module] = {
+            "concepts": {module: frame}, "rows": len(frame), "errors": [],
+            "thesis_support": frame.attrs["thesis_support"],
+        }
+    if output_dir is None:
+        return result
+
+    root = Path(output_dir)
+    marker = begin_native_export(root)
+    if any(entry != marker for entry in root.iterdir()):
+        marker.unlink()
+        raise ValueError("pinned thesis support requires an empty output directory")
+    try:
+        for module, frame in frames.items():
+            path = root / f"{module}.parquet"
+            frame.to_parquet(path, index=False)
+            fields = frame.attrs["available_fields"]
+            saved = {module: {"concepts": fields, "path": str(path)}} if fields else {}
+            (root / f"{module}.manifest.json").write_text(
+                json.dumps({
+                    "module": module, "saved": saved, "pinned_thesis_support": frame.attrs["thesis_support"],
+                }),
+                encoding="utf-8",
+            )
+            result["modules"][module]["concepts"] = {
+                field: {"path": str(path), "rows": len(frame)} for field in fields
+            }
+        if native_export_v2 is not False:
+            result["native_export_v2"] = _publish_native_export_v2(
+                database=database, data_path="", output_dir=str(root), modules=selected,
+                max_patients=None, result=result,
+            )
+            finish_native_export(root)
+        else:
+            marker.unlink()
+    except Exception as exc:
+        _quarantine_unpublished_outputs(str(root), {}, exc)
+        raise
+    return result
+
 
 @_keeps_storage_evidence
 def extract_database(
@@ -8985,6 +9076,8 @@ def extract_database(
     module_batch_sizes: Optional[Mapping[str, int]] = None,
     max_workers: Optional[int] = None,
     subhour_concepts: Optional[Mapping[str, Sequence[str]]] = None,
+    *,
+    pinned_inputs: Mapping[str, Sequence[PinnedModuleInput]] | None = None,
 ) -> Dict:
     """按 20 个模块分组、子进程隔离地提取整个数据库的全部特征。
 
@@ -9027,6 +9120,8 @@ def extract_database(
             自动计划。适用于同一数据库中少数高膨胀模块的已测内存边界。
         max_workers: 显式 CPU worker 上限；优先于 EASYICU_PARALLEL_MAX_WORKERS，
             固定内存预算只可进一步降低此上限，不能提高它。
+        pinned_inputs: D0 file bindings keyed by thesis support module. This mode
+            accepts explicit stay IDs and uses the pinned module files in place of data_path.
         group_modules: True(默认) = 自动选择：内存充足的服务器将共享源表的
             模块合并为分组子进程；≤24GB 主机或 ≤4GB 显式缓存预算自动切换
             为每模块一个隔离子进程。False = 始终逐模块隔离。可用
@@ -9070,6 +9165,16 @@ def extract_database(
         >>> result = extract_database('miiv', modules=['vitals', 'demographics'])
         >>> hr_df = result['modules']['vitals']['concepts']['hr']
     """
+    from ..concept.thesis_support import PINNED_SUPPORT_MODULES
+
+    pinned_only = bool(modules) and set(modules) <= PINNED_SUPPORT_MODULES
+    if pinned_inputs is not None or pinned_only:
+        if pinned_inputs is not None and (data_path is not None or max_patients is not None):
+            raise ValueError("pinned thesis support uses pinned inputs and explicit stay IDs")
+        return _extract_pinned_thesis_support(
+            database, modules, pinned_inputs or {}, patient_ids, output_dir, native_export_v2,
+        )
+
     import multiprocessing as mp
     import tempfile
     import json

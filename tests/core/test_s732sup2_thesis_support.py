@@ -92,11 +92,12 @@ def test_peep_uses_original_source_clock_range_channel_and_median(tmp_path, data
 
 
 @pytest.mark.parametrize("database,module,missing_input", [
-    *((db, "imv_recorded_compat", f"{db}/respiratory.parquet:mech_vent")
-      for db in ("aumc", "miiv", "hirid", "sic")),
-    *((db, "rrt_time", f"{db}_hourly_core.parquet:rrt") for db in ("aumc", "eicu", "hirid", "sic")),
-    ("miiv", "rrt_time", "raw_timestamp_actual_end.parquet"),
-    ("mimic", "rrt_time", "mimiciii/chartevents/*.parquet"),
+    *((db, "imv_recorded_compat", "release.params.cohort.episode_gap_tolerance_h")
+      for db in ("aumc", "miiv", "sic")),
+    ("hirid", "imv_recorded_compat", "hirid/respiratory.parquet:mech_vent"),
+    *((db, "rrt_time", f"{db}/renal.parquet:rrt") for db in ("aumc", "eicu", "hirid", "sic")),
+    ("miiv", "rrt_time", "miiv_rrt_time.parquet: treatment start and actual end through pre-ICU hour -24"),
+    ("mimic", "rrt_time", None),
     *((db, module, None) for db in ("eicu", "mimic") for module in ("imv_recorded_compat", "observed_peep_set")),
 ])
 def test_typed_absence_without_any_source_reads(tmp_path, monkeypatch, database, module, missing_input):
@@ -120,15 +121,13 @@ def test_typed_absence_without_any_source_reads(tmp_path, monkeypatch, database,
         assert receipt == {"source": None, "status": "no_frozen_reducer"}
     else:
         assert receipt["status"] == "UNAVAILABLE_IN_SCOPE"
-        assert receipt["reason"] == "no_raw_producer"
+        assert receipt["reason"] == ("no_exact_producer" if (database, module) == ("miiv", "rrt_time")
+                                     else "no_raw_producer")
         assert missing_input in receipt["missing_inputs"]
-    if database == "mimic" and module == "rrt_time":
-        assert "#641 CareVue view" in receipt["detail"]
-        assert "mimiciii/procedureevents_mv.parquet" in receipt["missing_inputs"]
     report = frozen_equivalence.run_equivalence(
         database=database, db_root=tmp_path, stay_ids=[_STAY], module=module,
     )
-    assert report == {"status": receipt["status"]}
+    assert report == {key: receipt[key] for key in ("status", "reason", "missing_inputs") if key in receipt}
 
 
 def test_unknown_support_module_fails_at_both_entry_points(tmp_path):
@@ -179,7 +178,7 @@ def test_native_export_is_opt_in_and_seals_typed_support_receipts(tmp_path, stre
         assert entries[module]["thesis_support"]["status"] == "UNAVAILABLE_IN_SCOPE"
         assert entries[module]["thesis_support"]["reason"] == "no_raw_producer"
         assert entries[module]["time_axis_audit"]["policy"] == "frozen_source_icu_hours"
-    assert "sic_hourly_core.parquet:rrt" in entries["rrt_time"]["thesis_support"]["missing_inputs"]
+    assert "sic/renal.parquet:rrt" in entries["rrt_time"]["thesis_support"]["missing_inputs"]
     imv = pd.read_parquet(output / "imv_recorded_compat.parquet")
     assert imv.empty and str(imv.imv.dtype) == "boolean"
     assert str(imv.imv_recorded_end_hour.dtype) == "float64"
