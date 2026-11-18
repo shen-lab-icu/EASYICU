@@ -269,18 +269,16 @@ def test_second_nested_worker_exit_blocks_native_publication(tmp_path, monkeypat
     assert not (native / "_manifest.json").exists()
 
 
-@pytest.mark.skipif(not hasattr(os, "fork"), reason="needs a forked worker to inject an exit")
-@pytest.mark.parametrize("worker_exit", [0, 9], ids=["clean", "exit-9"])
-def test_desktop_renal_automatically_uses_nested_batches(tmp_path, monkeypatch, worker_exit):
+@pytest.fixture
+def desktop_renal_cohort(tmp_path, monkeypatch):
     import psutil
 
     from easyicu.runtime import memory_manager
     from easyicu.webserver.hosted import deployment_kind
     from tests.support.renal_export import write_renal_source
-    from tools import formal_run_receipt
-    from tools.formal import v2_bench_local
 
     monkeypatch.setenv("EASYICU_DEPLOYMENT", "desktop")
+    monkeypatch.setenv("EASYICU_MP_START_METHOD", "fork")
     for key in (
         "EASYICU_HOSTED", "EASYICU_ONESHOT_BUDGET_MB", "EASYICU_AUTO_CHUNK_SIZE",
         "EASYICU_DISABLE_AUTO_CHUNK", "EASYICU_FORCE_INPROCESS_BATCH",
@@ -288,120 +286,198 @@ def test_desktop_renal_automatically_uses_nested_batches(tmp_path, monkeypatch, 
     ):
         monkeypatch.delenv(key, raising=False)
     assert deployment_kind() == "desktop"
-    total_ram = 16 * 1024**3
-    memory = psutil.virtual_memory()._replace(total=total_ram, available=total_ram)
-    monkeypatch.setattr(psutil, "virtual_memory", lambda: memory)
-    cohort_size = 200_859
-    concepts = extraction_api.EXTRACT_MODULES["renal"]
-    assert memory_manager.estimate_memory_mb(concepts, "eicu", cohort_size) > 0.6 * 16 * 1024
 
-    # Only materialize observations for synthetic stays at the two ends of
-    # the estimator's cohort. Both original batches have real source rows.
+    ram = 16 * 1024**3
+    memory = psutil.virtual_memory()._replace(total=ram, available=ram)
+    monkeypatch.setattr(psutil, "virtual_memory", lambda: memory)
+    monkeypatch.setattr(memory_manager, "_read_cgroup_v2_memory_mb", lambda root: (None, None))
+
+    # Put synthetic observations at both ends of a large logical cohort.
     source = tmp_path / "source"
     write_renal_source(source, "eicu", stays=24, hours=6, urine_rows_per_hour=1)
     id_col = "patientunitstayid"
+    cohort_size = 135_003
     for path in source.glob("*.parquet"):
         frame = pd.read_parquet(path)
         if id_col in frame and not frame.empty:
             ids = frame[id_col]
             frame[id_col] = ids.where(ids <= 12, ids + cohort_size - 24)
+            if path.name == "patient.parquet":
+                # Every fixture stay is the first in its own hospitalization.
+                frame["unitvisitnumber"] = 1
             frame.to_parquet(path, index=False)
-    patient_ids = {id_col: list(range(1, cohort_size + 1))}
+    return source, {id_col: list(range(1, cohort_size + 1))}
+
+
+@pytest.mark.skipif(not hasattr(os, "fork"), reason="needs a forked worker to inject an exit")
+@pytest.mark.parametrize("worker_exit", [0, 9], ids=["clean", "exit-9"])
+def test_desktop_renal_automatically_uses_nested_batches(
+    tmp_path, monkeypatch, desktop_renal_cohort, worker_exit,
+):
+    import multiprocessing as mp
+
+    from easyicu.runtime import memory_manager
+
+    source, patient_ids = desktop_renal_cohort
+    id_col, ids = next(iter(patient_ids.items()))
+    concepts = extraction_api.EXTRACT_MODULES["renal"]
     original_worker = memory_manager._subprocess_load_worker
     run_batch = memory_manager._run_batch_process
-    batch_log = tmp_path / "batch-attempts.jsonl"
+    batch_log = tmp_path / "nested-batches.jsonl"
 
     def worker(args):
-        if worker_exit and cohort_size in args["patient_ids"][id_col]:
+        if worker_exit and ids[-1] in args["patient_ids"][id_col]:
             raise SystemExit(worker_exit)
         original_worker(args)
 
     def observe_batch(args, attempt_dir, batch_num, mode):
-        ids = args["patient_ids"][id_col]
+        assert os.environ["EASYICU_FORCE_INPROCESS_BATCH"] == "1"
+        batch_ids = args["patient_ids"][id_col]
         exitcode = run_batch(args, attempt_dir, batch_num, mode)
         with batch_log.open("a", encoding="utf-8") as log:
-            log.write(json.dumps([batch_num, ids[0], ids[-1], exitcode]) + "\n")
+            log.write(json.dumps([batch_num, batch_ids[0], batch_ids[-1], exitcode]) + "\n")
         return exitcode
 
-    def read_attempts():
-        return [tuple(json.loads(line)) for line in batch_log.read_text(encoding="utf-8").splitlines()]
+    def extract(name, batch_size):
+        output = tmp_path / name
+        worker = mp.get_context("fork").Process(
+            target=extraction_api._extract_module_group_worker,
+            args=([("renal", concepts)], [], "eicu", str(source), patient_ids, batch_size, str(output), False),
+            daemon=True,
+        )
+        worker.start()
+        worker.join()
+        assert worker.exitcode == 0
+        return output / "renal"
 
     monkeypatch.setattr(memory_manager, "_subprocess_load_worker", worker)
     monkeypatch.setattr(memory_manager, "_run_batch_process", observe_batch)
-    if not worker_exit:
-        def extract_renal(name, batch_size):
-            output = tmp_path / name
-            output.mkdir()
-            extraction_api._run_module_extraction(
-                module_name="renal", concepts=concepts, database="eicu", data_path=str(source),
-                patient_ids_filter=patient_ids, batch_size=batch_size, output_dir=str(output),
-            )
-            manifest = json.loads((output / "_manifest.json").read_text(encoding="utf-8"))
-            assert manifest["errors"] == []
-            return pd.read_parquet(output / "renal.parquet")
-
-        actual = extract_renal("batched-renal", None)
-        attempts = read_attempts()
-        assert len(attempts) == 2
-        first, second = attempts
-        assert first == (1, 1, second[1] - 1, 0)
-        assert second == (2, first[2] + 1, cohort_size, 0)
-        expected = extract_renal("one-shot-renal", cohort_size)
-        assert read_attempts() == attempts
-        assert {1, cohort_size} <= set(expected[id_col])
-        keys = [id_col, "charttime"]
+    output = extract("automatic", None)
+    attempts = [json.loads(line) for line in batch_log.read_text(encoding="utf-8").splitlines()]
+    first, second, *repairs = attempts
+    assert first == [1, ids[0], second[1] - 1, 0]
+    assert second == [2, first[2] + 1, ids[-1], worker_exit]
+    manifest = json.loads((output / "_manifest.json").read_text(encoding="utf-8"))
+    if worker_exit:
+        assert [(number, code) for number, _, _, code in repairs] == [(2, 0), (2, 9)]
+        assert manifest["saved"] == {}
+        assert "stage 'subprocess_batch_load': batch 2: worker exited with code 9" in manifest["errors"][0]
+        assert not (output / "renal.parquet").exists()
+    else:
+        assert not repairs
+        assert manifest["errors"] == []
+        one_shot = extract("one-shot", len(ids))
+        assert len(batch_log.read_text(encoding="utf-8").splitlines()) == 2
+        baseline_manifest = json.loads((one_shot / "_manifest.json").read_text(encoding="utf-8"))
+        assert baseline_manifest["errors"] == []
+        actual = pd.read_parquet(output / "renal.parquet")
+        expected = pd.read_parquet(one_shot / "renal.parquet")
+        assert {ids[0], ids[-1]} <= set(expected[id_col])
+        sort_keys = [id_col, "charttime"]
         pd.testing.assert_frame_equal(
-            actual.sort_values(keys).reset_index(drop=True),
-            expected.sort_values(keys).reset_index(drop=True),
+            actual.sort_values(sort_keys).reset_index(drop=True),
+            expected.sort_values(sort_keys).reset_index(drop=True),
             check_exact=True,
         )
-        return
 
-    # Exercise the same nested load inside the database worker. Use fork to
-    # carry the test hooks across the group boundary and keep the real module
-    # manifest, database collector, native publisher and summary writer.
-    run_module = extraction_api._run_module_extraction
 
-    def run_nested_module(module, concepts, database, path, ids, batch_size, out, **kwargs):
+@pytest.mark.skipif(not hasattr(os, "fork"), reason="needs a forked worker to inject an exit")
+@pytest.mark.parametrize("worker_exit", [0, 9], ids=["clean", "exit-9"])
+def test_desktop_native_export_reports_stream_batch_exit(
+    tmp_path, monkeypatch, desktop_renal_cohort, worker_exit,
+):
+    import psutil
+
+    from tools import formal_run_receipt
+    from tools.formal import v2_bench_local
+
+    source, patient_ids = desktop_renal_cohort
+    id_col, ids = next(iter(patient_ids.items()))
+    stream_worker = extraction_api._write_isolated_stream_batch
+    batch_log = tmp_path / "stream-batches.jsonl"
+
+    def run_stream_batch(module, concepts, load_kwargs, batch_ids, *args):
         assert os.environ["EASYICU_FORCE_INPROCESS_BATCH"] == "1"
-        run_module(
-            module, concepts, database, path, ids, None, out,
-            **{**kwargs, "stream_output_batches": False},
-        )
+        if module == "renal":
+            # Record the actual inner load size and patient partition in the child.
+            positions = batch_ids[id_col]
+            with batch_log.open("a", encoding="utf-8") as log:
+                log.write(json.dumps([load_kwargs["batch_size"], positions[0], positions[-1]]) + "\n")
+            if worker_exit and ids[-1] in positions:
+                raise SystemExit(worker_exit)
+        stream_worker(module, concepts, load_kwargs, batch_ids, *args)
 
-    monkeypatch.setattr(extraction_api, "_run_module_extraction", run_nested_module)
-    monkeypatch.setattr(extraction_api, "_get_extraction_mp_context", lambda mp: mp.get_context("fork"))
-    monkeypatch.setattr(extraction_api, "_get_all_patient_ids", lambda *args: (patient_ids[id_col], id_col))
+    monkeypatch.setattr(extraction_api, "_write_isolated_stream_batch", run_stream_batch)
+    monkeypatch.setattr(extraction_api, "_get_all_patient_ids", lambda *args: (ids, id_col))
     summary_dir = tmp_path / "eicu"
     summary_dir.mkdir()
     monkeypatch.setattr(sys, "argv", ["v2_bench_local.py", "eicu", str(source), str(summary_dir), "full"])
     monkeypatch.setitem(sys.modules, "formal_boot_live", SimpleNamespace(record={
         "tools": str(tmp_path), "src": str(tmp_path), "sha": "", "site_packages": "",
     }))
-    monkeypatch.setattr(v2_bench_local, "_affinity_selfcheck", lambda: len(os.sched_getaffinity(0)))
+    cpu_count = os.cpu_count() or 1
+    monkeypatch.setattr(v2_bench_local, "_affinity_selfcheck", lambda: cpu_count)
+    if not hasattr(psutil.Process, "cpu_affinity"):
+        monkeypatch.setattr(psutil.Process, "cpu_affinity", lambda self: range(cpu_count), raising=False)
     monkeypatch.setattr(v2_bench_local, "subprocess", SimpleNamespace(run=lambda *args, **kwargs: None))
     monkeypatch.setattr(v2_bench_local, "_cgroup_dir", lambda: tmp_path / "synthetic-cgroup")
-    monkeypatch.setenv("BENCH_MODULES", "renal")
+    # Native longitudinal publication requires the outcome module's LOS bounds.
+    monkeypatch.setenv("BENCH_MODULES", "renal,outcome")
     monkeypatch.delenv("BENCH_BATCH", raising=False)
+    # Register the environment slot so pytest restores it after main sets it.
     monkeypatch.setenv("FORMAL_WORKER_ORIGIN_DIR", str(summary_dir / "worker_origin"))
     v2_bench_local.main()
 
-    assert [(number, code) for number, _, _, code in read_attempts()] == [
-        (1, 0), (2, 9), (2, 0), (2, 9),
-    ]
-    with pytest.raises(formal_run_receipt.ReceiptError, match="database_run_reported_errors"):
-        formal_run_receipt._database_section(tmp_path, "eicu", str(source), "128-159", 0, "")
     summary = json.loads((summary_dir / "summary.json").read_text(encoding="utf-8"))
-    assert "requires every requested module to finish" in summary["exception"]
-    assert summary["exception_root"]["chain"] == ["NativeExportPublicationError", "ValueError"]
-
+    assert summary["batch_size"] is None
+    attempts = [json.loads(line) for line in batch_log.read_text(encoding="utf-8").splitlines()]
+    assert len(attempts) > 1
+    batch_size = attempts[0][0]
+    assert attempts == [
+        [min(batch_size, len(ids) - start), ids[start], ids[min(start + batch_size, len(ids)) - 1]]
+        for start in range(0, len(ids), batch_size)
+    ]
     output = summary_dir / "export"
-    manifest_path, = (output / ".easyicu-unpublished").glob("*/renal.manifest.json")
-    module = json.loads(manifest_path.read_text(encoding="utf-8"))
-    assert module["saved"] == {}
-    assert "stage 'subprocess_batch_load': batch 2: worker exited with code 9" in module["errors"][0]
-    assert not (output / "_manifest.json").exists()
-    assert not list(output.glob("*.parquet"))
+    if worker_exit:
+        with pytest.raises(formal_run_receipt.ReceiptError) as caught:
+            formal_run_receipt._database_section(tmp_path, "eicu", str(source), "", 0, "")
+        assert caught.value.code == "database_run_reported_errors"
+        assert caught.value.details == {
+            "database": "eicu",
+            "root_type": "builtins.ValueError",
+            "root_reason": None,
+            "chain": ["NativeExportPublicationError", "ValueError"],
+        }
+        assert "failures=['renal']" in summary["exception"]
+        manifest_path, = (output / ".easyicu-unpublished").glob("*/renal.manifest.json")
+        module = json.loads(manifest_path.read_text(encoding="utf-8"))
+        assert module["saved"] == {}
+        assert len(module["errors"]) == 1
+        assert module["resource_plan"]["batch_size"] == batch_size
+        failure = module["stream_failure"]
+        expected_failure = {
+            "exception_type": "StreamBatchWorkerKilled",
+            "failure_class": "worker_failed",
+            "memory_evidence": None,
+            "worker_exit_code": worker_exit,
+            "batch_index": len(attempts),
+            "start_offset": batch_size * (len(attempts) - 1),
+            "batch_size": batch_size,
+            "retries_used": 0,
+        }
+        assert {key: failure[key] for key in expected_failure} == expected_failure
+        assert not (output / "_manifest.json").exists()
+        assert not list(output.glob("*.parquet"))
+    else:
+        assert summary.get("errors") == [], summary.get("exception")
+        assert summary["worker_failures"] == 0
+        assert "_manifest.json" in summary["files"]
+        assert "renal.parquet" in summary["files"]
+        published = json.loads((output / "_manifest.json").read_text(encoding="utf-8"))
+        assert published["module_resource_plans"]["renal"]["batch_size"] == batch_size
+        assert published["time_window_authority"]["source"] == "outcome.los_icu"
+        native = pd.read_parquet(output / "renal.parquet", columns=["stay_id"])
+        assert set(native["stay_id"]) == set(range(1, 13)) | set(ids[-12:])
 
 
 @pytest.mark.parametrize("reasons", [{}, {"fio2_set": "required_source_table_missing"}])
