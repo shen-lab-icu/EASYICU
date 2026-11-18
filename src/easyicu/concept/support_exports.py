@@ -42,7 +42,7 @@ def _normalise_stay_filters(database, patient_ids):
     if not isinstance(patient_ids, Mapping):
         patient_ids = {config["id_col"]: patient_ids}
     for key, members in patient_ids.items():
-        if not pd.api.types.is_list_like(members):
+        if isinstance(members, Mapping) or not pd.api.types.is_list_like(members):
             raise ConceptTableReadError(
                 database=database, table=config["table"], stage="patient_ids",
                 detail=f"filter {key!r} requires a sequence of IDs",
@@ -87,10 +87,16 @@ def select_support_cohort(database, data_path, patient_ids):
     stay = config["id_col"]
     if filters is None:
         return None
-    if not filters or list(filters) == [stay]:
-        return {stay: list(filters[stay]) if filters else []}
+    if not filters:
+        return {stay: []}
     rows = _stay_table(database, data_path, [stay], filters=filters)
     require_unique_keys(rows, [stay], table=config["table"])
+    if list(filters) == [stay]:
+        # Preserve the caller's batch order and use the source's stay keys.
+        source_ids = pd.Index(rows[stay])
+        requested_ids = pd.Index(filters[stay], dtype=object, tupleize_cols=False).unique()
+        positions = source_ids.get_indexer(requested_ids)
+        return {stay: source_ids[positions[positions >= 0]].tolist()}
     return {stay: _selected_stays(rows, filters)[stay].tolist()}
 
 
@@ -103,7 +109,8 @@ def _valid_ordinal(values):
 
 
 def _all_within(mask, groups):
-    return mask.fillna(False).groupby(groups, sort=False).transform("all").eq(True)
+    # A missing group key cannot establish a group-wide fact.
+    return mask.fillna(False).groupby(groups, sort=False).transform("all").eq(True).fillna(False)
 
 
 def _first_by_clock(clock, groups):
@@ -115,11 +122,11 @@ def _first_by_clock(clock, groups):
 
 def _clock_reverses(rows, groups, column, *, ties=None):
     """Check known clock readings in the order established by another source field."""
-    known = rows.loc[np.isfinite(rows[column])]
+    known = rows.loc[np.isfinite(rows[column]).fillna(False)]
     group_keys = [known[key] for key in groups]
     clock = known[column]
     prior_max = clock.groupby(group_keys, sort=False).cummax().groupby(group_keys, sort=False).shift()
-    reversed_clock = clock.lt(prior_max)
+    reversed_clock = clock.lt(prior_max).fillna(False)
     if ties is not None:
         tied_value = known.groupby([*groups, ties], sort=False)[column].transform("nunique")
         reversed_clock |= tied_value.gt(1)
@@ -152,15 +159,17 @@ def _rank_identity(rows, *, database, stay, person, hospital, order):
         valid_count = _valid_ordinal(count)
         tied = rows.duplicated([person, "admissioncount"], keep=False)
         unresolved = rows.duplicated([person, "admissioncount", "admittedat"], keep=False)
-        valid &= valid_count & ~unresolved & (~tied | np.isfinite(rows["admittedat"]))
+        valid &= valid_count & ~unresolved & (~tied | np.isfinite(rows["admittedat"]).fillna(False))
         valid &= ~_clock_reverses(_sort_stays(rows, order), [person], "admittedat").reindex(rows.index)
         proven_later = valid_count & count.gt(1)
     elif database == "sic":
         offset = rows["OffsetAfterFirstAdmission"]
         icu_offset = rows["ICUOffset"]
-        malformed_icu_offset = icu_offset.notna() & (~np.isfinite(icu_offset) | icu_offset.lt(0))
+        finite_offset = np.isfinite(offset).fillna(False)
+        finite_icu_offset = np.isfinite(icu_offset).fillna(False)
+        malformed_icu_offset = icu_offset.notna() & (~finite_icu_offset | icu_offset.lt(0))
         rows["ICUOffset"] = icu_offset.mask(malformed_icu_offset)
-        valid &= np.isfinite(offset) & offset.ge(0)
+        valid &= finite_offset & offset.ge(0)
         sort_order = ["OffsetAfterFirstAdmission", "ICUOffset", stay]
         rows["_icu_start"] = offset + rows["ICUOffset"]
         sorted_cases = _sort_stays(rows, sort_order)
@@ -171,7 +180,7 @@ def _rank_identity(rows, *, database, stay, person, hospital, order):
         tied_admission = rows.duplicated([person, "OffsetAfterFirstAdmission"], keep=False)
         tied_icu = rows["_icu_start"].notna() & rows.duplicated([person, "_icu_start"], keep=False)
         complete &= ~tied_icu & (~tied_admission | rows["ICUOffset"].notna())
-        proven_later = np.isfinite(offset) & offset.gt(0)
+        proven_later = finite_offset & offset.gt(0)
     elif database == "eicu":
         groups = [rows[person], rows[hospital]]
         visit = rows["unitvisitnumber"]
@@ -183,23 +192,24 @@ def _rank_identity(rows, *, database, stay, person, hospital, order):
         rows["_visit_order"] = visit.where(by_visit)
         sort_order = ["hospitaldischargeyear", hospital, "_visit_order", "hospitaladmitoffset", stay]
         offset = rows["hospitaladmitoffset"]
-        hospital_clock = -offset.where(np.isfinite(offset))
+        finite_offset = np.isfinite(offset).fillna(False)
+        hospital_clock = -offset.where(finite_offset)
         first_hospital = _first_by_clock(visit.where(by_visit), groups).where(
             by_visit, _first_by_clock(hospital_clock, groups),
         )
         later_visit = valid_visit & visit.gt(1)
         all_later = _all_within(later_visit, groups)
-        known_clocks = _sort_stays(rows.loc[valid_visit & np.isfinite(offset)], ["hospitaladmitoffset", "unitvisitnumber"])
+        known_clocks = _sort_stays(rows.loc[valid_visit & finite_offset], ["hospitaladmitoffset", "unitvisitnumber"])
         reversed_visit = _clock_reverses(known_clocks, [person, hospital], "unitvisitnumber")
         starts_with_return = ~by_visit & first_hospital.fillna(False) & later_visit & ~all_later
         contradicted = ~_all_within(~(reversed_visit.reindex(rows.index, fill_value=False) | starts_with_return), groups)
-        first_hospital = first_hospital.mask(contradicted).mask(later_visit | all_later, False)
-        proven_later = (first_hospital.eq(False).fillna(False) & ~contradicted) | all_later
+        first_hospital = first_hospital.mask(later_visit, False).mask(contradicted).mask(all_later, False)
+        proven_later = first_hospital.eq(False).fillna(False)
         year = rows["hospitaldischargeyear"]
         same_year = year.groupby(groups, sort=False).transform("nunique").eq(1)
         valid_offset = hospital_clock.notna() & ~rows.duplicated([person, hospital, "hospitaladmitoffset"], keep=False)
         hospital_valid = (by_visit | valid_offset) & ~contradicted
-        valid &= rows[hospital].notna() & hospital_valid & np.isfinite(year) & same_year
+        valid &= rows[hospital].notna() & hospital_valid & np.isfinite(year).fillna(False) & same_year
         admission_count = rows.groupby([person, "hospitaldischargeyear"], sort=False)[hospital].transform("nunique")
         hospital_positions = _sort_stays(rows, sort_order).groupby([person, hospital], sort=False).cumcount() + 1
         complete &= admission_count.eq(1) & (~valid_visit | visit.le(hospital_positions))
@@ -211,6 +221,7 @@ def _rank_identity(rows, *, database, stay, person, hospital, order):
     # A sibling with an unknown position can precede any ranked stay.
     rankable = _all_within(valid, rows[person])
     rows = _sort_stays(rows, sort_order)
+    complete = complete.reindex(rows.index)
     ranked = rows.loc[rankable]
     positions = ranked.groupby(person, sort=False).cumcount()
     ordinal = positions + 1
@@ -447,17 +458,22 @@ def load_pao2_arterial_hourly_min(load_concepts, *, native_charttime_axis, **kwa
     columns = [stay, "charttime", "po2", status]
     if isinstance(loaded, Mapping):
         if not loaded:
-            return pd.DataFrame(columns=columns)
+            return pd.DataFrame({
+                stay: pd.Series(dtype="int64"),
+                "charttime": pd.Series(dtype="float64"),
+                "po2": pd.Series(dtype="float64"),
+                status: pd.Series(dtype="string"),
+            })
         loaded = loaded["po2"]
     if isinstance(loaded, pd.DataFrame):
         loaded = native_charttime_axis(loaded)
     else:
         loaded = loaded.data.rename(columns={loaded.index_column: "charttime"})
+    if status not in loaded:
+        loaded = loaded.assign(**{status: pd.Series(pd.NA, index=loaded.index, dtype="string")})
     if loaded.empty:
         return loaded.reindex(columns=columns)
 
-    if status not in loaded:
-        loaded = loaded.assign(**{status: pd.Series(pd.NA, index=loaded.index, dtype="string")})
     observed = loaded.loc[loaded.po2.notna(), columns].copy()
     if observed.empty:
         return observed

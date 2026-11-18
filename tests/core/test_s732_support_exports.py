@@ -19,6 +19,7 @@ from easyicu.concept.sicdb_sources import COVERAGE_ATTR
 from easyicu.concept.support_exports import load_imv_first_episode, load_stay_identity
 from easyicu.config import DataSourceRegistry
 from easyicu.databases import profiles
+from easyicu.storage_binding import binding_unit
 from easyicu.synthetic_sources import generate_source
 from easyicu.table import TsTbl, WinTbl
 from tests.support.aumc_source import aumc_db
@@ -45,6 +46,13 @@ def _check_stay_order_invariants(monkeypatch):
 
     def rank_and_check(rows, **identity):
         ranked = rank_identity(rows, **identity)
+        person_first = ranked.is_first_icu_stay
+        hospital_first = ranked.is_first_icu_stay_of_hospital_admission
+        hospital = identity["hospital"]
+        if hospital:
+            known_admission = ranked[hospital].notna()
+            assert hospital_first[known_admission & person_first.fillna(False)].fillna(False).all()
+        assert person_first[hospital_first.eq(False).fillna(False)].eq(False).fillna(False).all()
         for _, history in ranked.groupby(identity["person"], sort=False, dropna=False):
             if history.stay_order.notna().any():
                 assert history.stay_order.sort_values().tolist() == list(range(1, len(history) + 1))
@@ -158,6 +166,16 @@ def test_aumc_partial_history_keeps_known_return_flags(tmp_path):
     assert actual.is_first_icu_stay_of_hospital_admission.isna().all()
 
 
+def test_aumc_nullable_timestamps_leave_distinct_admission_counts_rankable(tmp_path):
+    _write(pd.DataFrame({
+        "admissionid": [26, 14, 72], "patientid": 51, "admissioncount": [3, 1, 2],
+        "admittedat": pd.Series([985_000, 125_000, pd.NA], dtype="Int64"),
+    }), tmp_path / "admissions.parquet")
+    actual = load_stay_identity(database="aumc", data_path=tmp_path).set_index("admissionid")
+    pd.testing.assert_extension_array_equal(actual.loc[[14, 72, 26], "stay_order"].array, pd.array([1, 2, 3]))
+    assert actual.loc[[14, 72, 26], "is_first_icu_stay"].tolist() == [True, False, False]
+
+
 @pytest.mark.parametrize("last_count", [3, 5], ids=["continuous-history", "skipped-admission"])
 def test_aumc_only_earliest_dated_count_one_can_be_first_even_after_selection(tmp_path, last_count):
     _write(pd.DataFrame({
@@ -210,6 +228,19 @@ def test_eicu_resets_visit_number_at_each_hospital_admission(tmp_path):
     assert actual.loc[[1, 2, 3, 4, 5, 6, 7], "is_first_icu_stay_of_hospital_admission"].tolist() == [
         False, False, True, False, True, False, True,
     ]
+
+
+def test_eicu_nullable_offsets_leave_distinct_visits_rankable(tmp_path):
+    _write(pd.DataFrame({
+        "patientunitstayid": [62, 19, 44, 57], "uniquepid": ["person-k", "person-k", "person-k", "person-b"],
+        "patienthealthsystemstayid": pd.Series([71, 71, 71, pd.NA], dtype="Int64"),
+        "hospitaldischargeyear": 2019, "unitvisitnumber": pd.Series([3, 1, 2, 1], dtype="Int64"),
+        "hospitaladmitoffset": pd.Series([-840, -95, pd.NA, -160], dtype="Int64"),
+    }), tmp_path / "patient.parquet")
+    actual = load_stay_identity(database="eicu", data_path=tmp_path).set_index("patientunitstayid")
+    pd.testing.assert_extension_array_equal(actual.loc[[19, 44, 62], "stay_order"].array, pd.array([1, 2, 3]))
+    assert actual.loc[[19, 44, 62], "is_first_icu_stay_of_hospital_admission"].tolist() == [True, False, False]
+    assert actual.loc[57, ["is_first_icu_stay", "is_first_icu_stay_of_hospital_admission"]].isna().all()
 
 
 @pytest.mark.parametrize(
@@ -271,8 +302,9 @@ def test_eicu_repeated_visit_numbers_require_a_complete_hospital_clock(tmp_path,
         assert actual.stay_order.isna().all()
         assert actual.loc[[82, 65], flags].isna().all(axis=None)
     later = actual.loc[[27, 94], flags]
-    assert later.is_first_icu_stay_of_hospital_admission.tolist() == [False, False]
-    assert later.is_first_icu_stay.array.equals(pd.array([later_person_first] * 2, dtype="boolean"))
+    expected_later = pd.array([later_person_first] * 2, dtype="boolean")
+    assert later.is_first_icu_stay.array.equals(expected_later)
+    assert later.is_first_icu_stay_of_hospital_admission.array.equals(expected_later)
 
 
 @pytest.mark.parametrize("later_offset", [-780, None], ids=["rank-by-offset", "missing-offset"])
@@ -322,11 +354,17 @@ def test_eicu_clear_first_does_not_resolve_later_history(tmp_path, later_year_an
 
 
 @pytest.mark.parametrize(
-    "visits,offsets",
-    [([2, 3], [-35, -110]), ([1, 2], [-110, -35]), ([1, 3], [-35, -110])],
-    ids=["first-admission-starts-late", "visit-and-offset-disagree", "skipped-icu-visit"],
+    "visits,offsets,hospital_first",
+    [
+        ([2, 3], [-35, -110], [False, False]),
+        ([1, 2], [-110, -35], [pd.NA, pd.NA]),
+        ([1, 3], [-35, -110], [True, False]),
+        ([3, 4], [-220, -70], [False, False]),
+    ],
+    ids=["first-admission-starts-late", "visit-and-offset-disagree", "skipped-icu-visit",
+         "reversed-clocks-both-visits-after-first"],
 )
-def test_eicu_admission_requires_a_complete_consistent_clock(tmp_path, visits, offsets):
+def test_eicu_admission_requires_a_complete_consistent_clock(tmp_path, visits, offsets, hospital_first):
     _write(pd.DataFrame({
         "patientunitstayid": [46, 27], "uniquepid": "person-j", "patienthealthsystemstayid": 95,
         "hospitaldischargeyear": 2017, "unitvisitnumber": visits, "hospitaladmitoffset": offsets,
@@ -334,8 +372,22 @@ def test_eicu_admission_requires_a_complete_consistent_clock(tmp_path, visits, o
     actual = load_stay_identity(database="eicu", data_path=tmp_path).set_index("patientunitstayid")
     assert actual.stay_order.isna().all()
     assert not actual.loc[[27], "is_first_icu_stay"].fillna(False).any()
-    if visits[0] == 2:
+    assert actual.loc[[46, 27], "is_first_icu_stay_of_hospital_admission"].array.equals(
+        pd.array(hospital_first, dtype="boolean")
+    )
+    if min(visits) > 1:
         assert actual.is_first_icu_stay.eq(False).all()
+
+
+def test_sic_nullable_year_and_icu_offset_leave_distinct_admission_offsets_rankable(tmp_path):
+    _write(pd.DataFrame({
+        "CaseID": [81, 53, 27], "PatientID": 15, "OffsetAfterFirstAdmission": [30_000, 0, 18_000],
+        "AdmissionYear": pd.Series([2021, 2020, pd.NA], dtype="Int64"),
+        "ICUOffset": pd.Series([0, 210, pd.NA], dtype="Int64"),
+    }), tmp_path / "cases.parquet")
+    actual = load_stay_identity(database="sic", data_path=tmp_path).set_index("CaseID")
+    pd.testing.assert_extension_array_equal(actual.loc[[53, 27, 81], "stay_order"].array, pd.array([1, 2, 3]))
+    assert actual.loc[[53, 27, 81], "is_first_icu_stay"].tolist() == [True, False, False]
 
 
 @pytest.mark.parametrize(
@@ -415,7 +467,7 @@ def test_hirid_uses_stay_as_person_without_longitudinal_linkage(tmp_path):
 
 
 @pytest.mark.parametrize("module", ["stay_identity", "imv_first_episode"])
-@pytest.mark.parametrize("selector", ["sequence", "intersection", "absent-column"])
+@pytest.mark.parametrize("selector", ["sequence", "intersection", "absent-column", "mapping-as-ids"])
 def test_support_selectors_are_applied_before_publication(tmp_path, module, selector):
     _write(pd.DataFrame({
         "patientunitstayid": [33, 72, 18], "uniquepid": ["s", "s", "d"],
@@ -434,39 +486,84 @@ def test_support_selectors_are_applied_before_publication(tmp_path, module, sele
         assert set(load([72, 18]).patientunitstayid) == {72, 18}
     elif selector == "intersection":
         assert load({"patientunitstayid": [33, 72], "hospitalid": [86]}).patientunitstayid.tolist() == [72]
-    else:
+    elif selector == "absent-column":
         with pytest.raises(ConceptTableReadError, match="unrecorded_encounter"):
             load({"patientunitstayid": [], "unrecorded_encounter": [3]})
+    else:
+        with pytest.raises(ConceptTableReadError) as error:
+            load({"patientunitstayid": {72: "selected"}})
+        assert error.value.stage == "patient_ids"
 
 
-def test_streamed_support_modules_publish_only_the_intersection(tmp_path):
+@pytest.mark.parametrize(
+    "selection,expected_stays",
+    [
+        ({"PatientID": [101, 202], "CaseID": [2, 3]}, [2]),
+        ([2, 2], [2]),
+        ({"CaseID": [2, 931]}, [2]),
+        ([931], []),
+        ([3, 2, 3, 931], [3, 2]),
+    ],
+    ids=["selector-intersection", "repeated-requested-id", "requested-id-absent-from-source",
+         "all-requested-ids-absent", "keep-requested-batch-order"],
+)
+def test_streamed_support_modules_publish_only_existing_selected_stays(tmp_path, selection, expected_stays):
     generate_source(tmp_path / "source", "sic", stays=3)
     source = tmp_path / "source"
     cases = pd.read_parquet(source / "cases.parquet")
     _write(cases.assign(PatientID=[101, 202, 303], OffsetAfterFirstAdmission=0), source / "cases.parquet")
+    with binding_unit():
+        assert support_exports.select_support_cohort("sic", source, selection) == {"CaseID": expected_stays}
+
     output = tmp_path / "out"
-    result = extract_database(
-        "sic", data_path=source, output_dir=output, modules=list(SUPPORT_MODULES[:2]),
-        patient_ids={"PatientID": [101, 202], "CaseID": [2, 3]},
+    extract_kwargs = dict(
+        database="sic", data_path=source, output_dir=output, modules=list(SUPPORT_MODULES[:2]),
+        patient_ids=selection,
         native_export_v2=True, max_workers=1, stream_output_batches=True, batch_size=1,
     )
-    assert result["num_patients"] == 1
+    if not expected_stays:
+        with pytest.raises(ValueError, match="num_patients must be positive"):
+            extract_database(**extract_kwargs)
+        assert not output.exists()
+        return
+    result = extract_database(**extract_kwargs)
+    assert result["num_patients"] == len(expected_stays)
     for module in SUPPORT_MODULES[:2]:
-        assert pd.read_parquet(output / f"{module}.parquet").stay_id.tolist() == [2]
+        assert pd.read_parquet(output / f"{module}.parquet").stay_id.tolist() == sorted(expected_stays)
 
 
-def test_miiv_demo_without_procedures_reports_unavailable(tmp_path, demo_support_registry):
+def test_support_cohort_rejects_duplicate_source_keys_before_publication(tmp_path):
+    source = tmp_path / "source"
+    generate_source(source, "sic", stays=3)
+    cases_path = source / "cases.parquet"
+    cases = pd.read_parquet(cases_path)
+    _write(pd.concat([cases, cases.iloc[[1]]], ignore_index=True), cases_path)
+    output = tmp_path / "out"
+    with pytest.raises(ValueError, match="identity keys must be non-missing and unique"):
+        extract_database(
+            "sic", data_path=source, output_dir=output, modules=list(SUPPORT_MODULES[:2]),
+            patient_ids=[2], native_export_v2=True, max_workers=1, stream_output_batches=True, batch_size=1,
+        )
+    assert not output.exists()
+
+
+@pytest.mark.parametrize("procedures_present", [False, True], ids=["table-absent", "table-present-zero-rows"])
+def test_miiv_demo_distinguishes_an_absent_source_from_an_empty_source(
+    tmp_path, demo_support_registry, procedures_present,
+):
     _write(pd.DataFrame({"stay_id": [31]}), tmp_path / "icustays.parquet")
+    if procedures_present:
+        _write(pd.DataFrame({"stay_id": pd.Series(dtype="int64")}), tmp_path / "procedureevents.parquet")
 
     def empty_procedures(*, concepts, availability_sink, **kwargs):
         availability_sink["mech_vent"] = ConceptAvailabilityRecord(
-            concept="mech_vent", database="miiv_demo", reason="data_missing",
+            concept="mech_vent", database="miiv_demo", reason="mapped_present",
         )
         empty_rows = pd.DataFrame({"stay_id": pd.Series(dtype="int64"), "charttime": pd.Series(dtype="float64")})
         return dict.fromkeys(concepts, TsTbl(empty_rows, "stay_id", "charttime"))
 
     episode = load_imv_first_episode(empty_procedures, database="miiv_demo", data_path=tmp_path).iloc[0]
-    assert episode.episode_status == "source_unavailable"
+    assert episode.episode_status == ("no_invasive_episode" if procedures_present else "source_unavailable")
 
 
 def test_miiv_episode_gap_niv_and_explicit_boundaries(tmp_path):
@@ -646,9 +743,12 @@ def test_sic_episode_uses_exact_partial_hours_and_rule(tmp_path):
     assert rows.loc[3, "episode_status"] == "no_invasive_episode"
 
 
-@pytest.mark.parametrize("value", [None, 76.], ids=["no-measurement", "no-specimen-status-column"])
-def test_hourly_min_handles_a_missing_status_column(value):
-    data = pd.DataFrame({"stay_id": [57], "charttime": [1.25], "po2": [value]})
+@pytest.mark.parametrize(
+    "measurements", [[None], [76.], []],
+    ids=["no-measurement", "no-specimen-status-column", "zero-observation-rows"],
+)
+def test_hourly_min_handles_a_missing_status_column(measurements):
+    data = pd.DataFrame({"stay_id": 57, "charttime": 1.25, "po2": pd.Series(measurements, dtype="float64")})
 
     def load(*, merge, **kwargs):
         return data if merge else {"po2": TsTbl(data, "stay_id", "charttime")}
@@ -657,11 +757,10 @@ def test_hourly_min_handles_a_missing_status_column(value):
         "concepts": ["po2"], "database": "miiv", "merge": True,
     })
     assert list(result.columns) == ["stay_id", "charttime", "po2", "po2_specimen_status"]
-    if value is None:
-        assert result.empty
-    else:
+    assert isinstance(result.po2_specimen_status.dtype, pd.StringDtype)
+    assert result.po2.tolist() == data.po2.dropna().tolist()
+    if not result.empty:
         assert result.charttime.tolist() == [1.]
-        assert result.po2.tolist() == [value]
         assert result.po2_specimen_status.isna().all()
 
 
@@ -687,6 +786,9 @@ def test_hourly_min_accepts_concept_batch_results(observed):
         }
     else:
         assert result.empty
+        assert result.dtypes.astype(str).to_dict() == {
+            "admissionid": "int64", "charttime": "float64", "po2": "float64", "po2_specimen_status": "string",
+        }
 
 
 def test_hourly_min_keeps_the_winning_eicu_sample_status(tmp_path, monkeypatch):
