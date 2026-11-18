@@ -110,6 +110,7 @@ def first_in_hosp_column_metadata(metadata, receipt):
     )
 
 PINNED_SUPPORT_MODULES = frozenset({"imv_recorded_compat", "rrt_time"})
+_PINNED_DATABASE_FAMILIES = frozenset({"aumc", "eicu", "hirid", "miiv", "mimic", "sic"})
 _PINNED_D0_RELEASE = "20261117_d93795ce4_default_r14"
 _PINNED_D0_MANIFEST_SHA16 = "7f14448b9d9d1870"
 _HOURLY_CONTRACT_PATH = Path(
@@ -158,6 +159,14 @@ class PinnedInputError(ValueError):
         super().__init__(f"{reason_code}: {module}" if module else reason_code)
 
 
+def normalize_pinned_database(database: str) -> str:
+    """Resolve a canonical D0 family or its single demo alias without storage access."""
+    family = database.removesuffix("_demo") if isinstance(database, str) else None
+    if family not in _PINNED_DATABASE_FAMILIES:
+        raise PinnedInputError("pinned_database_not_allowed")
+    return family
+
+
 def _pinned_manifest(module, family, *, inputs=(), frozen_release_parameter=None):
     allowed = _PINNED_COLUMNS.get((module, family), {})
     span = module == "imv_recorded_compat" and family == "hirid"
@@ -202,11 +211,11 @@ def thesis_support_manifest(module: str, database: str, fields: Collection[str],
     """Report raw input provenance or the frozen producer's missing inputs."""
     if module not in THESIS_SUPPORT_MODULES:
         raise KeyError(module)
+    if module in PINNED_SUPPORT_MODULES:
+        return _pinned_manifest(module, normalize_pinned_database(database))
     family = database.removesuffix("_demo")
     if module == FIRST_IN_HOSP_FROZEN:
         return _first_in_hosp_manifest(family, fields, source_file)
-    if module in PINNED_SUPPORT_MODULES:
-        return _pinned_manifest(module, family)
     raw = _PEEP.get(family) if module == "observed_peep_set" else None
     if raw is None:
         return {"source": None, "status": "no_frozen_reducer"}
@@ -231,10 +240,9 @@ def _empty(module: str, stay: str) -> pd.DataFrame:
     })
 
 
-def validate_pinned_inputs(module, database, inputs):
+def validate_pinned_inputs(module, family, inputs):
     """Refuse forbidden declarations without resolving or opening any path."""
-    database = database.removesuffix("_demo")
-    allowed = _PINNED_COLUMNS.get((module, database), {})
+    allowed = _PINNED_COLUMNS.get((module, family), {})
     seen = set()
     for entry in inputs:
         if not isinstance(entry, PinnedModuleInput):
@@ -249,15 +257,15 @@ def validate_pinned_inputs(module, database, inputs):
                 or set(entry.allowed_columns) != set(allowed[name])):
             raise PinnedInputError("pinned_columns_not_allowed", name)
         path = Path(entry.path)
-        if path.name != f"{name}.parquet" or path.parent.name != database:
+        if path.name != f"{name}.parquet" or path.parent.name != family:
             raise PinnedInputError("pinned_path_not_allowed", name)
         if not re.fullmatch(r"[0-9a-f]{64}", entry.expected_sha256):
             raise PinnedInputError("pinned_sha256_invalid", name)
 
 
-def validate_frozen_release_parameter(module, database, parameter):
+def validate_frozen_release_parameter(module, family, parameter):
     """Reject unrelated parameters and manifest scopes before accessing files."""
-    if module != "imv_recorded_compat" or database.removesuffix("_demo") not in _HOURLY_IMV_DATABASES:
+    if module != "imv_recorded_compat" or family not in _HOURLY_IMV_DATABASES:
         raise PinnedInputError("frozen_release_parameter_not_allowed")
     _frozen_release_parameter_path(parameter)
 
@@ -314,8 +322,9 @@ def _file_state(handle):
 @contextmanager
 def open_pinned_modules(module, database, inputs):
     """Verify every file before any Parquet decoder is called, then reuse its descriptor."""
+    family = normalize_pinned_database(database)
     inputs = tuple(inputs)
-    validate_pinned_inputs(module, database, inputs)
+    validate_pinned_inputs(module, family, inputs)
     with ExitStack() as stack:
         verified = {}
         for entry in inputs:
@@ -359,15 +368,14 @@ def read_pinned_columns(opened, *, stays=None):
     return pq.read_table(handle, columns=list(entry.allowed_columns), filters=filters).to_pandas()
 
 
-def pinned_stay_ids(database, patient_ids):
+def pinned_stay_ids(family, patient_ids):
     """Resolve explicit stay keys directly, without consulting a raw identity table."""
-    database = database.removesuffix("_demo")
     if patient_ids is None:
-        if database == "miiv":
+        if family == "miiv":
             raise ValueError("MIIV thesis support requires an explicit allowed stay cohort")
         return None
     if isinstance(patient_ids, Mapping):
-        stay = DATABASE_ID_CONFIG[database]["id_col"]
+        stay = DATABASE_ID_CONFIG[family]["id_col"]
         if len(patient_ids) != 1 or next(iter(patient_ids)) not in {stay, "stay_id"}:
             raise PinnedInputError("pinned_cohort_requires_stay_ids")
         patient_ids = next(iter(patient_ids.values()))
@@ -443,7 +451,7 @@ def read_frozen_release_parameter(parameter: FrozenReleaseParameter) -> dict:
     }
 
 
-def _valid_los_hours(outcome, clock):
+def _valid_los_hours(outcome, clock, *, reject_infinite=False):
     # hourly_core.py:108-160. The hashed config declares the clock and spine source.
     if (clock["spine_source"], clock["spine_source_unit"], clock["source_time"]) != (
         "outcome.los_icu", "days", "ICU-relative charttime in hours",
@@ -451,6 +459,8 @@ def _valid_los_hours(outcome, clock):
         raise PinnedInputError("frozen_hourly_clock_unsupported")
     require_unique_keys(outcome, ["stay_id"], table="outcome")
     los = pd.to_numeric(outcome.set_index("stay_id")["los_icu"], errors="coerce")
+    if reject_infinite and np.isinf(los).any():
+        raise PinnedInputError("pinned_icu_los_invalid", "outcome")
     return los[los.notna() & np.isfinite(los) & los.gt(0)].astype("float64") * 24.0
 
 
@@ -498,9 +508,10 @@ def _first_hourly_imv_episode(source, los_hours, clock, gap):
     if clock["last_hour"] != "ceil(los_icu * 24) - 1":
         raise PinnedInputError("frozen_hourly_clock_unsupported")
     source = source.loc[source["mech_vent"].notna() & source["stay_id"].isin(los_hours.index)]
-    hour = np.floor(pd.to_numeric(source["charttime"], errors="coerce"))
-    if hour.isna().any():
+    time = pd.to_numeric(source["charttime"], errors="coerce")
+    if not np.isfinite(time).fillna(False).all():
         raise PinnedInputError("pinned_vent_hour_invalid", "respiratory")
+    hour = np.floor(time)
     last = source["stay_id"].map(np.ceil(los_hours) - 1)
     on_spine = hour.between(clock["first_hour"], last)
     source = source.loc[on_spine].assign(charttime=hour.loc[on_spine].astype("int32"))
@@ -540,7 +551,7 @@ def _load_pinned_support(frame, module, database, patient_ids, pinned_inputs, fr
     with open_pinned_modules(module, database, inputs) as opened:
         if stays != set():
             outcome = read_pinned_columns(opened["outcome"], stays=stays)
-            los = _valid_los_hours(outcome, contract["time_contract"])
+            los = _valid_los_hours(outcome, contract["time_contract"], reject_infinite=parameter is not None)
             if los.empty:
                 raise PinnedInputError("pinned_no_valid_icu_los", "outcome")
             if module == "rrt_time":
@@ -652,10 +663,10 @@ def load_thesis_support(
     frozen_release_parameter: FrozenReleaseParameter | None = None,
 ) -> pd.DataFrame:
     """Rebuild the frozen support projection for the explicitly selected input."""
-    if frozen_release_parameter is not None:
-        validate_frozen_release_parameter(module, database, frozen_release_parameter)
-    family = database.removesuffix("_demo")
     pinned_module = module in PINNED_SUPPORT_MODULES
+    family = normalize_pinned_database(database) if pinned_module else database.removesuffix("_demo")
+    if frozen_release_parameter is not None:
+        validate_frozen_release_parameter(module, family, frozen_release_parameter)
     stay = DATABASE_ID_CONFIG[family if pinned_module else database]["id_col"]
     frame = _empty(module, stay)
     frame.attrs["available_fields"] = []

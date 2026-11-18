@@ -9013,11 +9013,11 @@ def _extract_pinned_thesis_support(
     import json
 
     from ..concept.thesis_support import (
-        PINNED_SUPPORT_MODULES, PinnedInputError, load_thesis_support, pinned_stay_ids,
+        PINNED_SUPPORT_MODULES, PinnedInputError, load_thesis_support, normalize_pinned_database, pinned_stay_ids,
         validate_frozen_release_parameter, validate_pinned_inputs, validate_shared_pinned_inputs,
     )
 
-    database = database.removesuffix("_demo")
+    database = normalize_pinned_database(database)
     selected = list(dict.fromkeys(pinned_inputs if modules is None else modules))
     if (not selected or set(selected) - PINNED_SUPPORT_MODULES
             or set(pinned_inputs) - set(selected)):

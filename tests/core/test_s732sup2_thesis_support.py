@@ -812,7 +812,10 @@ def test_first_in_hosp_reference_rejects_changed_source_resolution(tmp_path, mon
 
 def test_first_in_hosp_reference_rechecks_hash_after_query_when_stat_is_unchanged(tmp_path, monkeypatch):
     source = tmp_path / "source"
-    _, original, _, _ = _first_in_hosp_source(source, "aumc")
+    _, original, field, _ = _first_in_hosp_source(source, "aumc")
+    replacement = pd.read_parquet(original)
+    replacement.loc[0, field] = 4
+    replacement_bytes = replacement.to_parquet(index=False)
     version = storage_binding._version
     original_version = version("admissions", str(original))
     connect = frozen_equivalence.duckdb_spill.connection
@@ -820,14 +823,14 @@ def test_first_in_hosp_reference_rechecks_hash_after_query_when_stat_is_unchange
     hash_checks = []
 
     def unchanged_stat(table, path):
-        return original_version if path == str(original) else version(table, path)
+        return original_version if Path(path).resolve() == original else version(table, path)
 
     @contextmanager
     def rewrite_after_query():
         with connect() as con:
             yield con
-        data = original.read_bytes()
-        original.write_bytes(data[:-1] + bytes([data[-1] ^ 1]))
+        # Keep the Parquet footer readable so the content hash detects the change.
+        original.write_bytes(replacement_bytes)
 
     def observe_bind(table, paths, *, sha256=False):
         hash_checks.append(sha256)
@@ -845,3 +848,64 @@ def test_first_in_hosp_reference_rechecks_hash_after_query_when_stat_is_unchange
     assert error.value.reason == "storage_source_changed"
     assert error.value.path == ""
     assert hash_checks == [True, True]
+
+
+@pytest.mark.parametrize("change", ["retarget-link", "unlink", "add-shard"])
+def test_first_in_hosp_reference_rechecks_source_during_query(tmp_path, monkeypatch, change):
+    source = tmp_path / "source"
+    _, original, _, _ = _first_in_hosp_source(source, "aumc")
+    installed = source / original.name
+    replacement = original.with_name("night-shift-replacement.parquet")
+    replacement.write_bytes(original.read_bytes())
+    if change == "add-shard":
+        shards = source / "admissions"
+        shards.mkdir()
+        (shards / "morning-rounds.parquet").write_bytes(original.read_bytes())
+        installed.unlink()
+        original.unlink()
+    connect = frozen_equivalence.duckdb_spill.connection
+
+    @contextmanager
+    def change_during_query():
+        with connect() as con:
+            def execute(sql):
+                result = con.execute(sql)
+                if "CREATE TEMP TABLE ordk" in sql:
+                    if change == "add-shard":
+                        (shards / "evening-rounds.parquet").write_bytes(replacement.read_bytes())
+                    else:
+                        installed.unlink()
+                        if change == "retarget-link":
+                            installed.symlink_to(replacement)
+                return result
+
+            yield SimpleNamespace(execute=execute)
+
+    monkeypatch.setattr(frozen_equivalence, "duckdb_spill", SimpleNamespace(connection=change_during_query))
+    with pytest.raises(storage_binding.StorageSourceChanged) as error:
+        frozen_equivalence.run_equivalence(database="aumc", module=FIRST_IN_HOSP_FROZEN, db_root=source)
+    assert error.value.reason == "storage_source_changed"
+    assert error.value.path == ""
+    assert ".parquet" not in str(error.value)
+
+
+@pytest.mark.parametrize("fault", [OSError, RuntimeError, storage_binding.StorageIntegrityError])
+def test_first_in_hosp_reference_sanitizes_postquery_binding_errors(tmp_path, monkeypatch, fault):
+    source = tmp_path / "source"
+    _, original, _, _ = _first_in_hosp_source(source, "sic")
+    bind = frozen_equivalence.bind_files
+    checks = []
+
+    def fail_second_binding(*args, **kwargs):
+        checks.append(True)
+        if len(checks) == 2:
+            raise fault(str(original))
+        return bind(*args, **kwargs)
+
+    monkeypatch.setattr(frozen_equivalence, "bind_files", fail_second_binding)
+    with pytest.raises(storage_binding.StorageSourceChanged) as error:
+        frozen_equivalence.run_equivalence(database="sic", module=FIRST_IN_HOSP_FROZEN, db_root=source)
+    assert error.value.reason == "storage_source_changed"
+    assert error.value.path == ""
+    assert ".parquet" not in str(error.value)
+    assert error.value.__suppress_context__

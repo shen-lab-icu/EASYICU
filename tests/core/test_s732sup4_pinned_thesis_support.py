@@ -455,7 +455,7 @@ def test_hourly_imv_refuses_an_unordered_mode_in_an_on_spine_collision(tmp_path)
     assert error.value.reason_code == "pinned_vent_type_invalid"
 
 
-def test_miiv_demo_uses_the_release_family_with_explicit_stays(tmp_path):
+def test_miiv_demo_uses_the_release_family_with_explicit_stays(tmp_path, capsys):
     parameter = _episode_parameter(tmp_path, common_version="v0.4")
     inputs = _episode_inputs(tmp_path, "miiv")
     args = dict(database="miiv_demo", module=_IMV, pinned_inputs=inputs, frozen_release_parameter=parameter)
@@ -463,6 +463,18 @@ def test_miiv_demo_uses_the_release_family_with_explicit_stays(tmp_path):
     assert rows.values.tolist() == [[102, 1., True, 1.]]
     assert rows.attrs["thesis_support"]["frozen_release_parameter"]["common_version"] == "v0.4"
     assert frozen_equivalence.run_equivalence(**args, stay_ids=[102])["status"] == "agree"
+    cohort = tmp_path / "night-rounds-stays.parquet"
+    pd.DataFrame({"stay_id": [102]}).to_parquet(cohort, index=False)
+    cli = [
+        "--database", "miiv_demo", "--module", _IMV, "--stay-ids-file", str(cohort),
+        "--frozen-release-parameter", str(parameter.path), parameter.expected_sha256,
+        "--common-version", parameter.common_version,
+    ]
+    for pin in inputs:
+        cli.extend(["--pinned-input", pin.module, str(pin.path), pin.expected_sha256, ",".join(pin.allowed_columns)])
+    assert frozen_equivalence.main(cli) == 0
+    assert json.loads(capsys.readouterr().out)["status"] == "agree"
+
     output = tmp_path / "night-rounds-export"
     extract_database(
         "miiv_demo", pinned_inputs={_IMV: inputs}, frozen_release_parameter=parameter,
@@ -564,3 +576,102 @@ def test_cli_uses_requested_gap_version_and_catches_planted_episode_end(tmp_path
     captured = capsys.readouterr()
     assert json.loads(captured.out)["status"] == "different"
     assert not captured.err and str(tmp_path) not in captured.out and "101" not in captured.out
+
+
+@pytest.mark.parametrize(("bad_hour", "los", "reason"), [
+    (float("inf"), 3 / 24, "pinned_vent_hour_invalid"),
+    (float("-inf"), 3 / 24, "pinned_vent_hour_invalid"),
+    ("inf", 3 / 24, "pinned_vent_hour_invalid"),
+    ("-inf", 3 / 24, "pinned_vent_hour_invalid"),
+    (1.75, float("inf"), "pinned_icu_los_invalid"),
+    (1.75, float("-inf"), "pinned_icu_los_invalid"),
+], ids=["positive-float-hour", "negative-float-hour", "positive-text-hour", "negative-text-hour",
+        "positive-infinite-los", "negative-infinite-los"])
+@pytest.mark.parametrize("entry", ["producer", "harness", "reference"])
+def test_overnight_imv_rejects_infinite_clock_inputs(tmp_path, monkeypatch, capsys, bad_hour, los, reason, entry):
+    database = "sic"
+    stays = [7301, 7302]
+    parameter = _episode_parameter(tmp_path)
+    good_hour = "0.25" if isinstance(bad_hour, str) else 0.25
+    inputs = (
+        _pin(tmp_path, database, "outcome", stay_id=stays, los_icu=[3 / 24, los]),
+        _pin(
+            tmp_path, database, "respiratory", stay_id=stays,
+            charttime=[good_hour, bad_hour], mech_vent=["InVaSiVe", "standby at handover"],
+        ),
+    )
+    if entry == "producer":
+        with np.errstate(invalid="raise"), pytest.raises(support.PinnedInputError) as error:
+            support.load_thesis_support(
+                module=_IMV, database=database, patient_ids=stays,
+                pinned_inputs=inputs, frozen_release_parameter=parameter,
+            )
+        assert error.value.reason_code == reason
+        return
+
+    if entry == "reference":
+        # Supply a projected producer result to exercise the independent frozen path.
+        clean_root = tmp_path / "clean-shift"
+        clean_pins = (
+            _pin(clean_root, database, "outcome", stay_id=stays, los_icu=[3 / 24, 3 / 24]),
+            _pin(clean_root, database, "respiratory", stay_id=[stays[0]], charttime=[0.25], mech_vent=["invasive"]),
+        )
+        projected = support.load_thesis_support(
+            module=_IMV, database=database, patient_ids=stays,
+            pinned_inputs=clean_pins, frozen_release_parameter=parameter,
+        )
+        monkeypatch.setattr(frozen_equivalence, "load_thesis_support", lambda **options: projected)
+
+    args = [
+        "--database", database, "--module", _IMV, "--stay-ids", *map(str, stays),
+        "--frozen-release-parameter", str(parameter.path), parameter.expected_sha256,
+    ]
+    for pin in inputs:
+        args.extend(["--pinned-input", pin.module, str(pin.path), pin.expected_sha256, ",".join(pin.allowed_columns)])
+    with np.errstate(invalid="raise"):
+        status = frozen_equivalence.main(args)
+    captured = capsys.readouterr()
+    assert json.loads(captured.out) == {"status": "comparison_failed", "reason": reason}
+    assert status == 2
+    assert not captured.err
+
+
+@pytest.mark.parametrize("database", ["miiv_demo_demo", "aumc_demo_demo", "miiv_overnight"])
+@pytest.mark.parametrize("entry", ["extract", "load", "compare", "manifest", "open", "cli"])
+def test_pinned_entries_reject_unknown_database_names_before_access(tmp_path, monkeypatch, database, entry, capsys):
+    family = "aumc" if database.startswith("aumc") else "miiv"
+    pins = _episode_inputs(tmp_path, family)
+    parameter = _episode_parameter(tmp_path)
+
+    def deny_access(*args, **kwargs):
+        pytest.fail("invalid overnight database name reached an input path")
+
+    monkeypatch.setattr(support, "_resolve_pinned_module_path", deny_access)
+    monkeypatch.setattr(support, "read_frozen_release_parameter", deny_access)
+    monkeypatch.setattr(frozen_equivalence, "_read_cohort_file", deny_access)
+    monkeypatch.setattr(frozen_equivalence, "read_frozen_release_parameter", deny_access)
+    options = dict(database=database, module=_IMV, pinned_inputs=pins, frozen_release_parameter=parameter)
+    if entry == "cli":
+        status = frozen_equivalence.main([
+            "--database", database, "--module", _IMV, "--stay-ids-file", str(tmp_path / "overnight-stays.txt"),
+        ])
+        captured = capsys.readouterr()
+        assert json.loads(captured.out) == {"status": "comparison_failed", "reason": "pinned_database_not_allowed"}
+        assert status == 2
+        assert not captured.err
+        return
+
+    with pytest.raises(support.PinnedInputError) as error:
+        if entry == "extract":
+            extract_database(database, pinned_inputs={_IMV: pins}, frozen_release_parameter=parameter, patient_ids=[102])
+        elif entry == "load":
+            support.load_thesis_support(**options, patient_ids=[102])
+        elif entry == "compare":
+            frozen_equivalence.run_equivalence(**options, stay_ids=[102])
+        elif entry == "manifest":
+            support.thesis_support_manifest(_IMV, database, ())
+        else:
+            with support.open_pinned_modules(_IMV, database, pins):
+                pytest.fail("invalid database opened pinned modules")
+    assert error.value.reason_code == "pinned_database_not_allowed"
+    assert database not in str(error.value)

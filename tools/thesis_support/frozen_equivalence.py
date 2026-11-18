@@ -37,6 +37,7 @@ from easyicu.concept.thesis_support import (
     PinnedInputError,
     PinnedModuleInput,
     load_thesis_support,
+    normalize_pinned_database,
     open_pinned_modules,
     pinned_stay_ids,
     read_frozen_release_parameter,
@@ -207,16 +208,20 @@ def _reference(source, family, stay, ids, frozen_dir, tables, *, empty):
             return _peep_reference(_FrozenSQL(con), rel, frozen, family, relations)
 
 
-def _verify_first_in_hosp_reference_binding(table, path, expected_sha256):
+def _verify_first_in_hosp_reference_binding(source, table, stay, receipt):
     try:
-        bind_files(table, (path,), sha256=True)
-        # An explicitly bound digest may be cached even when the stat is unchanged.
-        with path.open("rb") as handle:
-            digest = hashlib.file_digest(handle, "sha256").hexdigest()
-    except (OSError, StorageSourceChanged):
+        files = support_input_files(source, table, stay, None) or ()
+        path = files[0].resolve(strict=True) if len(files) == 1 else None
+        if path is not None and path == Path(receipt["source_realpath"]):
+            bind_files(table, (path,), sha256=True)
+            # An explicitly bound digest may be cached even when the stat is unchanged.
+            with path.open("rb") as handle:
+                digest = hashlib.file_digest(handle, "sha256").hexdigest()
+            if digest == receipt["source_sha256"]:
+                return path
+    except (OSError, RuntimeError, StorageIntegrityError):
         raise StorageSourceChanged("storage_source_changed", table) from None
-    if digest != expected_sha256:
-        raise StorageSourceChanged("storage_source_changed", table)
+    raise StorageSourceChanged("storage_source_changed", table)
 
 
 def _first_in_hosp_reference(source, family, stay, ids, receipt):
@@ -226,14 +231,7 @@ def _first_in_hosp_reference(source, family, stay, ids, receipt):
         "sic": "COALESCE(OffsetAfterFirstAdmission, 0) = 0",
     }[family]
     table = receipt["source_table"]
-    try:
-        files = support_input_files(source, table, stay, None) or ()
-        path = files[0].resolve(strict=True) if len(files) == 1 else None
-    except (OSError, RuntimeError, StorageIntegrityError):
-        raise StorageSourceChanged("storage_source_changed", table) from None
-    if path != Path(receipt["source_realpath"]):
-        raise StorageSourceChanged("storage_source_changed", table)
-    _verify_first_in_hosp_reference_binding(table, path, receipt["source_sha256"])
+    path = _verify_first_in_hosp_reference_binding(source, table, stay, receipt)
     relation = parquet_relation((path,), ordered=False)
     with duckdb_spill.connection() as con:
         con.execute(f"""
@@ -245,7 +243,7 @@ def _first_in_hosp_reference(source, family, stay, ids, receipt):
             con.register("hc", pd.DataFrame({"stay_id": pd.Series(ids, dtype="int64")}))
             con.execute("DELETE FROM ordk WHERE stay_id NOT IN (SELECT stay_id FROM hc)")
         rows = con.execute("SELECT stay_id, first_in_hosp AS first_in_hosp_frozen FROM ordk").df()
-    _verify_first_in_hosp_reference_binding(table, path, receipt["source_sha256"])
+    _verify_first_in_hosp_reference_binding(source, table, stay, receipt)
     return rows
 
 
@@ -357,16 +355,19 @@ def _pinned_hourly_imv_reference(con, opened, spine, hourly, cohort_reference, g
     respiratory = respiratory.dropna(subset=["mech_vent"])
     respiratory["stay_id"] = hourly._normalise_stay_id(respiratory["stay_id"], context="respiratory")
     mapping = read_hourly_contract()["dynamic"]["respiratory"]
+    time = pd.to_numeric(respiratory["charttime"], errors="coerce")
+    if not np.isfinite(time).fillna(False).all():
+        raise PinnedInputError("pinned_vent_hour_invalid", "respiratory")
     # Restrict the frozen binning kernel to the requested ICU spine and apply
     # its derived-feature case rule before ranking modes in the same hour.
-    hour = np.floor(pd.to_numeric(respiratory["charttime"], errors="coerce"))
+    hour = np.floor(time)
     last = respiratory["stay_id"].map(spine.groupby("stay_id")["icu_hour"].max())
     on_spine = hour.between(spine["icu_hour"].min(), last)
     modes = respiratory["mech_vent"].astype("string").str.lower()
     repeated = respiratory.assign(icu_hour=hour).duplicated(hourly.KEY, keep=False)
     # A singleton unknown mode cannot contribute to IMV. Keep unknown modes
     # in collisions so the frozen rank validation rejects them.
-    keep = hour.isna() | (on_spine & (repeated | modes.isin(["invasive", "noninvasive"])))
+    keep = on_spine & (repeated | modes.isin(["invasive", "noninvasive"]))
     prepared, _ = hourly._prepare_dynamic(
         respiratory.loc[keep].assign(mech_vent=modes), {"mech_vent": mapping["mech_vent"]}, module="respiratory",
     )
@@ -396,6 +397,10 @@ def _pinned_reference(module, database, pinned_inputs, stay_ids, empty, frozen_r
     )
     with open_pinned_modules(module, database, pinned_inputs) as opened, duckdb_spill.connection() as con:
         outcome = read_pinned_columns(opened["outcome"], stays=stay_ids)
+        if parameter is not None:
+            los = pd.to_numeric(outcome["los_icu"], errors="coerce")
+            if np.isinf(los).any():
+                raise PinnedInputError("pinned_icu_los_invalid", "outcome")
         spine, _ = hourly.build_hourly_spine(outcome, stay_ids=stay_ids)
         if module == "rrt_time":
             cohort = _reference_functions(cohort_reference, ("rrt_hours_sql",))
@@ -464,9 +469,10 @@ def run_equivalence(
     pinned_inputs=None, frozen_release_parameter=None,
 ):
     """Compare the selected stays, defaulting to all raw stays outside MIIV."""
-    family = database.removesuffix("_demo")
     if module in PINNED_SUPPORT_MODULES:
-        database = family
+        database = family = normalize_pinned_database(database)
+    else:
+        family = database.removesuffix("_demo")
     stay = DATABASE_ID_CONFIG[database]["id_col"]
     with binding_unit():
         options = {} if pinned_inputs is None else {"pinned_inputs": tuple(pinned_inputs)}
@@ -548,7 +554,7 @@ def _read_cohort_file(path, database):
 
 def main(argv=None):
     parser = _PrivateArgumentParser(description=__doc__)
-    parser.add_argument("--database", choices=("aumc", "eicu", "hirid", "miiv", "mimic", "sic"), required=True)
+    parser.add_argument("--database", required=True)
     parser.add_argument("--db-root", type=Path)
     parser.add_argument(
         "--pinned-input", action="append", nargs=4, metavar=("MODULE", "PATH", "SHA256", "COLUMNS"),
@@ -569,8 +575,11 @@ def main(argv=None):
     if args.module in PINNED_SUPPORT_MODULES:
         if args.db_root is not None:
             parser.error("pinned support does not use a raw database root")
-    elif args.db_root is None or args.pinned_input or args.frozen_release_parameter:
-        parser.error("raw support requires --db-root")
+    else:
+        if args.database not in ("aumc", "eicu", "hirid", "miiv", "mimic", "sic"):
+            parser.error("unknown raw support database")
+        if args.db_root is None or args.pinned_input or args.frozen_release_parameter:
+            parser.error("raw support requires --db-root")
     if args.common_version is not None and args.frozen_release_parameter is None:
         parser.error("a common version requires a frozen release parameter")
     if args.module == FIRST_IN_HOSP_FROZEN and args.stay_ids is not None:
@@ -585,6 +594,8 @@ def main(argv=None):
         logging.disable(logging.CRITICAL)
         try:
             options = vars(args)
+            if args.module in PINNED_SUPPORT_MODULES:
+                args.database = normalize_pinned_database(args.database)
             cohort_file = options.pop("stay_ids_file")
             pinned = options.pop("pinned_input")
             parameter = options.pop("frozen_release_parameter")
