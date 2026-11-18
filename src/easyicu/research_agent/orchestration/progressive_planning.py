@@ -575,6 +575,7 @@ def question_requirement_outcome(
         sealed_owner_concepts=sealed_owner_concepts,
         host_facts=host_facts, sealed=sealed,
         question=context.research_question,
+        shadow_context=context,
     )
     unstated = (
         ()

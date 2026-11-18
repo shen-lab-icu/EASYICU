@@ -125,6 +125,7 @@ from .question_quote import (
     QuestionQuoteSpan,
     normalize_question_quote,
 )
+from .requirement_typing.shadow import observe_effect_measures, observe_outline, observe_requirements
 from .requirement_coverage import (
     ANALYSIS_ROLES,
     SUBGROUP_ACTIONS,
@@ -1094,6 +1095,7 @@ def judge_question_requirements(
     host_facts: Sequence[Mapping[str, Any]] = (),
     sealed: Sequence[str] = (),
     question: str | None = None,
+    shadow_context: ResearchContext | None = None,
 ) -> tuple[JudgedRequirement, ...]:
     """Decide how the compiled plan answers each stated requirement.
 
@@ -1116,12 +1118,13 @@ def judge_question_requirements(
         )
         for item in requirements
     )
-    if question is None or not judged:
-        return judged
-    matcher = QuestionQuoteMatcher(question)
-    return tuple(
-        replace(entry, quote_span=matcher.find(entry.requirement.quote)) for entry in judged
-    )
+    if question is not None and judged:
+        matcher = QuestionQuoteMatcher(question)
+        judged = tuple(
+            replace(entry, quote_span=matcher.find(entry.requirement.quote)) for entry in judged
+        )
+    observe_requirements(judged, plan=plan, question=question, context=shadow_context)
+    return judged
 
 
 def _judge(
@@ -1442,6 +1445,7 @@ def judge_stated_effect_measures(
         if measure is not None:
             reported[step.step_id] = measure
     if not reported:
+        observe_effect_measures((), plan=plan)
         return ()
     named = {item.measure: item for item in stated}
     stated_by_planner = {item.effect_measure for item in requirements if item.effect_measure}
@@ -1465,7 +1469,9 @@ def judge_stated_effect_measures(
             "risk_ratio", None, "not_covered", EFFECT_MEASURE_UNREQUESTED_REASON,
             risk_ratio_owners,
         ))
-    return tuple(judged)
+    result = tuple(judged)
+    observe_effect_measures(result, plan=plan)
+    return result
 
 
 @dataclass(frozen=True)
@@ -1509,7 +1515,7 @@ def outline_route_unstated(
             *(getattr(cohort, "exclusion", None) or ()),
         )
     }
-    return tuple(
+    unstated = tuple(
         UnstatedConcept(
             named=item,
             reading_step_ids=tuple(
@@ -1522,6 +1528,8 @@ def outline_route_unstated(
         for item in named
         if not set(item.concepts) & sealed_columns
     )
+    observe_outline(unstated, plan=plan)
+    return unstated
 
 
 def question_requirement_coverage(
