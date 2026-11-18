@@ -1,15 +1,17 @@
 """Synthetic stay/hour fixtures for the r15 support projections."""
 
+from contextlib import contextmanager
 import hashlib
 import json
 import os
 from pathlib import Path
+from types import SimpleNamespace
 
 import pandas as pd
 import pyarrow.parquet as pq
 import pytest
 
-from easyicu import datasource
+from easyicu import datasource, storage_binding
 from easyicu.api import extraction
 from easyicu.api.extraction import (
     EXTRACT_MODULE_ORDER, EXTRACT_MODULES, _load_module_concepts, extract_database, publication_dictionary,
@@ -651,6 +653,68 @@ def test_streaming_unavailable_first_in_hosp_seals_native_key_and_receipt(tmp_pa
     assert producer["thesis_support"]["status"] == "UNAVAILABLE_IN_SCOPE"
 
 
+@pytest.mark.parametrize("database", ["aumc", "sic"])
+@pytest.mark.parametrize(("fault", "reason"), [
+    ("missing_file", "first_in_hosp_worker_file_missing"),
+    ("missing_receipt", "first_in_hosp_worker_receipt_missing"),
+])
+def test_streaming_first_in_hosp_with_authority_requires_worker_output(tmp_path, monkeypatch, database, fault, reason):
+    source = tmp_path / "source"
+    _first_in_hosp_source(source, database)
+    output = tmp_path / "export"
+    worker_file = (FIRST_IN_HOSP_FROZEN, f"{FIRST_IN_HOSP_FROZEN}.parquet")
+    exists = extraction.os.path.exists
+    read_schema = pq.read_schema
+
+    def no_worker_file(path):
+        return False if Path(path).parts[-2:] == worker_file else exists(path)
+
+    def schema_without_receipt(path):
+        schema = read_schema(path)
+        if Path(path).parts[-2:] == worker_file:
+            metadata = dict(schema.metadata)
+            del metadata[thesis_support.FIRST_IN_HOSP_SOURCE_KEY]
+            return schema.with_metadata(metadata)
+        return schema
+
+    if fault == "missing_file":
+        monkeypatch.setattr(extraction.os.path, "exists", no_worker_file)
+    else:
+        monkeypatch.setattr(pq, "read_schema", schema_without_receipt)
+
+    with pytest.raises(RuntimeError) as error:
+        extract_database(
+            database, data_path=source, output_dir=output,
+            modules=[FIRST_IN_HOSP_FROZEN], patient_ids=[_STAY],
+            stream_output_batches=True, batch_size=1, native_export_v2=True, max_workers=1,
+        )
+    assert error.value.reason_code == reason
+    assert not (output / "_manifest.json").exists()
+    assert not (output / f"{FIRST_IN_HOSP_FROZEN}.parquet").exists()
+    assert not (output / f"{FIRST_IN_HOSP_FROZEN}.manifest.json").exists()
+
+
+def test_first_in_hosp_publisher_refuses_a_lost_collected_file(tmp_path, monkeypatch):
+    source = tmp_path / "source"
+    _first_in_hosp_source(source, "sic")
+    output = tmp_path / "export"
+    publish = extraction._publish_native_export_v2
+
+    def lose_collected_output(**kwargs):
+        (output / f"{FIRST_IN_HOSP_FROZEN}.parquet").unlink()
+        return publish(**kwargs)
+
+    monkeypatch.setattr(extraction, "_publish_native_export_v2", lose_collected_output)
+    with pytest.raises(RuntimeError) as error:
+        extract_database(
+            "sic", data_path=source, output_dir=output, modules=[FIRST_IN_HOSP_FROZEN],
+            patient_ids=[_STAY], native_export_v2=True, max_workers=1,
+        )
+    assert error.value.reason_code == "first_in_hosp_worker_file_missing"
+    assert not (output / "_manifest.json").exists()
+    assert not (output / f"{FIRST_IN_HOSP_FROZEN}.parquet").exists()
+
+
 @pytest.mark.parametrize("kind", ["reloaded", "absent", "missing_authority"])
 def test_first_in_hosp_metadata_accepts_frames_without_projected_lineage(tmp_path, kind):
     database = "eicu" if kind == "absent" else "aumc"
@@ -713,3 +777,71 @@ def test_first_in_hosp_cli_rejects_reference_source_changed_after_production(tmp
     out = capsys.readouterr()
     assert json.loads(out.out) == {"status": "comparison_failed", "error_type": "StorageSourceChanged"}
     assert not out.err
+
+
+@pytest.mark.parametrize("fault", ["gained_shard", "lost_shard", "dangling_link", "denied_resolution", "retargeted_link"])
+def test_first_in_hosp_reference_rejects_changed_source_resolution(tmp_path, monkeypatch, fault):
+    source = tmp_path / "source"
+    _, original, _, _ = _first_in_hosp_source(source, "sic")
+    replacement = tmp_path / "unlisted-cases-shard.parquet"
+    replacement.write_bytes(original.read_bytes())
+    alias = tmp_path / "late-source-link.parquet"
+    alias.symlink_to(replacement if fault == "retargeted_link" else tmp_path / "vanished-shard.parquet")
+    resolve_path = Path.resolve
+
+    def resolve(path, *args, **kwargs):
+        if path == alias and fault == "denied_resolution":
+            raise PermissionError(str(alias))
+        return resolve_path(path, *args, **kwargs)
+
+    monkeypatch.setattr(Path, "resolve", resolve)
+    paths = {
+        "gained_shard": (original, replacement), "lost_shard": None,
+        "dangling_link": (alias,), "denied_resolution": (alias,), "retargeted_link": (alias,),
+    }[fault]
+    monkeypatch.setattr(frozen_equivalence, "support_input_files", lambda *args: paths)
+    with pytest.raises(storage_binding.StorageSourceChanged) as error:
+        frozen_equivalence.run_equivalence(
+            database="sic", module=FIRST_IN_HOSP_FROZEN, db_root=source,
+        )
+    assert error.value.reason == "storage_source_changed"
+    assert error.value.path == ""
+    assert str(tmp_path) not in str(error.value)
+    assert ".parquet" not in str(error.value)
+
+
+def test_first_in_hosp_reference_rechecks_hash_after_query_when_stat_is_unchanged(tmp_path, monkeypatch):
+    source = tmp_path / "source"
+    _, original, _, _ = _first_in_hosp_source(source, "aumc")
+    version = storage_binding._version
+    original_version = version("admissions", str(original))
+    connect = frozen_equivalence.duckdb_spill.connection
+    bind = frozen_equivalence.bind_files
+    hash_checks = []
+
+    def unchanged_stat(table, path):
+        return original_version if path == str(original) else version(table, path)
+
+    @contextmanager
+    def rewrite_after_query():
+        with connect() as con:
+            yield con
+        data = original.read_bytes()
+        original.write_bytes(data[:-1] + bytes([data[-1] ^ 1]))
+
+    def observe_bind(table, paths, *, sha256=False):
+        hash_checks.append(sha256)
+        return bind(table, paths, sha256=sha256)
+
+    # Patch only the harness's connection so the producer's query sees the original bytes.
+    monkeypatch.setattr(frozen_equivalence, "duckdb_spill", SimpleNamespace(connection=rewrite_after_query))
+    monkeypatch.setattr(frozen_equivalence, "bind_files", observe_bind)
+    monkeypatch.setattr(storage_binding, "_version", unchanged_stat)
+    monkeypatch.setattr(storage_binding, "racily_clean", lambda *args: False)
+    with pytest.raises(storage_binding.StorageSourceChanged) as error:
+        frozen_equivalence.run_equivalence(
+            database="aumc", module=FIRST_IN_HOSP_FROZEN, db_root=source,
+        )
+    assert error.value.reason == "storage_source_changed"
+    assert error.value.path == ""
+    assert hash_checks == [True, True]

@@ -4,7 +4,10 @@ from dataclasses import replace
 from hashlib import sha256
 from io import BufferedReader
 import json
+from pathlib import Path
+from types import SimpleNamespace
 
+import numpy as np
 import pandas as pd
 import pytest
 
@@ -63,10 +66,10 @@ def _episode_inputs(root, database):
         ),
         _pin(
             root, database, "respiratory",
-            stay_id=[101] * 6 + [102, 102, 103, 103, 104, 105],
-            charttime=[-0.5, 0.2, 3.1, 3.8, 7.4, 10., 1., 5., 2., None, 2., 0.],
+            stay_id=[101] * 7 + [102, 102, 103, 103, 104, 105],
+            charttime=[-0.5, 0.2, 0.5, 3.1, 3.8, 7.4, 10., 1., 5., 2., None, 2., 0.],
             mech_vent=[
-                "invasive", "invasive", "noninvasive", "invasive", "invasive", "invasive",
+                "invasive", "invasive", "invasive", "Invasive", "noninvasive", "invasive", "invasive",
                 "invasive", "invasive", "invasive", None, "invasive", "invasive",
             ],
         ),
@@ -394,6 +397,124 @@ def test_first_hourly_imv_episode_obeys_frozen_gap_and_stay_membership(tmp_path,
         support.pq.ParquetFile(out / f"{_IMV}.parquet").read().to_pandas(),
         rows.rename(columns={rows.columns[0]: "stay_id"}),
     )
+
+
+@pytest.mark.parametrize("database", ["aumc", "miiv", "sic"])
+def test_hourly_imv_case_and_unordered_singletons_are_cohort_invariant(tmp_path, database):
+    inputs = (
+        _pin(tmp_path, database, "outcome", stay_id=[101, 102], los_icu=[3 / 24, 3 / 24]),
+        _pin(
+            tmp_path, database, "respiratory",
+            stay_id=[101, 101, 102, 102, 102],
+            charttime=[0.2, 0.5, 0.0, 1.0, 9.0],
+            mech_vent=["invasive", "NonInvasive", "Invasive", "standby confirmed", "source disconnected"],
+        ),
+    )
+    args = dict(database=database, module=_IMV, pinned_inputs=inputs,
+                frozen_release_parameter=_episode_parameter(tmp_path))
+    only = support.load_thesis_support(**args, patient_ids=[102])
+    both = support.load_thesis_support(**args, patient_ids=[101, 102])
+    assert only.values.tolist() == both.iloc[1:].values.tolist() == [[102, 0., True, 0.]]
+    for ids in ([102], [101, 102]):
+        assert frozen_equivalence.run_equivalence(**args, stay_ids=ids)["status"] == "agree"
+
+
+def test_hourly_imv_excludes_off_spine_and_other_stay_rows_before_cast_and_validation(tmp_path):
+    inputs = (
+        _pin(tmp_path, "sic", "outcome", stay_id=[101, 102], los_icu=[2 / 24, 2 / 24]),
+        _pin(
+            tmp_path, "sic", "respiratory",
+            stay_id=[102, 102, 102, 102, 102, 101],
+            charttime=[0.1, 1.7e12, -1.8e12, 3.1, 3.8, None],
+            mech_vent=["invasive", "invasive", "invasive", "standby confirmed", "noninvasive", "invasive"],
+        ),
+    )
+    args = dict(database="sic", module=_IMV, pinned_inputs=inputs,
+                frozen_release_parameter=_episode_parameter(tmp_path))
+    with np.errstate(invalid="raise"):
+        rows = support.load_thesis_support(**args, patient_ids=[102])
+        report = frozen_equivalence.run_equivalence(**args, stay_ids=[102])
+    assert rows.values.tolist() == [[102, 0., True, 0.]]
+    assert report["status"] == "agree"
+
+
+def test_hourly_imv_refuses_an_unordered_mode_in_an_on_spine_collision(tmp_path):
+    inputs = (
+        _pin(tmp_path, "aumc", "outcome", stay_id=[101, 102], los_icu=[2 / 24, 2 / 24]),
+        _pin(
+            tmp_path, "aumc", "respiratory",
+            stay_id=[101, 101, 102], charttime=[1.2, 1.7, 1.2],
+            mech_vent=["invasive", "standby confirmed", "invasive"],
+        ),
+    )
+    args = dict(database="aumc", module=_IMV, pinned_inputs=inputs,
+                frozen_release_parameter=_episode_parameter(tmp_path))
+    assert support.load_thesis_support(**args, patient_ids=[102]).values.tolist() == [[102, 1., True, 1.]]
+    with pytest.raises(support.PinnedInputError) as error:
+        support.load_thesis_support(**args, patient_ids=[101, 102])
+    assert error.value.reason_code == "pinned_vent_type_invalid"
+
+
+def test_miiv_demo_uses_the_release_family_with_explicit_stays(tmp_path):
+    parameter = _episode_parameter(tmp_path, common_version="v0.4")
+    inputs = _episode_inputs(tmp_path, "miiv")
+    args = dict(database="miiv_demo", module=_IMV, pinned_inputs=inputs, frozen_release_parameter=parameter)
+    rows = support.load_thesis_support(**args, patient_ids={"stay_id": [102]})
+    assert rows.values.tolist() == [[102, 1., True, 1.]]
+    assert rows.attrs["thesis_support"]["frozen_release_parameter"]["common_version"] == "v0.4"
+    assert frozen_equivalence.run_equivalence(**args, stay_ids=[102])["status"] == "agree"
+    output = tmp_path / "night-rounds-export"
+    extract_database(
+        "miiv_demo", pinned_inputs={_IMV: inputs}, frozen_release_parameter=parameter,
+        patient_ids=[102], output_dir=output,
+    )
+    assert pd.read_parquet(output / f"{_IMV}.parquet").values.tolist() == rows.values.tolist()
+
+
+@pytest.mark.parametrize(("changes", "reason"), [
+    ({"key_path": ()}, "frozen_release_parameter_not_allowed"),
+    ({"key_path": ("quality", "overnight_margin")}, "frozen_release_parameter_not_allowed"),
+    ({"key_path": ("cohort", False)}, "frozen_release_parameter_not_allowed"),
+    ({"common_version": ["overnight"]}, "frozen_release_parameter_version_invalid"),
+    ({"expected_sha256": 64}, "frozen_release_parameter_sha256_invalid"),
+    ({"expected_sha256": "z" * 64}, "frozen_release_parameter_sha256_invalid"),
+    ({"expected_sha256": "b" * 63}, "frozen_release_parameter_sha256_invalid"),
+    ({"path": False}, "frozen_release_parameter_path_not_allowed"),
+    ({"path": Path("night-rounds.yaml")}, "frozen_release_parameter_path_not_allowed"),
+], ids=["empty-key", "unrelated-key", "non-string-key", "version-type", "digest-type", "non-hex",
+        "short-digest", "path-type", "non-json"])
+def test_public_release_parameter_reader_validates_fields_before_resolving(tmp_path, monkeypatch, changes, reason):
+    parameter = replace(_episode_parameter(tmp_path), **changes)
+    resolve = Path.resolve
+
+    def guarded_resolve(path, *args, **kwargs):
+        assert path != parameter.path, "malformed release receipt reached file resolution"
+        return resolve(path, *args, **kwargs)
+
+    monkeypatch.setattr(Path, "resolve", guarded_resolve)
+    with pytest.raises(support.PinnedInputError) as error:
+        support.read_frozen_release_parameter(parameter)
+    assert error.value.reason_code == reason
+
+
+def test_public_release_parameter_reader_rejects_lookalike_before_resolving(tmp_path, monkeypatch):
+    parameter = SimpleNamespace(**vars(_episode_parameter(tmp_path)))
+    resolve = Path.resolve
+
+    def guarded_resolve(path, *args, **kwargs):
+        assert path != parameter.path, "an untyped receipt reached file resolution"
+        return resolve(path, *args, **kwargs)
+
+    monkeypatch.setattr(Path, "resolve", guarded_resolve)
+    with pytest.raises(support.PinnedInputError) as error:
+        support.read_frozen_release_parameter(parameter)
+    assert error.value.reason_code == "frozen_release_parameter_not_allowed"
+
+
+def test_public_release_parameter_reader_canonicalizes_hex_digest(tmp_path):
+    parameter = _episode_parameter(tmp_path)
+    upper = replace(parameter, expected_sha256=parameter.expected_sha256.upper())
+    assert support.read_frozen_release_parameter(upper) == support.read_frozen_release_parameter(parameter)
 
 
 @pytest.mark.parametrize(("failure", "reason"), [

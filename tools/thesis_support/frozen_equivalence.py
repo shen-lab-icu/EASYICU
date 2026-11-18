@@ -51,7 +51,7 @@ from easyicu.config import DATABASE_ID_CONFIG
 from easyicu.datasource import storage_source
 from easyicu.runtime import duckdb_spill
 from easyicu.storage_binding import StorageSourceChanged, bind_files, binding_unit
-from easyicu.storage_layout import parquet_relation
+from easyicu.storage_layout import StorageIntegrityError, parquet_relation
 
 _FROZEN_SOURCE_DIR = Path(
     "/home/zhuhb/workspace/claude-ws/_wt/ys351lcommon/frozen_copies/L-COMMON/src/phd_common"
@@ -207,6 +207,18 @@ def _reference(source, family, stay, ids, frozen_dir, tables, *, empty):
             return _peep_reference(_FrozenSQL(con), rel, frozen, family, relations)
 
 
+def _verify_first_in_hosp_reference_binding(table, path, expected_sha256):
+    try:
+        bind_files(table, (path,), sha256=True)
+        # An explicitly bound digest may be cached even when the stat is unchanged.
+        with path.open("rb") as handle:
+            digest = hashlib.file_digest(handle, "sha256").hexdigest()
+    except (OSError, StorageSourceChanged):
+        raise StorageSourceChanged("storage_source_changed", table) from None
+    if digest != expected_sha256:
+        raise StorageSourceChanged("storage_source_changed", table)
+
+
 def _first_in_hosp_reference(source, family, stay, ids, receipt):
     # The predicate text below is copied from build_c565v6.py:99-107.
     expression = {
@@ -214,11 +226,14 @@ def _first_in_hosp_reference(source, family, stay, ids, receipt):
         "sic": "COALESCE(OffsetAfterFirstAdmission, 0) = 0",
     }[family]
     table = receipt["source_table"]
-    file, = support_input_files(source, table, stay, None)
-    path = file.resolve(strict=True)
+    try:
+        files = support_input_files(source, table, stay, None) or ()
+        path = files[0].resolve(strict=True) if len(files) == 1 else None
+    except (OSError, RuntimeError, StorageIntegrityError):
+        raise StorageSourceChanged("storage_source_changed", table) from None
     if path != Path(receipt["source_realpath"]):
-        raise StorageSourceChanged("storage_source_changed", table, str(path))
-    bind_files(table, (path,), sha256=True)
+        raise StorageSourceChanged("storage_source_changed", table)
+    _verify_first_in_hosp_reference_binding(table, path, receipt["source_sha256"])
     relation = parquet_relation((path,), ordered=False)
     with duckdb_spill.connection() as con:
         con.execute(f"""
@@ -230,7 +245,7 @@ def _first_in_hosp_reference(source, family, stay, ids, receipt):
             con.register("hc", pd.DataFrame({"stay_id": pd.Series(ids, dtype="int64")}))
             con.execute("DELETE FROM ordk WHERE stay_id NOT IN (SELECT stay_id FROM hc)")
         rows = con.execute("SELECT stay_id, first_in_hosp AS first_in_hosp_frozen FROM ordk").df()
-    bind_files(table, (path,))
+    _verify_first_in_hosp_reference_binding(table, path, receipt["source_sha256"])
     return rows
 
 
@@ -339,10 +354,21 @@ def _pinned_hirid_reference(con, opened, spine, ids, cohort_reference):
 
 def _pinned_hourly_imv_reference(con, opened, spine, hourly, cohort_reference, gap):
     respiratory = read_pinned_columns(opened["respiratory"], stays=spine["stay_id"].unique())
+    respiratory = respiratory.dropna(subset=["mech_vent"])
     respiratory["stay_id"] = hourly._normalise_stay_id(respiratory["stay_id"], context="respiratory")
     mapping = read_hourly_contract()["dynamic"]["respiratory"]
+    # Restrict the frozen binning kernel to the requested ICU spine and apply
+    # its derived-feature case rule before ranking modes in the same hour.
+    hour = np.floor(pd.to_numeric(respiratory["charttime"], errors="coerce"))
+    last = respiratory["stay_id"].map(spine.groupby("stay_id")["icu_hour"].max())
+    on_spine = hour.between(spine["icu_hour"].min(), last)
+    modes = respiratory["mech_vent"].astype("string").str.lower()
+    repeated = respiratory.assign(icu_hour=hour).duplicated(hourly.KEY, keep=False)
+    # A singleton unknown mode cannot contribute to IMV. Keep unknown modes
+    # in collisions so the frozen rank validation rejects them.
+    keep = hour.isna() | (on_spine & (repeated | modes.isin(["invasive", "noninvasive"])))
     prepared, _ = hourly._prepare_dynamic(
-        respiratory, {"mech_vent": mapping["mech_vent"]}, module="respiratory",
+        respiratory.loc[keep].assign(mech_vent=modes), {"mech_vent": mapping["mech_vent"]}, module="respiratory",
     )
     hc = spine.merge(prepared, on=hourly.KEY, how="left", validate="one_to_one", sort=False)
     # hourly_core.py:385,392 derives IMV from the normalized, binned vent type.
@@ -438,8 +464,10 @@ def run_equivalence(
     pinned_inputs=None, frozen_release_parameter=None,
 ):
     """Compare the selected stays, defaulting to all raw stays outside MIIV."""
-    stay = DATABASE_ID_CONFIG[database]["id_col"]
     family = database.removesuffix("_demo")
+    if module in PINNED_SUPPORT_MODULES:
+        database = family
+    stay = DATABASE_ID_CONFIG[database]["id_col"]
     with binding_unit():
         options = {} if pinned_inputs is None else {"pinned_inputs": tuple(pinned_inputs)}
         if frozen_release_parameter is not None:

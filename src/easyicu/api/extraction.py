@@ -8150,6 +8150,7 @@ def _publish_native_export_v2(
         ColumnMetadataSidecar,
         write_content_addressed_sidecar,
     )
+    from ..concept.thesis_support import FIRST_IN_HOSP_SOURCE_KEY, has_frozen_first_in_hosp
     from ..config import load_src_cfg
 
     output_root = Path(output_dir)
@@ -8255,6 +8256,8 @@ def _publish_native_export_v2(
         relative_path = f"{module}.parquet"
         source_parquet = output_root / relative_path
         physical_output_missing = not source_parquet.is_file()
+        if physical_output_missing and module == FIRST_IN_HOSP_FROZEN and has_frozen_first_in_hosp(normalized_database):
+            raise FirstInHospProducerError("first_in_hosp_worker_file_missing")
         source_rows = 0
         if physical_output_missing:
             original_columns = {"stay_id"}
@@ -8481,12 +8484,8 @@ def _publish_native_export_v2(
 
                 table = pa.Table.from_pandas(frame, preserve_index=False)
                 if module == FIRST_IN_HOSP_FROZEN and not physical_output_missing:
-                    from ..concept.thesis_support import FIRST_IN_HOSP_SOURCE_KEY
-
-                    lineage = (source_file.schema_arrow.metadata or {}).get(FIRST_IN_HOSP_SOURCE_KEY)
-                    if lineage is None:
-                        raise ValueError(f"{module}: missing producer source receipt")
-                    frame.attrs["thesis_support"] = json.loads(lineage)
+                    lineage, receipt = _first_in_hosp_producer_receipt(source_file.schema_arrow)
+                    frame.attrs["thesis_support"] = receipt
                     table = table.replace_schema_metadata({
                         **(table.schema.metadata or {}),
                         FIRST_IN_HOSP_SOURCE_KEY: lineage,
@@ -8865,6 +8864,29 @@ def _publish_native_export_v2(
     }
 
 
+class FirstInHospProducerError(RuntimeError):
+    """The frozen stay predicate cannot be published without worker evidence."""
+
+    def __init__(self, reason_code: str):
+        self.reason_code = reason_code
+        super().__init__(reason_code)
+
+
+def _first_in_hosp_producer_receipt(schema):
+    import json
+
+    from ..concept.thesis_support import FIRST_IN_HOSP_SOURCE_KEY
+
+    lineage = (schema.metadata or {}).get(FIRST_IN_HOSP_SOURCE_KEY)
+    try:
+        receipt = json.loads(lineage) if lineage else None
+    except (ValueError, RecursionError):
+        raise FirstInHospProducerError("first_in_hosp_worker_receipt_missing") from None
+    if not isinstance(receipt, dict) or not receipt:
+        raise FirstInHospProducerError("first_in_hosp_worker_receipt_missing")
+    return lineage, receipt
+
+
 class NativeExportPublicationError(ValueError):
     """A native-v2 extraction could not be published.
 
@@ -8995,6 +9017,7 @@ def _extract_pinned_thesis_support(
         validate_frozen_release_parameter, validate_pinned_inputs, validate_shared_pinned_inputs,
     )
 
+    database = database.removesuffix("_demo")
     selected = list(dict.fromkeys(pinned_inputs if modules is None else modules))
     if (not selected or set(selected) - PINNED_SUPPORT_MODULES
             or set(pinned_inputs) - set(selected)):
@@ -9181,7 +9204,7 @@ def extract_database(
         >>> result = extract_database('miiv', modules=['vitals', 'demographics'])
         >>> hr_df = result['modules']['vitals']['concepts']['hr']
     """
-    from ..concept.thesis_support import PINNED_SUPPORT_MODULES
+    from ..concept.thesis_support import PINNED_SUPPORT_MODULES, has_frozen_first_in_hosp
 
     pinned_only = bool(modules) and set(modules) <= PINNED_SUPPORT_MODULES
     if pinned_inputs is not None or pinned_only or frozen_release_parameter is not None:
@@ -9213,8 +9236,6 @@ def extract_database(
         raise ValueError("MIIV thesis support requires an explicit allowed stay cohort")
     absence_only = False
     if modules and set(modules) == {FIRST_IN_HOSP_FROZEN}:
-        from ..concept.thesis_support import has_frozen_first_in_hosp
-
         absence_only = not has_frozen_first_in_hosp(database)
     # The primary gate precedes cohort discovery, workers and ledger acceptance.
     from ..datasource import storage_source
@@ -9539,6 +9560,7 @@ def extract_database(
 
     def _collect_module_result(tmp_mod_dir: str, mod_name: str) -> Dict:
         """读回单个模块 worker 的 manifest + parquet 输出。"""
+        requires_first_in_hosp_output = mod_name == FIRST_IN_HOSP_FROZEN and has_frozen_first_in_hosp(database)
         mod_result = {
             "concepts": {},
             "rows": 0,
@@ -9555,6 +9577,8 @@ def extract_database(
         }
         manifest_path = os.path.join(tmp_mod_dir, "_manifest.json")
         if not os.path.exists(manifest_path):
+            if requires_first_in_hosp_output:
+                raise FirstInHospProducerError("first_in_hosp_worker_file_missing")
             mod_result["errors"] = [
                 f"{mod_name}: worker produced no manifest (process may have died)"
             ]
@@ -9654,10 +9678,12 @@ def extract_database(
             module_rows = info.get("rows", 0)
             if mod_name == FIRST_IN_HOSP_FROZEN:
                 import pyarrow.parquet as pq
-                from ..concept.thesis_support import FIRST_IN_HOSP_SOURCE_KEY
 
-                lineage = pq.read_schema(pq_path).metadata[FIRST_IN_HOSP_SOURCE_KEY]
-                mod_result["thesis_support"] = output_manifest["thesis_support"] = json.loads(lineage)
+                try:
+                    _, receipt = _first_in_hosp_producer_receipt(pq.read_schema(pq_path))
+                except FileNotFoundError:
+                    raise FirstInHospProducerError("first_in_hosp_worker_file_missing") from None
+                mod_result["thesis_support"] = output_manifest["thesis_support"] = receipt
             mod_result["rows"] += module_rows
             concept_meta = info.get("concept_meta", {}) or {}
             concept_names = info.get("concepts") or list(concept_meta.keys())
@@ -9693,6 +9719,8 @@ def extract_database(
         if mod_name == FIRST_IN_HOSP_FROZEN and "thesis_support" not in output_manifest:
             from ..concept.thesis_support import thesis_support_manifest
 
+            if requires_first_in_hosp_output:
+                raise FirstInHospProducerError("first_in_hosp_worker_file_missing")
             mod_result["thesis_support"] = output_manifest["thesis_support"] = thesis_support_manifest(
                 mod_name, database, [],
             )
@@ -10140,9 +10168,15 @@ def extract_database(
             group_mods = [m for m in group_mods if m not in incomplete_mods]
 
         for mod_name in group_mods:
-            mod_result = _collect_module_result(
-                os.path.join(tmp_root, mod_name), mod_name
-            )
+            try:
+                mod_result = _collect_module_result(
+                    os.path.join(tmp_root, mod_name), mod_name
+                )
+            except FirstInHospProducerError as exc:
+                shutil.rmtree(tmp_root, ignore_errors=True)
+                if native_export_v2:
+                    exc.quarantine = _quarantine_unpublished_outputs(output_dir, entries_before_extraction, exc)
+                raise
             result["modules"][mod_name] = mod_result
             units_done += 1
             if verbose:
@@ -10232,7 +10266,7 @@ def extract_database(
             )
             from ..concept.value_kind import ConceptValueKindUndeclared
 
-            if isinstance(exc, ConceptValueKindUndeclared):
+            if isinstance(exc, (ConceptValueKindUndeclared, FirstInHospProducerError)):
                 # The typed refusal itself, unpublished (no root manifest).
                 exc.quarantine = quarantine
                 raise

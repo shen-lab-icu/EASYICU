@@ -57,12 +57,13 @@ from .storage_layout import StorageIntegrityError
 class StorageSourceChanged(StorageIntegrityError):
     """A file the run bound differs from the binding (changed, swapped or gone)."""
 
-    def __init__(self, reason: str, table: str, path: str):
+    def __init__(self, reason: str, table: str, path: str = ""):
         self.reason = reason
         self.table = table
         self.path = path
+        source = os.path.basename(path) if path else "source"
         super().__init__(
-            f"{reason}: {table}: {os.path.basename(path)} changed while this run "
+            f"{reason}: {table}: {source} changed while this run "
             "was bound to it; rerun on a stable installation"
         )
 

@@ -233,6 +233,7 @@ def _empty(module: str, stay: str) -> pd.DataFrame:
 
 def validate_pinned_inputs(module, database, inputs):
     """Refuse forbidden declarations without resolving or opening any path."""
+    database = database.removesuffix("_demo")
     allowed = _PINNED_COLUMNS.get((module, database), {})
     seen = set()
     for entry in inputs:
@@ -256,13 +257,28 @@ def validate_pinned_inputs(module, database, inputs):
 
 def validate_frozen_release_parameter(module, database, parameter):
     """Reject unrelated parameters and manifest scopes before accessing files."""
-    if (module != "imv_recorded_compat" or database not in _HOURLY_IMV_DATABASES
-            or not isinstance(parameter, FrozenReleaseParameter) or parameter.key_path != _EPISODE_GAP_KEY):
+    if module != "imv_recorded_compat" or database.removesuffix("_demo") not in _HOURLY_IMV_DATABASES:
         raise PinnedInputError("frozen_release_parameter_not_allowed")
-    if not re.fullmatch(r"[0-9a-f]{64}", parameter.expected_sha256):
+    _frozen_release_parameter_path(parameter)
+
+
+def _frozen_release_parameter_path(parameter):
+    if (not isinstance(parameter, FrozenReleaseParameter)
+            or not isinstance(parameter.key_path, tuple)
+            or not all(isinstance(key, str) for key in parameter.key_path)
+            or parameter.key_path != _EPISODE_GAP_KEY):
+        raise PinnedInputError("frozen_release_parameter_not_allowed")
+    if not isinstance(parameter.common_version, str) or not parameter.common_version:
+        raise PinnedInputError("frozen_release_parameter_version_invalid")
+    if (not isinstance(parameter.expected_sha256, str)
+            or not re.fullmatch(r"[0-9a-fA-F]{64}", parameter.expected_sha256)):
         raise PinnedInputError("frozen_release_parameter_sha256_invalid")
-    if Path(parameter.path).suffix != ".json":
+    if not isinstance(parameter.path, (str, Path)):
         raise PinnedInputError("frozen_release_parameter_path_not_allowed")
+    path = Path(parameter.path)
+    if path.suffix != ".json" or "\0" in str(path):
+        raise PinnedInputError("frozen_release_parameter_path_not_allowed")
+    return path
 
 
 def _resolve_pinned_module_path(entry):
@@ -345,8 +361,9 @@ def read_pinned_columns(opened, *, stays=None):
 
 def pinned_stay_ids(database, patient_ids):
     """Resolve explicit stay keys directly, without consulting a raw identity table."""
+    database = database.removesuffix("_demo")
     if patient_ids is None:
-        if database.removesuffix("_demo") == "miiv":
+        if database == "miiv":
             raise ValueError("MIIV thesis support requires an explicit allowed stay cohort")
         return None
     if isinstance(patient_ids, Mapping):
@@ -383,9 +400,10 @@ def read_hourly_contract():
 
 def read_frozen_release_parameter(parameter: FrozenReleaseParameter) -> dict:
     """Resolve the requested version from the lead's receipt after verifying its bytes."""
+    declared_path = _frozen_release_parameter_path(parameter)
     try:
-        path = Path(parameter.path).resolve()
-        if path != Path(os.path.abspath(parameter.path)):
+        path = declared_path.resolve()
+        if path != Path(os.path.abspath(declared_path)):
             raise PinnedInputError("frozen_release_parameter_path_not_allowed")
         with open(path, "rb", opener=_open_regular_pinned_file) as handle:
             source = handle.read()
@@ -393,7 +411,8 @@ def read_frozen_release_parameter(parameter: FrozenReleaseParameter) -> dict:
         raise PinnedInputError("frozen_release_parameter_file_missing") from None
     except (OSError, RuntimeError):
         raise PinnedInputError("frozen_release_parameter_file_unreadable") from None
-    if sha256(source).hexdigest() != parameter.expected_sha256:
+    digest = sha256(source).hexdigest()
+    if digest != parameter.expected_sha256.lower():
         raise PinnedInputError("frozen_release_parameter_sha256_mismatch")
     try:
         receipt = json.loads(source)
@@ -419,7 +438,7 @@ def read_frozen_release_parameter(parameter: FrozenReleaseParameter) -> dict:
         raise PinnedInputError("frozen_release_parameter_receipt_invalid")
     return {
         "key_path": list(parameter.key_path), "common_version": parameter.common_version,
-        "value": value, "receipt_sha256": parameter.expected_sha256,
+        "value": value, "receipt_sha256": digest,
         "defined_at": defined_at, "rule": _RELEASE_PARAMETER_RULE,
     }
 
@@ -476,20 +495,22 @@ def _hirid_recorded_span(source, los_hours):
 
 def _first_hourly_imv_episode(source, los_hours, clock, gap):
     """Bin respiratory evidence onto the ICU spine and reduce episode one."""
-    source = source.loc[source["mech_vent"].notna()].copy()
-    time = pd.to_numeric(source["charttime"], errors="coerce")
-    if not np.isfinite(time).all():
-        raise PinnedInputError("pinned_vent_hour_invalid", "respiratory")
-    source["charttime"] = np.floor(time).astype("int32")
-    vent_type = source["mech_vent"].astype("string")
-    # The frozen respiratory binning gives invasive priority over NIV.
-    if source.duplicated(["stay_id", "charttime"]).any() and not vent_type.isin(["invasive", "noninvasive"]).all():
-        raise PinnedInputError("pinned_vent_type_invalid", "respiratory")
     if clock["last_hour"] != "ceil(los_icu * 24) - 1":
         raise PinnedInputError("frozen_hourly_clock_unsupported")
+    source = source.loc[source["mech_vent"].notna() & source["stay_id"].isin(los_hours.index)]
+    hour = np.floor(pd.to_numeric(source["charttime"], errors="coerce"))
+    if hour.isna().any():
+        raise PinnedInputError("pinned_vent_hour_invalid", "respiratory")
     last = source["stay_id"].map(np.ceil(los_hours) - 1)
-    on_spine = source["charttime"].between(clock["first_hour"], last)
-    hours = source.loc[on_spine & vent_type.str.lower().eq("invasive"), ["stay_id", "charttime"]]
+    on_spine = hour.between(clock["first_hour"], last)
+    source = source.loc[on_spine].assign(charttime=hour.loc[on_spine].astype("int32"))
+    # hourly_core_v7.json:169-174 maps mech_vent to vent_type.
+    # hourly_core.py:274-311 orders invasive above NIV and :385-393 lowercases for IMV.
+    vent_type = source["mech_vent"].astype("string").str.lower()
+    collides = source.duplicated(["stay_id", "charttime"], keep=False)
+    if not vent_type.loc[collides].isin(["invasive", "noninvasive"]).all():
+        raise PinnedInputError("pinned_vent_type_invalid", "respiratory")
+    hours = source.loc[vent_type.eq("invasive"), ["stay_id", "charttime"]]
     hours = hours.drop_duplicates().sort_values(["stay_id", "charttime"])
     # cohort.py:104-117 starts episode two at the first gap exceeding gap + 1.
     breaks = hours.groupby("stay_id")["charttime"].diff().gt(gap + 1)
@@ -507,7 +528,7 @@ def _load_pinned_support(frame, module, database, patient_ids, pinned_inputs, fr
     parameter = None
     if frozen_release_parameter is not None:
         parameter = read_frozen_release_parameter(frozen_release_parameter)
-    receipt = _pinned_manifest(module, database.removesuffix("_demo"), inputs=inputs, frozen_release_parameter=parameter)
+    receipt = _pinned_manifest(module, database, inputs=inputs, frozen_release_parameter=parameter)
     if parameter is not None:
         receipt["frozen_release_parameter"] = parameter
     frame.attrs["thesis_support"] = receipt
@@ -634,11 +655,12 @@ def load_thesis_support(
     if frozen_release_parameter is not None:
         validate_frozen_release_parameter(module, database, frozen_release_parameter)
     family = database.removesuffix("_demo")
-    stay = DATABASE_ID_CONFIG[database]["id_col"]
+    pinned_module = module in PINNED_SUPPORT_MODULES
+    stay = DATABASE_ID_CONFIG[family if pinned_module else database]["id_col"]
     frame = _empty(module, stay)
     frame.attrs["available_fields"] = []
-    if module in PINNED_SUPPORT_MODULES:
-        return _load_pinned_support(frame, module, database, patient_ids, pinned_inputs, frozen_release_parameter)
+    if pinned_module:
+        return _load_pinned_support(frame, module, family, patient_ids, pinned_inputs, frozen_release_parameter)
     if pinned_inputs is not None:
         raise PinnedInputError("pinned_module_not_allowed")
     if module == FIRST_IN_HOSP_FROZEN:
