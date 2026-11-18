@@ -43,10 +43,14 @@
           .slice(0, MAX_MODULES)
           .map(module => module.slice(0, MAX_MODULE))
       : [];
+    const concepts = Object.fromEntries(modules.filter(module => Array.isArray(config.concepts?.[module]))
+      .map(module => [module, config.concepts[module].slice(0, MAX_MODULES)
+        .filter(id => typeof id === 'string' && id.length <= MAX_MODULE)]));
     const maxPatients = Number(config.max_patients);
     return {
       run_mode: config.run_mode === 'recommended' ? 'recommended' : 'custom',
       modules,
+      ...(Object.keys(concepts).length ? { concepts } : {}),
       format: ['parquet', 'csv', 'excel'].includes(config.format) ? config.format : 'parquet',
       merge: config.merge === true,
       max_patients: Number.isFinite(maxPatients)
@@ -101,6 +105,21 @@
 
   function host() {
     return window.EU_EXTRACTION_JOB_HOST || null;
+  }
+
+  function continuityMessage(record, missing, error, t) {
+    const kind = record && record.kind === 'convert' ? t('conversion', '转换') : t('extraction', '抽取');
+    if (missing) {
+      return t(
+        `The saved ${kind} task is no longer available. The local server was restarted or its job history expired; start the task again. EasyICU did not infer a successful result.`,
+        `已保存的${kind}任务已不可用。本地服务可能已重启，或任务历史已过期；请重新开始。EasyICU 没有推断任务成功。`
+      );
+    }
+    const detail = error && error.message ? ` (${error.message})` : '';
+    return t(
+      `EasyICU could not verify the ${kind} task${detail}. Refresh to reconnect; this screen will not mark it complete without a terminal server result.`,
+      `EasyICU 暂时无法核验${kind}任务${detail}。请刷新页面重新连接；没有服务端终态，本页面不会把任务标记为完成。`
+    );
   }
 
   function isCurrent(record, requestGeneration) {
@@ -275,6 +294,7 @@
     attach,
     restore,
     abandon,
+    continuityMessage,
     isPending: ticket => !!ticket && ticket.generation === generation,
     isRunning: () => !!(active && running),
     active: () => active ? JSON.parse(JSON.stringify(active)) : null,

@@ -199,7 +199,7 @@ def test_native_assistant_labels_expose_one_primary_copilot_conversation() -> (
     assert "js/app.js?v=20261117-boot1" in index_html
     assert "js/copilot-dock.js?v=20261027-old1" in index_html
     assert "js/screens-extraction-folder-picker.js?v=20261021-hosted1" in index_html
-    assert "js/screens-extraction.js?v=20261117-minute1" in index_html
+    assert "js/screens-extraction.js?v=20261118-minute-selection" in index_html
     assert "js/screens-agent.js?" not in index_html
     assert "js/screens-guided-pi-run-files.js?v=20261028-pend1" in index_html
     assert "js/screens-help.js?v=20261027-help3" in index_html

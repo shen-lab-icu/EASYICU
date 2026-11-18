@@ -2,10 +2,14 @@
 (function () {
   function create({ t, escHtml, hosted, repaint, backgroundRepaint }) {
     let state = null;
+    let prefill = null;
 
     function render({ path, database, ready }) {
+      path = String(path || '').trim();
       if (!state || state.path !== path || state.database !== database || state.ready !== ready) {
-        state = { path, database, ready, group: null, failed: false, pending: false, selected: new Set() };
+        const requested = path && database && ready ? prefill : null;
+        state = { path, database, ready, group: null, failed: false, pending: false, selected: new Map(), requested };
+        if (requested) prefill = null;
       }
       if (path && database && ready && !state.group && !state.failed && !state.pending && window.EU_API?.getJSON) {
         load(state);
@@ -13,8 +17,48 @@
     }
 
     function reset(keepSource) {
-      if (state?.ready && keepSource && state.path === keepSource.path && state.database === keepSource.database) return;
+      if (state?.ready && keepSource && state.path === String(keepSource.path || '').trim() && state.database === keepSource.database) return true;
+      resetForConnection();
+      prefill = null;
+      return false;
+    }
+
+    function resetForConnection() {
+      // Keep prefill that has yet to be bound to a validated folder.
       state = null;
+    }
+
+    function clear() {
+      prefill = null;
+      if (!state) return;
+      state.requested = null;
+      state.selected.clear();
+    }
+
+    function setSelection(modules, concepts) {
+      clear();
+      if (!Array.isArray(modules) || !modules.length) return;
+      const requested = { modules: new Set(modules), concepts };
+      if (state?.ready && state.path && state.database) {
+        state.requested = requested;
+        resolveSelection(state);
+      } else {
+        // A study or handoff can specify features before a folder has been validated.
+        prefill = requested;
+      }
+    }
+
+    function resolveSelection(current) {
+      const { group, requested, selected } = current;
+      if (!group || !requested) return;
+      current.requested = null;
+      if (group.unavailable_reason || hosted()) return;
+      for (const row of group.modules) {
+        if (!requested.modules.has(row.id) || row.unavailable_reason || !Array.isArray(row.signals)) continue;
+        const projection = requested.concepts?.[row.id];
+        const signals = Array.isArray(projection) ? row.signals.filter(id => projection.includes(id)) : row.signals;
+        if (signals.length) selected.set(row.id, signals);
+      }
     }
 
     function load(current) {
@@ -29,6 +73,7 @@
           current.group = Array.isArray(options?.modules) ? options : null;
           current.failed = !current.group;
           current.pending = false;
+          resolveSelection(current);
           backgroundRepaint();
         });
     }
@@ -36,7 +81,8 @@
     function choices(wanted) {
       const { group, selected } = state || {};
       if (hosted() || !group || group.unavailable_reason) return [];
-      return group.modules.filter(row => selected.has(row.id) && (!wanted || wanted.has(row.id)));
+      return group.modules.filter(({ id }) => selected.has(id) && (!wanted || wanted.has(id)))
+        .map(({ id }) => [id, selected.get(id)]);
     }
 
     function markup() {
@@ -64,12 +110,12 @@
             ${(group?.modules || []).map(row => {
               const label = escHtml(t(...row.label));
               if (hostedReason) return `<div class="ex-minute-choice">${label}</div>`;
-              if (row.unavailable_reason) return `<div class="ex-minute-choice">${label}
+              if (row.unavailable_reason || !Array.isArray(row.signals) || !row.signals.length) return `<div class="ex-minute-choice">${label}
                 <span class="ex-minute-note">${t('No covered signals', '无覆盖信号')}</span></div>`;
-              const on = selected.has(row.id);
+              const signals = selected.get(row.id);
               return `<div>
-                <label class="ex-minute-choice"><input type="checkbox" data-ex-minute-module="${escHtml(row.id)}" ${on ? 'checked' : ''}> ${label}</label>
-                ${on ? `<p class="ex-minute-note"><b>${escHtml(source)}</b> · ${escHtml(row.signals.join(', '))}</p>` : ''}
+                <label class="ex-minute-choice"><input type="checkbox" data-ex-minute-module="${escHtml(row.id)}" ${signals ? 'checked' : ''}> ${label}</label>
+                ${signals ? `<p class="ex-minute-note"><b>${escHtml(source)}</b> · ${escHtml(signals.join(', '))}</p>` : ''}
               </div>`;
             }).join('')}
           </div>
@@ -85,9 +131,11 @@
       });
       root.querySelectorAll('[data-ex-minute-module]').forEach(input => {
         input.addEventListener('change', () => {
-          if (current !== state || !current?.group) return;
+          if (current !== state || !current?.group || hosted() || current.group.unavailable_reason) return;
           const id = input.dataset.exMinuteModule;
-          if (input.checked) current.selected.add(id);
+          const row = current.group.modules.find(row => row.id === id);
+          if (!Array.isArray(row?.signals) || !row.signals.length || row.unavailable_reason) return;
+          if (input.checked) current.selected.set(id, row.signals);
           else current.selected.delete(id);
           markStale();
           repaint();
@@ -107,11 +155,10 @@
     }
 
     return {
-      render, markup, bind, resultDetail, reset,
-      clear: () => state?.selected.clear(),
-      keys: () => choices().map(row => row.id),
-      count: () => choices().reduce((count, row) => count + row.signals.length, 0),
-      payload: wanted => Object.fromEntries(choices(wanted).map(row => [row.id, row.signals])),
+      render, markup, bind, resultDetail, reset, resetForConnection, setSelection, clear,
+      keys: () => choices().map(([id]) => id),
+      count: () => choices().reduce((count, [, signals]) => count + signals.length, 0),
+      payload: wanted => Object.fromEntries(choices(wanted)),
     };
   }
 

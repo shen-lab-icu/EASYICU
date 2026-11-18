@@ -310,6 +310,7 @@
   function applyGuidedPrefill(handoff) {
     const cfg = handoff && handoff.config;
     if (!cfg || typeof cfg !== 'object' || extractionTaskRunning()) return;
+    minuteModules?.setSelection(cfg.modules, cfg.concepts);
     if (cfg.cohort_preset && COHORT_PRESETS.some(p => p[0] === cfg.cohort_preset)) exCohortPreset = cfg.cohort_preset;
     if (Array.isArray(cfg.modules) && cfg.modules.length) {
       const want = new Set(cfg.modules);
@@ -357,6 +358,7 @@
       exScanResult = null; exScanError = null; exDatabaseMismatch = null;
       convJobId = null; convProg = null; convResult = null; convErr = null;
     }
+    if (!sameForm || disconnect) minuteModules?.setSelection(setup.modules, setup.concepts);
     if (sameForm) {
       if (disconnect) backgroundRepaint();
       return setup;
@@ -521,6 +523,7 @@
         config: {
           run_mode: runMode,
           modules,
+          concepts: minuteModules?.payload(new Set(modules)),
           format: exFormat,
           merge: exMerge === 'merged',
           max_patients: exMaxPatients,
@@ -822,7 +825,7 @@
   }
   function startConvert() {
     abandonExtractionContinuity();
-    minuteModules?.reset();
+    minuteModules?.resetForConnection();
     convProg = null; convResult = null; convErr = null; convJobId = null;
     exReal = 'converting'; repaint();
     const database = (exScanResult && exScanResult.db_key) || 'miiv';
@@ -862,7 +865,7 @@
   }
   function startScan(src) {
     abandonExtractionContinuity();
-    minuteModules?.reset();
+    minuteModules?.resetForConnection();
     if (!String(exPath || '').trim()) {
       exSource = src || null;
       exScanResult = null;
@@ -1036,28 +1039,21 @@
   function abandonExtractionContinuity() {
     if (window.EU_EXTRACTION_JOB_CONTINUITY) window.EU_EXTRACTION_JOB_CONTINUITY.abandon();
   }
-  function continuityMessage(record, missing, error) {
-    const kind = record && record.kind === 'convert' ? t('conversion', '转换') : t('extraction', '抽取');
-    if (missing) {
-      return t(
-        `The saved ${kind} task is no longer available. The local server was restarted or its job history expired; start the task again. EasyICU did not infer a successful result.`,
-        `已保存的${kind}任务已不可用。本地服务可能已重启，或任务历史已过期；请重新开始。EasyICU 没有推断任务成功。`
-      );
-    }
-    const detail = error && error.message ? ` (${error.message})` : '';
-    return t(
-      `EasyICU could not verify the ${kind} task${detail}. Refresh to reconnect; this screen will not mark it complete without a terminal server result.`,
-      `EasyICU 暂时无法核验${kind}任务${detail}。请刷新页面重新连接；没有服务端终态，本页面不会把任务标记为完成。`
-    );
-  }
   window.EU_EXTRACTION_JOB_HOST = {
     begin(record) {
       const source = record.source || {};
       const config = record.config || {};
-      minuteModules?.reset(record.kind === 'extract' ? source : null);
       exPath = source.path || '';
       exScanResult = Object.assign({}, exScanResult || {}, { ok: true, db_key: source.database || '' });
       if (record.kind === 'extract') {
+        const keepsForm = minuteModules ? minuteModules.reset(source) : exReal === 'ready';
+        if (!keepsForm) {
+          const modules = new Set(config.modules || []);
+          MODS.forEach(m => { m[3] = modules.has(moduleKey(m)); });
+          exSelectedConcepts = config.concepts || {};
+          minuteModules?.setSelection(config.modules, config.concepts);
+        }
+        exReal = 'ready';
         exportJobId = record.job_id;
         exportRunMode = config.run_mode === 'recommended' ? 'recommended' : 'custom';
         exportRunModules = Array.isArray(config.modules) ? config.modules.slice() : [];
@@ -1068,6 +1064,7 @@
         exportProg = null; exportResult = null; exportErr = null; exportCancelled = null; exportCohortReport = null; exportResourcePlan = null; exportCancelRequested = false;
         exView = 'running';
       } else {
+        minuteModules?.resetForConnection();
         convJobId = record.job_id;
         convProg = null; convResult = null; convErr = null;
         exReal = 'converting';
@@ -1134,13 +1131,13 @@
       backgroundRepaint();
     },
     missing(record) {
-      const message = continuityMessage(record, true);
+      const message = window.EU_EXTRACTION_JOB_CONTINUITY.continuityMessage(record, true, null, t);
       if (record.kind === 'extract') { exportJobId = null; exportErr = message; exView = 'running'; }
       else { convJobId = null; convErr = message; exReal = 'converting'; }
       backgroundRepaint();
     },
     connectionLost(record, error) {
-      const message = continuityMessage(record, false, error);
+      const message = window.EU_EXTRACTION_JOB_CONTINUITY.continuityMessage(record, false, error, t);
       if (record.kind === 'extract') { exportErr = message; exView = 'running'; }
       else { convErr = message; exReal = 'converting'; }
       backgroundRepaint();
@@ -1938,7 +1935,7 @@
         });
       });
       const startConvBtn = root.querySelector('[data-ex-startconv]'); if (startConvBtn) startConvBtn.addEventListener('click', () => { startConvert(); });
-      root.querySelectorAll('[data-ex-rescan]').forEach(b => b.addEventListener('click', () => { abandonExtractionContinuity(); minuteModules?.reset(); exReal = 'connect'; exSource = null; exScanResult = null; exScanError = null; convProg = null; convResult = null; convErr = null; repaint(); }));
+      root.querySelectorAll('[data-ex-rescan]').forEach(b => b.addEventListener('click', () => { abandonExtractionContinuity(); minuteModules?.resetForConnection(); exReal = 'connect'; exSource = null; exScanResult = null; exScanError = null; convProg = null; convResult = null; convErr = null; repaint(); }));
       const convDoneBtn = root.querySelector('[data-ex-convdone]'); if (convDoneBtn) convDoneBtn.addEventListener('click', () => { abandonExtractionContinuity(); exReal = 'ready'; repaint(); });
       // run
       root.querySelectorAll('[data-ex-run]').forEach(b => b.addEventListener('click', () => runExtract(b.dataset.exRun || 'custom')));
@@ -2085,7 +2082,7 @@
     beginSourceBinding() {
       if (extractionTaskRunning()) return false;
       abandonExtractionContinuity();
-      minuteModules?.reset();
+      minuteModules?.resetForConnection();
       exView = 'home';
       exSetupStep = 'modules';
       exReal = 'connect';

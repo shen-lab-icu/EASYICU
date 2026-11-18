@@ -52,6 +52,7 @@ function extractor(hosted, values = {}) {
   const c = page(hosted, {
     runModuleKeys: () => ['vitals'], cohortExportSupport: () => ({ ok: true }), abandonExtractionContinuity() {},
     repaint() {}, backgroundRepaint() {}, exScanResult: { db_key: 'eicu' }, selectedConceptPayload: () => ({}),
+    minuteModules: null,
     exMaxPatients: 0, recommendedCohortContract: () => ({}), cohortContract: () => ({}), ...values,
   });
   c.window.EventSource = function EventSource() {};
@@ -241,14 +242,18 @@ const coverage = { minute_resolution: { modules: [
 const recommendedModules = ['demographics', 'vitals', 'chemistry', 'sofa2_score', 'sepsis3_sofa2', 'outcome'];
 const settle = () => new Promise(resolve => setImmediate(resolve));
 
-function minuteScreen(getOptions = async () => coverage) {
+function minuteScreen(getOptions = async () => coverage, storage = new Map(), status = 'running') {
   const posted = [];
   const requests = [];
   let events;
   function EventSource() { events = this; this.close = () => {}; }
   const c = vm.createContext({
     t: en => en, icon: () => '', location: { hash: '#extraction' }, setTimeout() {}, EventSource,
-    localStorage: { getItem: () => null, setItem() {}, removeItem() {} },
+    localStorage: {
+      getItem: key => storage.get(key) ?? null,
+      setItem: (key, value) => storage.set(key, value),
+      removeItem: key => storage.delete(key),
+    },
     window: {
       EU_SETTINGS: { export_dir: '/fixture/output' },
       EU_CATALOG: { groupConcepts: { vitals: ['sbp'] } },
@@ -258,6 +263,9 @@ function minuteScreen(getOptions = async () => coverage) {
           return { ok: true, db_key: 'sic', db: 'SICdb', source: 'prepared', ready: true };
         },
         getJSON(url) { requests.push(url); return getOptions(); },
+        async loadJobSnapshot(id) {
+          return { id, kind: 'extract', status, error: 'Archive volume became read-only' };
+        },
         async postJSON(url, body) {
           posted.push({ url, body: JSON.parse(JSON.stringify(body)) });
           return { job_id: 'fixture-job' };
@@ -356,6 +364,136 @@ test('Use recommended modules clears an explicit minute selection before submitt
   const body = await screen.submit();
   assert.deepEqual(body.modules, recommendedModules);
   assert.deepEqual(body.concepts, { vitals: ['sbp'] });
+});
+
+for (const [change, patch] of [
+  ['feature edit', { modules: ['chemistry'] }],
+  ['cohort edit', { cohort: { age_min: 30 } }],
+]) {
+  test(`a same-folder study ${change} replaces locally checked bedside signals`, async () => {
+    const screen = minuteScreen();
+    const { EU_EXTRACTION_STUDY_CONTEXT: bridge, EU_EXTRACTION_CONTEXT: context } = screen.c.window;
+    const study = {
+      id: 'overnight-lab-audit', revision: 3,
+      data_source: { path: '/fixture/overnight-lab-audit', database: 'sic' },
+      modules: ['blood_gas'],
+    };
+    bridge.hydrate(study);
+    await screen.connect(study.data_source.path);
+    screen.interact('data-ex-minute-module', 'subhour_signals', 'change', { checked: true });
+    assert.ok(context.snapshot().modules.includes('subhour_signals'));
+
+    bridge.hydrate({ ...study, ...patch, revision: 4 });
+    const snapshot = context.snapshot();
+    const body = await screen.submit();
+    const modules = patch.modules || study.modules;
+    assert.deepEqual({ snapshot: Array.from(snapshot.modules), submitted: body.modules, concepts: body.concepts },
+      { snapshot: modules, submitted: modules, concepts: undefined });
+    assert.equal(snapshot.data_source.path, study.data_source.path);
+    assert.equal(screen.requests.length, 1);
+  });
+}
+
+const arterialCoverage = { minute_resolution: { modules: [
+  { ...coverage.minute_resolution.modules[0], signals: ['sbp_invasive', 'dbp_invasive'] },
+  coverage.minute_resolution.modules[1],
+  { id: 'vent_native', label: ['Ventilator settings', '呼吸机设置'], signals: [], unavailable_reason: 'no_whitelisted_signals' },
+] } };
+
+test('a saved waveform study selects its minute module after its folder is scanned', async () => {
+  const screen = minuteScreen(async () => arterialCoverage);
+  screen.c.window.EU_EXTRACTION_STUDY_CONTEXT.hydrate({
+    id: 'waveform-recheck', data_source: { database: 'sic' }, modules: ['haemo_native'],
+  });
+  await screen.connect('/fixture/waveform-recheck');
+  const body = await screen.submit();
+  assert.deepEqual(body.modules, ['haemo_native']);
+  assert.deepEqual(body.concepts, { haemo_native: ['sbp_invasive', 'dbp_invasive'] });
+});
+
+test('an updated arterial study intersects its saved projection when coverage arrives', async () => {
+  let resolveCoverage;
+  const screen = minuteScreen(() => new Promise(resolve => { resolveCoverage = resolve; }));
+  const { EU_EXTRACTION_STUDY_CONTEXT: bridge, EU_EXTRACTION_CONTEXT: context } = screen.c.window;
+  const study = { id: 'diastolic-calibration', data_source: { database: 'sic' }, modules: ['haemo_native'] };
+  bridge.hydrate(study);
+  await screen.connect('/fixture/diastolic-calibration');
+  bridge.hydrate({
+    ...study,
+    modules: ['haemo_native', 'subhour_signals', 'vent_native', 'unlisted_waveforms'],
+    concepts: { haemo_native: ['dbp_invasive', 'expired_channel'], subhour_signals: ['expired_channel'] },
+  });
+  assert.deepEqual(Array.from(context.snapshot().modules), []);
+  resolveCoverage(arterialCoverage);
+  await settle();
+
+  assert.match(screen.markup, /data-ex-minute-module="haemo_native" checked/);
+  assert.match(screen.markup, /SICdb<\/b> · dbp_invasive</);
+  assert.deepEqual(Array.from(context.snapshot().modules), ['haemo_native']);
+  const body = await screen.submit();
+  assert.deepEqual(body.modules, ['haemo_native']);
+  assert.deepEqual(body.concepts, { haemo_native: ['dbp_invasive'] });
+});
+
+test('guided perfusion prefill carries its signal projection into extraction', async () => {
+  const screen = minuteScreen(async () => arterialCoverage);
+  let handoff = { config: { modules: ['haemo_native'], concepts: { haemo_native: ['dbp_invasive'] } } };
+  screen.c.window.EU_GUIDED_HANDOFF = {
+    take(route) {
+      assert.equal(route, 'extraction');
+      const next = handoff;
+      handoff = null;
+      return next;
+    },
+  };
+  await screen.connect('/fixture/guided-perfusion');
+  const body = await screen.submit();
+  assert.deepEqual(body.modules, ['haemo_native']);
+  assert.deepEqual(body.concepts, { haemo_native: ['dbp_invasive'] });
+});
+
+for (const status of ['running', 'failed']) {
+  test(`a reloaded ${status} pressure export returns to setup with the original minute projection`, async () => {
+    const storage = new Map();
+    const originalCoverage = { minute_resolution: { modules: [
+      { ...arterialCoverage.minute_resolution.modules[0], signals: ['dbp_invasive'] },
+    ] } };
+    const original = minuteScreen(async () => originalCoverage, storage);
+    await original.connect('/fixture/pressure-archive');
+    original.interact('data-ex-minute-module', 'haemo_native', 'change', { checked: true });
+    const submitted = await original.submit();
+    assert.deepEqual(submitted.modules, ['haemo_native']);
+    assert.deepEqual(submitted.concepts, { haemo_native: ['dbp_invasive'] });
+
+    const restored = minuteScreen(async () => arterialCoverage, storage, status);
+    assert.ok(await restored.c.window.EU_EXTRACTION_JOB_CONTINUITY.ready);
+    await settle();
+    if (status === 'running') {
+      restored.jobEvent({ type: 'end', status: 'failed', error: 'Archive volume became read-only' });
+    }
+    restored.interact('data-ex-reset');
+
+    assert.match(restored.markup, /data-ex-minute-module="haemo_native" checked/);
+    assert.deepEqual(Array.from(restored.c.window.EU_EXTRACTION_CONTEXT.snapshot().modules), ['haemo_native']);
+    const body = await restored.submit();
+    assert.deepEqual(body.modules, ['haemo_native']);
+    assert.deepEqual(body.concepts, { haemo_native: ['dbp_invasive'] });
+  });
+}
+
+test('a padded telemetry path keeps coverage and minute choices when the job attaches', async () => {
+  const screen = minuteScreen();
+  await screen.connect('  /fixture/telemetry/weekly  ');
+  screen.c.window.EU_EXTRACTION_STUDY_CONTEXT.hydrate({
+    id: 'weekly-telemetry', data_source: { path: '/fixture/telemetry/weekly', database: 'sic' },
+  });
+  screen.interact('data-ex-minute-module', 'subhour_signals', 'change', { checked: true });
+  const body = await screen.submit();
+  assert.deepEqual(body.modules, ['subhour_signals']);
+  screen.jobEvent({ type: 'end', status: 'failed', error: 'Archive volume became read-only' });
+  screen.interact('data-ex-reset');
+  assert.equal(screen.requests.length, 1);
+  assert.match(screen.markup, /data-ex-minute-module="subhour_signals" checked/);
 });
 
 test('an empty coverage reply offers Retry and can recover', async () => {

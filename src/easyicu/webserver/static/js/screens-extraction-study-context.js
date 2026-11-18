@@ -48,12 +48,16 @@
     };
     const rawWindow = current.time_window && typeof current.time_window === 'object'
       ? current.time_window : {};
+    const modules = cleanTextList(current.modules, 64);
+    const concepts = Object.fromEntries(modules.filter(id => Array.isArray(current.concepts?.[id]))
+      .map(id => [id, cleanTextList(current.concepts[id], 64)]));
     return {
       study_context_id: String(current.id || current.study_context_id || '').trim(),
       revision: Number.isInteger(current.revision) && current.revision >= 0 ? current.revision : 0,
       expected_database: cleanDatabase(expectedDatabase || source.database),
       cohort,
-      modules: cleanTextList(current.modules, 64),
+      modules,
+      concepts,
       execution_concepts: executionConcepts,
       time_window: {
         ...(Number.isFinite(rawWindow.hours) ? { hours: rawWindow.hours } : {}),
