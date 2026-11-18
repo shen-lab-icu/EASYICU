@@ -42,17 +42,24 @@ class _MissingHistoryTable(Exception):
     """A required history input has no readable source mapping."""
 
 
-def _history(data_source, table, columns, **selections):
+def _history(data_source, table, columns, *, optional_columns=(), **selections):
     try:
-        frame = _read(data_source, table, columns, **selections)
+        frame = _read(data_source, table, [*columns, *optional_columns], **selections)
     except (FileNotFoundError, MissingTableSourceError) as exc:
         raise _MissingHistoryTable(table) from exc
+    present_optional = [column for column in optional_columns if column in frame.columns]
+    projection = [*columns, *present_optional]
     # The generic MIIV reader can return a zero-row default projection for
     # an absent table. Distinguish that case from a readable empty table.
     if frame.empty and set(columns).difference(frame.columns):
         if data_source.resolve_loader_from_disk(table) is None:
             raise _MissingHistoryTable(table)
-    return frame
+        # An empty IN selection can skip the disk read and return no columns.
+        if any(ids is not None and not ids for ids in selections.values()):
+            return frame.reindex(columns=projection)
+    # The reader can return a wider, case-normalized frame. Keep only the
+    # history inputs so unrelated source columns cannot become merge suffixes.
+    return frame.loc[:, projection]
 
 
 def _ids(frame, column):
@@ -128,7 +135,9 @@ def _view_has_table(data_source, table):
 
 
 def _carevue_flags(data_source, stay_column, selected):
-    stays = _history(data_source, "icustays", [stay_column, "hadm_id", "subject_id", "dbsource"])
+    stays = _history(
+        data_source, "icustays", [stay_column, "hadm_id", "subject_id"], optional_columns=("dbsource",),
+    )
     source = stays.get("dbsource", pd.Series(pd.NA, index=stays.index, dtype="string"))
     source = source.astype("string").str.strip().str.lower()
     carevue = source.eq("carevue").fillna(False)
