@@ -4,6 +4,7 @@ from pathlib import Path
 import pandas as pd
 import pytest
 
+from easyicu.storage_layout import TableScanError
 from easyicu.webserver import dataio
 
 
@@ -51,3 +52,26 @@ def test_mimic_csv_icd9_leading_zeroes_are_preserved(tmp_path: Path):
     (tmp_path / "icustays.csv").write_text("stay_id,hadm_id\n1,10\n2,20\n")
     (tmp_path / "diagnoses_icd.csv").write_text("hadm_id,icd9_code\n10,0389\n20,3890\n")
     assert dataio._match_mimic_icd_ids(tmp_path, "stay_id", ["038"], [], {1, 2}) == ({1}, set())
+
+
+def test_mimic3_icd_selection_binds_uppercase_keys_and_preserves_csv_codes(tmp_path, monkeypatch):
+    rows = tmp_path / "rows.parquet"
+    codes = tmp_path / "codes.csv.gz"
+    pd.DataFrame({"ICUSTAY_ID": [1, 2], "HADM_ID": [10, 20]}).to_parquet(rows, index=False)
+    pd.DataFrame({"HADM_ID": [10, 20], "ICD9_CODE": ["0389", "3890"]}).to_csv(codes, index=False)
+    monkeypatch.setattr(
+        dataio, "_find_table_file", lambda _, tables: rows if tables == ["icustays"] else codes,
+    )
+
+    assert dataio._match_mimic_icd_ids(tmp_path, "icustay_id", ["038"], [], {1, 2}) == ({1}, set())
+
+
+def test_mimic3_icd_selection_refuses_ambiguous_stay_identity(tmp_path, monkeypatch):
+    rows = tmp_path / "rows.parquet"
+    pd.DataFrame({"ICUSTAY_ID": [1], "icustay_id": [2], "HADM_ID": [10]}).to_parquet(rows)
+    monkeypatch.setattr(dataio, "_find_table_file", lambda *_: rows)
+
+    with pytest.raises(TableScanError) as error:
+        dataio._match_mimic_icd_ids(tmp_path, "icustay_id", ["038"], [], {1})
+
+    assert error.value.reason == "identity_column_ambiguous"

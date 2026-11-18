@@ -108,6 +108,18 @@ def test_schema_and_digest_are_bound_to_same_unchanged_table(tmp_path: Path):
     assert "patientunitstayid" in binding.table_columns["patient"]
 
 
+def test_mimic3_raw_identity_does_not_prefer_an_exact_match_over_an_alias(tmp_path: Path):
+    rows = tmp_path / "rows.parquet"
+    pd.DataFrame({"icustay_id": [1], "ICUSTAY_ID": [2]}).to_parquet(rows, index=False)
+    names, _ = owner._table_schema_and_digest(rows, table="icustays")
+
+    with pytest.raises(owner.RawSourceAuthorityError) as error:
+        owner._identity_read_columns("mimic_iii", "icustays", names)
+
+    assert error.value.code == "raw_source_authority_identity_column_ambiguous"
+    assert error.value.details["column"] == "icustay_id"
+
+
 @pytest.mark.parametrize("change", ["in_place", "replace"])
 def test_same_size_table_change_during_binding_is_refused(tmp_path: Path, monkeypatch, change):
     export, _ = _export(tmp_path)

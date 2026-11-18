@@ -8,6 +8,7 @@ from typing import Callable, Dict, List, Mapping, MutableMapping, Optional, Unio
 import pandas as pd
 import pyarrow.parquet as pq
 
+from ..io.identity import read_identity_csv_header, resolve_identity_columns
 from ..patient_filter import PatientFilter
 from ..value_failures import TYPED_VALUE_FAILURES
 from ..patient_filter import get_cohort_stats as _get_cohort_stats
@@ -83,6 +84,7 @@ def get_all_patient_ids_impl(
         database_id_config=database_id_config,
     )
     root = Path(data_path)
+    is_mimic3 = resolved_database in {"mimic", "mimic_demo"}
 
     try:
         all_ids: Optional[List] = None
@@ -102,8 +104,16 @@ def get_all_patient_ids_impl(
             for shard in resolve_table_files(storage, table, loader=presence.loader):
                 try:
                     names = pq.read_schema(shard).names
-                    columns = [id_col, ORDINAL] if ORDINAL in names else [id_col]
-                    frames.append(pd.read_parquet(shard, columns=columns))
+                    physical_id = id_col
+                    if is_mimic3:
+                        physical_id = resolve_identity_columns(
+                            names, [id_col], table=table,
+                        ).get(id_col, id_col)
+                    columns = [physical_id, ORDINAL] if ORDINAL in names else [physical_id]
+                    frame = pd.read_parquet(shard, columns=columns)
+                    if physical_id != id_col:
+                        frame = frame.rename(columns={physical_id: id_col})
+                    frames.append(frame)
                 except unreadable_file_errors() as exc:
                     # Present but unreadable is corruption, not absence: no
                     # CSV sibling stands in for it (delta17c).
@@ -145,8 +155,13 @@ def get_all_patient_ids_impl(
             from ..storage_layout import csv_table_scan
 
             csv_table_scan(storage, table_name, presence.loader)
-            frame = pd.read_csv(presence.loader, usecols=[id_col])
-            all_ids = frame[id_col].dropna().unique().tolist()
+            physical_id = id_col
+            if is_mimic3:
+                physical_id = resolve_identity_columns(
+                    read_identity_csv_header(presence.loader), [id_col], table=table_name,
+                ).get(id_col, id_col)
+            frame = pd.read_csv(presence.loader, usecols=[physical_id])
+            all_ids = frame[physical_id].dropna().unique().tolist()
             source_format = "csv_fallback"
 
         if all_ids is None:

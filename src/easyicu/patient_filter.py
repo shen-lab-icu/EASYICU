@@ -35,10 +35,17 @@ from dataclasses import dataclass
 import pandas as pd
 
 from .databases.profiles import normalize_database_key
-from .storage_layout import StorageIntegrityError
+from .io.identity import read_identity_csv_header, resolve_identity_columns
+from .storage_layout import StorageIntegrityError, parquet_columns
 from .hospital_mortality import hospital_mortality_status_from_flag
 
 logger = logging.getLogger(__name__)
+
+_MIMIC_DEMOGRAPHIC_FIELDS = {
+    "icustays": ("icustay_id", "subject_id", "hadm_id", "intime", "outtime", "los"),
+    "patients": ("subject_id", "dob", "gender"),
+    "admissions": ("subject_id", "hadm_id", "hospital_expire_flag"),
+}
 
 
 class PatientFilterCriterionError(RuntimeError):
@@ -699,7 +706,11 @@ class PatientFilter:
         from .storage_layout import csv_table_scan
 
         csv_table_scan(storage_source(self.database, self.data_path), table_name, path)
-        return pd.read_csv(path)
+        fields = _MIMIC_DEMOGRAPHIC_FIELDS.get(table_name) if self.database == "mimic" else None
+        if not fields:
+            return pd.read_csv(path)
+        physical = resolve_identity_columns(read_identity_csv_header(path), fields, table=table_name)
+        return pd.read_csv(path).rename(columns={name: logical for logical, name in physical.items()})
 
     def _read_table(self, table_name: str) -> pd.DataFrame:
         """Read ``table_name`` through the storage owner.
@@ -718,10 +729,21 @@ class PatientFilter:
             from .datasource import storage_source
 
             self._storage = storage_source(self.database, self.data_path)
+
+        fields = _MIMIC_DEMOGRAPHIC_FIELDS.get(table_name) if self.database == "mimic" else None
+
+        def read_parquet(path: Path) -> pd.DataFrame:
+            if not fields:
+                return pd.read_parquet(path)
+            physical = resolve_identity_columns(parquet_columns(path), fields, table=table_name)
+            return pd.read_parquet(path).rename(
+                columns={name: logical for logical, name in physical.items()},
+            )
+
         files = self._storage.resolve_target_files(table_name)
         if files:
             # Path order, as the former directory and bucket listings.
-            frames = [pd.read_parquet(f) for f in sorted(files)]
+            frames = [read_parquet(f) for f in sorted(files)]
             return frames[0] if len(frames) == 1 else pd.concat(frames, ignore_index=True)
 
         # No Parquet installation of the table: a CSV export, admitted by the
@@ -743,7 +765,7 @@ class PatientFilter:
                 path = found[0]
                 if ext == '.parquet':
                     (path,) = self._validated(table_name, path)
-                    return pd.read_parquet(path)
+                    return read_parquet(path)
                 return self._read_csv(table_name, path)
 
         raise SourceTableNotInstalled(table_name, self.data_path)
