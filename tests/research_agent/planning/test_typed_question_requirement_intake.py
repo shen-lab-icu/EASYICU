@@ -53,15 +53,14 @@ from easyicu.research_agent.schema import (
     AnalysisPlan, AnalysisStep, ConceptDescriptor, ObservationSemantics, ResearchContext, UserPreferences,
 )
 
+from tests.support.typed_question_requirements import (
+    AUTHORITY, CASES, CLUSTER, DIALYSIS16, DICTIONARY, FIRST_ONLY, ICU, REPORT_STAYS, STUDY_POPULATION,
+    _context, _model, _model_plan, _shadow_event, bind, fact, interval, key, proposal,
+)
+from tests.support.typed_question_requirements import shadow_events as shadow_events
+
 from .family_spec_fixtures import _context as _family_context
 from .family_spec_fixtures import ALLOWED_CITATIONS, DIRECT_COMPARATORS, _request, _run, _spec_payload
-from .test_typed_question_requirement_coverage import _context, _model, _model_plan
-from .test_typed_question_requirement_regressions import (
-    AUTHORITY, CASES, CLUSTER, DIALYSIS16, DICTIONARY, FIRST_ONLY, ICU, REPORT_STAYS, STUDY_POPULATION,
-    bind, fact, interval, key,
-)
-from .test_typed_question_requirement_shadow import _shadow_event, proposal
-from .test_typed_question_requirement_shadow import shadow_events as shadow_events
 
 
 def _clock() -> ConceptDescriptor:

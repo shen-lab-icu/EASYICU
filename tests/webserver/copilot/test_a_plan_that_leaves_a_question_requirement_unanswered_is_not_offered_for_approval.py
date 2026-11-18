@@ -387,14 +387,17 @@ _ASKED = [
     {
         "id": "r2",
         "kind": "estimand",
-        "quote": "discrimination and calibration",
+        "quote": "discrimination and calibration under leave-one-hospital-out validation",
         "concepts": [],
         "coverage": "capability_gap",
         "gap": {
             "requirement": "estimand_unsupported",
             "concept": None,
             "element": "analysis",
-            "detail": "This plan cannot estimate the named measure on held-out rows.",
+            "detail": (
+                "The plan holds out patients within the study cohort. Leave-one-hospital-out "
+                "validation needs hospital membership and a separate fit for each held-out hospital."
+            ),
         },
         "note": None,
     },
@@ -415,7 +418,7 @@ def _written_records(run_dir: Path) -> dict[str, dict[str, Any]]:
             "research_question": (
                 "Among adult ICU stays, how well do first-24-hour vitals, labs, "
                 "and demographics predict in-hospital mortality, in "
-                "discrimination and calibration?"
+                f"{_ASKED[1]['quote']}?"
             ),
             "user_preferences": base.user_preferences.model_copy(
                 update={"data_constraints": json.dumps(constraints)}
@@ -429,15 +432,29 @@ def _written_records(run_dir: Path) -> dict[str, dict[str, Any]]:
         ),
         "question_requirements": _ASKED,
     }
-    _llm, result = _run(
-        context, [json.dumps(payload)], required_primary_cohort_selection_mode=None
+    # On reconsideration, the offered family still lacks hospital-wise
+    # validation. Keep the gap through both bounded confirmation rounds.
+    response = json.dumps(payload)
+    llm, result = _run(
+        context, [response, response, response], required_primary_cohort_selection_mode=None
     )
+    assert len(llm.calls) == 3
+    for messages, _options in llm.calls[1:]:
+        assert "progressive_capability_gap_confirmation_required" in messages[-1].content
+        assert "question_requirements[1].gap" in messages[-1].content
+
     findings = question_requirement_outcome(
         context=context, plan=result.output, facts=result.facts, run_dir=run_dir
     )
     question_requirements_on_plan_under_review(
         findings, plan=result.output, run_dir=run_dir
     )
+    requests = human_review_requests_for_plan(
+        findings=findings, plan=result.output, require_plan_review=True,
+    )
+    assert [(request.payload["reason"], request.payload["approval_allowed"]) for request in requests] == [
+        (_GAP, False)
+    ]
     return {
         name: json.loads((run_dir / name).read_text(encoding="utf-8"))
         for name in (

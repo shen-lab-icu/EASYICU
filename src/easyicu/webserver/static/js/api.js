@@ -704,6 +704,9 @@
   function confirmPiCopilotPlanDecision(sessionId, body) {
     return postJSON('/api/copilot/pi/sessions/' + encodeURIComponent(sessionId) + '/plan-decision-selection', body || {});
   }
+  function compilePiCopilotTargetTrialProposal(sessionId, body) {
+    return postJSON('/api/copilot/pi/sessions/' + encodeURIComponent(sessionId) + '/target-trial-proposal', body || {});
+  }
   function approvePiCopilotTargetTrial(sessionId, body) {
     return postJSON('/api/copilot/pi/sessions/' + encodeURIComponent(sessionId) + '/target-trial-approval', body || {});
   }
@@ -1102,6 +1105,7 @@
   window.EU_API.cancelPiCopilotFollowup = cancelPiCopilotFollowup;
   window.EU_API.confirmPiCopilotCohortEligibility = confirmPiCopilotCohortEligibility;
   window.EU_API.confirmPiCopilotPlanDecision = confirmPiCopilotPlanDecision;
+  window.EU_API.compilePiCopilotTargetTrialProposal = compilePiCopilotTargetTrialProposal;
   window.EU_API.approvePiCopilotTargetTrial = approvePiCopilotTargetTrial;
   window.EU_API.approvePiQuickAnswer = approvePiQuickAnswer;
   window.EU_API.expandPiQuickAnswer = expandPiQuickAnswer;

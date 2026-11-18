@@ -62,7 +62,7 @@ from .contracts import (
 )
 from .plan_projection import project_plan_conversation_preview
 from .exposure_group_notes import project_exposure_groups
-from .question_requirement_notes import project_question_requirement_notes
+from .question_requirement_notes import exposure_arrangement_offer, project_question_requirement_notes
 from .population_preparation import current_population_preparation
 from .population_acceptance import current_population_acceptance
 from .survival_plan_decision import SurvivalLandmarkDecision, pending_survival_decision
@@ -1928,6 +1928,12 @@ def build_project_workflow_projection(
                 if isinstance(plan_review_authority, Mapping) else None
             ),
         )
+    review_summary = snapshot.plan_review_summary or {}
+    arrangement = exposure_arrangement_offer(snapshot.next_action_code, review_summary)
+    if arrangement is not None:
+        snapshot = snapshot.model_copy(update={
+            "plan_review_summary": {**review_summary, "exposure_arrangement": arrangement}
+        })
     host_decisions = host_decision_offers(
         snapshot,
         study=study,

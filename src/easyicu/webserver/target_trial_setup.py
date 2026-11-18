@@ -293,6 +293,7 @@ def latest_target_trial_compile(study_id: str) -> Optional[dict[str, Any]]:
         "detail": detail,
         "missing_concepts": _bounded_codes(found.get("missing_concepts")),
         "cause_code": cause if _CAUSE.fullmatch(cause) else None,
+        **({"host_proposal": True} if latest.get("host_proposal") is True else {}),
     }
 
 
@@ -559,7 +560,7 @@ def check_target_trial_statement(
 
 
 def submit_target_trial_compile(
-    study: Mapping[str, Any], statement: TargetTrialStatement
+    study: Mapping[str, Any], statement: TargetTrialStatement, *, host_proposal: bool = False
 ) -> Any:
     """Start the study's compile job; the job states the trial when it compiles.
 
@@ -642,6 +643,7 @@ def submit_target_trial_compile(
             "created_at": time.time(),
             "request": request,
             "result": None,
+            **({"host_proposal": True} if host_proposal else {}),
         }
         _write_job_record(started["path"], started["record"])
     except study_contexts.StudyContextError as exc:

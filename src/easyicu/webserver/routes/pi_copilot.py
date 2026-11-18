@@ -282,6 +282,7 @@ class PiMessageRequest(BaseModel):
         Literal[
             "confirm_formal_plan_generation",
             "confirm_fresh_plan_generation",
+            "confirm_exposure_arrangement",
             "confirm_planner_checkpoint_resume",
             "advance_after_data_source_confirmation",
             "idea_discovery_entry",
@@ -388,6 +389,15 @@ class PiHostActionRequest(BaseModel):
     ]
     action_key: ShortText
     child_job_id: ShortText | None = None
+
+
+class PiTargetTrialProposalRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    project_id: ShortText
+    study_context_id: ShortText
+    expected_revision: StrictInt = Field(ge=1)
+    proposal_sha256: Sha256Text
 
 
 class PiTargetTrialApprovalRequest(BaseModel):
@@ -1585,6 +1595,18 @@ def post_pi_copilot_host_action(
             action_code=body.action_code,
             action_key=body.action_key,
             child_job_id=body.child_job_id,
+        )
+    except PiCopilotError as exc:
+        _raise_http(exc)
+
+
+@router.post("/api/copilot/pi/sessions/{session_id}/target-trial-proposal")
+def post_pi_copilot_target_trial_proposal(
+    session_id: ShortText, body: PiTargetTrialProposalRequest
+) -> dict:
+    try:
+        return get_pi_copilot_service().compile_target_trial_proposal(
+            session_id, **body.model_dump()
         )
     except PiCopilotError as exc:
         _raise_http(exc)

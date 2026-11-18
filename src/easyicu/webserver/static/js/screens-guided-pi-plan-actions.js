@@ -203,7 +203,7 @@
 
     function setPending(value) {
       host.setBusy(Boolean(value));
-      host.setError('');
+      if (value) host.setError('');
       host.render();
     }
 
@@ -841,8 +841,20 @@
       }
     }
 
-    async function confirmWorkflow(confirmation) {
-      if (!confirmation) return;
+    async function confirmWorkflow(confirmation, exposureOption) {
+      if (!confirmation || (exposureOption !== undefined && !confirmation.exposureArrangement)) return;
+      if (confirmation.compileTrialProposal) {
+        await compileTargetTrialProposal();
+        return;
+      }
+      if (confirmation.exposureArrangement) {
+        if (confirmation.approveDisabled || unavailable()) return;
+        const proposal = confirmation.exposureArrangement;
+        const option = exposureOption ?? proposal.defaultOption;
+        if (!Object.hasOwn(proposal.options, option)) return;
+        await host.sendText(proposal.options[option], confirmation.grants, 'confirm_exposure_arrangement', true, 'host_prompt');
+        return;
+      }
       if (confirmation.code === 'approve_quick_answer' || confirmation.code === 'expand_into_full_study') {
         await quickAnswerAction(confirmation);
         return;
@@ -907,6 +919,38 @@
       await host.sendText(confirmation.message, confirmation.grants, undefined, true, 'host_prompt');
     }
 
+    function currentTrialSelection(sessionId, project) {
+      const selection = host.selectionRevision ? host.selectionRevision() : null;
+      return () => host.projectId() === project && host.session()?.session_id === sessionId
+        && (!host.selectionRevision || host.selectionRevision() === selection);
+    }
+
+    async function compileTargetTrialProposal() {
+      if (unavailable()) return;
+      const owner = window.EasyICU.guidedPi.optional('targetTrial');
+      const session = host.session() || {};
+      const project = host.projectId();
+      const isCurrent = currentTrialSelection(session.session_id, project);
+      const body = owner?.proposalRequest(host.workflow(), session, project);
+      const api = host.api();
+      if (!body || typeof api.compilePiCopilotTargetTrialProposal !== 'function') return;
+      setPending(true);
+      let jobId;
+      try {
+        const result = await api.compilePiCopilotTargetTrialProposal(session.session_id, body);
+        if (!isCurrent()) return;
+        jobId = result.job_id;
+      } catch (error) {
+        if (!isCurrent()) return;
+        await Promise.resolve(host.loadWorkflow()).catch(() => null);
+        if (!isCurrent()) return;
+        host.setError(owner.refusalText(error, tr) || host.errorText(error));
+      } finally {
+        setPending(false);
+      }
+      if (jobId && isCurrent()) host.watchChildJob(jobId, 'easyicu_target_trial_compile_submitted');
+    }
+
     // The researcher's click on an approvable target trial card, every line
     // ticked: the host records it against the record the card shows
     // (webserver/target_trial_card.py) and writes the conversation's row.
@@ -914,23 +958,25 @@
       if (unavailable()) return;
       const owner = window.EasyICU.guidedPi.optional('targetTrial');
       const session = host.session() || {};
-      const body = owner ? owner.approvalRequest(host.workflow(), session, host.projectId()) : null;
+      const project = host.projectId();
+      const isCurrent = currentTrialSelection(session.session_id, project);
+      const body = owner?.approvalRequest(host.workflow(), session, project);
       const api = host.api();
       if (!body || typeof api.approvePiCopilotTargetTrial !== 'function') return;
       setPending(true);
       try {
         await api.approvePiCopilotTargetTrial(session.session_id, body);
+        if (!isCurrent()) return;
         await host.refreshSession(true);
+        if (!isCurrent()) return;
         await host.loadWorkflow();
-        host.setBusy(false);
-        host.render();
       } catch (error) {
-        host.setBusy(false);
-        // A stale card is the study's state, not this click's failure: show
-        // the card the host has now, with why the click did not approve.
+        if (!isCurrent()) return;
         await Promise.resolve(host.loadWorkflow()).catch(() => null);
-        host.setError((owner && owner.refusalText(error, tr)) || host.errorText(error));
-        host.render();
+        if (!isCurrent()) return;
+        host.setError(owner.refusalText(error, tr) || host.errorText(error));
+      } finally {
+        setPending(false);
       }
     }
 

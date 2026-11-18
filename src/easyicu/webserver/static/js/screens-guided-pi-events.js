@@ -84,8 +84,10 @@
       render();
     }
 
-    function revealPendingReview() {
-      const card = state.host && state.host.querySelector('.gpi-confirmation[data-gpi-review-recovery]');
+    function revealPendingReview(recoveryOnly = false) {
+      const card = state.host?.querySelector('.gpi-confirmation[data-gpi-review-recovery]')
+        || (!recoveryOnly && (state.host?.querySelector('.gpi-confirmation')
+          || state.host?.querySelector('.gpi-cohort-eligibility, .gpi-data-consent')));
       if (!card) return;
       card.scrollIntoView({ block: 'center', behavior: 'smooth' });
       card.setAttribute('tabindex', '-1');
@@ -174,7 +176,7 @@
           if (!state.busy && !state.childJobId) openStudySetupInConversation();
           return;
         }
-        if (event.target.closest('[data-gpi-stop-recovery]')) { revealPendingReview(); return; }
+        if (event.target.closest('[data-gpi-stop-recovery]')) { revealPendingReview(true); return; }
         const stopAction = event.target.closest('[data-gpi-stop-action]');
         if (stopAction) {
           if (!state.session || state.busy || state.childJobId || state.projectLoading || state.session.stale?.stale) return;
@@ -588,6 +590,11 @@
         if (reportRetry) {
           const reason = reportRetry.dataset.gpiRunOutcomeRetry;
           retryFailedExecution(['report_only', 'restore'].includes(reason) ? reason : 'validation_repair');
+          return;
+        }
+        const exposureChoice = event.target.closest('[data-gpi-exposure-arrangement]');
+        if (exposureChoice) {
+          if (!exposureChoice.disabled) confirmWorkflowAction(exposureChoice.dataset.gpiExposureArrangement);
           return;
         }
         if (event.target.closest('[data-gpi-confirm-action]')) { confirmWorkflowAction(); return; }
