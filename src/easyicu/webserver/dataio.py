@@ -2766,7 +2766,6 @@ def make_export_runner(
     ``_manifest.json``. ``max_patients`` caps the cohort (None = all). Emits one
     ``progress`` event per module.
     """
-    import os
     from easyicu.webserver.hosted import is_hosted, require_path
 
     minute_modules = minute_export_modules(database, modules, concepts)
@@ -2791,9 +2790,6 @@ def make_export_runner(
         if quality["data_quality_status"] != "clean":
             raise ExportCohortError("source_conversion_quality_incomplete", quality)
 
-        # On this memory-tight machine the batch estimator over-predicts ~5x and
-        # trips the low-mem path; force the fast in-process path (see CLAUDE.md).
-        os.environ.setdefault("EASYICU_FORCE_INPROCESS_BATCH", "1")
         import easyicu.api as api
         from easyicu.api import extraction
         from easyicu.concept.catalog import CONCEPT_GROUPS_INTERNAL
@@ -3038,6 +3034,10 @@ def make_export_runner(
                                 )
                             )
                         except ConceptExtractionUnavailable as exc:
+                            # Stay-level modules may have already written tables
+                            # in this run before the first longitudinal module.
+                            for entry in files:
+                                (out / entry["file"]).unlink(missing_ok=True)
                             raise ExportCohortError(
                                 "stay_time_upper_bounds_unavailable",
                                 {"module": mod, "stage": exc.stage, "reason": exc.detail},

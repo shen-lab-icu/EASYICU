@@ -134,8 +134,8 @@ EXPECTED = {'furosemide_active': {'class_name': 'lgl_cncpt',
                                 'sub_var': 'DrugID',
                                 'callback': 'transform_fun(comp_na(`>`, 0))'}]}},
  'vancomycin_iv': {'class_name': 'lgl_cncpt',
-                   'description': 'vancomycin systemic (intravenous) administration; input of '
-                                  'vancomycin_piperacillin_tazobactam',
+                   'description': 'vancomycin systemic (intravenous) administration; an input of the '
+                                  'vancomycin and piperacillin-tazobactam co-exposure',
                    'category': 'medications',
                    'aggregate': 'max',
                    'sources': {'miiv': [{'ids': 225798,

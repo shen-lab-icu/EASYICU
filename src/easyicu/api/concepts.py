@@ -1700,11 +1700,11 @@ def load_concepts(
     #   <12GB: 始终 subprocess（小内存，pymalloc 碎片致命）
     #   12-32GB: 仅在 cohort > 60K 时 subprocess（典型场景仍走 inprocess）
     #   ≥32GB: 仅在 cohort > 120K 时 subprocess
-    # 显式覆盖：EASYICU_FORCE_INPROCESS_BATCH=1 强制 inprocess；
-    #          EASYICU_FORCE_SUBPROCESS_BATCH=1 强制 subprocess。
+    # These overrides apply to the RAM-based decision. The one-shot budget
+    # above and special-concept routing below can require subprocesses.
     if not use_subprocess and effective_batch_size is not None:
         if os.environ.get("EASYICU_FORCE_INPROCESS_BATCH"):
-            pass  # 用户显式禁用 subprocess，保持 inprocess
+            pass
         elif os.environ.get("EASYICU_FORCE_SUBPROCESS_BATCH"):
             use_subprocess = True
         else:
@@ -1844,8 +1844,6 @@ def load_concepts(
                         str(loader.data_path) if hasattr(loader, "data_path") else None
                     ),
                     verbose=verbose,
-                    merge=merge,
-                    r_compatible=r_compatible,
                     dict_path=dict_path,
                     use_sofa2=use_sofa2,
                     **load_kwargs,
