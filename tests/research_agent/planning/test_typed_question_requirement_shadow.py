@@ -60,6 +60,20 @@ def _legacy(facet: str, quote: str):
     )
 
 
+def test_live_v1_credits_dialysis_landmark_to_vasopressor_clause(monkeypatch) -> None:
+    monkeypatch.delenv(FLAG, raising=False)
+    [entry] = _legacy("time_zero", BILINGUAL_CASES[0][1])()
+    assert entry.requirement.concepts == ["rrt"]
+    assert entry.disposition == "covered"
+    assert entry.reason_code == "question_methods_clauses_covered"
+    [clause] = entry.clauses
+    assert clause["evidence"]["source"] == "host_default"
+    assert clause["evidence"]["source_ref"] == (
+        "research_context.json.user_preferences.sensitivity_specs[dialysis]"
+    )
+    assert clause["evidence"]["statement"] == {"landmark_hours": 16, "strategy": "landmark"}
+
+
 @pytest.mark.parametrize(
     ("facet", "language", "quote"),
     [pytest.param(facet, language, quote, id=f"{facet}-{language}")
