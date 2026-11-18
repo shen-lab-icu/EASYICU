@@ -37,6 +37,7 @@ class ProgressivePlannerRunFacts:
     #: The plan was projected from a family template (the family-spec route),
     #: whose steps are the template's: set by that route alone.
     family_template: bool = False
+    question_requirement_typings: object = ()
 
     @property
     def complete_for_persistence(self) -> bool:
@@ -76,6 +77,7 @@ class ProgressivePlannerAttemptState:
     )
     question_requirements: list[QuestionRequirement] = field(default_factory=list)
     family_template: bool = False
+    question_requirement_typings: object = ()
 
     def retry_progress_callback(self, callback):
         def observe(event):
@@ -114,6 +116,7 @@ class ProgressivePlannerAttemptState:
             },
             question_requirements=tuple(self.question_requirements),
             family_template=self.family_template,
+            question_requirement_typings=self.question_requirement_typings,
         )
 
 
