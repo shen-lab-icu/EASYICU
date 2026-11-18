@@ -59,6 +59,7 @@ from easyicu.research_agent.planning.question_requirements import (
     judge_question_requirements,
 )
 from easyicu.research_agent.providers.structured_diagnostics import safe_validation_issues
+from easyicu.research_agent.providers.structured_retry import StructuredResponseFailure
 from easyicu.research_agent.schema import (
     CohortDescriptor,
     ConceptDescriptor,
@@ -433,6 +434,32 @@ def test_a_spline_family_reports_odds_ratios_so_a_requested_risk_ratio_is_a_type
     # The signed spline primary is read as an odds-ratio primary.
     signed = SimpleNamespace(scientific_capability="association_landmark_spline_v1", model_requirements=[])
     assert primary_binary_effect_measure(signed) == "odds_ratio"
+
+
+def test_unsupported_effect_measure_does_not_excuse_a_contradicted_concept_gap():
+    context = _spline_context()
+    quote = "express the contrast as relative risk"
+    context = context.model_copy(update={
+        "research_question": context.research_question.replace(RR_WORDS, quote),
+    })
+    request = _landmark_request(context)
+    assert family_effect_measures(request) == ("odds_ratio",)
+    gap = {
+        **GAP, "requirement": "levels_from_thresholds_unavailable", "concept": "sex",
+        "detail": "The recorded sex has no discrete levels for comparing the contrast.",
+    }
+    requirement = _rr_requirement(
+        quote=quote, coverage="capability_gap", concepts=["sex"], gap=gap,
+    )
+    raw = json.dumps(_spline_spec(request, question_requirements=[requirement]).model_dump(mode="json"))
+    with pytest.raises(StructuredResponseFailure) as caught:
+        _landmark_run(context, [raw] * 4)
+
+    cause = caught.value.__cause__
+    assert isinstance(cause, ProgressivePlanCompileError)
+    assert cause.reason_code == "progressive_capability_gap_claim_unverified"
+    assert cause.path == "question_requirements[0].gap"
+    assert cause.details["cause_code"] == "levels_from_thresholds_unavailable"
 
 
 # ---------------------------------------------------------------------------

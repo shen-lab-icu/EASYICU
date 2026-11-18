@@ -110,6 +110,9 @@ class ManuscriptRepairPass:
     ) -> tuple[str, List[Dict[str, object]], Optional[Dict[str, Any]]]:
         """Require valid decisions before falling back to conservative removal."""
 
+        if not rejected_sentences:
+            return scaffold, [], None
+
         repair = BoundedRepair()
         if receipt is not None:
             receipt.update(repair.receipt)
@@ -117,6 +120,7 @@ class ManuscriptRepairPass:
             "rejected_sentence_count": len(rejected_sentences),
         })
         feedback = (initial,)
+        structured_attempts: list[dict[str, Any]] = []
         while repair.available:
             repair.begin(feedback)
             try:
@@ -144,6 +148,10 @@ class ManuscriptRepairPass:
                 })
                 repair.finish("rejected", findings=(rejection,))
                 feedback = (initial, rejection)
+                structured_attempts.extend(
+                    dict(item) for item in getattr(exc, "easyicu_structured_attempt_metadata", ())
+                    if isinstance(item, dict)
+                )
                 failure = exc
             except BaseException as exc:
                 repair.finish("rejected", findings=(RepairFeedback(
@@ -154,12 +162,11 @@ class ManuscriptRepairPass:
                 repair.finish("resolved")
                 return repaired, applied, None
         repaired, applied = self._deterministically_drop(scaffold, rejected_sentences)
-        raw_attempts = getattr(failure, "easyicu_structured_attempt_metadata", [])
         return repaired, applied, {
             "reason_code": "writer_evidence_repair_deterministic_drop",
             "exception_type": type(failure).__name__,
             "rejected_sentence_count": len(rejected_sentences),
-            "structured_attempts": [dict(item) for item in raw_attempts if isinstance(item, dict)][:4],
+            "structured_attempts": structured_attempts,
         }
 
     def drop_residual(

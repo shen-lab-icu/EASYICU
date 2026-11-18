@@ -22,6 +22,7 @@ from .manuscript_sections import (
     manuscript_binding_tokens,
     manuscript_repair_feedback,
     manuscript_repair_regressions,
+    manuscript_section_key,
 )
 
 REPAIRABLE_MANUSCRIPT_CODES = frozenset({
@@ -55,7 +56,7 @@ def _sections(text: str) -> dict[str, str]:
 
 
 def _codes(errors: Mapping[str, Sequence[str]]) -> list[str]:
-    return sorted({code for rows in errors.values() for row in rows for code in _CODE.findall(row)})
+    return sorted({item.code for item in manuscript_repair_feedback(errors)})
 
 
 def _numeric_authority(binding: Any) -> Counter:
@@ -216,7 +217,7 @@ def run_manuscript_audit_repair(
                     current, binding, errors = candidate, checked, next_errors
         except ManuscriptSectionContractError as exc:
             last_rejection = (RepairFeedback(
-                "MANUSCRIPT_SUBSECTION_MISSING_OR_EMPTY", exc.section_name.lower(),
+                "MANUSCRIPT_SUBSECTION_MISSING_OR_EMPTY", manuscript_section_key(exc.section_name),
                 {"missing_subsections": list(exc.missing_subsections)},
             ),)
             repair.finish("rejected", findings=last_rejection)

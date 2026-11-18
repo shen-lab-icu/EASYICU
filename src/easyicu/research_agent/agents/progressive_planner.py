@@ -4078,6 +4078,9 @@ class ProgressivePlannerAgent:
     ) -> AnalysisPlan | ProgressivePlanOutline:
         self._attempt.resume_validated = False
         enforce_article_contract = enforce_article_contract and tier_from_planning_contract(planning_contract_context) == "article"
+        self._attempt.outline = None
+        self._attempt.foundation = None
+        self._attempt.materializations = []
         self._attempt.compile_failure_attempts = []
         if planner_strategy not in {"progressive_v2", FAMILY_SPEC_STRATEGY}:
             raise ValueError(f"unsupported planner_strategy {planner_strategy!r}")
@@ -4463,7 +4466,6 @@ class ProgressivePlannerAgent:
             outline = resume_checkpoint.outline
             saved_gap_feedback = gap_repair.seed_saved_outline(resume_checkpoint, capability_gap_check(outline)) if outline.capability_gap else None
             if saved_gap_feedback:
-                self._attempt.resume_validated = True
                 current_prompt_metrics["superseded_gap_checkpoint_sha256"] = resume_checkpoint.checkpoint_sha256
                 checkpoint_emitter = ProgressivePlannerCheckpointEmitter(callback=checkpoint_callback, request_authority_sha256=resume_checkpoint.request_authority_sha256)
                 resume_checkpoint = None
@@ -4605,6 +4607,7 @@ class ProgressivePlannerAgent:
                     stage="outline", outline=outline, foundation=None, materializations=(),
                     prompt_metrics=self._attempt.prompt_metrics,
                 )
+                self._attempt.resume_validated = "superseded_gap_checkpoint_sha256" in current_prompt_metrics
             raise stop
         self._validate_outline_authority(
             outline,
@@ -4630,8 +4633,6 @@ class ProgressivePlannerAgent:
             article_context=article_context,
         )
         self._attempt.outline = outline
-        self._attempt.foundation = None
-        self._attempt.materializations = []
         outline_sha256 = canonical_sha256(outline.model_dump(mode="json"))
         if resume_checkpoint is not None:
             if self._attempt.prompt_metrics.get("outline_sha256") != outline_sha256:
@@ -4649,6 +4650,7 @@ class ProgressivePlannerAgent:
                 materializations=self._attempt.materializations,
                 prompt_metrics=self._attempt.prompt_metrics,
             )
+            self._attempt.resume_validated = "superseded_gap_checkpoint_sha256" in current_prompt_metrics
         if stop_after_outline:
             # Dependency and request authority were validated above.  A
             # resumed outline can therefore be accepted for this deliberately

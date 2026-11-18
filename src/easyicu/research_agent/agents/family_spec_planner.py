@@ -1051,7 +1051,11 @@ def question_requirement_gap_feedback(
     for index, item in enumerate(spec.question_requirements):
         if item.gap is None or requirement_delivery_coverage(item) is not None:
             continue
-        if item.effect_measure and item.effect_measure not in family_effect_measures(request):
+        if (
+            item.gap.requirement == "estimand_unsupported"
+            and item.effect_measure
+            and item.effect_measure not in family_effect_measures(request)
+        ):
             # Spec validation already verified this family's estimand ceiling.
             continue
         check = check_capability_gap(

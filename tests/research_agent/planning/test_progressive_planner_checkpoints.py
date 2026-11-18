@@ -35,6 +35,7 @@ from easyicu.research_agent.authority.plan_lifecycle import (
     build_normalized_plan_lineage,
 )
 from easyicu.research_agent.providers.mocks import ScriptedMockLLMClient
+from easyicu.research_agent.providers.structured_retry import StructuredResponseFailure
 
 from tests.support.progressive_retry import _RecordingEvidence
 
@@ -779,3 +780,90 @@ def test_an_old_unverified_gap_checkpoint_replans_without_importing_it_as_an_app
     assert source_path.read_bytes() == original
     assert "estimand_unsupported" in retry.calls[0][0][-1].content
     assert result.checkpoint.prompt_metrics["capability_gap_repair"]["attempts"][0]["status"] == "resolved"
+
+
+@pytest.fixture
+def gap_resume_case(tmp_path):
+    gap = {
+        **_outline_payload(), "steps": [], "capability_gap": "design_element_unsupported",
+        "rationale": "The requested interventional indirect effect requires a mediation design.",
+    }
+    context = _context().model_copy(update={
+        "research_question": "How much of the admission marker's association is mediated by ward transfer?",
+    })
+    cohort_path = tmp_path / "synthetic.parquet"
+    cohort_path.write_bytes(b"metadata-only fixture")
+
+    def run(name, llm, *, source=None, evidence=None, findings=None):
+        run_dir = tmp_path / name
+        run_dir.mkdir()
+        return run_progressive_planner(
+            planner=ProgressivePlannerAgent(llm), context=context, run_dir=run_dir,
+            evidence=_RecordingEvidence() if evidence is None else evidence,
+            prompt_pack_version="test-v1", resume_checkpoint_path=source,
+            resume_checkpoint_sha256=hashlib.sha256(source.read_bytes()).hexdigest() if source else None,
+            cohort_path=cohort_path, llm_signature="mock:test", planner_kwargs={},
+            know_how_binding=PlannerKnowHowBinding(), planning_contract_context="",
+            finding_sink=(findings.append if findings is not None else lambda _: None),
+            stop_after_outline=True,
+        )
+
+    return gap, run
+
+
+def test_gap_repairs_share_one_cap_across_two_resumes(tmp_path, gap_resume_case):
+    gap, run = gap_resume_case
+    answer = json.dumps(gap)
+    initial = ScriptedMockLLMClient(["not-json", answer, answer, answer])
+    with pytest.raises(ProgressivePlanCompileError, match="progressive_capability_gap"):
+        run("first", initial)
+    first = tmp_path / "first/progressive_planner_checkpoint_000.json"
+    first_metrics = ProgressivePlannerCheckpoint.model_validate_json(first.read_bytes()).prompt_metrics
+
+    resume = ScriptedMockLLMClient([answer], repeat_last=True)
+    with pytest.raises(ProgressivePlanCompileError, match="progressive_capability_gap"):
+        run("second", resume, source=first)
+    second = tmp_path / "second/progressive_planner_checkpoint_000.json"
+    second_metrics = ProgressivePlannerCheckpoint.model_validate_json(second.read_bytes()).prompt_metrics
+
+    resume_again = ScriptedMockLLMClient([answer], repeat_last=True)
+    with pytest.raises(ProgressivePlanCompileError, match="progressive_capability_gap"):
+        run("third", resume_again, source=second)
+
+    assert [len(resume.calls), len(resume_again.calls)] == [1, 0]
+    assert first_metrics["capability_gap_confirmation_count"] == 2
+    assert second_metrics["capability_gap_confirmation_count"] == 3
+    previous = first_metrics["capability_gap_repair"]
+    resumed = second_metrics["capability_gap_repair"]
+    assert previous["max_attempts"] == resumed["max_attempts"] == 3
+    assert resumed["attempts"][:2] == previous["attempts"]
+    assert [row["attempt"] for row in resumed["attempts"]] == [1, 2, 3]
+
+
+@pytest.mark.parametrize("replacement", ["malformed", "contradicted"])
+def test_failed_gap_reconsideration_does_not_import_the_old_checkpoint(
+    tmp_path, gap_resume_case, replacement,
+):
+    from easyicu.research_agent.providers.structured_retry import automatic_retry_scope
+
+    gap, run = gap_resume_case
+    with automatic_retry_scope(disabled=True), pytest.raises(ProgressivePlanCompileError):
+        run("first", ScriptedMockLLMClient([json.dumps(gap)]))
+    source = tmp_path / "first/progressive_planner_checkpoint_000.json"
+    original = source.read_bytes()
+    raw = "not-json" if replacement == "malformed" else json.dumps({
+        **gap, "capability_gap": "levels_from_thresholds_unavailable", "capability_gap_concept": "exposure_flag",
+        "rationale": "The admission marker cannot be divided into groups for the mediation contrast.",
+    })
+    evidence, findings = _RecordingEvidence(), []
+    llm = ScriptedMockLLMClient([raw], repeat_last=True)
+    with pytest.raises(StructuredResponseFailure) as caught:
+        run("second", llm, source=source, evidence=evidence, findings=findings)
+
+    if replacement == "contradicted":
+        assert caught.value.__cause__.reason_code == "progressive_capability_gap_claim_unverified"
+    assert llm.calls
+    assert source.read_bytes() == original
+    assert not (tmp_path / "second/progressive_planner_checkpoint_000.json").exists()
+    assert "progressive_planner_checkpoint_000" not in evidence.records
+    assert findings == []

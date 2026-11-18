@@ -673,6 +673,40 @@ def test_final_audit_retries_rejected_candidate_with_typed_feedback(tmp_path, mo
     assert [row["status"] for row in receipt["attempts"]] == ["rejected", "pass"]
 
 
+def test_title_contract_retry_feedback_stays_with_its_owner():
+    from easyicu.research_agent.reporting.manuscript_audit_repair import run_manuscript_audit_repair
+    from easyicu.research_agent.reporting.manuscript_sections import ManuscriptSectionContractError
+
+    before = "# Ward transfers\n\n## Results\n\nTransfers were recorded.\n"
+    after = "# A cohort study of ward transfers\n\n**Keywords:** transfer, cohort\n\n## Results\n\nWard transfers were recorded.\n"
+    requests = []
+
+    def draft(repair):
+        if repair is None:
+            return SimpleNamespace(scaffold=before, writer_error_message=None)
+        _, request = repair
+        requests.append(request)
+        if len(requests) == 1:
+            raise ManuscriptSectionContractError(
+                section_name="Title and Keywords", missing_subsections=("Keywords",),
+            )
+        return SimpleNamespace(scaffold=after, writer_error_message=None)
+
+    result, _ = run_manuscript_audit_repair(
+        draft=draft, bind=lambda item: SimpleNamespace(bound=item.scaffold),
+        section_errors=lambda item, _: (
+            {"title": ("MANUSCRIPT_KEYWORDS_MISSING: Name the cohort topic.",),
+             "results": ("MANUSCRIPT_SECTION_TRUNCATED: Finish the transfer summary.",)}
+            if item.scaffold == before else {}
+        ),
+        findings=[], run_dir=None, evidence=None,
+    )
+    assert result.scaffold == after
+    initial, retry = requests
+    assert "MANUSCRIPT_SUBSECTION_MISSING_OR_EMPTY: Keywords" in retry["title"]
+    assert retry["results"] == initial["results"]
+
+
 def test_an_unsupported_dictionary_definition_never_reaches_editorial_repair():
     from easyicu.research_agent.reporting.manuscript_audit_repair import run_manuscript_audit_repair
 

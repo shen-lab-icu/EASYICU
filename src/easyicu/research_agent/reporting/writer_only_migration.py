@@ -56,12 +56,12 @@ from .manuscript_quality import (
     render_reader_manuscript,
 )
 from .manuscript_sections import (
-    MANUSCRIPT_SECTION_SPECS,
     ManuscriptReaderQualityContractError,
     ManuscriptSectionContractError,
     completed_section_repair_candidate,
     manuscript_repair_feedback,
     manuscript_repair_regressions,
+    manuscript_section_key,
     manuscript_writer_contract_sha256,
     quality_repair_section_keys,
     quality_repair_section_errors,
@@ -914,24 +914,27 @@ def repair_writer_only(
         repair.begin((*feedback, *rejection), section_keys=list(request))
         try:
             try:
-                candidate, repaired_keys_now = repair_sections(
-                    manuscript,
-                    analysis_plan=prepared.plan,
-                    section_errors=request,
-                    context=prepared.context,
-                    evidence_ids=prepared.evidence_ids,
-                    evidence_digest=prepared.evidence_digest,
-                    literature_digest=prepared.literature_digest,
-                    reader_display_labels=reader_labels,
-                    administrative_authority=prepared.administrative_authority,
-                )
+                try:
+                    candidate, repaired_keys_now = repair_sections(
+                        manuscript,
+                        analysis_plan=prepared.plan,
+                        section_errors=request,
+                        context=prepared.context,
+                        evidence_ids=prepared.evidence_ids,
+                        evidence_digest=prepared.evidence_digest,
+                        literature_digest=prepared.literature_digest,
+                        reader_display_labels=reader_labels,
+                        administrative_authority=prepared.administrative_authority,
+                    )
+                finally:
+                    if _input_hashes(prepared.source_run_dir) != dict(prepared.source_hashes):
+                        raise WriterOnlyMigrationError(
+                            code="WRITER_ONLY_SOURCE_CHANGED_DURING_REPAIR",
+                            detail="one or more sealed source inputs changed during migration",
+                        )
             except ManuscriptSectionContractError as exc:
-                owner = next(
-                    (spec.key for spec in MANUSCRIPT_SECTION_SPECS if spec.section_name == exc.section_name),
-                    exc.section_name.lower(),
-                )
                 rejection = (RepairFeedback(
-                    "MANUSCRIPT_SUBSECTION_MISSING_OR_EMPTY", owner,
+                    "MANUSCRIPT_SUBSECTION_MISSING_OR_EMPTY", manuscript_section_key(exc.section_name),
                     {"missing_subsections": list(exc.missing_subsections)},
                 ),)
                 repair.finish("rejected", findings=rejection)
@@ -940,7 +943,7 @@ def repair_writer_only(
                 completed = completed_section_repair_candidate(exc, expected_section_keys=tuple(request))
                 if completed is None:
                     rejection = tuple(
-                        RepairFeedback(code, section.lower()) for code, section, _ in exc.findings
+                        RepairFeedback(code, manuscript_section_key(section)) for code, section, _ in exc.findings
                     ) or (RepairFeedback("MANUSCRIPT_REPAIR_CANDIDATE_INCOMPLETE", "manuscript"),)
                     repair.finish("rejected", findings=rejection)
                     continue
@@ -950,11 +953,6 @@ def repair_writer_only(
                 raise WriterOnlyMigrationError(
                     code="MANUSCRIPT_REPAIR_AUTHORITY_CHANGED",
                     detail=", ".join(changed_sections),
-                )
-            if _input_hashes(prepared.source_run_dir) != dict(prepared.source_hashes):
-                raise WriterOnlyMigrationError(
-                    code="WRITER_ONLY_SOURCE_CHANGED_DURING_REPAIR",
-                    detail="one or more sealed source inputs changed during migration",
                 )
             next_manuscript, next_filtered, next_errors = _review_authority_candidate(prepared, candidate)
         except WriterOnlyMigrationError as exc:

@@ -16,6 +16,8 @@ from easyicu.research_agent.reporting.manuscript_quality import (
     audit_manuscript_quality,
 )
 from easyicu.research_agent.reporting.manuscript_sections import (
+    ManuscriptReaderQualityContractError,
+    ManuscriptSectionContractError,
     quality_repair_section_keys,
 )
 from easyicu.research_agent.reporting.writer_only_migration import (
@@ -714,6 +716,76 @@ def test_authority_repair_retries_an_incomplete_section_and_records_the_attempts
     assert "MANUSCRIPT_SUBSECTION_MISSING_OR_EMPTY" in " ".join(writer.requests[-1]["methods"])
     assert [row["status"] for row in result.authority_repair_receipt["attempts"]] == ["rejected", "rejected", "resolved"]
     assert (prepared.source_run_dir / "manuscript_scaffold.md").read_text() == bad
+
+
+def test_incomplete_reader_quality_retry_locates_title_feedback(tmp_path, monkeypatch):
+    from easyicu.research_agent.reporting import writer_only_migration as owner
+
+    prepared = _prepared(tmp_path, _manuscript())
+    requests = []
+    code = "MANUSCRIPT_KEYWORDS_MISSING"
+    monkeypatch.setattr(owner, "_claim_policy_projection", lambda _run, text: (text, {}))
+    monkeypatch.setattr(owner, "_review_authority_candidate", lambda _prepared, text: (
+        text, {}, {} if len(requests) == 2 else {
+            "title": ("MANUSCRIPT_TITLE_MISSING: Name the ward cohort.",),
+            "results": ("MANUSCRIPT_SECTION_TRUNCATED: Finish the transfer results.",),
+        },
+    ))
+
+    class Writer:
+        def repair_existing(self, text, **kwargs):
+            return text, ()
+
+        def repair_sections(self, text, *, section_errors, **kwargs):
+            requests.append(section_errors)
+            if len(requests) == 1:
+                raise ManuscriptReaderQualityContractError(
+                    findings=((code, "Title and Keywords", "Add keywords for the ward cohort."),),
+                    manuscript=text, repaired_section_keys=("results",),
+                )
+            return text, ("title", "results")
+
+    result = repair_writer_only(prepared, writer=Writer())
+
+    initial, retry = requests
+    assert retry["results"] == initial["results"]
+    assert any(code in row for row in retry["title"])
+    finding, = result.authority_repair_receipt["attempts"][0]["findings"]
+    assert finding["path"] == "title"
+
+
+@pytest.mark.parametrize("error_type", ["section", "reader_quality"])
+def test_source_mutation_during_a_rejected_repair_stops_before_retry(tmp_path, monkeypatch, error_type):
+    from easyicu.research_agent.reporting import writer_only_migration as owner
+
+    source = _manuscript().replace("Analyses used versioned software and registered artifacts.", "")
+    prepared = _prepared(tmp_path, source)
+    calls = []
+    monkeypatch.setattr(owner, "_claim_policy_projection", lambda _run, text: (text, {}))
+
+    class Writer:
+        def repair_existing(self, text, **kwargs):
+            return text, ()
+
+        def repair_sections(self, text, **kwargs):
+            calls.append(text)
+            (prepared.source_run_dir / "writer_evidence_digest.md").write_text("changed ward cohort evidence")
+            if error_type == "section":
+                raise ManuscriptSectionContractError(
+                    section_name="Methods", missing_subsections=("Software and reproducibility",),
+                )
+            raise ManuscriptReaderQualityContractError(findings=(
+                ("MANUSCRIPT_SECTION_TRUNCATED", "Methods", "Finish the software description."),
+            ))
+
+    with pytest.raises(WriterOnlyMigrationError) as caught:
+        repair_writer_only(prepared, writer=Writer())
+
+    assert caught.value.code == "WRITER_ONLY_SOURCE_CHANGED_DURING_REPAIR"
+    assert len(calls) == 1
+    attempt, = caught.value.repair_receipt["attempts"]
+    assert attempt["status"] == "hard_stop"
+    assert attempt["findings"][0]["code"] == caught.value.code
 
 
 @pytest.mark.parametrize(("injected", "hard_stop_code"), [

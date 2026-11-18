@@ -9,6 +9,8 @@ from easyicu.research_agent.reporting.manuscript_sections import (
     MANUSCRIPT_SECTION_SPECS,
     ManuscriptReaderQualityContractError,
     ManuscriptSectionContractError,
+    manuscript_repair_feedback,
+    manuscript_repair_regressions,
     quality_repair_section_errors,
     repair_existing_manuscript_sections,
     repair_named_manuscript_sections,
@@ -17,6 +19,28 @@ from easyicu.research_agent.reporting.manuscript_sections import (
 from easyicu.research_agent.reporting.administrative_authority import (
     ManuscriptAdministrativeAuthority,
 )
+
+
+@pytest.mark.parametrize(("previous", "candidate", "new_count"), [
+    (("MANUSCRIPT_LITERATURE_REQUIREMENT: Cite the survey instrument.", "Explain how transfers were counted."),
+     ("Explain how transfers were counted.",), 0),
+    (("MANUSCRIPT_LITERATURE_REQUIREMENT: Cite the survey instrument.",),
+     ("MANUSCRIPT_LITERATURE_REQUIREMENT: Cite the survey instrument.", "Clarify who coded transfers."), 1),
+    (("Explain how transfers were counted.",),
+     ("Explain how transfers were counted.", "Specify the follow-up window.", "Clarify who coded transfers."), 2),
+])
+def test_editorial_regressions_count_each_finding_row(previous, candidate, new_count):
+    before = manuscript_repair_feedback({"methods": previous})
+    after = manuscript_repair_feedback({"methods": candidate})
+    regressions = manuscript_repair_regressions(before, after)
+
+    if new_count:
+        regression, = regressions
+        assert regression.code == "MANUSCRIPT_REPAIR_REGRESSION"
+        assert regression.path == "methods"
+        assert regression.facts == {"finding": "MANUSCRIPT_EDITORIAL_FINDING", "count": new_count}
+    else:
+        assert regressions == ()
 
 
 def test_manuscript_section_contract_has_fixed_publication_order() -> None:

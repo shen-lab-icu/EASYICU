@@ -889,13 +889,22 @@ def manuscript_binding_tokens(text: str) -> list[str]:
     return _BINDING_TOKEN_RE.findall(text)
 
 
+def manuscript_section_key(section_name: str) -> str:
+    """Locate contract feedback on the same section key the Writer receives."""
+    return next(
+        (spec.key for spec in MANUSCRIPT_SECTION_SPECS if spec.section_name == section_name),
+        section_name.lower(),
+    )
+
+
 def manuscript_repair_feedback(
     errors: Mapping[str, Sequence[str]],
 ) -> tuple[RepairFeedback, ...]:
     return tuple(
         RepairFeedback(code, section)
         for section, rows in errors.items()
-        for code in re.findall(r"\b(?:MANUSCRIPT_[A-Z0-9_]+|OWNER_CLAIM_TARGET_ABSENT)\b", "\n".join(rows))
+        for row in rows
+        for code in re.findall(r"\b(?:MANUSCRIPT_[A-Z0-9_]+|OWNER_CLAIM_TARGET_ABSENT)\b", row)
         or ["MANUSCRIPT_EDITORIAL_FINDING"]
     )
 

@@ -20,9 +20,11 @@ from easyicu.research_agent.agents.progressive_payload import (
     progressive_outline_structured_output_request,
 )
 from easyicu.research_agent.agents.progressive_planner import ProgressivePlannerAgent
+from easyicu.research_agent.bounded_repair import RepairFeedback
 from easyicu.research_agent.canonical_json import canonical_sha256
 from easyicu.research_agent.planning.capability_gap import (
-    capability_gap_confirmation_facts, check_capability_gap,
+    CapabilityGapCheck, CapabilityGapRepair, capability_gap_confirmation_facts,
+    capability_gap_feedback, check_capability_gap,
 )
 from easyicu.research_agent.planning.family_spec.request import (
     SEALED_TRAJECTORY_SUITE_MARKER,
@@ -197,6 +199,61 @@ def test_confirmation_uses_only_the_remaining_outline_retry_budget(earlier_rejec
     confirmations = [event for event in progress if event.reason_code == "progressive_capability_gap_confirmation_required"]
     assert len(confirmations) == 3 - earlier_rejections
     assert checkpoints[0].prompt_metrics.get("capability_gap_confirmation_count", 0) == len(confirmations)
+
+
+@pytest.mark.parametrize("blocking", ["contradicted", "regression"])
+@pytest.mark.parametrize("limit", [0, 3])
+def test_exhausted_confirmation_reports_the_blocking_finding(blocking, limit):
+    families = ("association_study",)
+    advisory = capability_gap_feedback(
+        _claim("estimand_unsupported"),
+        CapabilityGapCheck("unverifiable", "The host cannot establish support for an indirect effect."),
+        offered_families=families, path="question_requirements[0].gap",
+    )
+    contradicted = capability_gap_feedback(
+        _claim("levels_from_thresholds_unavailable", "ward_transfer"),
+        CapabilityGapCheck("unverified", "The ward transfer flag already has two closed levels."),
+        offered_families=families, path="question_requirements[1].gap",
+    )
+    regression = RepairFeedback(
+        "progressive_question_requirement_repair_regression", "question_requirements",
+        {"quote": "Report the association before and after transfer", "kind": "analysis"},
+    )
+    repair = CapabilityGapRepair(families, None, limit=limit)
+    feedback = (advisory, contradicted) if blocking == "contradicted" else (advisory,)
+    regressions = (regression,) if blocking == "regression" else ()
+    expected = contradicted if blocking == "contradicted" else regression
+    for _ in range(limit):
+        repair.loop.begin((advisory,))
+        repair.loop.finish("unresolved", findings=(advisory,))
+    repair.retry_available = bool(limit)
+
+    with pytest.raises(ProgressivePlanCompileError) as caught:
+        repair.check(feedback, regressions=regressions)
+
+    assert caught.value.reason_code == expected.code
+    assert caught.value.path == expected.path
+    assert caught.value.details.get("cause_code") == expected.facts.get("requirement")
+    assert len(caught.value.details["findings"]) == 2
+
+
+def test_parse_retry_after_a_rejected_confirmation_does_not_spend_another_gap_attempt():
+    gap = {
+        **_gap_outline("design_element_unsupported"),
+        "rationale": "The proposed mediation contrast needs a ward-level intermediate outcome.",
+    }
+    context = _context().model_copy(update={
+        "research_question": "Is the admission marker associated with the recorded ward outcome?",
+    })
+    client = ScriptedMockLLMClient([json.dumps(gap), "not-json", json.dumps(_outline_payload())])
+    result = ProgressivePlannerAgent(client).run_attempt(context, stop_after_outline=True)
+
+    assert len(client.calls) == 3
+    assert "progressive_capability_gap_confirmation_required" in client.calls[1][0][-1].content
+    assert "JSONDecodeError" in client.calls[2][0][-1].content.split("Earlier attempts", 1)[0]
+    metrics = result.facts.prompt_metrics
+    assert metrics["capability_gap_confirmation_count"] == 1
+    assert [row["status"] for row in metrics["capability_gap_repair"]["attempts"]] == ["rejected"]
 
 
 def test_a_named_unverifiable_gap_gets_its_own_located_feedback():

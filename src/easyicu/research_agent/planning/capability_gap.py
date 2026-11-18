@@ -82,25 +82,32 @@ class CapabilityGapRepair:
         self.offered_families = tuple(offered_families)
         self.progress_callback = progress_callback
         self.loop = BoundedRepair(min(limit, DEFAULT_REPAIR_ATTEMPTS))
+        self._unrecorded_attempts = 0
         self.pending: tuple[RepairFeedback, ...] = ()
         self.retry_available = False
 
     @property
     def count(self) -> int:
-        return len(self.loop.receipt["attempts"])
+        return self._unrecorded_attempts + len(self.loop.receipt["attempts"])
+
+    @property
+    def _remaining(self) -> int:
+        return max(0, self.loop.receipt["max_attempts"] - self.count)
 
     def on_progress(self, event: Any) -> None:
         if event.phase == "started":
             self.retry_available = event.attempt < event.total_attempts
-            if self.pending and self.loop.available:
-                self.loop.begin(self.pending)
+            if self.pending and self._remaining:
+                attempt_number = self.count + 1
+                row = self.loop.begin(self.pending)
+                row["attempt"] = attempt_number
+                self.pending = ()
         elif self.loop.active:
             if event.phase == "rejected":
                 findings = (RepairFeedback(event.reason_code or "invalid_repair_response", "response"),)
                 self.loop.finish("rejected", findings=findings)
             else:
                 self.loop.finish("resolved")
-                self.pending = ()
         if self.progress_callback is not None:
             self.progress_callback(event)
 
@@ -111,11 +118,14 @@ class CapabilityGapRepair:
         if gap is None or check.verification == "verified":
             return None
         previous = checkpoint.prompt_metrics.get("capability_gap_repair", {})
-        spent = max(len(previous.get("attempts", ())), checkpoint.prompt_metrics.get("capability_gap_confirmation_count", 0))
-        remaining = self.loop.receipt["max_attempts"] - spent
-        if remaining <= 0:
+        attempts = list(previous.get("attempts", ()))
+        self.loop.receipt["attempts"] = attempts
+        # Older checkpoints may record only the count. Spend that budget
+        # without manufacturing receipts for the missing attempts.
+        saved_count = checkpoint.prompt_metrics.get("capability_gap_confirmation_count", 0)
+        self._unrecorded_attempts = max(0, saved_count - len(attempts))
+        if not self._remaining:
             return None
-        self.loop = BoundedRepair(remaining)
         self.pending = (capability_gap_feedback(gap, check, offered_families=self.offered_families),)
         return (
             _capability_gap_repair_message(gap.requirement) + "\n"
@@ -123,7 +133,7 @@ class CapabilityGapRepair:
         )
 
     def transport_retries(self, client: Any) -> int:
-        limit = self.loop.receipt["max_attempts"] - bool(self.pending)
+        limit = self._remaining - bool(self.pending)
         journal_limit = getattr(client, "structured_retry_limit", None)
         return min(limit, journal_limit) if type(journal_limit) is int else limit
 
@@ -142,12 +152,14 @@ class CapabilityGapRepair:
         issues = (*feedback, *regressions)
         if not issues:
             return
-        first = issues[0]
-        contradicted = any(item.facts.get("verification") == "unverified" for item in feedback)
-        if self.retry_available and self.loop.available:
+        if self.retry_available and self._remaining:
             self.pending = issues
-        elif not contradicted and not regressions:
-            return
+            first = issues[0]
+        else:
+            blocking = (*(item for item in feedback if item.facts.get("verification") == "unverified"), *regressions)
+            if not blocking:
+                return
+            first = blocking[0]
         message = json.dumps([item.as_dict() for item in issues], ensure_ascii=False)
         raise ProgressivePlanCompileError(
             first.code, _capability_gap_repair_message(first.facts.get("requirement")) + "\n" + message,
