@@ -665,11 +665,12 @@ def test_failed_job_display_overlay_is_project_bound_and_does_not_change_replay(
         "job_id": "job1", "kind": "agent-run", "status": "failed", "progress": [{
             "action": "literature_build", "run_id": "run_inner", "timestamp": "2026-01-01T00:00:03+00:00",
         }],
-    }]}
+    }, {"job_id": "overnight_assay_export", "kind": "extract", "status": "cancelled"}]}
     original = json.loads(json.dumps(replay))
     output = service._replay_jobs_with_literature(record, replay)
     assert replay == original
     assert output[0]["progress"][0]["literature_record_registered"] is True
+    assert [choice["kind"] for choice in output[1]["next_actions"]] == ["reexport_data"]
     assert calls[0][0] == tmp_path / "study1/study1/run_job1"
     assert calls[0][1]["pipeline_run_id"] == "run_inner"
     assert calls[0][1]["wrapper_run_id"] == "run_job1"

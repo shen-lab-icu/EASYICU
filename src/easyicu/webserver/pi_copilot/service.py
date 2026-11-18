@@ -88,6 +88,7 @@ from .provider_config import (
 from .resource_lifecycle import WebMemoryAdmission
 from .registered_source_offer import bind_offered_registered_source, registered_source_offer
 from .projections import (
+    project_archived_job_stop,
     project_job_for_replay as project_job,
     project_pi_replay_event,
     project_transcript,
@@ -5490,7 +5491,7 @@ class PiCopilotService(SkillAttachmentService, QuickAnswerService):
         source_jobs = replay.get("child_jobs")
         if not isinstance(source_jobs, list):
             return []
-        jobs_out = [dict(job) for job in source_jobs if isinstance(job, Mapping)]
+        jobs_out = [project_archived_job_stop(job) for job in source_jobs if isinstance(job, Mapping)]
         candidates: list[tuple[Dict[str, Any], Dict[str, Any]]] = []
         for job in jobs_out:
             if job.get("kind") != "agent-run" or job.get("status") != "failed":

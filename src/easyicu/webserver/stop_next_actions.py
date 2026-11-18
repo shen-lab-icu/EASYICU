@@ -7,8 +7,6 @@ substitutes an input, approves a plan, or starts a run while being projected.
 
 from __future__ import annotations
 
-from easyicu.databases.research_requirements import MissingCapability
-
 import hashlib
 import json
 import re
@@ -17,6 +15,8 @@ from typing import Annotated, Any, Literal, Mapping, Sequence
 from pydantic import BaseModel, ConfigDict, Field, ValidationError, model_validator
 
 from easyicu.concept.selection_policy import concept_selection_policy
+from easyicu.databases.research_approval import CAPABILITY_APPROVAL_CODES
+from easyicu.databases.research_requirements import MissingCapability
 from easyicu.research_agent.authority.baseline_association_runtime import BaselineAssociationAuthorityError
 from easyicu.research_agent.concept_availability import explain_concept_availability
 from easyicu.research_agent.planning.approval_stops import PLAN_APPROVAL_STOPS
@@ -31,6 +31,8 @@ ActionKind = Literal[
     "retry",
     "rephrase_in_scope",
     "reexport_data",
+    "edit_study",
+    "check_connection",
 ]
 _CODE = re.compile(r"[a-z][a-z0-9_]{0,79}")
 Code = Annotated[str, Field(pattern=r"^[a-z][a-z0-9_]{0,79}$")]
@@ -50,12 +52,14 @@ class PlanEditParams(BaseModel):
     alternative_concept: Code | None = None
     database: Code | None = None
     step_id: StepId | None = None
+    change_question: Literal[True] | None = None
 
 
 class RetryParams(BaseModel):
     model_config = ConfigDict(extra="forbid", frozen=True)
 
     route: Literal["retry"] = "retry"
+    stage: Literal["planning", "execution"] = "planning"
 
 
 class DataExtractionParams(BaseModel):
@@ -63,6 +67,20 @@ class DataExtractionParams(BaseModel):
 
     route: Literal["data_extraction"] = "data_extraction"
     requires_explicit_choice: Literal[True] = True
+
+
+class ConnectionParams(BaseModel):
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    route: Literal["model_connection"] = "model_connection"
+
+
+class StudyEditParams(BaseModel):
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    route: Literal["study_edit"] = "study_edit"
+    field: Literal["cohort", "outcome", "source", "source_or_question"]
+    concept: Code | None = None
 
 
 class ScopeParams(BaseModel):
@@ -85,13 +103,15 @@ class StopNextAction(BaseModel):
     action_id: str = Field(pattern=r"^[a-z_]+_[a-f0-9]{16}$")
     kind: ActionKind
     label_key: str
-    params: PlanEditParams | RetryParams | ScopeParams | DataExtractionParams
+    params: PlanEditParams | RetryParams | ScopeParams | DataExtractionParams | StudyEditParams | ConnectionParams
 
     @model_validator(mode="after")
     def _matching_params(self) -> StopNextAction:
         expected = {
             "reexport_data": DataExtractionParams,
             "retry": RetryParams,
+            "edit_study": StudyEditParams,
+            "check_connection": ConnectionParams,
             "rephrase_in_scope": ScopeParams,
         }.get(self.kind, PlanEditParams)
         if not isinstance(self.params, expected):
@@ -121,6 +141,7 @@ _EDIT_CODES = frozenset(
     {
         # A plan that refuses approval is edited like any other plan review.
         *PLAN_APPROVAL_STOPS,
+        *CAPABILITY_APPROVAL_CODES,
         # Unbound measurement summaries need a new explicit design choice.
         *WINDOWED_SUMMARY_STOP_MESSAGES,
         # A kind of a concept the analysis data do not separate needs the
@@ -132,11 +153,11 @@ _EDIT_CODES = frozenset(
         # A mean survival time needs the question asked for an estimand a
         # plan answers (question_mean_survival).
         "question_mean_survival_unplanned",
+        "study_stated_variable_unrecorded",
         # An unverified restriction cannot be silently dropped or retried.
         "research_pipeline_hospital_first_stay_restriction_unverified",
         # A revision whose source plan is gone or changed starts from a fresh plan.
         "plan_revision_source_plan_missing",
-        "result_append_source_changed",
         "result_append_execution_failed",
         "result_append_unavailable",
         "plan_append_scope_changed",
@@ -186,11 +207,8 @@ _EDIT_CODES = frozenset(
         "research_pipeline_cancelled",
         "research_pipeline_cluster_unit_unsupported",
         "research_pipeline_cluster_variance_unsupported",
-        "research_pipeline_codex_user_auth_provider_required",
-        "research_pipeline_codex_user_auth_required",
         "research_pipeline_cohort_concept_unavailable",
         "research_pipeline_conflicting_sealed_suites",
-        "research_pipeline_credential_source_invalid",
         "research_pipeline_data_constraints_too_large",
         "research_pipeline_database_required",
         "research_pipeline_database_unknown",
@@ -261,7 +279,6 @@ _EDIT_CODES = frozenset(
         "research_pipeline_planning_patient_grouping_authority_invalid",
         "research_pipeline_prepared_source_catalog_unavailable",
         "research_pipeline_primary_exposure_aggregation_required",
-        "research_pipeline_primary_exposure_outside_configured_modules",
         "research_pipeline_profile_dictionary_mismatch",
         "research_pipeline_progressive_compile_failed",
         "research_pipeline_project_workspace_required",
@@ -313,6 +330,17 @@ _EDIT_CODES = frozenset(
     }
 )
 
+# Regeneration on an unchanged question replays these refusals.
+_QUESTION_EDIT_CODES = frozenset({
+    "study_coordinate_unrecognized",
+    *WINDOWED_SUMMARY_STOP_MESSAGES,
+    "question_named_level_undistinguished",
+    "question_treatment_use_unrecorded",
+    "question_mean_survival_unplanned",
+    "study_stated_variable_unrecorded",
+    "research_pipeline_hospital_first_stay_restriction_unverified",
+})
+
 _RETRY_CODES = frozenset(
     {
         # The run spent its model budget (failed transport attempts count): a
@@ -348,6 +376,7 @@ _DATA_CODES = frozenset(
         "export_time_window_unbounded",
         "data_foundation_blocked",
         "concept_unavailable",
+        "requested_concept_no_data",
         "source_unavailable",
         "missing_data",
         "missing_required_concepts",
@@ -368,6 +397,15 @@ _SCOPE_CODES = frozenset(
         "target_trial_database_out_of_scope",
     }
 )
+_STUDY_EDIT_FIELDS = {
+    "plan_icd_source_unverified": "cohort",
+    "caller_bound_population_mode_conflict": "cohort",
+    "bound_export_cohort_invalid": "cohort",
+    "research_pipeline_export_cohort_invalid": "cohort",
+    "study_primary_outcome_confirmation_required": "outcome",
+    "research_pipeline_demo_planning_authority_stale": "source",
+    "study_coordinate_unavailable": "source_or_question",
+}
 STOP_POLICIES = {
     # An occupied request may still be using the remote service; neither a
     # plan edit nor retry establishes that its capacity is available.
@@ -375,23 +413,43 @@ STOP_POLICIES = {
     "research_pipeline_metadata_shared_scope_unavailable": "none",
     # Source and first-observed input identities must be re-established by
     # their owners; retrying or editing away the population would bypass them.
-    "research_pipeline_demo_planning_authority_stale": "none",
     "research_pipeline_first_observed_input_binding_unavailable": "none",
     "controlled_candidate_provider_identity_changed": "none",
     "research_pipeline_deferred_review_stage_mismatch": "none",
     "research_pipeline_deferred_review_unverified": "none",
     "research_pipeline_planning_native_metadata_invalid": "none",
-    # These are pending researcher decisions, not permission to generate a
-    # replacement plan or silently keep the study's previous outcome.
+    "extraction_database_filter_unsupported": "none",
+    # Case-field reads require the complete signed plan, independently of
+    # the failed attempt's receipt.
     "case_duration_plan_approval_required": "none",
-    "study_primary_outcome_confirmation_required": "none",
-    # Changing the cohort is offered by the guided review, not an automatic retry.
-    "plan_icd_source_unverified": "none",
     **dict.fromkeys(_EDIT_CODES, "edit_plan"),
     **dict.fromkeys(_RETRY_CODES, "retry"),
     **dict.fromkeys(_REPAIR_CODES, "repair"),
     **dict.fromkeys(_DATA_CODES, "data"),
     **dict.fromkeys(_SCOPE_CODES, "scope"),
+    **dict.fromkeys(_STUDY_EDIT_FIELDS, "study_edit"),
+    # Only the application can restore a supported coordinate to its menu.
+    "planning_menu_missing_supported_concept": "none",
+    "study_coordinate_unrecognized": "edit_plan",
+    **dict.fromkeys({
+        "research_pipeline_codex_user_auth_provider_required",
+        "research_pipeline_codex_user_auth_required",
+        "research_pipeline_credential_source_invalid",
+        "research_pipeline_pi_verified_credentials_required",
+    }, "model_connection"),
+    **dict.fromkeys({
+        "result_append_source_changed",
+        "no_export_files",
+        "extract_cancelled",
+        "research_pipeline_manifest_invalid",
+        "research_pipeline_manifest_required",
+        "research_pipeline_export_cohort_mismatch",
+        "research_pipeline_outcome_outside_configured_modules",
+        "research_pipeline_primary_exposure_outside_configured_modules",
+        "research_pipeline_target_outside_configured_modules",
+        "windowed_summary_materialization_window_mismatch",
+    }, "data_extraction"),
+    "plan_decision_source_superseded": "edit_plan",
 }
 
 
@@ -478,7 +536,7 @@ def source_stop_coordinates(payload: Any) -> dict[str, Any]:
 
 def _action(
     kind: ActionKind,
-    params: PlanEditParams | RetryParams | ScopeParams | DataExtractionParams,
+    params: PlanEditParams | RetryParams | ScopeParams | DataExtractionParams | StudyEditParams | ConnectionParams,
 ) -> StopNextAction:
     content = json.dumps(
         [kind, params.model_dump(mode="json", exclude_none=True)], sort_keys=True
@@ -507,6 +565,16 @@ def _available_alternative(
     return alternative if availability.available else None
 
 
+def stop_reason_codes(reason: str, detail: Mapping[str, Any]) -> tuple[str, ...]:
+    """Read the controlling reason and its typed diagnostic codes."""
+
+    codes = (_code(reason), _code(detail.get("reason_code")))
+    for index, code in enumerate(codes, start=1):
+        if code in _RETRY_CODES:
+            return tuple(item for item in codes[:index] if item is not None)
+    return tuple(item for item in (*codes, _code(detail.get("cause_code"))) if item is not None)
+
+
 def next_actions_for_stop(
     reason_code: str,
     detail: Mapping[str, Any] | None = None,
@@ -526,59 +594,52 @@ def next_actions_for_stop(
     reason = _code(reason_code)
     if reason is None:
         return []
-    cause = _code(detail.get("cause_code"))
-    inner = _code(detail.get("reason_code"))
-    if reason == "result_append_source_changed":
-        return [_action("reexport_data", DataExtractionParams())]
-    if "export_time_window_unbounded" in {
-        reason, cause, inner, _code(detail.get("intake_error_code")),
-    }:
-        return [_action("reexport_data", DataExtractionParams())]
-    # EasyICU's planning menu lacks a concept the source provides, or the host
-    # named a coordinate its dictionary does not know: no plan edit, drop or
-    # regeneration on this build fixes its own gap; the stop's receipt and
-    # diagnostic report are the way forward.
-    if {"planning_menu_missing_supported_concept", "study_coordinate_unrecognized"} & {reason, inner}:
+    codes = stop_reason_codes(reason, detail)
+    policies = {STOP_POLICIES.get(code) for code in codes}
+    if "none" in policies:
         return []
-    policy = STOP_POLICIES.get(reason, "edit_plan")
-    if policy == "none":
-        return []
-    if reason not in _RETRY_CODES and inner in _SCOPE_CODES:
-        policy = "scope"
-    if reason not in _RETRY_CODES and (inner in _DATA_CODES or cause in _DATA_CODES):
-        policy = "data"
+    # A retry stop may also describe the work it interrupted. Keep its
+    # recovery independent of that work's coordinates and intake details.
+    if reason in _RETRY_CODES or _code(detail.get("reason_code")) in _RETRY_CODES:
+        return [_action("retry", RetryParams())]
+    if "data_extraction" in policies or "export_time_window_unbounded" in (
+        *codes, _code(detail.get("intake_error_code")),
+    ):
+        return [_action("reexport_data", DataExtractionParams())]
+    if "model_connection" in policies:
+        return [_action("check_connection", ConnectionParams())]
+    study_edit = next((_STUDY_EDIT_FIELDS[code] for code in codes if code in _STUDY_EDIT_FIELDS), None)
+    if study_edit and study_edit != "source_or_question":
+        return [_action("edit_study", StudyEditParams(field=study_edit))]
+    scope_code = next((code for code in codes if code in _SCOPE_CODES), None)
+    if scope_code:
+        return [_action("rephrase_in_scope", ScopeParams(**v1_scope_description(
+            reason_code=scope_code, detail=detail, database=database,
+        )))]
     concepts = _codes(detail.get("missing_concepts"))
     element = _code(detail.get("element"))
     step = _step_id(detail.get("step_id"))
     concept = _code(detail.get("concept")) or next(iter(concepts), None)
-    if policy == "data" and not concepts and concept is not None:
+    coordinate_absent = "study_coordinate_unavailable" in codes
+    data_stop = "data" in policies
+    if (data_stop or coordinate_absent) and not concepts and concept is not None:
         concepts = (concept,)
     coordinates = {"element": element, "step_id": step, "concept": concept}
-    edit = _action("edit_plan", PlanEditParams(**coordinates))
-    if policy == "retry":
-        return [_action("retry", RetryParams())]
-    if policy == "scope":
-        return [
-            _action(
-                "rephrase_in_scope",
-                ScopeParams(
-                    **v1_scope_description(
-                        reason_code=inner or reason,
-                        detail=detail,
-                        database=database,
-                    )
-                ),
-            )
-        ]
-    # The study's own exposure or outcome is absent from this source: dropping
-    # it asks another question and a regeneration repeats the stop, so only an
-    # owner-issued alternative is a choice (``agent_pipeline_runs``).
-    coordinate_absent = "study_coordinate_unavailable" in {reason, inner}
-    if policy == "data" and concepts:
+    question_edit = bool(_QUESTION_EDIT_CODES.intersection(codes))
+    edit = _action("edit_plan", PlanEditParams(
+        **coordinates, change_question=True if question_edit or (data_stop and not concept) else None,
+    ))
+    if question_edit:
+        return [edit]
+    # The study's own exposure or outcome cannot simply be dropped.
+    if (data_stop or coordinate_absent) and concepts:
         actions = []
         for missing in concepts:
             alternative = _available_alternative(missing, database, detail)
             if coordinate_absent and not alternative:
+                actions.append(_action("edit_study", StudyEditParams(
+                    field="source_or_question", concept=missing,
+                )))
                 continue
             actions.append(
                 _action(
@@ -591,11 +652,17 @@ def next_actions_for_stop(
                 )
             )
         return actions if coordinate_absent else [*actions, edit]
+    if coordinate_absent:
+        return [_action("edit_study", StudyEditParams(field="source_or_question"))]
+    if data_stop:
+        return [edit]
+    if "retry" in policies:
+        return [_action("retry", RetryParams())]
     if (
-        policy == "repair"
+        "repair" in policies
         and (element is not None or step is not None)
         and detail.get("question_required") is False
-        and (cause != "design_element_unsupported" or concept is not None)
+        and ("design_element_unsupported" not in codes or concept is not None)
     ):
         return [_action("rerun_without_element", PlanEditParams(**coordinates)), edit]
     return [edit]
@@ -645,10 +712,17 @@ def project_stop_next_actions(
     actions = next_actions_for_stop(reason, gate.get("detail"), database=database)
     # Only the workflow's existing retry assessment can add this offer; a
     # persisted stop record or model suggestion cannot authorize a retry.
-    if execution_retry_available and reason in {
-        "research_pipeline_execution_failed", "research_agent_pipeline_failed_closed",
-    }:
-        actions = [_action("retry", RetryParams()), *actions]
+    if execution_retry_available and actions and all(
+        isinstance(action.params, RetryParams)
+        or (isinstance(action.params, PlanEditParams) and not action.params.change_question)
+        and action.kind in {"edit_plan", "rerun_without_element"}
+        for action in actions
+    ):
+        fallback = [action for action in actions if action.kind != "retry"]
+        actions = [
+            _action("retry", RetryParams(stage="execution")),
+            *(fallback or [_action("edit_plan", PlanEditParams())]),
+        ]
     return [
         action.model_dump(mode="json", exclude_none=True)
         for action in actions
@@ -660,4 +734,5 @@ __all__ = [
     "StopNextAction",
     "next_actions_for_stop",
     "project_stop_next_actions",
+    "stop_reason_codes",
 ]

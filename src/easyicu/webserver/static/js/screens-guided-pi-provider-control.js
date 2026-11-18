@@ -10,7 +10,7 @@
   function create(options) {
     const {
       state, api, tr, render, runtimeReady, shellReady,
-      connectionConfigured, connectionReady, errorText,
+      connectionConfigured, connectionReady, errorText, loadWorkflow,
     } = options;
 
     const OPENROUTER = Object.freeze({ provider: 'openrouter', base_url: 'https://openrouter.ai/api/v1' });
@@ -57,18 +57,28 @@
       if (!api().loadPiCopilotCodexStatus) return;
       try {
         const payload = await api().loadPiCopilotCodexStatus();
-        state.codexAuth = payload && payload.auth ? payload.auth : null;
-        if (state.codexAuth && state.codexAuth.authentication_verified) {
+        const auth = payload?.auth;
+        const previousAuth = state.codexAuth;
+        const verified = auth?.authentication_verified === true;
+        const loginInThisTab = Boolean(state.codexLogin);
+        if (auth) {
+          const verifiedAt = auth.verified_at ?? (verified && loginInThisTab
+            ? new Date().toISOString() : previousAuth?.verified_at);
+          state.codexAuth = { ...auth, verified_at: verifiedAt };
+        }
+        if (verified) {
+          const wasPending = loginInThisTab || previousAuth?.account_session_status === 'codex_auth_login_pending';
           stopCodexPoll();
           state.codexLogin = null;
+          if (wasPending) await loadWorkflow();
           await loadCodexModels(false);
-        } else if (state.codexAuth && state.codexAuth.account_session_status === 'codex_auth_login_pending') {
-          stopCodexPoll();
-          state.codexPoll = window.setTimeout(() => loadCodexResearchStatus(true), 1500);
         }
       } catch (error) {
-        state.codexAuth = null;
         if (renderAfter) state.error = errorText(error);
+      }
+      if (state.codexAuth?.account_session_status === 'codex_auth_login_pending') {
+        stopCodexPoll();
+        state.codexPoll = window.setTimeout(() => loadCodexResearchStatus(true), 1500);
       }
       if (renderAfter) render();
     }

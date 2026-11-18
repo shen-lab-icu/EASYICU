@@ -983,6 +983,10 @@
           host.render();
         }
       } catch (error) {
+        if (error?.code === 'plan_decision_source_superseded') {
+          await Promise.resolve().then(() => host.refreshSession(true))
+            .then(() => host.loadWorkflow()).catch(() => null);
+        }
         host.setBusy(false);
         host.setError(host.errorText(error));
         host.render();

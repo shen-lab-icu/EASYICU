@@ -32,9 +32,12 @@
     const stopOwner = MODULES.optional('runStop');
     const RUN_STOP = stopOwner ? stopOwner.create({ tr, runFailureText,
       workflow: () => state.workflow, latestRun: () => state.latestRun,
-      canAct: () => Boolean(state.session) && !state.busy && !state.childJobId && !sessionIsStale(),
+      connectionChecks: () => ({
+        credentialVerifiedAt: state.runtime?.configuration?.verified_at,
+        codexAuth: state.codexAuth,
+      }),
+      canAct: () => Boolean(state.session) && !state.busy && !state.childJobId && !state.projectLoading && !sessionIsStale(),
       canPreview: () => Boolean(MODULES.optional('preview')),
-      hasRecovery: () => typeof workflowConfirmation === 'function' && Boolean(workflowConfirmation()),
       resourceButton: RESOURCE_OWNER.button,
     }) : null;
 
@@ -140,7 +143,7 @@
         const records = MODULES.optional('decisionRecords');
         return records ? records.render(row, { tr, esc }) : '';
       }
-      const stopHtml = RUN_STOP ? RUN_STOP.render(row) : '';
+      const stopHtml = RUN_STOP ? RUN_STOP.render(row, options) : '';
       if (row.role === 'activity' && stopHtml) {
         // The run record owns the stop's typed cause. The activity's job code
         // alone would add a second, sometimes contradictory explanation.
@@ -367,6 +370,8 @@
       const showProjectContinuationCards = !workspace && !lightweight && !freshTask && !ideaExplorationTurn;
       const dataConsentRequired = showProjectContinuationCards
         && DATA_CONSENT && DATA_CONSENT.requiresConfirmation(session);
+      const continuationCards = showProjectContinuationCards && !dataConsentRequired ? continuationCardsHtml() : '';
+      const hasRecovery = continuationCards.includes(' data-gpi-review-recovery');
       const fullTimeline = freshTask ? [] : withQuickAnswers(withDecisionRecords(RUN_FILES.timeline(state.messages.concat(state.workflowReceipts))));
       const timeline = state.regenerating && REGENERATION
         ? REGENERATION.visibleRows(fullTimeline, state.regeneration)
@@ -426,6 +431,7 @@
           && DATA_CONSENT && typeof DATA_CONSENT.matchesSourceSelection === 'function'
           && DATA_CONSENT.matchesSourceSelection(state.session, precedingUserText);
         const html = messageHtml(displayRow, {
+          hasRecovery,
           interactive: row === latestAssistant && !interactionLocked && !stale,
           allowEdit: true,
           canEdit: !interactionLocked && !stale,
@@ -473,7 +479,10 @@
             saved.run_id === run.run_id && RUN_STOP.stopped(saved)
           )))
         )) : null;
-      const conversation = messages + (pendingStop ? RUN_STOP.render({ savedRuns: [pendingStop] }) : '')
+      const pendingJobStop = showProjectContinuationCards && !dataConsentRequired && RUN_STOP
+        ? RUN_STOP.renderJob(session) : '';
+      const conversation = messages + (pendingStop ? RUN_STOP.render({ savedRuns: [pendingStop] }, { hasRecovery }) : '')
+        + pendingJobStop
         + (lightweight ? taskScope.render(state, { tr, esc, disabled: interactionLocked }) : '');
       const dataConsentHtml = dataConsentRequired
         ? DATA_CONSENT.render(session, {
@@ -570,7 +579,7 @@
                 : emptyResearchHtml)}
             ${outcome}
             ${showProjectContinuationCards ? dataConsentHtml : ''}
-            ${showProjectContinuationCards && !dataConsentRequired ? continuationCardsHtml() : ''}
+            ${continuationCards}
           </div>
           ${state.error ? `<div class="gpi-error" role="alert"><span>${esc(state.error)}</span><button type="button" class="gpi-error-close" data-gpi-dismiss-error aria-label="${tr('Dismiss', '关闭提示')}">×</button></div>${MODULES.optional('skillAttach')?.defaultRecoveryControl?.(projectId()) || ''}` : ''}
           ${emptyResearch ? '' : `${activeChild ? serverNoteHtml : ''}<div class="gpi-compose">${actionAskHtml}${composerCardHtml}</div>`}

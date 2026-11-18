@@ -46,7 +46,13 @@ from easyicu.webserver.target_trial_setup import (
 )
 from easyicu.webserver.planning_coordinate_readings import project_coordinate_readings
 from easyicu.webserver.study_family_scope import bound_study_family_gap
-from easyicu.webserver.stop_next_actions import STOP_POLICIES, StopNextAction, project_stop_next_actions
+from easyicu.webserver.stop_next_actions import (
+    STOP_POLICIES,
+    StopNextAction,
+    project_stop_next_actions,
+    safe_stop_coordinates,
+    stop_reason_codes,
+)
 
 from . import cohort_eligibility, plan_decisions, plan_review_progress
 from .contracts import (
@@ -66,6 +72,7 @@ from .projections import (
     ensure_safe_projection,
     gate_detail_projection,
     project_job,
+    project_revision_timestamp,
     project_run_outcome,
     project_study_setup_receipt,
     stable_code,
@@ -121,6 +128,7 @@ class ResearchWorkflowSnapshot(BaseModel):
     current_stage: str
     next_action_code: str
     next_actions: List[StopNextAction] = Field(default_factory=list, max_length=17)
+    missing_concepts: List[str] = Field(default_factory=list, max_length=16)
     missing_setup_fields: List[str] = Field(default_factory=list, max_length=20)
     planning_prerequisites_missing: List[str] = Field(
         default_factory=list, max_length=8
@@ -133,6 +141,7 @@ class ResearchWorkflowSnapshot(BaseModel):
         "conversation_and_orchestration"
     )
     study_setup_receipt: StudySetupReceipt
+    bound_export_updated_at: Optional[str] = None
     # Read-only source facts for the *current* project and registration;
     # never an applied endpoint or a grant to prepare or execute data.
     source_boundary_review: Optional[Mapping[str, Any]] = None
@@ -266,23 +275,27 @@ def registered_export_matches_study(
 ) -> bool:
     """Return whether the project's exact bound export is still registered."""
 
+    return _registered_export_for_study(study, registry) is not None
+
+
+def _registered_export_for_study(
+    study: Optional[Mapping[str, Any]], registry: Optional[Mapping[str, Any]],
+) -> Optional[Mapping[str, Any]]:
     study_row: Mapping[str, Any] = study or {}
     confirmations = study_row.get("confirmations")
     confirmations = confirmations if isinstance(confirmations, Mapping) else {}
     if confirmations.get("extraction_completed") is not True:
-        return False
+        return None
     source = study_row.get("data_source")
     source = source if isinstance(source, Mapping) else {}
     expected = str(source.get("path") or "").strip()
     if not expected:
-        return False
+        return None
     registry_row: Mapping[str, Any] = registry or {}
-    return any(
-        isinstance(row, Mapping)
-        and bool(row.get("ok"))
-        and str(row.get("path") or "").strip() == expected
-        for row in (registry_row.get("sources") or [])
-    )
+    return next((
+        row for row in (registry_row.get("sources") or [])
+        if isinstance(row, Mapping) and row.get("ok") and str(row.get("path") or "").strip() == expected
+    ), None)
 
 
 def _study_with_registered_source_identity(
@@ -496,6 +509,7 @@ def build_research_workflow_snapshot(
     pipeline_run = run_engine == "easyicu.research_agent.pipeline"
     pipeline_receipt = "source_run_manifest.json" in artifact_names
     gate_status = str(run_row.get("gate_status") or "")
+    gate_reason = str(run_row.get("gate_reason") or run_row.get("gate_reason_code") or "")
     run_blocked = gate_status == "blocked"
     raw_gate_checks = run_row.get("gate_checks")
     gate_checks = dict(raw_gate_checks) if isinstance(raw_gate_checks, Mapping) else {}
@@ -966,20 +980,23 @@ def build_research_workflow_snapshot(
     failed_pipeline_regeneration_required = bool(
         pipeline_attempt_blocked and not pipeline_running and not plan_review_declared
     )
+    failed_stop_superseded = bool(
+        failed_pipeline_regeneration_required
+        and len(planned_scientific_digest) == 64
+        and planned_scientific_digest != current_scientific_digest
+    )
     failed_execution_retry_available = bool(
         failed_pipeline_regeneration_required
         and has_plan
         and has_evidence
-        and str(run_row.get("gate_reason") or "")
-        in EXECUTION_RETRY_REPLAYABLE_GATE_REASONS
+        and gate_reason in EXECUTION_RETRY_REPLAYABLE_GATE_REASONS
         and len(planned_scientific_digest) == 64
         and planned_scientific_digest == current_scientific_digest
     )
     analysis_validation_retry_available = bool(
         analysis_outputs_available
         and run_blocked
-        and str(run_row.get("gate_reason") or "")
-        in EXECUTION_RETRY_REPLAYABLE_GATE_REASONS
+        and gate_reason in EXECUTION_RETRY_REPLAYABLE_GATE_REASONS
         and len(planned_scientific_digest) == 64
         and planned_scientific_digest == current_scientific_digest
     )
@@ -1008,13 +1025,19 @@ def build_research_workflow_snapshot(
     # offered while the availability owner still says so; a changed source or
     # question, or a build that now provides it, offers one again.
     gate_detail = run_row.get("gate_detail")
-    source_coordinate_gap = bool(
-        failed_pipeline_regeneration_required
-        and isinstance(gate_detail, Mapping)
-        and gate_detail.get("reason_code") == "study_coordinate_unavailable"
-        and len(planned_scientific_digest) == 64
-        and planned_scientific_digest == current_scientific_digest
-        and _coordinates_still_unavailable(gate_detail, study_row)
+    gate_detail = gate_detail if isinstance(gate_detail, Mapping) else {}
+    gate_codes = stop_reason_codes(gate_reason, gate_detail)
+    source_coordinate_stop = (
+        next(
+            (code for code in gate_codes if code in {"study_coordinate_unavailable", "study_coordinate_unrecognized"}),
+            "",
+        )
+        if failed_pipeline_regeneration_required and not failed_stop_superseded
+        else ""
+    )
+    coordinate_stop, coordinate_detail = (
+        _recheck_source_coordinates(gate_detail, study_row, reason=source_coordinate_stop)
+        if source_coordinate_stop else ("", {})
     )
     # A retry resumes the failed step's sealed code with its restored repair
     # budget.  When that budget is spent and nothing it runs on changed, the
@@ -1145,7 +1168,7 @@ def build_research_workflow_snapshot(
                 else "running"
                 if planning_running
                 else "blocked"
-                if export_cohort_blocks_plan or (family_gap is not None and not metadata_candidate_gap) or source_coordinate_gap or metadata_capacity_blocked
+                if export_cohort_blocks_plan or (family_gap is not None and not metadata_candidate_gap) or coordinate_stop or metadata_capacity_blocked
                 else "ready"
                 if plan_regeneration_required
                 else "complete"
@@ -1166,8 +1189,8 @@ def build_research_workflow_snapshot(
                 if export_cohort_blocks_plan
                 else family_gap["code"]
                 if family_gap is not None and not metadata_candidate_gap
-                else "study_coordinate_unavailable"
-                if source_coordinate_gap
+                else coordinate_stop
+                if coordinate_stop
                 else plan_regeneration_reason_code
                 if plan_regeneration_required
                 else "agent_plan_ready"
@@ -1355,13 +1378,22 @@ def build_research_workflow_snapshot(
         next_stage = next_stage.model_copy(update={"reason_code": trial_action})
         stages = [next_stage if row.id == "plan" else row for row in stages]
     stop_gate = {
-        "status": run_row.get("gate_status"), "reason": run_row.get("gate_reason"),
-        "detail": run_row.get("gate_detail"), "next_actions": run_row.get("next_actions"),
+        "status": gate_status, "reason": gate_reason,
+        "detail": gate_detail, "next_actions": run_row.get("next_actions"),
     }
+    if failed_stop_superseded or (source_coordinate_stop and not coordinate_stop):
+        stop_gate = {}
+        if next_action.startswith("failed_pipeline_"):
+            stop_gate = {"status": "blocked", "reason": next_action}
     if next_action in STOP_POLICIES and next_action != "operator_plan_approval_required":
+        review_stop = gate_reason == "human_plan_review_required" and next_action in active_plan_review_codes
+        if next_action not in gate_codes and not review_stop:
+            stop_gate = {}
         stop_gate.update(status="blocked", reason=next_action)
     if family_gap is not None and not metadata_candidate_gap:
         stop_gate["detail"] = family_gap
+    if coordinate_stop and next_action == coordinate_stop:
+        stop_gate = {"status": "blocked", "reason": coordinate_stop, "detail": coordinate_detail}
     planning_source = None
     if next_action == "bound_export_cohort_mismatch":
         from .demo_planning_source import resolve_demo_planning_source
@@ -1377,6 +1409,10 @@ def build_research_workflow_snapshot(
             database=(study_row.get("data_source") or {}).get("database")
             if isinstance(study_row.get("data_source"), Mapping) else None,
         ) if job_status != "running" else [],
+        missing_concepts=(
+            safe_stop_coordinates(coordinate_detail).get("missing_concepts", [])
+            if next_action == coordinate_stop else []
+        ),
         planning_prerequisites_missing=planning_prerequisites_missing,
         missing_setup_fields=missing,
         unconfirmed_outcome=(
@@ -1413,28 +1449,34 @@ def build_research_workflow_snapshot(
     )
 
 
-def _coordinates_still_unavailable(detail: Mapping[str, Any], study_row: Mapping[str, Any]) -> bool:
-    """Whether the availability owner still says the bound source lacks them.
-
-    A name the owner does not know (``concept_not_found``) is EasyICU's gap on
-    every source, never the source's, so it holds no plan back.
-    """
+def _recheck_source_coordinates(
+    detail: Mapping[str, Any], study_row: Mapping[str, Any], *, reason: str,
+) -> tuple[str, Mapping[str, Any]]:
+    """Reclassify recorded coordinates using the current source's owner."""
 
     from easyicu.research_agent.concept_availability import explain_concept_availability
 
     source = study_row.get("data_source")
     database = str(source.get("database") or "").strip() if isinstance(source, Mapping) else ""
-    concepts = [
-        value for value in detail.get("missing_concepts") or ()
-        if isinstance(value, str) and value.strip()
-    ]
+    missing = detail.get("missing_concepts")
+    if not isinstance(missing, (tuple, list)) or not missing:
+        missing = (detail.get("concept"),)
+    concepts = [value for value in missing if isinstance(value, str) and value.strip()]
+    unchecked_detail = {**detail, "missing_concepts": concepts}
+    unavailable = "study_coordinate_unavailable"
     if not database or not concepts:
-        return False
+        return reason, unchecked_detail
     try:
-        found = [explain_concept_availability(concept=value, database=database) for value in concepts]
-        return not any(item.available or item.reason == "concept_not_found" for item in found)
+        found = [(value, explain_concept_availability(concept=value, database=database)) for value in concepts]
     except (KeyError, ValueError):
-        return False
+        return reason, unchecked_detail
+    absent = [value for value, item in found if not item.available and item.reason != "concept_not_found"]
+    if absent:
+        return unavailable, {"missing_concepts": absent}
+    unrecognized = [value for value, item in found if not item.available]
+    if unrecognized:
+        return "study_coordinate_unrecognized", {"missing_concepts": unrecognized}
+    return "", {}
 
 
 #: Runtime findings an approvable candidate may still carry that the Host
@@ -1770,6 +1812,7 @@ def build_project_workflow_projection(
 
     registry = sources.load_registry(planning_metadata_only=True)
     projected_study = _study_with_registered_source_identity(study, registry)
+    bound_export = _registered_export_for_study(study, registry)
     active_job: Optional[Mapping[str, Any]] = None
     active_job_id = str(study.get("active_job_id") or "").strip()
     if active_job_id:
@@ -1821,7 +1864,7 @@ def build_project_workflow_projection(
 
     snapshot_inputs: Dict[str, Any] = dict(
         study=study,
-        active_export_present=registered_export_matches_study(study, registry),
+        active_export_present=bound_export is not None,
         active_job=active_job,
         latest_run=latest_run,
         latest_attempt=rows[0] if rows else None,
@@ -1857,6 +1900,11 @@ def build_project_workflow_projection(
         )
         snapshot = snapshot.model_copy(update={
             "source_boundary_review": _source_boundary_review(study, registry, exact_bound_study_id),
+        })
+    if bound_export is not None:
+        timestamps = (project_revision_timestamp(bound_export.get(key)) for key in ("generated", "registered_at"))
+        snapshot = snapshot.model_copy(update={
+            "bound_export_updated_at": max((stamp for stamp in timestamps if stamp), default=None),
         })
     if snapshot.report_rewrite_available and not agent_pipeline_runs.report_rewrite_ready(
         study=study,

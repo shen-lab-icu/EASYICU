@@ -74,13 +74,14 @@ def test_a_build_that_now_provides_the_coordinate_offers_a_fresh_plan(monkeypatc
     assert snapshot.next_action_code == "failed_pipeline_requires_fresh_plan"
 
 
-def test_a_name_the_dictionary_does_not_know_never_holds_the_plan_back(monkeypatch) -> None:
-    # A reader defect naming a horizon as the outcome (``icu_mortality_72h``)
-    # is unknown on every source; it is EasyICU's gap, not the source's.
+def test_a_name_the_dictionary_does_not_know_offers_question_revision(monkeypatch) -> None:
     _owner_says(monkeypatch, False, reason="concept_not_found")
-    study = complete_study()
+    study = {**complete_study(), "question": "Compare the dusk assay on alternating shifts."}
     snapshot = _snapshot(study, _stopped(study))
-    assert snapshot.next_action_code == "failed_pipeline_requires_fresh_plan"
+    assert snapshot.next_action_code == "study_coordinate_unrecognized"
+    assert [(action.kind, action.params.change_question) for action in snapshot.next_actions] == [
+        ("edit_plan", True),
+    ]
 
 
 @pytest.mark.parametrize("available", [True, False])
