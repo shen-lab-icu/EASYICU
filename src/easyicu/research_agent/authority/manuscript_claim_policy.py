@@ -21,7 +21,7 @@ from ..contracts.manuscript_result_structure import (
     PRIMARY_RESULT_HEADINGS,
     RESULT_HEADINGS_BY_ROLE,
 )
-from ..contracts.manuscript_sentence_context import contextual_sentence_deletion
+from ..contracts.manuscript_sentence_context import PROSE_SENTENCE_END, contextual_sentence_deletion
 
 ClaimResolver = Callable[[str], Optional[ScientificClaim]]
 EvidenceResolver = Callable[[str], bool]
@@ -512,12 +512,14 @@ def _canonical_duplicate_claim_token(
 
 
 def _split_sentences(text: str) -> list[str]:
-    parts = [
-        part.strip()
-        for part in re.split(r"(?<=[.!?。！？])\s+", text.strip())
-        if part.strip()
-    ]
-    return parts or ([text.strip()] if text.strip() else [])
+    parts = []
+    start = 0
+    for ending in PROSE_SENTENCE_END.finditer(text):
+        parts.append(text[start:ending.end()].strip())
+        start = ending.end()
+    if tail := text[start:].strip():
+        parts.append(tail)
+    return parts
 
 
 def _split_markdown_structure_prefix(line: str) -> tuple[str, str]:

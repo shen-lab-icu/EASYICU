@@ -17,7 +17,9 @@ from typing import Any, Callable, Mapping, Sequence
 
 from ..authority.evidence_store import EvidenceEnforcementError
 from ..bounded_repair import BoundedRepair, RepairFeedback
-from ..contracts.manuscript_sentence_context import AUDIT_MARKUP_RE, EVIDENCE_LINK_PATTERN, EVIDENCE_TOKEN_PATTERN
+from ..contracts.manuscript_sentence_context import (
+    AUDIT_MARKUP_RE, EVIDENCE_LINK_PATTERN, EVIDENCE_TOKEN_PATTERN, PROSE_SENTENCE_END,
+)
 from .descriptive_report_facts import insert_question_fact_tokens
 from .manuscript_labels import recorded_definition_section_errors
 from .manuscript_sections import (
@@ -64,7 +66,7 @@ _SECTION_ORDER = {spec.key: i for i, spec in enumerate(MANUSCRIPT_SECTION_SPECS)
 def _section_blocks(text: str) -> list[tuple[str, str]]:
     headings = list(_H2.finditer(text))
     starts = [0, *(match.start() for match in headings), len(text)]
-    keys = ["title", *(match[1].strip().casefold() for match in headings)]
+    keys = ["title", *(manuscript_section_key(match[1]) for match in headings)]
     return [(key, text[start:stop]) for key, start, stop in zip(keys, starts, starts[1:])]
 
 
@@ -177,7 +179,7 @@ def _coverage_findings(binding: Any) -> Sequence[Any]:
 
 def _record_unresolved_coverage(receipt, binding):
     if coverage := _coverage_findings(binding):
-        receipt.update(status="non_repairable", unresolved_question_parts=[finding.detail for finding in coverage])
+        receipt["unresolved_question_parts"] = [finding.detail for finding in coverage]
 
 
 def _filter_instruction(item: RepairFeedback) -> str:
@@ -357,7 +359,7 @@ def run_manuscript_audit_repair(
     _accept_binding(findings, binding)
     if not errors:
         if _coverage_findings(binding):
-            receipt["remaining_codes"] = _remaining_codes(errors, binding)
+            receipt.update(status="non_repairable", remaining_codes=_remaining_codes(errors, binding))
             _record_unresolved_coverage(receipt, binding)
         _persist(run_dir, evidence, receipt)
         return current, binding
@@ -489,6 +491,8 @@ def run_manuscript_audit_repair(
             remaining = _remaining_codes(errors, binding, last_rejection)
             receipt.update(status="exhausted" if remaining else "pass", remaining_codes=remaining)
     _record_unresolved_coverage(receipt, binding)
+    if not errors and not last_rejection and _coverage_findings(binding):
+        receipt["status"] = "non_repairable"
     if last_rejection:
         code = "MANUSCRIPT_BINDING_FILTER_REPAIR_EXHAUSTED" if filter_unresolved else "MANUSCRIPT_AUDIT_REPAIR_FAILED"
         if filter_unresolved:
@@ -504,12 +508,11 @@ def run_manuscript_audit_repair(
 
 _REGION = re.compile(
     r"(?m)^##[ \t]+(?P<section>[^\r\n]+)"
-    r"|^[ \t]*(?:#{1,6}[ \t]+|\||!\[|\[\^|\*\*Keywords:\*\*)[^\r\n]*"
+    r"|(?P<structural>^[ \t]*(?:#{1,6}[ \t]+|\||!\[|\[\^|\*\*Keywords:\*\*)[^\r\n]*)"
     r"|^[ \t]*\*\*(?:Background|Methods|Results|Conclusions?):\*\*[ \t]*"
     r"|\r?\n[ \t]*\r?\n",
     re.I,
 )
-_SENTENCE_END = re.compile(r"[.!?。！？](?=\s|$)")
 _HIDDEN = re.compile(r"<!--.*?-->|^ *```[^\n]*\n.*?^ *```[^\n]*", re.M | re.S)
 _ID = re.compile(r"[A-Za-z_][A-Za-z0-9_.-]*")
 _SPACE = re.compile(r"\s*")
@@ -549,10 +552,11 @@ class SentenceSpan:
     end: int
     key: str
     evidence_ids: frozenset[str] = frozenset()
+    structural: bool = False
 
 
-def sentence_spans(text: str) -> tuple[SentenceSpan, ...]:
-    """Locate prose and standalone claims in their H2 owners."""
+def sentence_spans(text: str, *, include_structural: bool = False) -> tuple[SentenceSpan, ...]:
+    """Locate prose, standalone claims, and optionally non-H2 Markdown lines."""
     visible = _HIDDEN.sub(lambda m: re.sub(r"[^\r\n]", " ", m[0]), text)
     markup = _CITATIONS.sub(lambda m: re.sub(r"[^\r\n]", " ", m[0]), visible)
     sentences = []
@@ -561,7 +565,7 @@ def sentence_spans(text: str) -> tuple[SentenceSpan, ...]:
     for region in (*_REGION.finditer(visible), None):
         stop = region.start() if region else len(text)
         position = start
-        for ending in (*_SENTENCE_END.finditer(markup, start, stop), None):
+        for ending in (*PROSE_SENTENCE_END.finditer(markup, start, stop), None):
             # A trailing citation belongs to the sentence immediately before it.
             end = ending.end() if ending else stop
             citation_end = end
@@ -577,7 +581,12 @@ def sentence_spans(text: str) -> tuple[SentenceSpan, ...]:
             position = max(position, citation_end)
         if region:
             if heading := region["section"]:
-                section = heading.strip().casefold()
+                section = manuscript_section_key(heading)
+            elif include_structural and (raw := region["structural"]):
+                sentences.append(SentenceSpan(
+                    section, region.start(), region.end(), sentence_key(raw),
+                    _sentence_evidence_names(raw), structural=True,
+                ))
             start = region.end()
     return tuple(sentences)
 
@@ -597,7 +606,7 @@ def delete_spans(text: str, spans: Sequence[SentenceSpan]) -> str:
 
 def _section_at(text: str, position: int) -> str:
     headings = list(_H2.finditer(text, 0, position))
-    return headings[-1][1].strip().casefold() if headings else "title"
+    return manuscript_section_key(headings[-1][1]) if headings else "title"
 
 
 def _section_owner(section: str) -> str:
@@ -606,10 +615,10 @@ def _section_owner(section: str) -> str:
 
 def scaffold_without_removed_sentences(scaffold: str, removed: Sequence[SentenceSpan]) -> str:
     """Delete the removed prose occurrences from the Writer's repair input."""
-    wanted = Counter((span.section, span.key, span.evidence_ids) for span in removed)
+    wanted = Counter((span.section, span.key, span.evidence_ids, span.structural) for span in removed)
     selected = []
-    for span in sentence_spans(scaffold):
-        coordinate = (span.section, span.key, span.evidence_ids)
+    for span in sentence_spans(scaffold, include_structural=True):
+        coordinate = (span.section, span.key, span.evidence_ids, span.structural)
         if wanted[coordinate]:
             selected.append(span)
             wanted[coordinate] -= 1
@@ -680,16 +689,27 @@ def numeric_removal_feedback(
     manuscript: str, spans: Sequence[tuple[int, int, tuple[int, ...]]],
 ) -> tuple[list[SentenceSpan], list[SentenceSpan], tuple[RepairFeedback, ...]]:
     """Describe the exact numeric deletions without carrying the literals."""
-    before = list(sentence_spans(manuscript))
+    candidates = sentence_spans(manuscript, include_structural=True)
+    before = [span for span in candidates if not span.structural]
     removed = []
     feedback = []
     ordinal = 0
     observed: set[SentenceSpan] = set()
     for start, end, positions in spans:
-        affected = [span for span in before if start < span.end and end > span.start and span not in observed]
+        # An adjacent heading can fall inside the numeric deletion window.
+        # Count a Markdown line only when it contains a rejected occurrence.
+        affected = [
+            span for span in candidates
+            if start < span.end and end > span.start and span not in observed
+            and (not span.structural or any(span.start <= offset < span.end for offset in positions))
+        ]
+        before.extend(span for span in affected if span.structural)
         if not affected:
             # A number in a heading can be rejected by STRICT too.
-            span = SentenceSpan(_section_at(manuscript, start + 1), start, end, sentence_key(manuscript[start:end]))
+            raw = manuscript[start:end]
+            span = SentenceSpan(
+                _section_at(manuscript, start + 1), start, end, sentence_key(raw), _sentence_evidence_names(raw),
+            )
             before.append(span)
             affected.append(span)
         removed.extend(affected)

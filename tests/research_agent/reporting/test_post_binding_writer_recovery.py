@@ -296,6 +296,53 @@ def test_host_fallback_rejects_partial_question_coverage(tmp_path):
     receipt = json.loads((tmp_path / "manuscript_audit_repair.json").read_text())
     assert len(receipt["attempts"]) == 3
     assert receipt["host_fallback"]["status"] == "rejected"
+    assert receipt["status"] == "exhausted"
+    assert receipt["unresolved_question_parts"] == [present.detail, absent.detail]
+
+
+@pytest.mark.parametrize("exit_path", ["skip", "writer_exception", "section_tokens", "exhausted"])
+def test_repairable_coverage_preserves_the_termination_status(tmp_path, exit_path):
+    coverage = _uncovered("ward_transfer_distribution", "Ward transfers")
+    before = "## Results\n\nWard transfers were tabulated {evidence:ward_summary}.\n"
+
+    def draft(request):
+        scaffold, error = before, None
+        if request:
+            if exit_path == "writer_exception":
+                raise RuntimeError("Scripted response failed")
+            if exit_path == "section_tokens":
+                scaffold = "## Results\n\nTransfer counts were tabulated.\n"
+            if exit_path == "exhausted":
+                error = "Scripted response did not produce a section"
+        return write_phase._DraftStageResult((), (), None, error, scaffold)
+
+    def run():
+        return run_manuscript_audit_repair(
+            draft=draft, bind=lambda item: SimpleNamespace(bound=item.scaffold, question_coverage_findings=[coverage]),
+            section_errors=lambda *_: {}, findings=[], run_dir=tmp_path, evidence=EvidenceStore(tmp_path),
+            skip_repair=exit_path == "skip",
+        )
+
+    if exit_path == "skip":
+        run()
+        expected_status = "not_needed"
+    elif exit_path == "writer_exception":
+        with pytest.raises(RuntimeError, match="Scripted response failed"):
+            run()
+        expected_status = "rejected"
+    elif exit_path == "section_tokens":
+        with pytest.raises(EvidenceEnforcementError, match="MANUSCRIPT_REPAIR_AUTHORITY_CHANGED"):
+            run()
+        expected_status = "rejected"
+    else:
+        with pytest.raises(EvidenceEnforcementError, match="MANUSCRIPT_AUDIT_REPAIR_FAILED"):
+            run()
+        expected_status = "exhausted"
+    receipt = json.loads((tmp_path / "manuscript_audit_repair.json").read_text())
+    assert receipt["status"] == expected_status
+    assert receipt["unresolved_question_parts"] == [coverage.detail]
+    if exit_path == "exhausted":
+        assert "writer_question_part_uncovered" in receipt["remaining_codes"]
 
 
 def test_headingless_results_repair_ignores_appended_discussion():
@@ -459,6 +506,101 @@ def test_binding_filter_removes_prose_citing_a_registered_alias(strict_writer_ru
     assert binding.manuscript_critique.status == "pass"
     assert len(client.calls) == 1
     assert "The outcome count was" not in client.calls[0][0][1].content
+
+
+
+@pytest.mark.parametrize(("citation", "removed_count"), [("retired_enrollment", 1), ("renal_summary", 1)])
+def test_comparison_counts_as_one_binding_filter_removal(tmp_path, strict_writer_run, citation, removed_count):
+    run, client, _, _ = strict_writer_run
+    opener = "Potassium measurements can inform the design of prognostic research."
+    prefix = "{evidence:renal_summary} " if citation == "renal_summary" else ""
+    comparison = f"Enrollment was 812 {prefix}vs. 913 across wards {{evidence:{citation}}}."
+    initial = _STRICT_GOOD.replace(opener, f"{comparison} {opener}")
+    response = f"## Introduction\n\n{opener} Enrollment records informed the sampling protocol."
+    _, binding = run(initial, [response])
+    assert len(client.calls) == 1
+    assert "Enrollment was" not in "\n".join(message.content for message in client.calls[0][0])
+    assert _section(binding.bound, "Audit") == f"{removed_count} sentence(s) were removed for unbindable values."
+    receipt = json.loads((tmp_path / "manuscript_audit_repair.json").read_text())
+    assert receipt["status"] == "pass"
+
+
+@pytest.mark.parametrize("rejected", [
+    "Diaz et al. catalogued 867 ward transfers.",
+    "The sampling diagram in Fig. 8 covers 867 admissions.",
+])
+def test_binding_filter_boundary_keeps_abbreviated_rejections_intact(rejected):
+    from easyicu.research_agent.reporting.manuscript_audit_repair import sentence_spans
+
+    kept = "The intake records were incomplete."
+    text = f"{rejected} {kept}"
+    result = filter_evidence_bound_scaffold(text, resolve_claim=lambda _: None, resolve_evidence=lambda _: False)
+    assert result.filtered_sentences == (rejected,)
+    assert result.scaffold == kept + "\n"
+    assert tuple(text[span.start:span.end].strip() for span in sentence_spans(text)) == (rejected, kept)
+
+
+@pytest.mark.parametrize("line", [
+    "### Recruitment window of 867 days {evidence:renal_result}",
+    "| Recruitment window | 867 days {evidence:renal_result} |",
+])
+def test_numeric_filter_removes_rejected_markdown_from_the_repair_source(strict_writer_run, line):
+    run, client, _, _ = strict_writer_run
+    opener = "Potassium measurements can inform the design of prognostic research."
+    initial = _STRICT_GOOD.replace(opener, f"{opener}\n\n{line}")
+    response = f"## Introduction\n\n{opener} Enrollment windows were prespecified."
+    _, binding = run(initial, [response])
+    assert binding.manuscript_critique.status == "pass"
+    assert len(client.calls) == 1
+    prompt = "\n".join(message.content for message in client.calls[0][0])
+    assert "Recruitment window" not in prompt
+    assert _section(binding.bound, "Audit") == "1 sentence(s) were removed for unbindable values."
+
+
+def test_numeric_filter_maps_rewritten_opener_back_to_the_repair_source(strict_writer_run):
+    run, client, _, _ = strict_writer_run
+    opener = "Interpretation is limited to the studied population."
+    initial = _STRICT_GOOD.replace(opener, (
+        "The validation sample comprised 711 admissions {evidence:retired_enrollment}.\n\n"
+        "The screening total was therefore 867 {evidence:renal_result}.\n\n"
+        "Sampling was prespecified. "
+        f"{opener}"
+    ))
+    response = f"## Discussion\n\n{opener} Sampling was prespecified."
+    _, binding = run(initial, [response])
+    assert binding.manuscript_critique.status == "pass"
+    assert len(client.calls) == 1
+    prompt = "\n".join(message.content for message in client.calls[0][0])
+    assert "screening total" not in prompt
+    assert _section(binding.bound, "Audit") == "2 sentence(s) were removed for unbindable values."
+
+
+@pytest.mark.parametrize("heading", ["结果", "Findings"])
+def test_binding_filter_routes_recognized_results_headings_to_the_writer(strict_writer_run, heading):
+    run, client, _, _ = strict_writer_run
+    initial = _STRICT_GOOD.replace("## Results\n", f"## {heading}\n").replace(
+        _OUTCOME, "The event count was 867 {evidence:renal_summary}."
+    )
+    response = "## Results\n\n" + _section(_STRICT_GOOD, "Results")
+    draft, binding = run(initial, [response])
+    assert binding.manuscript_critique.status == "pass"
+    assert len(client.calls) == 1
+    assert "The AUROC was {manuscript_value:" in client.calls[0][0][1].content
+    assert f"## {heading}\n" not in draft.scaffold
+    assert "event count" not in draft.scaffold
+    assert _section(binding.bound, "Audit") == "1 sentence(s) were removed for unbindable values."
+
+
+
+def test_claim_token_with_extra_numeric_prose_stops_before_expansion(tmp_path, ra):
+    from ..authority.test_scientific_claim_authority import _store_with_association_claim
+
+    store = _store_with_association_claim(ra, tmp_path)
+    claim = store.scientific_claims()[0]
+    prose = f"{claim.placeholder} and the ward-transfer tally included 867 admissions."
+    with pytest.raises(EvidenceEnforcementError, match="lacks deterministic") as stop:
+        store.enforce_evidence_bound_scaffold(f"## Discussion\n\n{prose}")
+    assert stop.value.detail["unsupported_scientific_claim_sentences"] == [prose]
 
 
 def test_binding_repair_revalidates_sections_outside_the_rewrite(tmp_path, strict_writer_run, monkeypatch):

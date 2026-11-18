@@ -43,6 +43,7 @@ from ..authority.numeric_claim_identity import (
     quantity_kind_refuses_claim,
     unnamed_fact_identity,
 )
+from ..contracts.manuscript_sentence_context import PROSE_SENTENCE_END
 from ..schema import ResearchContext
 from .writer_repair_decision import coerce_writer_repair_decisions
 from .manuscript_sentence_context import contextual_sentence_deletion
@@ -1737,9 +1738,9 @@ def _select_numeric_claim(
     return None, True
 
 
-_NUMERIC_SENTENCE_BOUNDARY_RE = re.compile(
-    r"[.!?](?=\s|$)|(?P<paragraph>\r?\n[^\S\r\n]*\r?\n)"
-)
+_NUMERIC_PARAGRAPH_BOUNDARY = r"(?P<paragraph>\r?\n[^\S\r\n]*\r?\n)"
+_NUMERIC_SENTENCE_BOUNDARY_RE = re.compile(rf"[.!?](?=\s|$)|{_NUMERIC_PARAGRAPH_BOUNDARY}")
+_NUMERIC_REMOVAL_BOUNDARY_RE = re.compile(rf"{PROSE_SENTENCE_END.pattern}|{_NUMERIC_PARAGRAPH_BOUNDARY}")
 
 _EFFECT_SCALE_PHRASE_PATTERNS = {
     NumericEffectScale.ODDS_RATIO: re.compile(r"\bodds[\s-]+ratios?\b", re.I),
@@ -1946,11 +1947,18 @@ def _numeric_sentence_context(text: str, *, start: int, end: int) -> str:
     return text[context_start:context_end]
 
 
-def _numeric_sentence_bounds(text: str, *, start: int, end: int) -> Tuple[int, int]:
-    """Return the exact sentence span used by numeric provenance binding."""
+def _numeric_sentence_bounds(
+    text: str, *, start: int, end: int, for_removal: bool = False,
+) -> Tuple[int, int]:
+    """Locate binding context or the whole prose sentence for a rejected value."""
 
     context_start = 0
-    for match in _NUMERIC_SENTENCE_BOUNDARY_RE.finditer(text, 0, start):
+    boundaries = _NUMERIC_REMOVAL_BOUNDARY_RE if for_removal else _NUMERIC_SENTENCE_BOUNDARY_RE
+    # Abbreviation lookahead needs to see the text beyond the occurrence start.
+    prior = boundaries.finditer(text) if for_removal else boundaries.finditer(text, 0, start)
+    for match in prior:
+        if match.end() > start:
+            break
         context_start = match.end()
     # The leading run of citations is KEPT, not skipped. Skipping it was a
     # symmetry argument, and canary39 refuted it on a real manuscript: the
@@ -1960,7 +1968,7 @@ def _numeric_sentence_bounds(text: str, *, start: int, end: int) -> Tuple[int, i
     # neighbouring runs stay in scope. That is safe because the restriction
     # below only ever NARROWS the candidate set: an extra citation costs recall,
     # it cannot by itself produce a wrong bind.
-    next_boundary = _NUMERIC_SENTENCE_BOUNDARY_RE.search(text, end)
+    next_boundary = boundaries.search(text, end)
     context_end = next_boundary.end() if next_boundary is not None else len(text)
     if next_boundary is not None and next_boundary.group("paragraph") is not None:
         # A paragraph can end without punctuation. Do not start a citation walk
@@ -2534,7 +2542,7 @@ def drop_untraceable_numeric_sentences(
     rejected_by_span: Dict[Tuple[int, int], Dict[str, Any]] = {}
     for occurrence in occurrences:
         start, end = occurrence["start"], occurrence["end"]
-        span = _numeric_sentence_bounds(manuscript, start=start, end=end)
+        span = _numeric_sentence_bounds(manuscript, start=start, end=end, for_removal=True)
         detail = rejected_by_span.setdefault(span, {
             "sentence": manuscript[span[0]:span[1]].strip(), "untraced": [], "miscited": [],
         })

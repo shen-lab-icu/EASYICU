@@ -22,7 +22,21 @@ _DEPENDENT_OPENER = re.compile(
     re.I,
 )
 _PARAGRAPH_BOUNDARY = re.compile(r"\n[ \t]*\n")
-_SENTENCE_END = re.compile(r"[.!?。！？](?:[ \t]+|$)")
+# These abbreviations have a visible continuation on the same line. A period
+# after a citation ending in "et al." can still terminate a sentence.
+PROSE_SENTENCE_END = re.compile(
+    r"""(?x:
+        (?:
+            [!?。！？]
+            | \. (?!
+                (?<=(?i:\bvs\.)) [ \t]+ \S
+                | (?<=(?i:\bet[ \t]al\.)) [ \t]+ [a-z(]
+                | (?<=(?i:\bfig\.)) [ \t]+ [Ss]?\d
+            )
+        )
+        (?=\s|$)
+    )"""
+)
 # Audit-only markup: a scaffold evidence token, its bound link, a numeric
 # claim footnote marker, and an annotation comment (an unresolved evidence
 # token is demoted to one).  Readers never see any of them, and a Writer often
@@ -88,14 +102,14 @@ def contextual_sentence_deletion(
             break
         # A leading citation goes with its sentence; a period inside a link
         # label never ends that sentence.
-        terminal = _SENTENCE_END.search(
+        terminal = PROSE_SENTENCE_END.search(
             remaining, _LEADING_CITATION_MARKUP.match(remaining).end(),
         )
         if terminal is None:
             break  # Do not guess the end of an incomplete sentence.
         sentence_end = sentence_start + terminal.end()
         dependent.append(suffix[sentence_start:sentence_end].strip())
-        cursor = sentence_end
+        cursor = len(suffix) - len(suffix[sentence_end:].lstrip(" \t"))
     return ContextualSentenceDeletion(
         start,
         end + cursor,

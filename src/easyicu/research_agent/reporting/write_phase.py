@@ -100,6 +100,7 @@ from .manuscript_audit_repair import (
     unregistered_evidence_feedback,
 )
 from .manuscript_labels import reader_claim_labels
+from .manuscript_surface import repair_filtered_section_openers
 from .administrative_authority import load_manuscript_administrative_authority
 from .manuscript_provenance import (
     ManuscriptProvenanceError,
@@ -2473,7 +2474,13 @@ def _filter_manuscript_numbers(
         plan, evidence.authoritative_scientific_claims(per_step_records), primary_result_facts, claim_labels,
     )
     loss = removal_losses([*evidence_drops, *before], all_drops, headline_keys)
-    repair_scaffold = scaffold_without_removed_sentences(writer_scaffold, all_drops)
+    repair_scaffold = writer_scaffold
+    if evidence_drops:
+        repair_scaffold = repair_filtered_section_openers(
+            scaffold_without_removed_sentences(writer_scaffold, evidence_drops),
+            before_filter=writer_scaffold,
+        )
+    repair_scaffold = scaffold_without_removed_sentences(repair_scaffold, numeric_drops)
     if removed:
         numeric_filtered_path = run_dir / "manuscript_scaffold_numeric_filtered.md"
         numeric_filtered_path.write_text(filtered, encoding="utf-8")
@@ -2571,8 +2578,6 @@ def _bind_and_review_manuscript(
             findings, evidence_feedback, validator="evidence_bound_writer",
             reason_code=EVIDENCE_REMOVAL, removed_count=len(evidence_drops),
         )
-    from .manuscript_surface import repair_filtered_section_openers
-
     evidence_bound_scaffold = repair_filtered_section_openers(
         evidence_bound_scaffold, before_filter=scaffold,
     )

@@ -729,7 +729,7 @@ def _leading_with_analyzed_population(
     return call
 
 
-def _existing_scientific_sections(manuscript: str) -> dict[str, str]:
+def _existing_scientific_sections(manuscript: str, *, accept_aliases: bool = False) -> dict[str, str]:
     """Project an existing scaffold back onto the eight Writer owners."""
 
     text = str(manuscript or "")
@@ -744,6 +744,8 @@ def _existing_scientific_sections(manuscript: str) -> dict[str, str]:
         for spec in MANUSCRIPT_SECTION_SPECS
         if spec.key != "title"
     }
+    if accept_aliases:
+        key_by_name.update(_WRITER_SECTION_ALIASES)
     for index, match in enumerate(matches):
         key = key_by_name.get(match.group(1).strip().casefold())
         if key is None:
@@ -889,11 +891,32 @@ def manuscript_binding_tokens(text: str) -> list[str]:
     return _BINDING_TOKEN_RE.findall(text)
 
 
+_WRITER_SECTION_ALIASES = {
+    "摘要": "abstract",
+    "background": "introduction",
+    "背景": "introduction",
+    "引言": "introduction",
+    "method": "methods",
+    "materials and methods": "methods",
+    "methods and analysis": "methods",
+    "方法": "methods",
+    "findings": "results",
+    "结果": "results",
+    "研究结果": "results",
+    "讨论": "discussion",
+    "strengths and limitations": "limitations",
+    "局限性": "limitations",
+    "conclusions": "conclusion",
+    "结论": "conclusion",
+}
+
+
 def manuscript_section_key(section_name: str) -> str:
     """Locate contract feedback on the same section key the Writer receives."""
+    name = section_name.strip().casefold()
     return next(
-        (spec.key for spec in MANUSCRIPT_SECTION_SPECS if spec.section_name == section_name),
-        section_name.lower(),
+        (spec.key for spec in MANUSCRIPT_SECTION_SPECS if spec.section_name.casefold() == name),
+        _WRITER_SECTION_ALIASES.get(name, name),
     )
 
 
@@ -985,7 +1008,7 @@ def repair_named_manuscript_sections(
     """
 
     call_section = _leading_with_analyzed_population(call_section, common)
-    sections = _existing_scientific_sections(manuscript)
+    sections = _existing_scientific_sections(manuscript, accept_aliases=True)
     specs = {spec.key: spec for spec in manuscript_section_specs(common.get("analysis_plan"))}
     unknown = sorted(set(section_errors) - set(specs))
     if unknown:
