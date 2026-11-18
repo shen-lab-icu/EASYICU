@@ -585,3 +585,17 @@ test('saving a check choice starts a new plan review and never submits approval'
   assert.equal(calls[1][1].planner_start_mode, 'fresh');
   assert.deepEqual(calls[2], ['watch', 'candidate-job']);
 });
+
+test('a result-product choice outside the three fields still opens the inline composer action', () => {
+  const html = pendingDecisionHtml({
+    next_action_code: 'host_delivery_request_ambiguous',
+    plan_review_summary: {
+      run_id: 'ward-results-plan',
+      deliverables: { requested: [], check: [], confirmed: true, source: 'detector_prefill' },
+    },
+  });
+  const log = html.slice(html.indexOf('data-gpi-log'), html.indexOf('data-gpi-input'));
+  assert.match(log, /data-gpi-plan-deliverables/);
+  assert.match(log, /data-gpi-confirm-edit[^>]*>Revise in the conversation<\/button>/);
+  assert.doesNotMatch(log, /data-gpi-confirm-action/);
+});

@@ -165,7 +165,7 @@ RUN_DELIVERABLES: Mapping[DeliverableKind, RunDeliverable] = MappingProxyType({
         ("result_tables.json",), r"(?:result\s+)?tables?|结果表(?:格)?|表格",
     ),
     "figures": RunDeliverable(
-        ("figure_gallery.json",), r"figures?|图表|图件|图形|图片",
+        ("figure_gallery.json",), r"figures?|plots?|图表|图件|图形|图片",
     ),
     "references": RunDeliverable(
         ("manuscript_scaffold.bib",),
@@ -181,13 +181,13 @@ RUN_DELIVERY_ARTIFACT_NAMES = tuple(dict.fromkeys(
 # Neutral delivery grammar only. Unknown words (methods, data requests,
 # destinations, formats, etc.) leave a residue and keep ordinary gap handling.
 _DELIVERY_VERB = (
-    r"(?:\b(?:provide|include|deliver|(?:give|send)\s+me|export|generate|supply|share)\b"
+    r"(?:\b(?:provide|include|deliver|(?:give|send)\s+me|export|generate|supply|share|render)\b"
     r"|提供|包含|交付|导出|生成)"
 )
 _DELIVERY_GRAMMAR = re.compile(
     rf"{_DELIVERY_VERB}|\b(?:please|"
-    r"a|an|the|and|or|of|with|downloadable|download|manuscript|article|report|files?|readable)\b"
-    r"|(?:请|以及|并|和|及|与|或|可下载|下载|文件|论文|文章|报告|信息充分|清晰|且|可读|的)",
+    r"a|an|the|and|either|or|of|with|set|study|estimates|downloadable|download|manuscript|article|report|files?|readable)\b"
+    r"|(?:请|以及|并|和|及|与|或者|或是|还是|或|可下载|下载|文件|论文|文章|报告|信息充分|清晰|且|可读|的)",
     re.IGNORECASE,
 )
 _SEPARATORS = re.compile(r"[\s,，、;；。.：:()（）/\-]+")

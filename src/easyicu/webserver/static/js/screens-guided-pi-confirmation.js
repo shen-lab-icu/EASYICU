@@ -556,23 +556,28 @@
         reviewMaterialsTitle: tr('View the plan and review evidence', '查看计划与审阅依据'),
         reviewResources: questionStopResources,
       };
-      if (code === 'first_result_delivery_requires_article' || code === 'host_delivery_request_ambiguous') return {
-        code, grants: [], nonApprovable: true, clarification: true,
-        hideEdit: Boolean(workflow.plan_review_summary?.deliverables),
-        editLabel: tr('Revise in the conversation', '在对话里修改'),
-        title: code === 'host_delivery_request_ambiguous'
-          ? tr('Clarify the requested deliverables', '请明确交付要求')
-          : tr('The requested deliverables require an article run', '所请求的交付物需要在论文任务中生成'),
-        note: workflow.plan_review_summary?.deliverables ? '' : code === 'host_delivery_request_ambiguous' ? tr(
-          'This plan cannot be approved until you clarify which deliverables to include. Specify your choices in the conversation.',
-          '请在对话中说明需要哪些交付物，以及应省略哪些。明确交付要求后才能继续，这份计划目前不能批准。',
-        ) : tr(
-          'This plan cannot be approved with the requested article deliverables. Revise the question for this analysis-only run, or start a separate article run to keep them.',
-          '本次仅分析任务无法满足论文交付要求，这份计划不能批准。请在对话中修改研究问题。如需保留这些要求，请另行启动论文任务。',
-        ),
-        reviewMaterialsTitle: tr('View the plan and review evidence', '查看计划与审阅依据'),
-        reviewResources: planStopResources.slice(0, 1),
-      };
+      if (code === 'first_result_delivery_requires_article' || code === 'host_delivery_request_ambiguous') {
+        const selection = workflow.plan_review_summary?.deliverables;
+        const inlineChoice = code === 'host_delivery_request_ambiguous'
+          ? Boolean(selection?.check?.length) : Boolean(selection?.article_required);
+        return {
+          code, grants: [], nonApprovable: true, clarification: true,
+          hideEdit: inlineChoice,
+          editLabel: tr('Revise in the conversation', '在对话里修改'),
+          title: code === 'host_delivery_request_ambiguous'
+            ? tr('Clarify the requested deliverables', '请明确交付要求')
+            : tr('The requested deliverables require an article run', '所请求的交付物需要在论文任务中生成'),
+          note: inlineChoice ? '' : code === 'host_delivery_request_ambiguous' ? tr(
+            'This plan cannot be approved until you clarify which deliverables to include. Specify your choices in the conversation.',
+            '请在对话中说明需要哪些交付物，以及应省略哪些。明确交付要求后才能继续，这份计划目前不能批准。',
+          ) : tr(
+            'This plan cannot be approved with the requested article deliverables. Revise the question for this analysis-only run, or start a separate article run to keep them.',
+            '本次仅分析任务无法满足论文交付要求，这份计划不能批准。请在对话中修改研究问题。如需保留这些要求，请另行启动论文任务。',
+          ),
+          reviewMaterialsTitle: tr('View the plan and review evidence', '查看计划与审阅依据'),
+          reviewResources: planStopResources.slice(0, 1),
+        };
+      }
       if (code === 'question_requirement_capability_gap') return {
         code, grants: ['provider_run', 'literature'],
         message: tr(

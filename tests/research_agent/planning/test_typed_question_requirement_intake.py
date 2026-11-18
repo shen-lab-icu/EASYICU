@@ -483,7 +483,7 @@ def test_delivery_alternatives_and_uncontracted_exports_do_not_get_credit(monkey
     result_tables = key(Delivery(output_id="result_tables"), STUDY_POPULATION)
     for quote, legacy_verdict in [
         ("Deliver result tables or figures", "needs_clarification"),
-        ("Deliver a patient-level spreadsheet", "covered"),
+        ("Deliver a patient-level spreadsheet", "not_covered"),
     ]:
         shadow_events.clear()
         (judged,) = _judge(quote, context, plan, kind="delivery", outputs=("result_tables",),
@@ -491,8 +491,8 @@ def test_delivery_alternatives_and_uncontracted_exports_do_not_get_credit(monkey
         [row] = _shadow_event(shadow_events)["parts"]
         assert row["v1"] == legacy_verdict
         assert row["v2"] == "unknown"
-        if legacy_verdict == "needs_clarification":
-            assert judged.delivery is None
+        assert judged.delivery is None
+        assert judged.disposition == legacy_verdict
 
 
 def test_multiple_outputs_keep_distinct_parts_even_with_the_same_span(monkeypatch, shadow_events) -> None:

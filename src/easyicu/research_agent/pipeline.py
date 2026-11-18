@@ -5007,7 +5007,8 @@ class ResearchAgentPipeline:
 
         def _human_review_invoker(plan_result):
             return _pipeline_run___human_review_invoker(
-                plan_result, reviewed_plan=reviewed_plan, self=self, stop_after_analysis=stop_after_analysis,
+                plan_result, reviewed_plan=reviewed_plan, self=self,
+                article_allowed=not stop_after_analysis and self._config.generate_manuscript is not False,
             )
 
         def _human_review_recorder(records):
@@ -7179,12 +7180,11 @@ def _pipeline_run___review_evidence_store(
     return EvidenceStore(run_dir, enforcement_mode=self._evidence_enforcement_mode)
 
 
-def _pipeline_run___human_review_invoker(plan_result, *, reviewed_plan: Any, self: Any, stop_after_analysis=False):
+def _pipeline_run___human_review_invoker(plan_result, *, reviewed_plan: Any, self: Any, article_allowed: bool = True):
     from .orchestration.workflow import human_review_requests_for_plan
     from .planning.approval_stops import delivery_approval_stop
 
     question = getattr(getattr(plan_result, "context", None), "research_question", None)
-    article_allowed = not stop_after_analysis and getattr(self._config, "generate_manuscript", None) is not False
     delivery_stop = (
         delivery_approval_stop(plan_result.plan, article_allowed=article_allowed)
         if isinstance(plan_result.plan, AnalysisPlan) else None

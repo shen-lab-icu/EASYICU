@@ -136,6 +136,7 @@ from .requirement_coverage import (
 from .requirement_typing.delivery import (
     planned_delivery_evidence, planned_run_delivery_evidence, requested_plan_deliverables,
 )
+from .requirement_typing.source import has_source_alternatives
 
 QUESTION_REQUIREMENTS_SCHEMA_VERSION = "easyicu.question_requirements/1"
 QUESTION_REQUIREMENTS_FILENAME = "question_requirements.json"
@@ -1161,11 +1162,18 @@ def _judge(
     stated_deliveries = requirement_delivery_kinds(item)
     selection = getattr(plan, "deliverables", None)
     host_kinds = set(stated_deliveries).intersection(HOST_DELIVERY_KINDS)
-    if selection and host_kinds and not selection.confirmed:
+    needs_document_choice = bool(selection and host_kinds and not selection.confirmed)
+    needs_result_choice = (
+        item.kind in {"analysis", "delivery"} and not item.gap and not item.concepts and not item.clauses
+        and has_source_alternatives(item.quote)
+        and set(neutral_delivery_kinds(item.quote)) == {"figures", "result_tables"}
+    )
+    if needs_document_choice or needs_result_choice:
         return JudgedRequirement(
             item, "needs_clarification", HOST_DELIVERY_CLARIFICATION, host_judged=True,
             gap=item.gap, verification="unverified" if item.gap else None,
-            fact=HOST_DELIVERY_CLARIFICATION_MESSAGE,
+            fact=HOST_DELIVERY_CLARIFICATION_MESSAGE if needs_document_choice else
+            "Choose which result products to include in the conversation.",
         )
     delivery_kinds = tuple(
         kind for kind in stated_deliveries
@@ -1345,9 +1353,6 @@ def requirement_delivery_kinds(
         return ()
     if item.kind not in {"analysis", "delivery"} or item.clauses:
         return ()
-    if item.deliverable_kinds and not set(item.deliverable_kinds).intersection(HOST_DELIVERY_KINDS):
-        # Figures and tables already bind to the scientific plan's products.
-        return item.deliverable_kinds
     kinds = neutral_delivery_kinds(item.quote)
     # The Planner's kind is a claim. A mixed quote must stay with science.
     if item.deliverable_kinds and set(item.deliverable_kinds) != set(kinds):
@@ -1685,7 +1690,7 @@ def question_requirement_findings(
         findings.append(ValidationFinding(
             validator="question_requirements",
             severity="error",
-            message=HOST_DELIVERY_CLARIFICATION_MESSAGE,
+            message=pending[0].fact or HOST_DELIVERY_CLARIFICATION_MESSAGE,
             detail={
                 "reason": HOST_DELIVERY_CLARIFICATION, "human_review_required": True,
                 "approval_allowed": False, "requirements": [entry.row() for entry in pending],

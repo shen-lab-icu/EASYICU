@@ -1865,6 +1865,7 @@ def test_clinical_negation_and_export_exclusions_prefill_independently(question,
 
 
 def test_an_edited_selection_stays_bound_when_the_detector_changes(monkeypatch):
+    from easyicu.research_agent.authority.plan_scope import plan_scientific_scope_signature
     from easyicu.research_agent.contracts.product_files import PlanDeliverables, host_delivery_owners
     from easyicu.research_agent.orchestration.workflow import human_review_requests_for_plan
     from easyicu.research_agent.planning.requirement_typing import delivery
@@ -1876,6 +1877,7 @@ def test_an_edited_selection_stays_bound_when_the_detector_changes(monkeypatch):
     edited = delivery.bind_confirmed_host_delivery(draft, PlanDeliverables(
         requested=("article_preview",), confirmed=True, source="user_edit",
     ))
+    assert plan_scientific_scope_signature(edited) == plan_scientific_scope_signature(prefilled)
     (request,) = human_review_requests_for_plan(findings=[], plan=edited, require_plan_review=True)
     approved = AnalysisPlan.model_validate(request.payload["plan_review_authority"]["plan_payload"])
 

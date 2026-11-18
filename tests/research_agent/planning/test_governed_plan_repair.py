@@ -1035,7 +1035,7 @@ def test_repair_cannot_relabel_an_unverified_scientific_gap_as_delivery(tmp_path
 
 
 @pytest.mark.parametrize("delivery_quote, kinds, disposition", [
-    ("Deliver result tables or figures", ["result_tables", "figures"], "not_covered"),
+    ("Deliver result tables or figures", ["result_tables", "figures"], "needs_clarification"),
     ("Export a PDF or include an online preview", ["manuscript_pdf", "article_preview"], "needs_clarification"),
 ])
 def test_original_question_survives_plan_paraphrase_and_approval_refuses_clarification(
