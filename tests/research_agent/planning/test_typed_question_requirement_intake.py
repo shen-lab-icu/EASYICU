@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import logging
 from dataclasses import dataclass, replace
 from functools import partial
 from types import SimpleNamespace
@@ -36,14 +37,14 @@ from easyicu.research_agent.planning.question_requirements import (
     question_requirement_host_facts,
     question_requirements_on_plan_under_review,
 )
+from easyicu.research_agent.planning.requirement_typing import intake, shadow
 from easyicu.research_agent.planning.requirement_typing.contract import (
     AtomicPart, CohortPredicate, Delivery, Grading, Method, Parameter, Point, RequirementKey,
-    SourceSpan, TimeZero, Unit, Window,
+    SourceSpan, TimeZero, Unit, VerifiedGap, Window,
 )
 from easyicu.research_agent.planning.requirement_typing.facts import ProjectedFacts, project_facts
 from easyicu.research_agent.planning.requirement_typing.intake import PROPOSALS_FIELD, TypingIntake
 from easyicu.research_agent.planning.requirement_typing.registry import contract_registry_sha256, registered_dictionary
-from easyicu.research_agent.planning.requirement_typing import shadow
 from easyicu.research_agent.planning.requirement_typing.shadow import FLAG, observe_requirements
 from easyicu.research_agent.planning.sensitivity_authority import PrespecifiedSensitivitySpec
 from easyicu.research_agent.providers.mocks import ScriptedMockLLMClient
@@ -557,7 +558,8 @@ def test_family_response_typings_stay_out_of_v1_and_flow_to_shadow(monkeypatch, 
 
 
 def test_live_run_records_only_aggregates_and_isolates_a_raising_shadow(monkeypatch, tmp_path, caplog) -> None:
-    quote = "Deliver result tables"
+    caplog.set_level(logging.DEBUG)
+    quote = "Please include the result tables"
     context = _family_context().model_copy(update={"research_question": f"{_family_context().research_question} {quote}"})
     payload = _spec_payload(_request(context), question_requirements=[{
         "id": "r1", "quote": quote, "kind": "delivery", "coverage": "plan",
@@ -662,6 +664,60 @@ def test_flag_off_keeps_v1_artifact_and_metrics_bytes_with_supplied_typings(monk
             (run_dir / "planner_prompt_metrics.json").read_bytes(),
         ))
     assert receipts[0] == receipts[1]
+
+
+@pytest.mark.parametrize(("quote", "v1_reason", "verified_gap", "bucket"), [
+    pytest.param(
+        "Please report the odds ratio for serum potassium and death",
+        "typed_plan_owner_present", False, "true_false_pass", id="source-bound-miss",
+    ),
+    pytest.param(
+        "Please report the odds ratio for serum potassium and death",
+        "typed_plan_owner_present", True, "true_false_pass", id="source-bound-gap",
+    ),
+    pytest.param(
+        "Please report the odds ratio for serum potassium and death",
+        "plan_declared", True, "prose_proven", id="prose-takes-precedence",
+    ),
+    pytest.param(
+        "Please report the odds ratio for magnesium and death",
+        "typed_plan_owner_present", True, "v2_under_typing", id="gap-key-not-bound-to-source",
+    ),
+])
+def test_shadow_counts_one_disagreement_per_part(quote, v1_reason, verified_gap, bucket, monkeypatch, shadow_events) -> None:
+    context, plan = _with_exposure("k")
+    item = QuestionRequirement(id="r1", quote=quote, kind="analysis", coverage="plan")
+    asked = key(
+        Method(action_id="binary_effect_measure", parameters=(Parameter(name="measure", value="odds_ratio"),)),
+        bind("k"), bind("death", "outcome"),
+    )
+    if verified_gap:
+        # Live intake currently supplies no gaps. Supply verified evidence
+        # to the real matcher so the observer receives a validated gap.
+        match = intake.match
+
+        def match_with_gap(key, *, authority, dictionary, facts):
+            gap = VerifiedGap(
+                key=asked, provenance=fact(asked, authority).provenance, reason="method_unavailable",
+            )
+            return match(key, authority=authority, dictionary=dictionary, facts=facts, gaps=(gap,))
+
+        monkeypatch.setattr(intake, "match", match_with_gap)
+
+    summary = observe_requirements(
+        [JudgedRequirement(item, "covered", v1_reason)],
+        plan=plan, context=context, question=quote, proposals=[proposal("r1", quote, asked)],
+    )
+    [comparison] = shadow_events
+    [part] = comparison.parts
+    assert part.result.part.key == asked
+    assert part.decision.state == ("capability_gap" if verified_gap else "not_covered")
+    expected_states = {"covered": 0, "not_covered": 1, "unknown": 0}
+    assert summary["by_facet"] == {"method": expected_states}
+    assert summary["by_language"] == {"en": expected_states}
+    expected_disagreements = {"true_false_pass": 0, "prose_proven": 0, "v2_under_typing": 0}
+    expected_disagreements[bucket] = 1
+    assert summary["disagreements"] == expected_disagreements
 
 
 def test_shadow_counts_directions_languages_and_rejections() -> None:

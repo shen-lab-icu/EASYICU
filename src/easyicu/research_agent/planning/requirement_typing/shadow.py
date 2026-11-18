@@ -238,7 +238,11 @@ def _observe(
             else:
                 result = PartResult(part=part, decision=decision)
             facet = part.key.facet.kind if part.key else part.facet_hint
-            if item.v1_state == "covered" and decision.state == "not_covered" and part.key is not None:
+            if (
+                item.v1_state == "covered"
+                and decision.state in {"not_covered", "capability_gap"}
+                and part.key is not None
+            ):
                 source_bound_miss = source_supports(span.text, part.key, context=context, dictionary=dictionary)
         elif intake is not None:
             repair = intake.missing_span_repair(item.part_id)
