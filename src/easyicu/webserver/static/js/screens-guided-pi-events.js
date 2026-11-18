@@ -186,18 +186,19 @@
             || (state.latestRun?.run_id === gpiStopRun ? state.latestRun : null);
           const job = gpiStopJob && owner.latestJobStop(state.session, workflow, {
             credentialVerifiedAt: state.runtime?.configuration?.verified_at,
-            codexAuthVerified: state.codexAuth?.authentication_verified,
+            codexAuth: state.codexAuth,
           });
           const review = window.EasyICU.guidedPi.optional('confirmation');
           const actions = gpiStopReview !== undefined ? review?.studyStopEdits?.(workflow)
             : gpiStopJob ? (job?.job_id === gpiStopJob ? owner.jobActions(job, workflow) : [])
               : owner.currentRun(run, workflow, state.latestRun) ? owner.offeredActions(run, workflow) : [];
           const action = actions?.find(row => row.action_id === gpiStopAction);
-          const route = owner.actionRoute(action, workflow, job);
+          const route = owner.actionRoute(action, workflow, job, state.session);
           if (route === 'retry' && typeof retryFailedExecution === 'function') retryFailedExecution();
           if (route === 'confirm' && typeof confirmWorkflowAction === 'function') confirmWorkflowAction();
           if (route === 'edit' && typeof editWorkflow === 'function') editWorkflow();
           if (route === 'connect') openConnection();
+          if (route === 'codex-login' && !state.codexBusy) startCodexLogin('browser', openAuthorizationPopup());
           if (route === 'data' && typeof authorizeDataSource === 'function') authorizeDataSource('begin_local_selection');
           if (route === 'draft') {
             const copy = review?.stopActionCopy(action, tr);

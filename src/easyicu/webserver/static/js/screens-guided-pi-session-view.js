@@ -34,7 +34,7 @@
       workflow: () => state.workflow, latestRun: () => state.latestRun,
       connectionChecks: () => ({
         credentialVerifiedAt: state.runtime?.configuration?.verified_at,
-        codexAuthVerified: state.codexAuth?.authentication_verified,
+        codexAuth: state.codexAuth,
       }),
       canAct: () => Boolean(state.session) && !state.busy && !state.childJobId && !state.projectLoading && !sessionIsStale(),
       canPreview: () => Boolean(MODULES.optional('preview')),

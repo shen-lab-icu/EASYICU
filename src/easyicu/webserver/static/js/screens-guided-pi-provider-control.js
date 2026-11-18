@@ -57,8 +57,14 @@
       if (!api().loadPiCopilotCodexStatus) return;
       try {
         const payload = await api().loadPiCopilotCodexStatus();
-        state.codexAuth = payload && payload.auth ? payload.auth : null;
-        if (state.codexAuth && state.codexAuth.authentication_verified) {
+        const auth = payload?.auth;
+        const previousAuth = state.codexAuth;
+        state.codexAuth = auth || null;
+        if (auth?.authentication_verified === true) {
+          // A routine status read preserves the evidence from the completed sign-in.
+          const loginPending = state.codexLogin || previousAuth?.account_session_status === 'codex_auth_login_pending';
+          const verifiedAt = loginPending ? new Date().toISOString() : previousAuth?.verified_at;
+          state.codexAuth = { ...auth, verified_at: verifiedAt };
           stopCodexPoll();
           state.codexLogin = null;
           await loadCodexModels(false);

@@ -11,6 +11,7 @@
   'use strict';
 
   const { esc } = window.EU_HTML;
+  const CODEX_AUTH_REQUIRED = 'research_pipeline_codex_user_auth_required';
   const STOP_STATUSES = new Set(['failed', 'cancelled', 'interrupted']);
   // A blocked gate that waits for review is not a stop (aside.runFacts).
   const FAILURE_GATE = /^research_pipeline_|^data_foundation_blocked$|^research_agent_pipeline_failed_closed$/;
@@ -25,6 +26,11 @@
   function gateReason(run) {
     return String(run && (run.gate_reason || run.gate_reason_code) || '');
   }
+  function isCodexAuthStop(job, session) {
+    return job?.kind === 'agent-run' && session?.research_provider?.provider === 'codex'
+      && (gateReason(job) || job.error_code) === CODEX_AUTH_REQUIRED;
+  }
+
   function stopped(run) {
     if (!run || typeof run !== 'object') return false;
     const status = String(run.run_status || '').toLowerCase();
@@ -34,7 +40,7 @@
 
   // Shared by rendering and click-time validation. A stale control cannot
   // act on the new run that has replaced the one it was rendered for.
-  function actionRoute(action, workflow, job = null) {
+  function actionRoute(action, workflow, job = null, session = null) {
     const params = action && action.params || {};
     const kind = action && action.kind;
     if (!action || !/^[a-z_]+_[a-f0-9]{16}$/.test(action.action_id || '')
@@ -60,7 +66,9 @@
     if (kind === 'rephrase_in_scope' && params.route === 'question_edit'
       && params.scope_owner === 'easyicu.webserver.study_family_scope') return 'draft';
     if (kind === 'check_connection' && params.route === 'model_connection'
-      && !window.EasyICU.guidedPi.optional('hosted')?.active()) return 'connect';
+      && !window.EasyICU.guidedPi.optional('hosted')?.active()) {
+      return isCodexAuthStop(job, session) ? 'codex-login' : 'connect';
+    }
     if (kind === 'reexport_data' && params.route === 'data_extraction' && params.requires_explicit_choice === true) return 'data';
     return '';
   }
@@ -93,7 +101,7 @@
     return Date.parse(turn?.ended_at ?? replay?.updated_at);
   }
 
-  function latestJobStop(session, workflow, { credentialVerifiedAt, codexAuthVerified } = {}) {
+  function latestJobStop(session, workflow, { credentialVerifiedAt, codexAuth } = {}) {
     if (session?.stale?.stale || workflow?.active_job?.status === 'running'
       || workflow?.next_action_code === 'starting') return null;
     const job = session?.archived_child_jobs?.at(-1);
@@ -111,9 +119,10 @@
     };
     const apiCredentialChanged = job.kind === 'agent-run' && session.research_provider?.provider !== 'codex'
       && newerThan(credentialVerifiedAt, started);
-    const codexAuthRestored = job.kind === 'agent-run' && session.research_provider?.provider === 'codex'
-      && (gateReason(job) || job.error_code) === 'research_pipeline_codex_user_auth_required'
-      && codexAuthVerified === true;
+    const workflowCode = workflow?.next_action_code;
+    const codexAuthRestored = isCodexAuthStop(job, session)
+      && codexAuth?.authentication_verified === true && newerThan(codexAuth.verified_at, finished)
+      && workflowCode && workflowCode !== CODEX_AUTH_REQUIRED;
     if (codexAuthRestored || newerThan(session.created_at, started) || newerThan(study?.updated_at, finished)
       || newerThan(workflow?.bound_export_updated_at, finished) || apiCredentialChanged
       || workflow?.runs?.some(run => run.run_id && newerThan(run.updated_at, started))) return null;
@@ -121,6 +130,7 @@
   }
 
   function actionLabel(action, route, workflow, tr) {
+    if (route === 'codex-login') return tr('Re-login to Codex', '重新登录 Codex');
     if (route === 'draft') return window.EasyICU.guidedPi.optional('confirmation')?.stopActionCopy(action, tr)?.label;
     const code = workflow?.next_action_code;
     const labels = {
@@ -137,11 +147,11 @@
     const tr = deps.tr;
     const runFailureText = typeof deps.runFailureText === 'function' ? deps.runFailureText : () => '';
 
-    function actionButtons(actions, workflow, attribute, coordinate, job = null) {
+    function actionButtons(actions, workflow, attribute, coordinate, job = null, session = null) {
       const controls = [];
       const seen = new Set();
       for (const action of actions) {
-        const route = actionRoute(action, workflow, job);
+        const route = actionRoute(action, workflow, job, session);
         const key = route === 'draft' ? action.action_id : route;
         if (!route || seen.has(key)) continue;
         const label = actionLabel(action, route, workflow, tr);
@@ -215,7 +225,7 @@
       const workflow = deps.workflow?.();
       const job = latestJobStop(session, workflow, deps.connectionChecks?.());
       if (!deps.canAct?.() || !job || !window.EU_PRODUCT_LABELS?.stopAction) return '';
-      const controls = actionButtons(jobActions(job, workflow), workflow, 'data-gpi-stop-job', job.job_id, job);
+      const controls = actionButtons(jobActions(job, workflow), workflow, 'data-gpi-stop-job', job.job_id, job, session);
       if (!controls.length) return '';
       return `<div class="gpi-run-stop" role="note" data-gpi-job-stop><p>${esc(cause(job))}</p><div class="gpi-run-stop-actions">${controls.join('')}</div></div>`;
     }

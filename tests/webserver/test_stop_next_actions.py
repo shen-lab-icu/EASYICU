@@ -689,8 +689,28 @@ def _archived_job_supersession_cases():
             "job": job, "workflow": {"next_action_code": "provider_ready_to_generate_plan", "runs": []},
             "superseded_workflow": updates,
         }
+    codex_reason = "research_pipeline_codex_user_auth_required"
+    codex_job = project_archived_job_stop({
+        "job_id": "handover_codex_check", "kind": "agent-run", "status": "failed",
+        "error_code": codex_reason, "created_at_epoch": 1767632400, "finished_at_epoch": 1767636000,
+    })
+    yield {
+        "code": codex_reason, "surface": "job-supersession",
+        "cause": "verified -> expired externally -> new run fails with auth",
+        "job": codex_job, "provider": "codex", "label": ("Re-login to Codex", "重新登录 Codex"),
+        "workflow": {
+            "next_action_code": codex_reason, "runs": [],
+            "active_job": {"job_id": codex_job["job_id"], "status": "failed"},
+            "next_actions": codex_job["next_actions"],
+        },
+        "initial_provider": {"codexAuth": {
+            "authentication_verified": True, "verified_at": "2026-01-05T16:00:00Z",
+        }},
+        "superseded_workflow": {"next_action_code": "provider_ready_to_generate_plan"},
+        "verified_provider": {"codexAuth": {"authentication_verified": True, "verified_at": newer}},
+    }
     for provider, reason, checked in (
-        ("codex", "research_pipeline_codex_user_auth_required", {"codexAuth": {"authentication_verified": True}}),
+        ("codex", codex_reason, {"codexAuth": {"authentication_verified": True, "verified_at": newer}}),
         ("openai", "research_pipeline_pi_verified_credentials_required",
          {"runtime": {"configuration": {"verified_at": newer}}}),
     ):
@@ -700,6 +720,7 @@ def _archived_job_supersession_cases():
         yield {
             "code": reason, "surface": "job-supersession", "cause": "Connect the model for the handover audit.",
             "job": job, "workflow": {"next_action_code": reason, "runs": []}, "provider": provider,
+            **({"label": ("Re-login to Codex", "重新登录 Codex")} if provider == "codex" else {}),
             "superseded_workflow": {"next_action_code": "provider_ready_to_generate_plan"},
             "verified_provider": checked,
         }

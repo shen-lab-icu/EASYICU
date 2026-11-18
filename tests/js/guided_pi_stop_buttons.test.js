@@ -24,7 +24,7 @@ const owner = modules.require('runStop').create({ tr, runFailureText,
   canAct: () => true, canPreview: () => true,
   connectionChecks: () => ({
     credentialVerifiedAt: state.runtime?.configuration?.verified_at,
-    codexAuthVerified: state.codexAuth?.authentication_verified,
+    codexAuth: state.codexAuth,
   }) });
 let statedDetail;
 modules.require('runStop').create({ tr, runFailureText: (_code, detail) => {
@@ -44,6 +44,7 @@ const confirmation = modules.optional('confirmation')?.create({
 const events = {};
 const drafts = [];
 const calls = [];
+const authorizationPopup = {};
 const recovery = { scrollIntoView() { calls.push('reveal'); }, setAttribute() {}, focus() {} };
 const state = { session: {}, busy: false, workflow, latestRun: run,
   host: { addEventListener: (name, callback) => { events[name] = callback; }, querySelector: selector => selector === '.gpi-confirmation[data-gpi-review-recovery]' ? recovery : null } };
@@ -52,6 +53,8 @@ modules.require('events').create({ state, tr,
   RESOURCE_OWNER: { fromButton: () => null },
   retryFailedExecution: reason => calls.push(reason || 'retry'), confirmWorkflowAction: () => calls.push('confirm'),
   editWorkflow: () => calls.push('edit'), render: () => drafts.push(state.draft),
+  openAuthorizationPopup: () => authorizationPopup,
+  startCodexLogin: (flow, popup) => calls.push([flow, popup]),
   authorizeDataSource: action => calls.push(action), confirmPlanDecision: selection => calls.push(selection),
   COHORT_ELIGIBILITY: { actionFromEvent: () => null },
 }).wire();
@@ -273,7 +276,7 @@ if (catalog) {
   for (language of ['en', 'zh']) {
     window.EU_LANG = language;
     for (const { code, cause, surface, design, routes, drafts: reviewDrafts, label, run, job, workflow: offer,
-      expect_edit, missing, recovered, superseded_workflow, verified_provider, provider } of cases) {
+      expect_edit, missing, recovered, superseded_workflow, initial_provider, verified_provider, provider } of cases) {
       const name = [surface, code, cause, language].filter(Boolean).join('/');
       try {
         calls.length = drafts.length = 0;
@@ -297,23 +300,36 @@ if (catalog) {
           state.session.conversation_replay = { updated_at: '2026-01-05T18:00:00Z' };
           if (provider) state.session.research_provider = { provider };
           try {
+            Object.assign(state, initial_provider);
             const [choice] = job.next_actions;
-            const clickJob = () => clickControl('[data-gpi-stop-action]', {
-              gpiStopJob: job.job_id, gpiStopAction: choice.action_id, gpiStopWorkflow: workflow.next_action_code,
-            });
             const html = owner.renderJob(state.session);
-            assert.match(html, /data-gpi-job-stop/);
-            const buttons = html.match(/<button(?![^>]* disabled)[^>]*>/g) || [];
-            assert.ok(buttons.some(button => button.includes(`data-gpi-stop-action="${choice.action_id}"`)));
+            assert.match(html, /data-gpi-job-stop/, 'the failed job keeps its recovery card');
+            const buttons = [...html.matchAll(/(<button(?![^>]* disabled)[^>]*>)([^<]*)<\/button>/g)];
+            const control = buttons.find(([, button]) => button.includes(`data-gpi-stop-action="${choice.action_id}"`));
+            assert.ok(control, 'the recovery action is enabled');
+            const [, button, buttonLabel] = control;
+            if (label) assert.equal(buttonLabel, tr(...label));
+            const clickJob = (workflowCode = readAttribute('workflow')) => clickControl('[data-gpi-stop-action]', {
+              gpiStopJob: readAttribute('job'), gpiStopAction: readAttribute('action'), gpiStopWorkflow: workflowCode,
+            });
+            function readAttribute(name) {
+              return new RegExp(`data-gpi-stop-${name}="([^"]+)"`).exec(button)?.[1];
+            }
             clickJob();
-            if (provider) assert.equal(state.showSetup, true);
+            if (label) assert.deepEqual(calls.splice(0), [['browser', authorizationPopup]]);
+            else if (provider) assert.equal(state.showSetup, true);
             else assert.deepEqual(calls.splice(0), ['begin_local_selection']);
             state.showSetup = false;
+            if (initial_provider) {
+              Object.assign(state, verified_provider);
+              assert.match(owner.renderJob(state.session), /data-gpi-job-stop/, 'the active auth stop still needs recovery');
+              Object.assign(state, initial_provider);
+            }
             Object.assign(workflow, superseded_workflow);
             if (provider) assert.match(owner.renderJob(state.session), /data-gpi-job-stop/, 'a workflow label does not verify a connection');
             Object.assign(state, verified_provider);
             assert.equal(owner.renderJob(state.session), '', 'the archived job was superseded');
-            clickJob();
+            clickJob(workflow.next_action_code);
             assert.deepEqual(calls, []);
             assert.equal(state.showSetup, false);
           } finally {
