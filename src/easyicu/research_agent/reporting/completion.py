@@ -40,6 +40,9 @@ class ManuscriptOutcome(BaseModel):
         "numeric_verified_not_satisfied", "writer_provider_transport_unavailable",
         "execution_complete_not_satisfied", "analysis_validated_not_satisfied",
         "planned_products_missing",
+        "research_pipeline_article_preview_delivery_unverified",
+        "research_pipeline_manuscript_pdf_delivery_unverified",
+        "research_pipeline_references_delivery_unverified",
     ] | None = None
 
 
@@ -53,7 +56,7 @@ def invalid_plan_execution_status(plan: AnalysisPlan | None) -> dict[str, Any] |
             "missing_steps": [],
             "failed_steps": [{"step_id": "plan", "status": "not_available"}],
         }
-    if not plan.steps:
+    if not getattr(plan, "execution_steps", plan.steps):
         return {
             "execution_complete": False,
             "step_scientific_requirements_complete": False,
@@ -92,6 +95,8 @@ def completion_outcomes(
     )
     if pending:
         manuscript = ManuscriptOutcome(status="pending")
+    elif reason := axes.get("host_delivery_failure"):
+        manuscript = ManuscriptOutcome(status="not_passed", reason_code=reason)
     elif axes.get("manuscript_requested") is False:
         manuscript = ManuscriptOutcome(status="not_requested")
     elif (
@@ -119,6 +124,32 @@ def completion_outcomes(
         "analysis_outcome": analysis.model_dump(),
         "manuscript_outcome": manuscript.model_dump(),
     }
+
+
+def apply_host_delivery_completion(gates: dict[str, Any], *, plan: AnalysisPlan | None, run_dir: Path) -> None:
+    """Recheck promised document products before making the run final."""
+    from ..canonical_json import canonical_sha256
+    from ..contracts.product_files import host_delivery_failure_code, host_delivery_owners, verified_host_deliveries
+
+    if plan is None or not any(getattr(step, "host_delivery_kind", None) for step in plan.steps):
+        return
+    payload = plan.model_dump(mode="json")
+    owners = host_delivery_owners(payload)
+    verified = verified_host_deliveries(
+        run_dir, run_id=run_dir.name, plan_sha256=canonical_sha256(payload), owners=owners,
+    )
+    failures = {kind: host_delivery_failure_code(kind) for kind in owners if kind not in verified}
+    gates["host_delivery_steps"] = [
+        {"step_id": step_id, "kind": kind, "status": "verified" if kind in verified else "unverified",
+         "reason_code": failures.get(kind)}
+        for kind, step_id in owners.items()
+    ]
+    if failures:
+        gates.update(
+            host_delivery_failure=next(iter(failures.values())), completion_status="diagnostic_only",
+            forced_diagnostic_only=True, manuscript_ready=False, publication_ready=False,
+            submission_ready=False, publication_artifacts_ready=False, paper_authorized=False,
+        )
 
 
 def run_status_payload(

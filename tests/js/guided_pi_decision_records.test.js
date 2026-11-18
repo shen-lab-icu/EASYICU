@@ -22,7 +22,7 @@ global.window = { EU_LANG: language, document: { addEventListener() {} },
 global.document = { addEventListener() {}, getElementById: () => null };
 for (const file of files) require(path.resolve(file));
 const modules = window.EasyICU.guidedPi;
-for (const name of ['target-trial-copy', 'target-trial', 'question-requirements']) {
+for (const name of ['target-trial-copy', 'target-trial', 'question-requirements', 'run-stop']) {
   require(path.resolve(`src/easyicu/webserver/static/js/screens-guided-pi-${name}.js`));
 }
 // Owners this page loads elsewhere; only what the conversation asks of them.
@@ -62,7 +62,7 @@ const LINES = {
 const stub = (overrides = {}) => new Proxy(overrides, { get: (target, key) => (key in target ? target[key] : () => '') });
 function conversation(session, messages, runFiles, workflow) {
   const state = {
-    session, messages, workflow, workflowReceipts: [], busy: false, projectLoading: false, draft: '',
+    session, sessions: [], messages, workflow, workflowReceipts: [], busy: false, projectLoading: false, draft: '',
     regenerating: false, planStarting: null,
   };
   const confirmation = modules.require('confirmation').create({
@@ -162,6 +162,46 @@ test('a pending exposure choice asks for an answer in the main log', () => {
   assert.match(exposure, /data-gpi-log[^]*Reply in the conversation before approval/);
   assert.match(exposure, /data-gpi-confirm-edit[^>]*>Answer this question<\/button>/);
   assert.doesNotMatch(exposure, /data-gpi-confirm-action/);
+});
+
+test('a completed literature turn ignores a stale plan summary from a failed run', () => {
+  const run = { run_id: 'earlier-candidate', run_ref: 'earlier', authoritative: true, run_status: 'failed',
+    gate_reason_code: 'research_pipeline_progressive_compile_failed' };
+  for (const code of ['failed_pipeline_requires_fresh_plan', 'failed_pipeline_execution_retry_available']) {
+    const html = pendingDecisionHtml({
+      next_action_code: code, plan_review_summary: { run_id: run.run_id }, runs: [run],
+    });
+    assert.match(html, /Compare two fluid strategies for renal recovery/);
+    assert.doesNotMatch(html, /data-gpi-run-stop|data-gpi-confirm-action/);
+  }
+});
+
+test('an open study decision is inline when the transcript has not arrived', () => {
+  const session = { ...pendingSession, binding: {} };
+  const html = conversation(session, [], null, { next_action_code: 'target_trial_statement_needed' });
+  const label = tr('State it in the conversation', '在对话里说明');
+  assert.match(html, /data-gpi-log[^]*data-gpi-confirm-edit/);
+  assert.ok(html.includes(label));
+  assert.match(html, /data-gpi-input/);
+  assert.doesNotMatch(html, /data-gpi-confirm-action/);
+});
+
+test('reading target-trial assumptions leaves approval to the explicit action', () => {
+  const owner = modules.require('targetTrial');
+  const session = { ...pendingSession, binding: { study_context_id: 'study-1', study_revision: 4 } };
+  assert.equal(owner.approvalRequest(pendingTrial, session, 'project-1'), null);
+  owner.noteTick(trial.compile_sha256, 0, true);
+  try {
+    const html = pendingDecisionHtml(pendingTrial);
+    assert.match(html, /data-gpi-log[^]*data-gpi-confirm-action>Approve the target trial<\/button>/);
+    assert.equal(trial.state, 'approvable');
+    assert.deepEqual(owner.approvalRequest(pendingTrial, session, 'project-1'), {
+      project_id: 'project-1', study_context_id: 'study-1', expected_revision: 4,
+      compile_sha256: trial.compile_sha256, n_lines_confirmed: 1,
+    });
+  } finally {
+    owner.noteTick(trial.compile_sha256, 0, false);
+  }
 });
 
 // What the page holds after a reload: the session as the host sends it, and

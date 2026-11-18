@@ -273,6 +273,7 @@ _ANALYSIS_STEP_CORE_SCIENTIFIC_AUTHORITY_FIELDS = frozenset(
 )
 _ANALYSIS_STEP_STRUCTURED_SCIENTIFIC_AUTHORITY_FIELDS = frozenset(
     {
+        "host_delivery_kind",
         "literature_citation_keys",
         "literature_design_bindings",
         "sensitivity_spec_ids",

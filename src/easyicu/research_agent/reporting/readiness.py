@@ -82,6 +82,7 @@ from .display_suite import (
     summarize_display_suite_status,
 )
 from .completion import (
+    apply_host_delivery_completion,
     count_missing_evidence_markers as _count_missing_evidence_markers,
     count_writer_attempts,
     has_figure_only_output_contract,
@@ -464,7 +465,7 @@ def execution_gate_status(
     invalid_plan = invalid_plan_execution_status(plan)
     if invalid_plan is not None:
         return invalid_plan
-    required_step_ids = [s.step_id for s in plan.steps]
+    required_step_ids = [s.step_id for s in getattr(plan, "execution_steps", plan.steps)]
     # 🔧 2026-05-16: previously this dict excluded `00_probe` records on the
     # assumption the planner never lists it. But the planner *does* sometimes
     # include `00_probe` in the published plan, and a deterministic probe
@@ -2329,6 +2330,7 @@ def write_readiness_artifacts(
     # gates were satisfied. Derived from the always-on audit_log.jsonl event
     # stream (no separate event artifact) so the gate story is quantitative
     # — a run that took 4 writer passes is more fragile than one that took 1.
+    apply_host_delivery_completion(gates, plan=plan, run_dir=run_dir)
     gates["writer_attempt_count"] = count_writer_attempts(run_dir)
     status = str(gates["completion_status"])
 

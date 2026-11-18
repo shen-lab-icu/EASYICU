@@ -6,6 +6,8 @@ delivery promises no scientific result, patient export or publication readiness.
 
 from __future__ import annotations
 
+import hashlib
+import json
 import re
 from dataclasses import dataclass
 from pathlib import Path
@@ -118,6 +120,7 @@ def contained_regular_output_file(out_dir: Path, value: object) -> Path:
 
 RUN_DELIVERY_SCHEMA_VERSION = "easyicu.run_delivery/1"
 HOST_DELIVERY_REASON = "question_requirement_covered_by_host_delivery"
+HostDeliveryKind = Literal["article_preview", "manuscript_pdf", "references"]
 DeliverableKind = Literal[
     "article_preview", "manuscript_pdf", "result_tables", "figures", "references",
 ]
@@ -148,11 +151,12 @@ RUN_DELIVERABLES: Mapping[DeliverableKind, RunDeliverable] = MappingProxyType({
         ("manuscript_draft.json", "manuscript_provenance.json"),
         r"(?:web|html|browser|online|网页|在线|浏览器)\s*"
         r"(?:(?:article|manuscript|report|文章|论文|报告)\s*)?(?:preview|预览)"
+        r"|(?:article|manuscript|report|文章|论文|报告)\s*(?:preview|预览)"
         r"|(?:article|manuscript|report)\s+text|正文",
     ),
     "manuscript_pdf": RunDeliverable(
         ("manuscript_scaffold.pdf", "manuscript_revision.pdf", "manuscript_pdf_receipt.json"),
-        r"pdf",
+        r"pdf|typeset copy",
     ),
     "result_tables": RunDeliverable(
         ("result_tables.json",), r"(?:result\s+)?tables?|结果表(?:格)?|表格",
@@ -174,9 +178,9 @@ RUN_DELIVERY_ARTIFACT_NAMES = tuple(dict.fromkeys(
 # Neutral delivery grammar only. Unknown words (methods, data requests,
 # destinations, formats, etc.) leave a residue and keep ordinary gap handling.
 _DELIVERY_GRAMMAR = re.compile(
-    r"\b(?:please|provide|include|deliver|a|an|the|and|or|with|downloadable|"
-    r"download|manuscript|article|report|files?|readable)\b"
-    r"|(?:请|提供|包含|交付|以及|并|和|及|与|或|可下载|下载|文件|信息充分|清晰|且|可读|的)",
+    r"\b(?:please|provide|include|deliver|give\s+me|export|generate|"
+    r"a|an|the|and|or|of|with|downloadable|download|manuscript|article|report|files?|readable)\b"
+    r"|(?:请|提供|包含|交付|导出|生成|以及|并|和|及|与|或|可下载|下载|文件|论文|文章|报告|信息充分|清晰|且|可读|的)",
     re.IGNORECASE,
 )
 _SEPARATORS = re.compile(r"[\s,，、;；。.：:()（）/\-]+")
@@ -197,6 +201,101 @@ def requested_deliverable_kinds(quote: str) -> tuple[DeliverableKind, ...]:
             kinds.append(kind)
     remainder = _DELIVERY_GRAMMAR.sub(" ", remainder)
     return tuple(kinds) if kinds and not _SEPARATORS.sub("", remainder) else ()
+
+
+HOST_DELIVERY_KINDS: tuple[HostDeliveryKind, ...] = ("article_preview", "manuscript_pdf", "references")
+
+_DELIVERY_SENTENCE_BOUNDARY = re.compile(r"[。？！?!；;\n]+|\.(?!\d)")
+_DELIVERY_REQUEST_BOUNDARY = re.compile(
+    r"(?:,\s*|\band\s+)(?=(?:please\s+)?(?:provide|include|deliver|give\s+me|export|generate)\b)"
+    r"|并(?=请?(?:提供|包含|交付|导出|生成))",
+    re.IGNORECASE,
+)
+_DELIVERY_NEGATION = re.compile(r"\b(?:no|not|never|without|don't)\b|(?:无需|不必|不要|不需要|不用)", re.IGNORECASE)
+_DELIVERY_ALTERNATIVE = re.compile(r"\bor\b|或者?|二选一", re.IGNORECASE)
+
+
+def requested_host_delivery_kinds(question: str) -> tuple[HostDeliveryKind, ...]:
+    """Read whole affirmative delivery clauses using the stored-quote grammar."""
+    kinds = set()
+    for sentence in _DELIVERY_SENTENCE_BOUNDARY.split(question):
+        if _DELIVERY_NEGATION.search(sentence):
+            continue
+        for clause in _DELIVERY_REQUEST_BOUNDARY.split(sentence):
+            stated = requested_deliverable_kinds(clause)
+            if len(stated) <= 1 or not _DELIVERY_ALTERNATIVE.search(clause):
+                kinds.update(stated)
+    return tuple(kind for kind in HOST_DELIVERY_KINDS if kind in kinds)
+
+
+HOST_DELIVERY_RECEIPT = "host_delivery_receipt.json"
+HOST_DELIVERY_RECEIPT_SCHEMA = "easyicu.host_delivery_receipt/1"
+_BOUND_MANUSCRIPT = "manuscript_scaffold_bound.md"
+HOST_DELIVERY_SOURCES: Mapping[HostDeliveryKind, tuple[str, ...]] = MappingProxyType({
+    "article_preview": (_BOUND_MANUSCRIPT, "manuscript_provenance.json"),
+    "manuscript_pdf": (_BOUND_MANUSCRIPT, "manuscript_scaffold.pdf", "manuscript_pdf_receipt.json"),
+    "references": ("manuscript_scaffold.bib",),
+})
+
+
+def host_delivery_owners(plan: Mapping[str, object]) -> dict[HostDeliveryKind, str]:
+    """Read terminal delivery owners from a serialized, authoritative plan."""
+    steps = plan.get("steps")
+    if not isinstance(steps, list):
+        return {}
+    return {
+        step["host_delivery_kind"]: step["step_id"]
+        for step in steps
+        if isinstance(step, Mapping) and step.get("host_delivery_kind") in HOST_DELIVERY_KINDS
+        and isinstance(step.get("step_id"), str) and step["step_id"]
+    }
+
+
+def host_delivery_failure_code(kind: HostDeliveryKind) -> str:
+    return f"research_pipeline_{kind}_delivery_unverified"
+
+
+def read_host_delivery_source(run_dir: Path, name: str) -> bytes:
+    limit = RUN_DOCUMENT_SPECS.get(name, {}).get("max_bytes", 8 * 1024 * 1024)
+    path = contained_regular_output_file(run_dir, name)
+    with path.open("rb") as source:
+        raw = source.read(limit + 1)
+    if len(raw) > limit or not raw.strip():
+        raise ValueError("host_delivery_source_empty_or_oversize")
+    return raw
+
+
+def host_delivery_source_digests(sources: Mapping[str, bytes]) -> dict[str, str]:
+    return {name: hashlib.sha256(raw).hexdigest() for name, raw in sources.items()}
+
+
+def verified_host_deliveries(
+    run_dir: Path, *, run_id: str, plan_sha256: str, owners: Mapping[HostDeliveryKind, str],
+) -> dict[HostDeliveryKind, dict[str, bytes]]:
+    """Recheck the producer's receipt against the run, plan and current files."""
+    if not owners:
+        return {}
+    try:
+        receipt = json.loads(read_host_delivery_source(run_dir, HOST_DELIVERY_RECEIPT))
+        if (
+            not isinstance(receipt, dict) or receipt.get("schema_version") != HOST_DELIVERY_RECEIPT_SCHEMA
+            or receipt.get("run_id") != run_id or receipt.get("plan_sha256") != plan_sha256
+            or not isinstance(receipt.get("deliveries"), dict)
+        ):
+            return {}
+    except (OSError, ValueError):
+        return {}
+    verified = {}
+    for kind, step_id in owners.items():
+        try:
+            sources = {name: read_host_delivery_source(run_dir, name) for name in HOST_DELIVERY_SOURCES[kind]}
+            if receipt["deliveries"].get(kind) == {
+                "step_id": step_id, "sha256_by_artifact": host_delivery_source_digests(sources),
+            }:
+                verified[kind] = sources
+        except (OSError, ValueError):
+            continue
+    return verified
 
 
 def host_delivery_coverage(owners: Mapping[DeliverableKind, Sequence[str]]) -> dict[str, object] | None:

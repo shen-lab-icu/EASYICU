@@ -2800,7 +2800,7 @@ class LandmarkSurvivalRuntimeAuthority(_AuthorityBase):
     def governed_step(self, plan: AnalysisPlan) -> AnalysisStep:
         """Return the deterministic analysis owner after validating the suite."""
 
-        if len(plan.steps) != 3:
+        if len(plan.execution_steps) != 3:
             raise CurrentCaseScientificAuthorityError(
                 "landmark survival suite must have cohort, analysis and figure owners"
             )
@@ -2944,7 +2944,7 @@ class SourceFeasibilityRuntimeAuthority(_AuthorityBase):
         )
 
     def governed_step(self, plan: AnalysisPlan) -> AnalysisStep:
-        if len(plan.steps) != 1:
+        if len(plan.execution_steps) != 1:
             raise CurrentCaseScientificAuthorityError(
                 "source feasibility-only plan contains forbidden additional steps"
             )
@@ -2975,7 +2975,7 @@ class SourceFeasibilityRuntimeAuthority(_AuthorityBase):
             )
         self._require_rule_ref(step)
         forbidden = set(self.forbidden_plan_tokens)
-        for candidate in plan.steps:
+        for candidate in plan.execution_steps:
             if candidate is step:
                 # The signed owner uses negated phrases such as "no effect estimate".
                 # Its fields were already checked for exact equality above, so scan

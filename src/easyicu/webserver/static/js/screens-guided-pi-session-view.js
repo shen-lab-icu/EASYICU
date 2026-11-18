@@ -367,15 +367,18 @@
       const showProjectContinuationCards = !workspace && !lightweight && !freshTask && !ideaExplorationTurn;
       const sourceDecision = DATA_CONSENT?.requiresConfirmation?.(session);
       const workflow = state.workflow || {};
-      const pendingDecision = sourceDecision || Boolean(workflow.plan_decision || workflow.plan_review_summary?.run_id)
+      const openPlanReview = [
+        'operator_plan_approval_required', 'plan_execution_upgrade_required', 'plan_scientific_changes_required',
+        'question_requirement_not_covered', 'question_requirement_capability_gap',
+      ].includes(workflow.next_action_code);
+      const pendingDecision = sourceDecision
+        || (openPlanReview && Boolean(workflow.plan_decision || workflow.plan_review_summary?.run_id))
         || Object.values(workflow.host_decisions || {}).some(Boolean) || [
           'cohort_eligibility_confirmation_required', 'study_primary_outcome_confirmation_required',
           'target_trial_statement_needed', 'target_trial_review', 'target_trial_plan_ready',
         ].includes(workflow.next_action_code);
-      // An idea or literature turn can finish with a study decision still open.
-      const showProjectDecisions = showProjectContinuationCards
-        || (!workspace && !lightweight && pendingDecision
-          && (!freshTask || sourceDecision || Boolean(session.binding?.study_context_id)));
+      // A study decision may arrive before the transcript or during a literature turn.
+      const showProjectDecisions = showProjectContinuationCards || (!workspace && !lightweight && pendingDecision);
       const dataConsentRequired = showProjectDecisions && sourceDecision;
       const fullTimeline = freshTask ? [] : withQuickAnswers(withDecisionRecords(RUN_FILES.timeline(state.messages.concat(state.workflowReceipts))));
       const timeline = state.regenerating && REGENERATION
@@ -472,7 +475,7 @@
         return html;
       }, renderSegment);
       const outcome = showProjectContinuationCards ? RUN_OUTCOME.render(state.latestRun, state.workflow) : '';
-      const emptyResearch = !workspace && !lightweight && !messages && !outcome;
+      const emptyResearch = !workspace && !lightweight && !messages && !outcome && !showProjectDecisions;
       const resultsView = Boolean(outcome) && !dataConsentRequired;
       // Workflow completion may arrive before the separate run-file catalog.
       // Use its authoritative stop until that run has a stop in the timeline.
@@ -577,7 +580,7 @@
             ${freshTask && !chosenStart && !workspace && !lightweight ? projectContinuityHtml() : ''}
             ${conversation || (resultsView ? '' : workspace
                 ? `<div class="gpi-empty"><strong>${tr('Build something in this project', '在当前项目中创建产物')}</strong><span>${tr('EasyICU Copilot can read, write, edit, check, and preview files in this project’s isolated workspace, while retaining EasyICU research tools.', 'EasyICU 研究助手可以在当前项目的隔离工作区中读取、写入、编辑、检查并预览文件，同时保留 EasyICU 研究工具。')}</span></div>`
-                : emptyResearchHtml)}
+                : emptyResearch ? emptyResearchHtml : '')}
             ${outcome}
             ${showProjectDecisions ? dataConsentHtml : ''}
             ${showProjectDecisions && !dataConsentRequired ? continuationCardsHtml() : ''}

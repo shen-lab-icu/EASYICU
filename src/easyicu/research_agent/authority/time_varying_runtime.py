@@ -274,7 +274,7 @@ class TimeVaryingRuntimeAuthority(BaseModel):
         ):
             raise ValueError("time-varying plan changed its bound hospital endpoint")
         if (
-            len(plan.steps) != 2
+            len(plan.execution_steps) != 2
             or plan.steps[0].method != "host_materialized_locked_cohort"
             or plan.steps[0].inputs
             or plan.steps[0].expected_outputs != ["table:analysis_cohort"]

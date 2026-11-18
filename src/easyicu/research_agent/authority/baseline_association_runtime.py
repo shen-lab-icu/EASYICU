@@ -305,25 +305,26 @@ class BaselineAssociationRuntimeAuthority(BaseModel):
         return primary
 
     def validate_plan(self, plan: AnalysisPlan):
-        # Append runs inherit results, not this authority's baseline step roster.
-        if tuple(step.step_id for step in plan.steps[:5]) != BASELINE_STEPS[:5]:
+        # This roster authorizes analysis. Manuscript owners run after it.
+        steps = plan.execution_steps
+        if tuple(step.step_id for step in steps[:5]) != BASELINE_STEPS[:5]:
             raise _step_roster_refusal()
         primary = self.governed_primary_step(plan)
         required_steps = baseline_core_step_ids(
             getattr(plan.design_selection, "execution_tier", None),
-            has_visualization=any(step.step_id == "visualization" for step in plan.steps),
+            has_visualization=any(step.step_id == "visualization" for step in steps),
         )
-        checks = [step for step in plan.steps if self._prespecified_check(step, plan)]
-        remaining = [step for step in plan.steps if step not in checks]
+        checks = [step for step in steps if self._prespecified_check(step, plan)]
+        remaining = [step for step in steps if step not in checks]
         core, companions = remaining[:len(required_steps)], remaining[len(required_steps):]
-        if len({step.step_id for step in plan.steps}) != len(plan.steps):
+        if len({step.step_id for step in steps}) != len(steps):
             raise _step_roster_refusal()
         if tuple(step.step_id for step in core) != required_steps:
             core_check = next((step for step in checks if step.step_id in required_steps), None)
             unexpected = next((step for step in core if step.step_id not in required_steps), None)
             raise _step_roster_refusal(core_check or unexpected)
-        if any(plan.steps.index(step) <= 4
-               or any(plan.steps.index(step) > plan.steps.index(s) for s in core if s.step_id in {"visualization", "report"})
+        if any(steps.index(step) <= 4
+               or any(steps.index(step) > steps.index(s) for s in core if s.step_id in {"visualization", "report"})
                for step in checks):
             raise _step_roster_refusal()
         profiles: set[str] = set()

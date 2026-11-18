@@ -2712,6 +2712,8 @@ class ResearchAgentPipeline:
                 self._provider_hard_stop, prompt_version, emit_progress,
             )
         plan = seal_plan_tier(generation.plan, self._config, resumed=generation.reused_prior_plan)
+        if not generation.reused_prior_plan and len(plan.execution_steps) != len(plan.steps):
+            plan = plan.model_copy(update={"steps": plan.execution_steps})
         self._services.validate_plan_revision(plan=plan, context=agent_context, before_runtime_binding=self._scientific_runtime_authorities)
         reused_prior_plan = generation.reused_prior_plan
         reused_plan_path = generation.reused_plan_path
@@ -2842,6 +2844,10 @@ class ResearchAgentPipeline:
                 )
         validate_plan_against_adjustment_authority(plan=plan, context=agent_context)
         self._scientific_runtime_authorities.validate_plan(plan)
+        if not reused_prior_plan:
+            from .planning.requirement_typing.delivery import bind_requested_host_delivery
+
+            plan = bind_requested_host_delivery(plan, question=context.research_question)
         plan_path = (
             migrated_plan_path or reused_plan_path or (run_dir / "analysis_plan.json")
         )

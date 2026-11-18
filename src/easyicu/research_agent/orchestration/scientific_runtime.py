@@ -481,6 +481,8 @@ class ScientificRuntimeAuthorities:
     def validate_plan(self, plan: AnalysisPlan) -> None:
         """Preserve the precise authority-owner error for any plan drift."""
 
+        if isinstance(plan, AnalysisPlan) and len(plan.execution_steps) != len(plan.steps):
+            plan = plan.model_copy(update={"steps": plan.execution_steps})
         if self.trajectory is not None:
             self.trajectory.validate_plan(plan)
         if self.current_case is not None:

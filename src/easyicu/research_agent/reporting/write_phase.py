@@ -719,6 +719,11 @@ def _persist_manuscript_provenance_artifact(
             )
         )
         return
+    if plan is not None and any(getattr(step, "host_delivery_kind", None) == "article_preview" for step in plan.steps):
+        from ..canonical_json import canonical_sha256
+
+        payload["delivery_plan_sha256"] = canonical_sha256(plan.model_dump(mode="json"))
+        payload["delivery_run_id"] = run_dir.name
     path = run_dir / "manuscript_provenance.json"
     path.write_text(
         json.dumps(payload, ensure_ascii=False, indent=2, sort_keys=True),
@@ -2972,6 +2977,62 @@ def _append_deferred_source_flow(
     return replace(binding, bound=bound, numeric_binding_map=claims)
 
 
+def _record_host_deliveries(
+    *, plan: AnalysisPlan, run_dir: Path, run_id: str, bound: str, published: set[str],
+) -> None:
+    """Record the outputs of this invocation of the manuscript producer."""
+    from ..authority.evidence_store import _atomic_write_text
+    from ..canonical_json import canonical_sha256
+    from ..contracts.product_files import (
+        HOST_DELIVERY_RECEIPT, HOST_DELIVERY_RECEIPT_SCHEMA, HOST_DELIVERY_SOURCES,
+        host_delivery_owners, host_delivery_source_digests, read_host_delivery_source,
+    )
+
+    plan_payload = plan.model_dump(mode="json")
+    owners = host_delivery_owners(plan_payload)
+    if not owners:
+        return
+    plan_sha256 = canonical_sha256(plan_payload)
+    deliveries = {}
+    for kind, step_id in owners.items():
+        names = HOST_DELIVERY_SOURCES[kind]
+        if kind != "article_preview" and not set(names).difference({"manuscript_scaffold_bound.md"}) <= published:
+            continue
+        try:
+            sources = {name: read_host_delivery_source(run_dir, name) for name in names}
+            digests = host_delivery_source_digests(sources)
+            if kind == "article_preview":
+                provenance = json.loads(sources["manuscript_provenance.json"])
+                if not (
+                    isinstance(provenance, dict) and provenance.get("schema_version") == "easyicu.manuscript-provenance/1"
+                    and provenance.get("manuscript_sha256") == digests["manuscript_scaffold_bound.md"]
+                    and provenance.get("delivery_run_id") == run_id
+                    and provenance.get("delivery_plan_sha256") == plan_sha256
+                ):
+                    continue
+            elif kind == "manuscript_pdf":
+                receipt = json.loads(sources["manuscript_pdf_receipt.json"])
+                pdf = receipt.get("pdf") if isinstance(receipt, dict) else None
+                if not (
+                    isinstance(pdf, dict) and receipt.get("status") == "rendered"
+                    and receipt.get("bound_manuscript_sha256") == digests["manuscript_scaffold_bound.md"]
+                    and pdf.get("sha256") == digests["manuscript_scaffold.pdf"]
+                    and sources["manuscript_scaffold.pdf"].startswith(b"%PDF")
+                ):
+                    continue
+            if kind != "references" and sources["manuscript_scaffold_bound.md"] != bound.encode("utf-8"):
+                continue
+        except (OSError, ValueError):
+            continue
+        deliveries[kind] = {"step_id": step_id, "sha256_by_artifact": digests}
+    payload = {
+        "schema_version": HOST_DELIVERY_RECEIPT_SCHEMA,
+        "run_id": run_id, "plan_sha256": plan_sha256,
+        "deliveries": deliveries,
+    }
+    _atomic_write_text(run_dir / HOST_DELIVERY_RECEIPT, json.dumps(payload, sort_keys=True), expected_root=run_dir)
+
+
 def _publish_and_audit_manuscript(
     pipeline: Any,
     *,
@@ -2992,8 +3053,29 @@ def _publish_and_audit_manuscript(
     emit_progress: Callable[..., None],
 ) -> None:
     """Render publication artifacts and run post-binding scientific audits."""
-    if pipeline._enable_latex:
+    requested = {kind for step in plan.steps if (kind := getattr(step, "host_delivery_kind", None))}
+    written: set[str] = set()
+    pdf_requested = "manuscript_pdf" in requested
+    bib_path = run_dir / "manuscript_scaffold.bib"
+    if pipeline._enable_latex or pdf_requested or "references" in requested:
         try:
+            if manuscript_citable_keys(literature):
+                bib_path.write_text(render_bibtex(literature), encoding="utf-8")
+                if evidence.get("manuscript_bibliography") is None:
+                    evidence.register_file(
+                        kind="log", description="BibTeX file rendered from the literature bundle.",
+                        source_path=bib_path, evidence_id="manuscript_bibliography",
+                        producer="pipeline", generation_mode="system",
+                    )
+                written.add(bib_path.name)
+        except Exception as exc:
+            findings.append(ValidationFinding(
+                validator="latex_export", severity="warning", message=f"BibTeX export failed: {exc}",
+            ))
+
+    if pipeline._enable_latex or pdf_requested:
+        try:
+            draft_watermark = pdf_requested or pipeline._latex_draft_watermark
             emit_progress(
                 "latex",
                 "Rendering LaTeX and BibTeX scaffold.",
@@ -3040,7 +3122,7 @@ def _publish_and_audit_manuscript(
                 tables=build_manuscript_tables(
                     plan=plan, evidence_records=current_verified_evidence_records, run_dir=run_dir,
                 ),
-                draft_watermark=pipeline._latex_draft_watermark,
+                draft_watermark=draft_watermark,
             )
             tex_path = run_dir / "manuscript_scaffold.tex"
             tex_path.write_text(tex, encoding="utf-8")
@@ -3053,34 +3135,13 @@ def _publish_and_audit_manuscript(
                     producer="pipeline",
                     generation_mode="system",
                 )
-            if manuscript_citable_keys(literature):
-                bib = render_bibtex(literature)
-                bib_path = run_dir / f"{bib_basename}.bib"
-                bib_path.write_text(bib, encoding="utf-8")
-                if evidence.get("manuscript_bibliography") is None:
-                    evidence.register_file(
-                        kind="log",
-                        description="BibTeX file rendered from the literature bundle.",
-                        source_path=bib_path,
-                        evidence_id="manuscript_bibliography",
-                        producer="pipeline",
-                        generation_mode="system",
-                    )
-            # Optional: compile the .tex to PDF on disk so users
-            # can open ``manuscript_scaffold.pdf`` directly. Off
-            # by default because not every environment has a
-            # LaTeX install.
-            if pipeline._enable_pdf_render:
-                bib_full = (
-                    run_dir / f"{bib_basename}.bib"
-                    if (run_dir / f"{bib_basename}.bib").exists()
-                    else None
-                )
+            if pipeline._enable_pdf_render or pdf_requested:
+                bib_full = bib_path if bib_path.name in written else None
                 pdf_result = render_pdf_for_run(
                     tex_path=tex_path,
                     bib_path=bib_full,
                     output_dir=run_dir,
-                    draft_watermark=pipeline._latex_draft_watermark,
+                    draft_watermark=draft_watermark,
                 )
                 if pdf_result.success and pdf_result.pdf_path is not None:
                     if pdf_result.receipt_path is None:
@@ -3113,6 +3174,7 @@ def _publish_and_audit_manuscript(
                             producer="pipeline",
                             generation_mode="system",
                         )
+                    written.update({pdf_result.pdf_path.name, pdf_result.receipt_path.name})
                     findings.append(
                         ValidationFinding(
                             validator="pdf_render",
@@ -3428,6 +3490,8 @@ def _publish_and_audit_manuscript(
             evidence=evidence, findings=findings, bound=bound,
             repro_envelope=repro_envelope, run_dir=run_dir, context=context,
         )
+    if requested:
+        _record_host_deliveries(plan=plan, run_dir=run_dir, run_id=run_id, bound=bound, published=written)
 
 
 def _run_drafting_reviewer_round(
@@ -3820,6 +3884,13 @@ def run_write_phase(
 ) -> WritePhaseResult:
     """Draft manuscript-facing outputs after analysis is complete."""
     from ..contracts.claim_ceiling import manuscript_disabled
+    from ..contracts.product_files import HOST_DELIVERY_RECEIPT
+
+    # A resumed Writer may stop before publishing. Its older receipt must
+    # never stand in for the artifacts of this invocation.
+    delivery_plan = getattr(execute_result, "plan", None)
+    if delivery_plan is not None and any(step.host_delivery_kind is not None for step in delivery_plan.steps):
+        (run_dir / HOST_DELIVERY_RECEIPT).unlink(missing_ok=True)
     if manuscript_disabled(pipeline, plan_result, execute_result):
         # Typed tables/figures and results_report are the desktop deliverable.
         # Return before figure publication, Writer/Critic, BibTeX or LaTeX.

@@ -1709,10 +1709,12 @@ def _step_maybe_replan(
         )
         return current_plan, plan_path
     replanner = ReplannerAgent(role_resolver("planner"))
+    delivery_steps = [step for step in current_plan.steps if step.host_delivery_kind is not None]
+    scientific_plan = current_plan.model_copy(update={"steps": current_plan.execution_steps}) if delivery_steps else current_plan
     try:
         revised = replanner.run(
             context=plan_result.agent_context,
-            current_plan=current_plan,
+            current_plan=scientific_plan,
             probe_summary=probe_summary_payload,
             completed_step_records=completed_records,
             directive=directive,
@@ -1739,7 +1741,7 @@ def _step_maybe_replan(
         plan=current_plan,
     )
     normalized_candidate = normalize_replan_candidate(
-        current_plan=current_plan,
+        current_plan=scientific_plan,
         candidate_plan=revised,
         completed_records=completed_records or [],
         context=context,
@@ -1747,18 +1749,17 @@ def _step_maybe_replan(
         locked_robustness_specs=locked_robustness_specs,
     )
     revised = normalized_candidate.plan
-
-    # Runtime replanning happens after the initial plan compiler.  Re-apply the
-    # same immutable scientific authority here so generic input-closure shaping
-    # cannot widen or otherwise drift a signed host-owned step.  Without this,
-    # a replanner could append plausible companion columns to an association
-    # model grid, make the exact owner decline it, and silently send the effect
-    # calculation back to generated code.
+    # Reapply signed scientific wiring after shaping and carry the reviewed
+    # delivery steps. Generic input closure must not drift either authority.
     try:
         revised, scientific_runtime_findings = (
             pipeline._scientific_runtime_authorities.bind_plan(revised, context=context)
         )
         pipeline._scientific_runtime_authorities.validate_plan(revised)
+        if delivery_steps:
+            if {step.step_id for step in revised.steps} & {step.step_id for step in delivery_steps}:
+                raise ValueError("revision reused a manuscript delivery step id")
+            revised = revised.model_copy(update={"steps": [*revised.execution_steps, *delivery_steps]})
     except (TypeError, ValueError) as exc:
         findings.extend(normalized_candidate.findings)
         findings.append(

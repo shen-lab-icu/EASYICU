@@ -152,6 +152,57 @@ def test_an_uncovered_row_survives_a_shared_quote(tmp_path, other):
     assert '"requirement_id":"r1"' in prompts[1]
 
 
+@pytest.mark.parametrize("same_identity", [False, True])
+def test_omitting_one_of_two_host_verified_rows_cannot_unlock_approval(tmp_path, same_identity):
+    quote = "Summarize afternoon recovery and graph the estimates"
+    analysis = {"kind": "analysis"}
+    delivery = {"kind": "delivery", "deliverable_kinds": ["figures"]}
+    covered = requirement(quote, disposition="covered", **(delivery if same_identity else analysis))
+    missing = requirement(quote.upper(), requirement_id="r2", **delivery)
+    result, prompts, notices = run_script(
+        tmp_path, ([covered, missing], NOT_COVERED),
+        ([{**covered, "id": "renumbered"}], "operator_plan_approval_required"),
+    )
+    with pytest.raises(ProgressivePlanCompileError) as error:
+        result()
+    assert error.value.reason_code == "progressive_question_requirement_repair_omitted"
+    assert error.value.easyicu_plan_repair["outcome"] == "repeated_failure"
+    assert len(prompts) == 2 and notices == [1]
+    assert '"requirement_id":"r2"' in prompts[1]
+
+
+@pytest.mark.parametrize("same_identity", [False, True])
+def test_resolving_one_host_verified_sibling_is_repair_progress(tmp_path, same_identity):
+    quote = "Summarize afternoon recovery and graph the estimates"
+    delivery = {"kind": "delivery", "deliverable_kinds": ["figures"]}
+    first = requirement(quote, **(delivery if same_identity else {"kind": "analysis"}))
+    second = requirement(quote.upper(), requirement_id="r2", **delivery)
+    fixed_first = {**first, "disposition": "covered", "id": "renumbered"}
+    result, prompts, notices = run_script(
+        tmp_path, ([first, second], NOT_COVERED),
+        ([second, fixed_first], NOT_COVERED),
+        ([fixed_first, {**second, "disposition": "covered"}], "operator_plan_approval_required"),
+    )
+    assert result() == ("operator_plan_approval_required", None)
+    assert len(prompts) == 3 and notices == [1, 2]
+    latest = json.loads(prompts[-1].split("\n", 1)[1])[-1]["requirements"]
+    assert [row["requirement_id"] for row in latest] == ["r2"]
+
+
+def test_an_unverified_claim_cannot_replace_previously_verified_requirement(tmp_path):
+    quote = "Describe whether temperature measurements were delayed"
+    covered = requirement(quote, kind="analysis", disposition="covered")
+    missing = requirement(quote, kind="analysis", requirement_id="r2")
+    claim = requirement(quote, kind="analysis", requirement_id="r3", disposition="capability_gap")
+    result, _, notices = run_script(
+        tmp_path, ([covered, missing], NOT_COVERED), ([covered, claim], GAP), ([covered, claim], GAP),
+    )
+    with pytest.raises(ProgressivePlanCompileError) as error:
+        result()
+    assert error.value.reason_code == "progressive_question_requirement_repair_omitted"
+    assert notices == [1, 2]
+
+
 def test_a_verified_row_satisfies_prior_feedback_in_any_row_order(tmp_path):
     quote = "Report the change in recovery probability"
     definition = requirement(quote, disposition="definition_only", requirement_id="r1", kind="definition")
@@ -334,7 +385,9 @@ def test_repair_uses_uncovered_clauses_and_preserves_explicit_exposure_choice(tm
     choice = requirement("Compare the two laboratory markers", requirement_id="r2", exposure_choice={"options": ["analyse_both"]})
     result, prompts, notices = run_script(
         tmp_path, ([first, choice], NOT_COVERED), ([second, choice], NOT_COVERED),
-        ([requirement(quote, disposition="covered"), choice], NOT_COVERED),
+        ([{**second, "disposition": "covered", "clauses": [
+            {**clause, "disposition": "covered"} for clause in second["clauses"]
+        ]}, choice], NOT_COVERED),
     )
     assert result() == (NOT_COVERED, None)
     assert len(notices) == 2
@@ -785,3 +838,50 @@ def test_a_real_pipeline_projects_the_terminal_repair_and_only_its_checkpoint(tm
     assert projected["run_id"] == pending.run_id
     assert projected["plan_repair"] == {"repairs": 1, "limit": 2, "outcome": "repeated_failure"}
     assert "source_run_manifest.json" in {row["artifact"] for row in projected["artifact_refs"]}
+
+
+@pytest.mark.parametrize("kind,quote", [
+    ("article_preview", "Provide a browser preview"),
+    ("manuscript_pdf", "Export a manuscript PDF"),
+    ("references", "提供参考文献清单"),
+    ("result_tables", "请提供结果表"),
+    ("figures", "Include the figures"),
+])
+def test_a_delivery_requirement_with_no_step_stays_not_covered(kind, quote):
+    item = QuestionRequirement(id="r1", kind="delivery", quote=quote, coverage="plan", deliverable_kinds=[kind])
+    plan = AnalysisPlan(research_question=quote, steps=[])
+    (judged,) = judge_question_requirements(
+        (item,), plan=plan, family_template=True, relatives=lambda _: frozenset(),
+        check_gap=lambda _: pytest.fail("no scientific gap was declared"),
+    )
+    assert judged.disposition == "not_covered" and judged.verified_by_host
+    assert judged.delivery is None
+    assert judged.row()["deliverable_kinds"] == [kind]
+
+
+def test_an_unanswered_methods_clause_cannot_disappear_from_its_row(tmp_path):
+    quote = "State the units and the observation window for the measurements"
+    units = {"quote": "the units", "disposition": "covered"}
+    window = {"quote": "the observation window", "disposition": "not_covered"}
+    row = requirement(quote, kind="analysis", clauses=[units, window])
+    result, _, notices = run_script(
+        tmp_path, ([row], NOT_COVERED),
+        ([{**row, "disposition": "covered", "clauses": [units]}], "operator_plan_approval_required"),
+    )
+    with pytest.raises(ProgressivePlanCompileError) as error:
+        result()
+    assert error.value.reason_code == "progressive_question_requirement_repair_omitted"
+    assert notices == [1]
+
+
+@pytest.mark.parametrize("draft_question, user_question, expected", [
+    ("Include a PDF alongside the ward summary", "Summarize recovery by ward.", []),
+    ("Summarize recovery by ward", "Summarize recovery by ward. Provide a PDF.", ["manuscript_pdf"]),
+])
+def test_host_delivery_uses_the_users_question_over_a_planner_rephrasing(draft_question, user_question, expected):
+    from easyicu.research_agent.planning.requirement_typing.delivery import bind_requested_host_delivery
+
+    # Simulate the legacy transport, which can return its own question text.
+    plan = AnalysisPlan(research_question=draft_question, steps=[])
+    bound = bind_requested_host_delivery(plan, question=user_question)
+    assert [step.host_delivery_kind for step in bound.steps] == expected

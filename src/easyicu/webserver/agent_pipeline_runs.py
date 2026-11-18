@@ -4287,6 +4287,8 @@ def _readiness_axes(run_dir: Path) -> Dict[str, Any]:
             "analysis_errors",
             "writer_stop",
             "manuscript_requested",
+            "host_delivery_steps",
+            "host_delivery_failure",
         )
         if key in merged
     }
@@ -4370,8 +4372,10 @@ def _gate_from_axes(axes: Mapping[str, Any], *, pending: bool) -> Dict[str, Any]
     from easyicu.research_agent.reporting.completion import completion_outcomes
 
     outcomes = completion_outcomes(axes, pending=pending)
-    status = "analysis_only" if outcomes["analysis_outcome"]["status"] == "completed" else "blocked"
-    reason = (
+    delivery_failure = axes.get("host_delivery_failure") if not pending else None
+    analysis_complete = outcomes["analysis_outcome"]["status"] == "completed"
+    status = "analysis_only" if analysis_complete and not delivery_failure else "blocked"
+    reason = delivery_failure or (
         "human_plan_review_required" if pending else
         "research_agent_pipeline_complete_human_interpretation_required"
         if status == "analysis_only" else "research_agent_pipeline_failed_closed"
@@ -4926,6 +4930,71 @@ def _system_validation_figure_gallery(
     }
 
 
+def _check_host_manuscript_delivery(
+    *,
+    run_dir: Path,
+    plan: Mapping[str, Any],
+    axes: Mapping[str, Any],
+    gate: Dict[str, Any],
+    manuscript_text: str,
+    provenance: Mapping[str, Any],
+    documents: List[Dict[str, Any]],
+    pdf_receipt: Optional[Dict[str, Any]],
+) -> set[str]:
+    from easyicu.research_agent.contracts.product_files import (
+        host_delivery_failure_code, host_delivery_owners, verified_host_deliveries,
+    )
+    from easyicu.research_agent.reporting.completion import completion_outcomes
+
+    owners = host_delivery_owners(plan)
+    if not owners and not plan:
+        owners = host_delivery_owners({"steps": [
+            {"host_delivery_kind": row.get("kind"), "step_id": row.get("step_id")}
+            for row in (axes.get("host_delivery_steps") or ()) if isinstance(row, Mapping)
+        ]})
+    if not owners:
+        return set()
+    verified = verified_host_deliveries(
+        run_dir, run_id=run_dir.name, plan_sha256=canonical_sha256(plan), owners=owners,
+    )
+    # Treat the public products as part of delivery too. Reuse the existing
+    # PDF and article-provenance readers, with the same verified bytes.
+    preview = verified.get("article_preview")
+    if preview and (
+        not manuscript_text.strip() or not provenance
+        or not preview["manuscript_scaffold_bound.md"].startswith(manuscript_text.encode("utf-8"))
+        or provenance != json.loads(preview["manuscript_provenance.json"])
+    ):
+        verified.pop("article_preview")
+    pdf = verified.get("manuscript_pdf")
+    if pdf and (
+        pdf_receipt != json.loads(pdf["manuscript_pdf_receipt.json"])
+        or not any(row["name"] == "manuscript_scaffold.pdf" and row["content"] == pdf["manuscript_scaffold.pdf"]
+                   for row in documents)
+    ):
+        verified.pop("manuscript_pdf")
+    if bibliography := verified.get("references"):
+        name = "manuscript_scaffold.bib"
+        documents[:] = [row for row in documents if row["name"] != name]
+        documents.append({"name": name, "content": bibliography[name], "media_type": _MANUSCRIPT_DOCUMENT_SPECS[name][0]})
+
+    failures = {kind: host_delivery_failure_code(kind) for kind in owners if kind not in verified}
+    gate["host_delivery_steps"] = [
+        {"kind": kind, "step_id": step_id, "status": "verified" if kind in verified else "unverified",
+         "reason_code": failures.get(kind)}
+        for kind, step_id in owners.items()
+    ]
+    if failures:
+        reason = next(iter(failures.values()))
+        gate.update(completion_outcomes({**axes, "host_delivery_failure": reason}))
+        gate.update(status="blocked", reason=reason, reportable=False, draft_unlocked=False)
+        gate["manuscript_detail"] = {"reason_code": reason}
+        for check in gate["checks"]:
+            if check["id"] in {"manuscript_ready", "publication_ready", "paper_authorized"}:
+                check.update(passed=False, reason=reason)
+    return set(failures)
+
+
 def _projection_time_window_hours(study: Mapping[str, Any]) -> Optional[float]:
     """Project an explicit study window without inventing Planner authority."""
 
@@ -5085,13 +5154,6 @@ def _write_projection(
         plan_recommendation_complete=plan_recommendation_complete,
         population_acceptance=population_acceptance,
     )
-    scientific_readiness = build_scientific_readiness_projection(
-        run_id=run_id,
-        run_dir=run_dir,
-        axes=axes,
-        literature_evidence=literature_evidence,
-        study=study,
-    ).model_dump(mode="json")
     manuscript_path = run_dir / "manuscript_scaffold_bound.md" if run_dir else None
     manuscript_text = ""
     if manuscript_path is not None:
@@ -5147,7 +5209,38 @@ def _write_projection(
         _read_json(run_dir / "evidence" / "evidence_index.json", []) if run_dir else []
     )
     evidence_count = len(evidence_index) if isinstance(evidence_index, list) else 0
-    pdf_receipt, manuscript_documents = _validated_manuscript_documents(run_dir)
+    from easyicu.research_agent.contracts.product_files import host_delivery_owners
+
+    delivery_active = run_dir is not None and pending is None and not blocked_reason
+    try:
+        pdf_receipt, manuscript_documents = _validated_manuscript_documents(run_dir)
+    except ResearchPipelineRunError:
+        if not delivery_active or "manuscript_pdf" not in host_delivery_owners(plan):
+            raise
+        pdf_receipt, manuscript_documents = None, []
+    if delivery_active:
+        failed_deliveries = _check_host_manuscript_delivery(
+            run_dir=run_dir, plan=plan, axes=axes, gate=gate, manuscript_text=manuscript_text,
+            provenance=manuscript_provenance, documents=manuscript_documents, pdf_receipt=pdf_receipt,
+        )
+        if failed_deliveries:
+            axes = {**axes, "manuscript_ready": False, "publication_ready": False, "paper_authorized": False}
+        if "article_preview" in failed_deliveries:
+            manuscript_text, manuscript_provenance, claims = "", {}, []
+        if "manuscript_pdf" in failed_deliveries:
+            pdf_receipt = None
+            manuscript_documents = [row for row in manuscript_documents if row["name"] not in {
+                "manuscript_scaffold.pdf", "manuscript_scaffold.tex",
+            }]
+        if "references" in failed_deliveries:
+            manuscript_documents = [row for row in manuscript_documents if row["name"] != "manuscript_scaffold.bib"]
+    scientific_readiness = build_scientific_readiness_projection(
+        run_id=run_id,
+        run_dir=run_dir,
+        axes=axes,
+        literature_evidence=literature_evidence,
+        study=study,
+    ).model_dump(mode="json")
     pending_requests = []
     if pending is not None:
         pending_requests = [
@@ -5371,13 +5464,11 @@ def _write_projection(
         system_validation_html = None
     for name, payload in payloads.items():
         _write_json(wrapper_dir / name, payload)
-    # A resumed/reprojected wrapper may predate this pass.  Fixed document names
-    # are removed before the newly validated set is copied so a missing, stale,
-    # or privacy-withheld receipt can never leave an older PDF reachable.
-    for document_name in _RUN_DOCUMENT_SPECS:
-        stale = wrapper_dir / document_name
-        if stale.exists() or stale.is_symlink():
-            stale.unlink()
+    # A resumed wrapper can still contain exports from its last projection.
+    # Purge those without a current validated document or JSON payload.
+    for name in (*_RUN_DOCUMENT_SPECS, "manuscript_provenance.json", "manuscript_pdf_receipt.json"):
+        if name not in payloads:
+            (wrapper_dir / name).unlink(missing_ok=True)
     document_rows: List[Dict[str, Any]] = []
     if privacy_scan["passed"]:
         for document in manuscript_documents:

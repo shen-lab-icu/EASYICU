@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+from collections import Counter, defaultdict
 from contextvars import ContextVar
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -19,7 +20,7 @@ from ..providers.structured_retry import automatic_retry_limit
 
 PLAN_REPAIR_LIMIT = 2
 _T = TypeVar("_T")
-_RequirementKey = tuple[str, str]
+_RequirementKey = tuple[str, str, tuple[str, ...], str, tuple[str, ...]]
 
 
 class PlanRepairReceipt(TypedDict):
@@ -35,12 +36,20 @@ class _RequirementRepair(TypedDict):
     host_verdict: str
     host_fact: str | None
     reason_code: NotRequired[str]
+    kind: NotRequired[str]
+    deliverable_kinds: NotRequired[Sequence[str]]
     effect_measure: NotRequired[str]
+    clause_quotes: NotRequired[Sequence[str]]
     uncovered_clauses: NotRequired[tuple[str, ...]]
 
 
 def _requirement_key(row: Mapping[str, Any]) -> _RequirementKey:
-    return normalize_question_quote(row["quote"]), row.get("effect_measure") or ""
+    clauses = row.get("clause_quotes") or [clause["quote"] for clause in row.get("clauses", ())]
+    return (
+        normalize_question_quote(row["quote"]), row.get("kind") or "",
+        tuple(sorted(row.get("deliverable_kinds") or ())), row.get("effect_measure") or "",
+        tuple(sorted(map(normalize_question_quote, clauses))),
+    )
 
 
 def plan_repair_receipt(error: BaseException) -> PlanRepairReceipt | None:
@@ -62,15 +71,15 @@ class _Feedback:
     check: Mapping[str, Any] | None = None
 
     @property
-    def signature(self) -> tuple[str, tuple[tuple[str, str, str], ...]]:
-        # The Planner can reassign IDs. Quotes, measures and uncovered clauses
-        # identify the host's unmet requirements across drafts.
-        uncovered = {
-            (*_requirement_key(row), normalize_question_quote(quote))
+    def signature(self) -> tuple[str, tuple[tuple[_RequirementKey, str], ...]]:
+        # The Planner can reassign IDs. Retain the multiplicity of unmet rows
+        # and clauses so that resolving one of several siblings is progress.
+        uncovered = sorted(
+            (_requirement_key(row), normalize_question_quote(quote))
             for row in self.requirements
             for quote in (row.get("uncovered_clauses") or (row["quote"] or row.get("reason_code", ""),))
-        }
-        return self.code, tuple(sorted(uncovered))
+        )
+        return self.code, tuple(uncovered)
 
     def payload(self) -> dict[str, Any]:
         if self.check is not None:
@@ -86,7 +95,9 @@ class _RetryPlan(Exception):
 class _Repair:
     limit: int
     history: list[_Feedback] = field(default_factory=list)
-    required: dict[_RequirementKey, _RequirementRepair] = field(default_factory=dict)
+    required: dict[_RequirementKey, list[_RequirementRepair]] = field(default_factory=dict)
+    row_counts: Counter[_RequirementKey] = field(default_factory=Counter)
+    verified_counts: Counter[_RequirementKey] = field(default_factory=Counter)
     receipt: PlanRepairReceipt | None = None
     planner_started: bool = False
 
@@ -133,34 +144,48 @@ def check_plan_requirements_for_repair(run_dir: Path, requests: Sequence[HumanRe
     path = run_dir / QUESTION_REQUIREMENTS_REVIEW_FILENAME
     record = json.loads(path.read_text(encoding="utf-8")) if path.is_file() else {}
     rows = record.get("judged", ())
-    unresolved: list[_RequirementRepair] = []
+    present: Counter[_RequirementKey] = Counter()
+    verified: Counter[_RequirementKey] = Counter()
+    unresolved: dict[_RequirementKey, list[_RequirementRepair]] = defaultdict(list)
     for row in rows:
         if row.get("exposure_choice"):
             continue  # This changes the estimand and requires a human choice.
         verdict = row.get("gap_verification")
-        uncovered = row["disposition"] == "not_covered" and row.get("verified_by_host") is True
+        host_verified = row.get("verified_by_host") is True
+        uncovered = row["disposition"] == "not_covered" and host_verified
         unverified_gap = row["disposition"] == "capability_gap" and verdict != "verified"
+        key = _requirement_key(row)
+        if host_verified:
+            verified[key] += 1
+        if host_verified or unverified_gap:
+            present[key] += 1
         if uncovered or unverified_gap:
-            unresolved.append({
+            unresolved[key].append({
                 "requirement_id": row["id"], "quote": row["quote"], "gap": row.get("gap"),
                 "host_verdict": verdict or "not_covered", "host_fact": row.get("gap_fact"),
                 **({"reason_code": row["reason_code"]} if row.get("reason_code") else {}),
+                **({"kind": row["kind"]} if row.get("kind") else {}),
+                **({"deliverable_kinds": row["deliverable_kinds"]} if row.get("deliverable_kinds") else {}),
                 **({"effect_measure": row["effect_measure"]} if row.get("effect_measure") else {}),
+                "clause_quotes": tuple(clause["quote"] for clause in row.get("clauses", ())),
                 "uncovered_clauses": tuple(
                     clause["quote"] for clause in row.get("clauses", ())
                     if clause["disposition"] == "not_covered"
                 ),
             })
-    present = {_requirement_key(row) for row in rows if row.get("verified_by_host") is True}
-    unresolved_by_key = {_requirement_key(row): row for row in unresolved}
-    omitted = [
-        prior for key, prior in state.required.items()
-        if key not in present and key not in unresolved_by_key
-    ]
-    # Some host checks report an extra effect measure that the user never
-    # requested. Feed it back but let the next plan remove it.
-    state.required.update({key: row for key, row in unresolved_by_key.items() if key[0]})
-    pending = (*unresolved, *omitted)
+    omitted = []
+    for key, prior in state.required.items():
+        missing_count = max(
+            state.row_counts[key] - present[key],
+            state.verified_counts[key] - verified[key],
+        )
+        omitted.extend(prior[min(index, len(prior) - 1)] for index in range(missing_count))
+    state.row_counts |= present
+    state.verified_counts |= verified
+    # An extra effect measure with no quote can be removed when the host
+    # confirms the user never requested it.
+    state.required.update({key: items for key, items in unresolved.items() if key[0]})
+    pending = (*(item for items in unresolved.values() for item in items), *omitted)
     if not pending:
         return
     feedback = _Feedback(QUESTION_REQUIREMENT_APPROVAL_STOPS["not_covered"], pending)
@@ -176,12 +201,15 @@ def check_plan_requirements_for_repair(run_dir: Path, requests: Sequence[HumanRe
         raise error
 
 
-def _check_feedback(check: Mapping[str, Any], required: dict[_RequirementKey, _RequirementRepair]) -> _Feedback:
+def _check_feedback(check: Mapping[str, Any], state: _Repair) -> _Feedback:
     receipt = dict(check)
     requirement = receipt.pop("requirement", None)
     rows = ()
     if requirement is not None:
-        required[_requirement_key(requirement)] = requirement
+        key = _requirement_key(requirement)
+        if key[0]:
+            state.required.setdefault(key, [requirement])
+            state.row_counts[key] = max(state.row_counts[key], 1)
         rows = (requirement,)
     return _Feedback(str(check["reason_code"]), requirements=rows, check=receipt)
 
@@ -212,7 +240,7 @@ def run_plan_with_repairs(
                 check = check_failure(error)
                 if not check:
                     raise
-                if not state.retry(_check_feedback(check, state.required)):
+                if not state.retry(_check_feedback(check, state)):
                     error.easyicu_plan_repair = state.receipt
                     raise
             # Report the repair before sending another Planner request. A

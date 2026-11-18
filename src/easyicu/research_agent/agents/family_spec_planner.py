@@ -1091,7 +1091,8 @@ def check_question_requirement_gaps(
                 cause_code=item.gap.requirement,
             )
             error.easyicu_question_requirement_gap = {
-                "requirement_id": item.id, "quote": item.quote,
+                "requirement_id": item.id, "quote": item.quote, "kind": item.kind,
+                **({"effect_measure": item.effect_measure} if item.effect_measure else {}),
                 "gap": item.gap.model_dump(mode="json"),
                 "host_verdict": check.verification, "host_fact": check.fact,
             }

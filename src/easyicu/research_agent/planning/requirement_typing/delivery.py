@@ -8,7 +8,9 @@ from ...contracts.descriptive_execution import exposure_outcome_distribution_exe
 from ...contracts.model_terms import PreparationRefusal, preparation_for_step
 from ...contracts.primary_cohort import primary_analysis_cohort_producer_uses_universe
 from ...contracts.prediction_subgroup import prediction_subgroup_step_matches
-from ...contracts.product_files import DeliverableKind, RUN_DELIVERY_SCHEMA_VERSION, host_delivery_coverage
+from ...contracts.product_files import (
+    DeliverableKind, RUN_DELIVERY_SCHEMA_VERSION, host_delivery_coverage, requested_host_delivery_kinds,
+)
 from ...contracts.product_identity import is_canonical_typed_product_token, typed_product
 from ..question_quote import normalize_question_quote
 from ..scientific_action_catalog import scientific_action_for_id
@@ -131,20 +133,39 @@ def _owns(kind: PlanDeliverableKind, step: AnalysisStep, plan: AnalysisPlan) -> 
     )
 
 
+def bind_requested_host_delivery(plan: AnalysisPlan, *, question: str | None = None) -> AnalysisPlan:
+    """Append the requested terminal steps to the scientific plan."""
+    from ...schema import AnalysisStep
+
+    kinds = requested_host_delivery_kinds(plan.research_question if question is None else question)
+    executable = plan.execution_steps
+    if not kinds and len(executable) == len(plan.steps):
+        return plan
+    used_ids = {step.step_id for step in executable}
+    intents = {
+        "article_preview": "Deliver the evidence-bound article preview",
+        "manuscript_pdf": "Deliver the compiled manuscript PDF",
+        "references": "Deliver the run's bibliography",
+    }
+    added = []
+    for kind in kinds:
+        step_id = f"host_delivery_{kind}"
+        while step_id in used_ids:
+            step_id += "_host"
+        added.append(AnalysisStep(step_id=step_id, intent=intents[kind], host_delivery_kind=kind))
+    return plan.model_copy(update={"steps": [*executable, *added]})
+
+
 def planned_run_delivery_evidence(
     kinds: Sequence[DeliverableKind], *, plan: AnalysisPlan,
 ) -> dict[str, object] | None:
     """Bind each run deliverable to the plan that this judgment will review."""
     product_kinds: dict[DeliverableKind, str] = {"figures": "figure", "result_tables": "table"}
-    # Manuscript preview, PDF and bibliography have no typed plan-step
-    # owner. A downstream file format alone grants no plan coverage.
-    if not all(kind in product_kinds for kind in kinds):
-        return None
     return host_delivery_coverage({
         kind: [
             step.step_id for step in plan.steps
-            if any(
-                is_canonical_typed_product_token(output) and output.partition(":")[0] == product_kinds[kind]
+            if step.host_delivery_kind == kind or any(
+                is_canonical_typed_product_token(output) and output.partition(":")[0] == product_kinds.get(kind)
                 for output in step.expected_outputs
             )
         ]

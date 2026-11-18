@@ -760,6 +760,7 @@ class JudgedRequirement:
 
     def row(self) -> dict[str, Any]:
         item = self.requirement
+        deliverable_kinds = requirement_delivery_kinds(item)
         return {
             "id": item.id,
             "kind": item.kind,
@@ -781,6 +782,7 @@ class JudgedRequirement:
             # Only a requirement that names a measure carries it, so the rows
             # of every other requirement keep their recorded bytes.
             **({"effect_measure": item.effect_measure} if item.effect_measure else {}),
+            **({"deliverable_kinds": list(deliverable_kinds)} if deliverable_kinds else {}),
             **({"delivery": dict(self.delivery)} if self.delivery is not None else {}),
             **({"clauses": list(self.clauses)} if self.clauses else {}),
             **({"exposure_choice": dict(self.exposure_choice)} if self.exposure_choice else {}),

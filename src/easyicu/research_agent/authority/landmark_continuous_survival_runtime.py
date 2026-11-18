@@ -431,7 +431,7 @@ class LandmarkContinuousSurvivalRuntimeAuthority(BaseModel):
     def governed_step(self, plan: AnalysisPlan) -> AnalysisStep:
         """Return the deterministic analysis owner after validating the suite."""
 
-        if len(plan.steps) != 3:
+        if len(plan.execution_steps) != 3:
             raise ContinuousSurvivalAuthorityError(
                 "continuous survival suite must have cohort, analysis and figure owners"
             )

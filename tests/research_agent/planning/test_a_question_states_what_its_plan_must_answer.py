@@ -614,47 +614,66 @@ def test_only_a_verified_gap_can_stop_the_plan_as_a_capability_gap(
     assert uncovered.message.endswith(row["gap_fact"] + ".")
 
 
-@pytest.mark.parametrize("quote, covered", [
-    ("web article preview and downloadable PDF", False),
-    ("网页文章预览、可下载的 PDF", False),
-    ("result tables, figures and reference list", False),
-    ("结果表、图表、正文、引用", False),
-    ("Include the result tables", True),
-    ("请提供结果表", True),
+@pytest.mark.parametrize("quote, kinds", [
+    ("web article preview and downloadable PDF", ("article_preview", "manuscript_pdf")),
+    ("网页文章预览、可下载的 PDF", ("article_preview", "manuscript_pdf")),
+    ("result tables, figures and reference list", ("result_tables", "figures", "references")),
+    ("结果表、图表、正文、引用", ("result_tables", "figures", "article_preview", "references")),
+    ("Include the result tables", ("result_tables",)),
+    ("请提供结果表", ("result_tables",)),
 ])
 @pytest.mark.parametrize("kind", ["analysis", "delivery"])
-def test_host_delivery_checks_the_plan_owner_and_records_why(tmp_path, quote, covered, kind) -> None:
+def test_host_delivery_checks_the_plan_owner_and_records_why(tmp_path, quote, kinds, kind) -> None:
     context = _context(named=False).model_copy(update={"research_question": _QUESTION + " " + quote})
     claim = {**_UNCHECKABLE, "kind": kind, "quote": quote}
     result = _planned(context, [claim])
     findings = question_requirement_outcome(
-        context=context, plan=result.output, facts=result.facts, run_dir=tmp_path,
+        context=context, plan=result.output, run_dir=tmp_path, facts=result.facts,
     )
     record = json.loads((tmp_path / QUESTION_REQUIREMENTS_FILENAME).read_text())
-    assert record["stated"][0] == claim  # Keep the original claim for audit.
+    assert record["stated"][0] == claim
     (row,) = record["judged"]
-    assert row["disposition"] == ("covered" if covered else "not_covered")
+    assert row["disposition"] == "covered"
     assert row["claimed_coverage"] == "capability_gap"
     assert row["host_judged"] is row["verified_by_host"] is True
     assert row["gap"] == claim["gap"]
-    assert record["coverage"]["complete"] is covered
-    if covered:
-        assert row["reason_code"] == "question_requirement_covered_by_host_delivery"
-        assert row["delivery"]["source"] == "host_verified"
-        assert row["delivery"]["contract"] == "easyicu.run_delivery/1"
-        assert row["delivery"]["deliverable_kinds"] == ["result_tables"]
-        owners = row["delivery"]["owner_step_ids_by_kind"]["result_tables"]
-        assert owners
-        (coverage,) = record["coverage"]["records"]
-        assert coverage["delivery_kind"] == coverage["concept_identity"] == "result_tables"
-        assert coverage["owner_step_ids"] == owners
-    else:
-        assert "delivery" not in row
-    stops = [] if covered else ["question_requirement_not_covered"]
-    assert _question_stops(findings) == stops
+    assert record["coverage"]["complete"] is True
+    assert row["reason_code"] == "question_requirement_covered_by_host_delivery"
+    assert row["delivery"]["source"] == "host_verified"
+    assert row["delivery"]["contract"] == "easyicu.run_delivery/1"
+    assert set(row["delivery"]["deliverable_kinds"]) == set(kinds)
+    steps = {step.step_id: step for step in result.output.steps}
+    owners = row["delivery"]["owner_step_ids_by_kind"]
+    assert set(owners) == set(kinds)
+    for coverage in record["coverage"]["records"]:
+        delivery = coverage["delivery_kind"]
+        assert coverage["concept_identity"] == delivery
+        assert coverage["owner_step_ids"] == owners[delivery]
+        assert owners[delivery] and set(owners[delivery]) <= steps.keys()
+        if delivery in {"article_preview", "manuscript_pdf", "references"}:
+            assert [steps[owner].host_delivery_kind for owner in owners[delivery]] == [delivery]
+    assert _question_stops(findings) == []
     reviewed = judge_recorded_requirements(record, plan=result.output)
     assert reviewed.record["judged"] == record["judged"]
-    assert _question_stops(reviewed.findings()) == stops
+    assert _question_stops(reviewed.findings()) == []
+
+
+@pytest.mark.parametrize("question,kinds", [
+    ("Describe shift recovery. Please include a browser preview, a PDF and a bibliography.",
+     ("article_preview", "manuscript_pdf", "references")),
+    ("请描述值班期间的康复情况。请提供在线预览、PDF和参考文献列表。",
+     ("article_preview", "manuscript_pdf", "references")),
+    ("Describe the recovery rates by shift.", ()),
+    ("请描述不同班次的康复率。", ()),
+    ("Describe shift recovery. Do not provide a PDF or bibliography.", ()),
+    ("请描述康复率。不需要PDF或参考文献。", ()),
+])
+def test_the_planner_adds_host_steps_only_when_the_question_requests_them(question, kinds):
+    context = _context(named=False).model_copy(update={"research_question": question})
+    result = _planned(context, [])
+    owners = [step for step in result.output.steps if getattr(step, "host_delivery_kind", None)]
+    assert [step.host_delivery_kind for step in owners] == list(kinds)
+    assert len({step.step_id for step in owners}) == len(kinds)
 
 
 @pytest.mark.parametrize("quote", [
@@ -680,7 +699,7 @@ def test_delivery_words_cannot_hide_a_method_or_unavailable_delivery_gap(quote, 
     ]
 
 
-def test_typed_delivery_requires_an_owner_even_without_neutral_wording(monkeypatch) -> None:
+def test_typed_delivery_uses_the_host_contract_independently_of_wording(monkeypatch) -> None:
     quote = "give me a typeset copy of the article"
     context = _context(named=False).model_copy(update={"research_question": _QUESTION + " " + quote})
     claim = {**_UNCHECKABLE, "kind": "delivery", "quote": quote,
@@ -699,7 +718,9 @@ def test_typed_delivery_requires_an_owner_even_without_neutral_wording(monkeypat
         result.facts.question_requirements, plan=result.output, family_template=True,
         relatives=concept_relatives(context), check_gap=_host_check(context),
     )
-    assert judged.disposition == "not_covered"
+    assert judged.disposition == "covered"
+    (owner_id,) = judged.delivery["owner_step_ids_by_kind"]["manuscript_pdf"]
+    assert next(step for step in result.output.steps if step.step_id == owner_id).host_delivery_kind == "manuscript_pdf"
     with pytest.raises(ValidationError, match="only a delivery requirement"):
         QuestionRequirement.model_validate({**claim, "kind": "analysis", "quote": "fit an unsupported joint model"})
     with pytest.raises(ValidationError, match="not scientific concepts"):

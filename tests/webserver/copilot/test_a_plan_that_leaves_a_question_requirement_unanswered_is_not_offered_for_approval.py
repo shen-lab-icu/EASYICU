@@ -134,16 +134,21 @@ def test_the_registry_holds_the_owners_stops() -> None:
     assert set(_STOPS) <= agent_routes._CANDIDATE_PLAN_WORKFLOW_CODES
 
 
-@pytest.mark.parametrize("quote, allowed", [
-    ("Include the result tables", True),
-    ("web article preview and downloadable PDF", False),
-    ("fit an unsupported joint model and provide a PDF", False),
+@pytest.mark.parametrize("quote, include_owner, allowed", [
+    ("Include the result tables", False, True),
+    ("web article preview and downloadable PDF", True, True),
+    ("web article preview and downloadable PDF", False, False),
+    ("fit an unsupported joint model and provide a PDF", True, False),
 ])
-def test_approval_checks_the_delivery_owner_and_the_scientific_gap(quote, allowed) -> None:
+def test_approval_checks_the_delivery_owner_and_the_scientific_gap(quote, include_owner, allowed) -> None:
+    from easyicu.research_agent.planning.requirement_typing.delivery import bind_requested_host_delivery
+
     plan = AnalysisPlan(research_question=quote, steps=[AnalysisStep(
         step_id="primary", intent="Describe the synthetic cohort", method="descriptive",
         inputs=[], expected_outputs=["table:summary"],
     )])
+    if include_owner:
+        plan = bind_requested_host_delivery(plan)
     requirement = QuestionRequirement(
         id="r1", kind="analysis", quote=quote, coverage="capability_gap",
         gap={"requirement": "design_element_unsupported", "element": "analysis",
@@ -154,6 +159,9 @@ def test_approval_checks_the_delivery_owner_and_the_scientific_gap(quote, allowe
         relatives=lambda concept: frozenset({concept}),
         check_gap=lambda gap: ("unverifiable", "No scientific capability evidence."),
     )
+    if include_owner and allowed:
+        owners = judged[0].delivery["owner_step_ids_by_kind"]
+        assert owners == {step.host_delivery_kind: [step.step_id] for step in plan.steps if step.host_delivery_kind}
     requests = human_review_requests_for_plan(
         findings=question_requirement_findings(judged), plan=plan, require_plan_review=True,
     )
