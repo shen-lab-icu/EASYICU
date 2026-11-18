@@ -20,6 +20,7 @@ import pandas as pd
 
 from .datasource import ICUDataSource
 from .concept import ConceptResolver, ConceptDictionary, defer_until_resolver_idle, resolver_is_idle
+from .concept.availability_signal import TypedAbsenceSink
 from .value_failures import TYPED_VALUE_FAILURES
 from .resolver_pool import ResolverPool, call_resolver, resolver_call_scope
 from .storage_binding import binding_unit, child_binding, in_binding_unit
@@ -1201,6 +1202,10 @@ class BaseICULoader:
                 blas_state = self._limit_blas_threads()
             try:
                 if backend == "process":
+                    absence_sink = extra_kwargs.get("_typed_absence_sink")
+                    worker_kwargs = dict(extra_kwargs)
+                    if absence_sink is not None:
+                        worker_kwargs["_typed_absence_sink"] = TypedAbsenceSink()
                     worker_payload = {
                         "database": self.database,
                         "data_path": str(self.data_path) if self.data_path is not None else None,
@@ -1229,14 +1234,16 @@ class BaseICULoader:
                                     merge,
                                     r_compatible,
                                     concept_workers,
-                                    extra_kwargs,
+                                    worker_kwargs,
                                 ),
                             ): idx
                             for idx, batch_ids in enumerate(batches, start=1)
                         }
                         for future in as_completed(future_map):
                             idx = future_map[future]
-                            chunk_result = future.result()
+                            chunk_result, absence_codes = future.result()
+                            if absence_sink is not None:
+                                absence_sink.observe(concepts, absence_codes)
                             _accumulate(chunk_result)
                             if progress:
                                 pct = (idx / total_batches) * 100.0
@@ -1396,8 +1403,10 @@ def _init_parallel_chunk_worker(payload: Dict[str, Any]) -> None:
     loader._thread_local_resolver = threading.local()
     _PROCESS_WORKER_LOADER = loader
 
-def _process_chunk_task(args: tuple) -> Union[pd.DataFrame, Dict[str, pd.DataFrame]]:
-    """Execute a patient chunk inside a worker process."""
+def _process_chunk_task(
+    args: tuple,
+) -> tuple[Union[pd.DataFrame, Dict[str, pd.DataFrame]], dict[str, str]]:
+    """Execute a patient chunk and return its typed absence receipts."""
     if _PROCESS_WORKER_LOADER is None:
         raise RuntimeError("Chunk worker not initialized")
 
@@ -1417,7 +1426,7 @@ def _process_chunk_task(args: tuple) -> Union[pd.DataFrame, Dict[str, pd.DataFra
     batch_loader = _PROCESS_WORKER_LOADER._create_loader_clone()
     try:
         with binding_unit(_PROCESS_WORKER_STAY_BINDING):
-            return batch_loader._load_concepts_once(
+            result = batch_loader._load_concepts_once(
                 concepts,
                 batch_ids,
                 interval,
@@ -1431,5 +1440,7 @@ def _process_chunk_task(args: tuple) -> Union[pd.DataFrame, Dict[str, pd.DataFra
                 preserve_cache=False,
                 resolver=batch_loader.concept_resolver,
             )
+        absence_sink = extra_kwargs.get("_typed_absence_sink")
+        return result, absence_sink.codes() if absence_sink is not None else {}
     finally:
         batch_loader.clear_cache()

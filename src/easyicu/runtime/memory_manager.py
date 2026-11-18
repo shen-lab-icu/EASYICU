@@ -22,6 +22,7 @@ import gc
 import sys
 import time
 import ctypes
+import json
 import logging
 import tempfile
 from dataclasses import dataclass
@@ -775,6 +776,12 @@ def _subprocess_load_worker(args: dict) -> str:
     from easyicu.api import load_concepts as _load_concepts
     
     load_kwargs = dict(args.get('load_kwargs') or {})
+    absence_sink = None
+    if args.get("collect_typed_absences"):
+        from ..concept.availability_signal import TypedAbsenceSink
+
+        absence_sink = TypedAbsenceSink()
+        load_kwargs["_typed_absence_sink"] = absence_sink
 
     result = _load_concepts(
         concepts=args['concepts'],
@@ -791,6 +798,10 @@ def _subprocess_load_worker(args: dict) -> str:
     
     # 写入临时 parquet 文件
     output_prefix = args['output_prefix']
+    if absence_sink is not None:
+        Path(f"{output_prefix}.absences.json").write_text(
+            json.dumps(absence_sink.codes()), encoding="utf-8",
+        )
     if isinstance(result, pd.DataFrame) and len(result) > 0:
         result.to_parquet(f"{output_prefix}.parquet", index=False, engine='pyarrow')
     elif isinstance(result, dict):
@@ -999,6 +1010,7 @@ def subprocess_batch_load(
     num_batches = (total + batch_size - 1) // batch_size
     
     easyicu_data_path = os.environ.get('EASYICU_DATA_PATH', '')
+    absence_sink = kwargs.pop("_typed_absence_sink", None)
 
     # 检测是否在 daemon 进程中
     # daemon 进程不允许 mp.Process.start()，但 os.fork() 不受此限制
@@ -1040,6 +1052,7 @@ def subprocess_batch_load(
                 'dict_path': str(dict_path) if dict_path else None,
                 'use_sofa2': use_sofa2,
                 'load_kwargs': kwargs,
+                'collect_typed_absences': absence_sink is not None,
             }
             
             # 在子进程中运行
@@ -1074,6 +1087,10 @@ def subprocess_batch_load(
                 else:
                     exitcode = proc.exitcode
             
+            if absence_sink is not None:
+                receipt = Path(f"{output_prefix}.absences.json")
+                codes = json.loads(receipt.read_text(encoding="utf-8")) if exitcode == 0 and receipt.is_file() else {}
+                absence_sink.observe(concepts, codes)
             if exitcode != 0:
                 logger.warning(f"Batch {batch_num} subprocess exit code: {exitcode}")
                 if verbose:

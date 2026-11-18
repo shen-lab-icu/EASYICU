@@ -1536,6 +1536,17 @@ def require_export_time_window_authority(
         from easyicu.concept.catalog import C565_RENAL_HISTORY_CONCEPTS
 
         selected = selected_modules.get("c565_renal_history")
+        if isinstance(selected, list) and not selected:
+            # A structural placeholder has no selected physical concepts.
+            # Its unavailable-module receipt carries the requested grain.
+            unavailable = manifest.get("unavailable_modules")
+            if isinstance(unavailable, list):
+                receipts = [
+                    item for item in unavailable
+                    if isinstance(item, Mapping) and item.get("module") == "c565_renal_history"
+                ]
+                if len(receipts) == 1:
+                    selected = receipts[0].get("concept_ids")
         if isinstance(selected, list) and selected and all(
             concept in C565_RENAL_HISTORY_CONCEPTS for concept in selected
         ):

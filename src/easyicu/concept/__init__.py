@@ -39,6 +39,7 @@ from ..table import ICUTable, WinTbl
 from .callbacks import ConceptCallbackContext, execute_concept_callback
 from .availability_signal import (
     ConceptAvailabilityRecord,
+    TypedAbsenceSink,
     set_table_availability,
     table_availability,
 )
@@ -1862,6 +1863,7 @@ class ConceptResolver:
         _batch_loading: bool = False,  # 🔧 批量加载模式标志，减少诊断输出
         _skip_concept_cache: bool = False,  # 🔧 跳过概念缓存，用于回调内部加载
         availability_sink: Optional[MutableMapping[str, ConceptAvailabilityRecord]] = None,
+        _typed_absence_sink: Optional[TypedAbsenceSink] = None,
         **kwargs,  # Additional parameters for callbacks (e.g., win_length, worst_val_fun)
     ):
         names = [name for name in concept_names]
@@ -1876,7 +1878,15 @@ class ConceptResolver:
         db_name = config.name if hasattr(config, 'name') else 'unknown'
         if isinstance(data_source, ICUDataSource):
             from ..storage_layout import validate_concept_layouts
-            validate_concept_layouts(data_source, self.dictionary, names)
+            # The CareVue-only owners validate layouts after admitting the view
+            # and its resolved table targets.
+            preflight_names = names
+            if db_name in {"mimic", "mimic_demo"}:
+                preflight_names = [
+                    name for name in names
+                    if name != "fio2_set" and name not in _C565_RENAL_HISTORY_FIELDS
+                ]
+            validate_concept_layouts(data_source, self.dictionary, preflight_names)
         # Callbacks need to distinguish an observed empty component from an
         # absent source even when the caller did not request an audit sink.
         availability_context = (
@@ -2655,6 +2665,14 @@ class ConceptResolver:
                     )
                     concept_table._pre_aggregated = True
                     tables[concept_name] = concept_table
+
+            if _typed_absence_sink is not None:
+                reasons = {}
+                for name in names:
+                    receipt = table_availability(tables.get(name), name)
+                    if receipt is not None and receipt.evaluation_status == "not_evaluable" and receipt.reason_code:
+                        reasons[name] = receipt.reason_code
+                _typed_absence_sink.observe(names, reasons)
 
             if availability_sink is not None and availability_context is not None:
                 unavailable_by_table: Dict[str, List[str]] = {}

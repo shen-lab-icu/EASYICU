@@ -8,7 +8,9 @@ missing source tables into misleading "100% missing" claims.
 
 from __future__ import annotations
 
+from collections.abc import Iterable, Mapping
 from dataclasses import asdict, dataclass, field
+from threading import Lock
 from typing import Literal, Optional
 
 
@@ -77,6 +79,27 @@ def set_table_availability(table: object, record: ConceptAvailabilityRecord) -> 
     """Keep receipts JSON serializable, including when pandas writes Parquet."""
     frame = getattr(table, "data", table)
     frame.attrs["easyicu_availability"] = asdict(record)
+
+
+_ABSENCE_LOCK = Lock()
+
+
+class TypedAbsenceSink:
+    """Keep a reason only when every load of that concept agrees on it."""
+
+    def __init__(self) -> None:
+        self._observed: dict[str, str | None] = {}
+
+    def observe(self, concepts: Iterable[str], reasons: Mapping[str, str]) -> None:
+        with _ABSENCE_LOCK:
+            for concept in concepts:
+                reason = reasons.get(concept)
+                if self._observed.setdefault(concept, reason) != reason:
+                    self._observed[concept] = None
+
+    def codes(self) -> dict[str, str]:
+        with _ABSENCE_LOCK:
+            return {concept: reason for concept, reason in self._observed.items() if reason is not None}
 
 
 def status_for_availability_reason(
