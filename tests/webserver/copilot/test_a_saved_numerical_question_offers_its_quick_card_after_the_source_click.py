@@ -45,6 +45,7 @@ from tests.webserver.copilot.pi_copilot_contract_fixtures import FakeGateway
 APP_DIR = Path(__file__).resolve().parents[3] / "src" / "easyicu" / "webserver" / "pi_copilot" / "node_app"
 QUESTION = "在 eICU demo 中，入 ICU 第一天最高乳酸的中位数是多少？"
 TRANSITION = "EasyICU 已确认所选数据来源，请在当前对话中继续。"
+REVIEW_QUESTION = "Could you summarize typical peak lactate in the opening six hours?"
 
 
 def reading(question: str = QUESTION) -> dict[str, Any]:
@@ -63,6 +64,7 @@ class ModelGateway(FakeGateway):
         self.declines = False
         self.initial_fields: dict[str, Any] = {}
         self.repair_fields: dict[str, Any] | None = None
+        self.after_initial_reading = lambda _context: None
 
     def request(self, method: str, params: dict[str, Any], **kwargs: Any) -> dict[str, Any]:
         response = super().request(method, params, **kwargs)
@@ -72,9 +74,11 @@ class ModelGateway(FakeGateway):
             return response
         if method == "session.prompt" and context is not None and (offered or self.call_quick_answer_anyway):
             # The sidecar hands a host refusal back to the model as a tool error.
-            self.submit_reading(context, {**reading(offered or QUESTION), **self.initial_fields})
+            question = context.quick_question or QUESTION
+            self.submit_reading(context, {**reading(question), **self.initial_fields})
+            self.after_initial_reading(context)
             if self.submitted[-1].get("details", {}).get("reading_issues") and self.repair_fields is not None:
-                self.submit_reading(context, {**reading(offered or QUESTION), **self.repair_fields})
+                self.submit_reading(context, {**reading(question), **self.repair_fields})
         return response
 
     def submit_reading(self, context, request):
@@ -128,11 +132,7 @@ def typed_turn(service, record, text: str, *, job_id: str = "job-question", orig
                                      job_id=job_id, status="done", assistant_reply="研究问题已保存。")
 
 
-def confirm_source_and_continue(service, record) -> str:
-    submitted = service.send_message(
-        record.session_id, project_id=record.project_id, message=TRANSITION,
-        message_intent="advance_after_data_source_confirmation", message_origin="host_prompt",
-    )
+def wait_for_message(submitted) -> str:
     deadline = time.monotonic() + 30
     job = None
     while time.monotonic() < deadline:
@@ -142,6 +142,13 @@ def confirm_source_and_continue(service, record) -> str:
         time.sleep(0.02)
     assert job is not None and job.status == "done", job and (job.status, getattr(job, "error", None))
     return submitted["job_id"]
+
+
+def confirm_source_and_continue(service, record) -> str:
+    return wait_for_message(service.send_message(
+        record.session_id, project_id=record.project_id, message=TRANSITION,
+        message_intent="advance_after_data_source_confirmation", message_origin="host_prompt",
+    ))
 
 
 def prompts(gateway) -> list[dict[str, Any]]:
@@ -248,6 +255,72 @@ def test_a_re_read_without_a_valid_submission_leaves_a_handoff(conversation, rep
     proposal = card["proposal"]
     assert (proposal["status"], proposal["reason"]) == ("full_study", "quick_reading_concept_unregistered")
     assert proposal["expand"]["action"] == "expand_into_full_study"
+
+
+def configure_reading_repair(service, record, gateway, *, offered):
+    if offered:
+        study = study_contexts.upsert_context({"id": record.binding.study_context_id, "question": REVIEW_QUESTION})
+        record.binding = service._binding_for_context(study)
+        service._save_record(record)
+        typed_turn(service, record, REVIEW_QUESTION)
+    else:
+        gateway.call_quick_answer_anyway = True
+    measure = {**reading()["measure"], "window": {"start_hours": 0, "end_hours": 6}}
+    gateway.initial_fields = {"measure": {**measure, "concept": "quartz_metric_zz"}}
+    gateway.repair_fields = {"measure": measure}
+
+
+@pytest.mark.parametrize("offered", [True, False], ids=["source-confirmation", "direct"])
+def test_a_re_read_that_stops_does_not_write_the_original_handoff(conversation, monkeypatch, offered):
+    from easyicu.webserver.pi_copilot import quick_answers
+    from easyicu.webserver.quick_answer import QuickStop
+
+    service, record, gateway = conversation
+    configure_reading_repair(service, record, gateway, offered=offered)
+    original = quick_answers.prepare_registered_question
+    attempts = []
+
+    def prepare(reading, **kwargs):
+        attempts.append(reading.measure.concept)
+        if reading.measure.concept == "lact":
+            raise QuickStop("quick_qualifying_provider_required")
+        return original(reading, **kwargs)
+
+    monkeypatch.setattr(quick_answers, "prepare_registered_question", prepare)
+    if offered:
+        confirm_source_and_continue(service, record)
+    else:
+        wait_for_message(service.send_message(
+            record.session_id, project_id=record.project_id, message=REVIEW_QUESTION, message_origin="typed",
+        ))
+    assert [result["code"] for result in gateway.submitted] == [
+        "quick_reading_concept_unregistered", "quick_qualifying_provider_required",
+    ]
+    assert service.get_session(record.session_id, project_id=record.project_id)["session"]["quick_answers"] == []
+    assert attempts == ["quartz_metric_zz", "lact"]
+
+
+@pytest.mark.parametrize("change", ["study", "authority", "source"])
+def test_a_stale_re_read_leaves_no_handoff_and_the_message_finishes(conversation, change):
+    service, record, gateway = conversation
+    configure_reading_repair(service, record, gateway, offered=True)
+
+    def invalidate(context):
+        if change == "study":
+            study_contexts.upsert_context({"id": record.binding.study_context_id, "question": "A revised study question."})
+        elif change == "authority":
+            context.invalidate_authority("authority_changed_in_test")
+        else:
+            sources.load_registry()["sources"][0]["id"] = "src_replaced"
+
+    gateway.after_initial_reading = invalidate
+    if change == "source":
+        gateway.repair_fields = None
+    confirm_source_and_continue(service, record)
+    assert gateway.submitted[0]["code"] == "quick_reading_concept_unregistered"
+    if change != "source":
+        assert gateway.submitted[1]["code"] == "pi_session_authority_stale"
+    assert service.get_session(record.session_id, project_id=record.project_id)["session"]["quick_answers"] == []
 
 
 def test_a_registered_but_unassessed_concept_does_not_get_a_re_read(conversation, monkeypatch):

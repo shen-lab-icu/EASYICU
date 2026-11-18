@@ -270,6 +270,60 @@ function messageStream(message) {
   return stream;
 }
 
+function firstQuickAnswerCallIndex(message) {
+  return message?.stopReason === "toolUse" && Array.isArray(message.content)
+    ? message.content.findIndex(part => part?.type === "toolCall" && part.name === "easyicu_quick_answer")
+    : -1;
+}
+
+function singleQuickAnswer(message) {
+  const first = firstQuickAnswerCallIndex(message);
+  if (first < 0) return { message };
+  const indices = message.content.flatMap((part, index) => part?.type !== "toolCall" || index === first ? [index] : []);
+  return indices.length === message.content.length
+    ? { message }
+    : { message: { ...message, content: indices.map(index => message.content[index]) }, indices };
+}
+
+export function limitQuickAnswerToolStream(stream) {
+  return {
+    result: async () => singleQuickAnswer(await stream.result()).message,
+    async *[Symbol.asyncIterator]() {
+      // Keep ordinary text streaming. Wait to publish tool blocks until the
+      // complete batch tells us whether quick answer owns this assistant turn.
+      const pending = [];
+      for await (const event of stream) {
+        if (event.type === "done") {
+          const { message, indices } = singleQuickAnswer(event.message);
+          if (indices) {
+            for (const update of pending) {
+              const index = indices.indexOf(update.contentIndex);
+              if (index < 0) continue;
+              const partial = update.partial;
+              yield { ...update, contentIndex: index, ...(Array.isArray(partial?.content) && {
+                partial: { ...partial, content: indices.map(i => partial.content[i]).filter(Boolean) },
+              }) };
+            }
+          } else {
+            yield* pending;
+          }
+          pending.length = 0;
+          yield message === event.message ? event : { ...event, message };
+        } else if (event.type === "error") {
+          yield* pending;
+          pending.length = 0;
+          yield event;
+        } else if (pending.length || event.type.startsWith("toolcall_")) {
+          pending.push(event);
+        } else {
+          yield event;
+        }
+      }
+      yield* pending;
+    },
+  };
+}
+
 /**
  * Settle the model's decision on a quick-answer offer. Its own words are
  * never shown: the host's acknowledgement is the reply, followed by the first
@@ -292,9 +346,7 @@ export async function settleQuickAnswerOffer(model, open, reply, signal) {
     return stream;
   }
   const settled = { ...finalizedMessage(model, reply), usage: message?.usage ?? ZERO_USAGE };
-  const call = message?.stopReason === "toolUse" && Array.isArray(message.content)
-    ? message.content.find((part) => part?.type === "toolCall" && part.name === "easyicu_quick_answer")
-    : undefined;
+  const call = message.content?.[firstQuickAnswerCallIndex(message)];
   return call
     ? messageStream({ ...settled, content: [...settled.content, call], stopReason: "toolUse" })
     : messageStream(settled);
@@ -608,6 +660,28 @@ export function quickAnswerReadingNeedsRepair(result) {
     && result.details.details.reading_issues.length > 0;
 }
 
+function quickAnswerToolBatch(messages, end) {
+  let result;
+  while (messages[end - 1]?.role === "toolResult") {
+    const receipt = messages[--end];
+    if (!result && receipt.toolName === "easyicu_quick_answer") result = receipt;
+  }
+  return { result, assistantIndex: end - 1 };
+}
+
+export function quickAnswerTurn(context) {
+  const messages = context?.messages ?? [];
+  const { result, assistantIndex } = quickAnswerToolBatch(messages, messages.length);
+  const afterRepair = Boolean(result && messages[assistantIndex]?.role === "assistant"
+    && quickAnswerReadingNeedsRepair(quickAnswerToolBatch(messages, assistantIndex).result));
+  return { result, afterRepair, repair: !afterRepair && quickAnswerReadingNeedsRepair(result) };
+}
+
+function quickAnswerRefusalText(result, language) {
+  const code = boundedLabel(result.details?.code || "quick_reading_invalid");
+  return language === "zh" ? `快速回答已停止（${code}）。` : `The quick answer was stopped (${code}).`;
+}
+
 /**
  * Finalize the narrow initial-question save path from the typed EasyICU receipt.
  * The first provider call still interprets the user's question and invokes the
@@ -616,20 +690,20 @@ export function quickAnswerReadingNeedsRepair(result) {
  */
 export function hostPostToolFinalization(model, context, language) {
   const latest = context?.messages?.at(-1);
-  if (quickAnswerReadingNeedsRepair(latest)) return null;
-  if (latest?.role === "toolResult" && latest.toolName === "easyicu_quick_answer"
-      && quickAnswerReadingNeedsRepair(context.messages.at(-3))) {
-    return completedStream(finalizedMessage(model, ""));
-  }
-  const quick = latest?.details?.details?.quick_answer;
-  if (latest?.role === "toolResult" && latest.toolName === "easyicu_quick_answer"
-      && latest.isError !== true && quick?.proposal
+  const { result, afterRepair, repair } = quickAnswerTurn(context);
+  if (repair) return null;
+  const quick = result?.details?.details?.quick_answer;
+  if (result?.isError !== true && quick?.proposal
       && ["approval_required", "stopped", "full_study"].includes(quick.proposal.status)) {
     // The host owns the card, evidence and copy. End this turn without asking
     // a model to improvise an answer or turn chat agreement into approval.
     return completedStream(finalizedMessage(model, ""));
   }
-  if (latest?.role === "toolResult" && quickAnswerOffered(context)) {
+  const offered = latest?.role === "toolResult" && quickAnswerOffered(context);
+  if ((result?.isError === true || result?.details?.status === "blocked") && (!offered || afterRepair)) {
+    return completedStream(finalizedMessage(model, quickAnswerRefusalText(result, language)));
+  }
+  if (afterRepair || offered) {
     // The offer's acknowledgement is already written. A
     // call the host refused leaves the transition as it is without an offer.
     return completedStream(finalizedMessage(model, ""));

@@ -46,10 +46,11 @@ import { repairDraftOnce } from "./draft-repair.mjs";
 import {
   DATA_SOURCE_CONFIRMED_MARKER,
   hostPostToolFinalization,
+  limitQuickAnswerToolStream,
   QUICK_ANSWER_OFFER_MARKER,
   quickAnswerOfferReply,
   quickAnswerOfferRetryAvailable,
-  quickAnswerReadingNeedsRepair,
+  quickAnswerTurn,
   settleQuickAnswerOffer,
 } from "./post-tool-finalization.mjs";
 import {
@@ -1441,7 +1442,7 @@ async function createSession(params) {
       async () => {
         const hostFinalization = record.draftRepairActive ? null : hostPostToolFinalization(model, context, record.language);
         if (hostFinalization) return hostFinalization;
-        const repair = quickAnswerReadingNeedsRepair(context.messages?.at(-1));
+        const { repair } = quickAnswerTurn(context);
         if (repair) context = { ...context, tools: context.tools?.filter(tool => tool.name === "easyicu_quick_answer") };
         const open = () => retryTransientProviderStream(async () => {
           const reservation = record.budgetGuard.authorize(context, options);
@@ -1463,9 +1464,10 @@ async function createSession(params) {
         // The data-source transition's quick-answer offer: the model decides
         // whether to submit a reading; the host writes the reply.
         const offerReply = record.draftRepairActive || repair ? "" : quickAnswerOfferReply(context, record.language);
-        return repair || offerReply
-          ? await settleQuickAnswerOffer(model, open, offerReply, options.signal)
-          : await open();
+        if (repair || offerReply) return await settleQuickAnswerOffer(model, open, offerReply, options.signal);
+        const stream = await open();
+        return context.tools?.some(tool => tool.name === "easyicu_quick_answer")
+          ? limitQuickAnswerToolStream(stream) : stream;
       },
     );
     sessions.set(externalId, record);

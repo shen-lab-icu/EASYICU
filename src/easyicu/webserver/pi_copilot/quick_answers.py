@@ -15,7 +15,7 @@ from easyicu.webserver.quick_answer.contracts import QuickProposal, StudyHandoff
 from easyicu.webserver.quick_answer.preparation import prepare_registered_question
 from easyicu.webserver.study_question_wording import normalize_question_text
 
-from .contracts import PiToolResult, ToolExecutionContext, utc_now
+from .contracts import PiCopilotError, PiToolResult, ToolExecutionContext, utc_now
 from .quick_answer_store import QuickAnswerStore, QuickQuestionInput, error, public_attachment, source_record, stored_source
 
 
@@ -122,37 +122,54 @@ class QuickAnswerService:
         }
         return question if normalize_question_text(question) in typed else ""
 
+    def _quick_turn_source(self, context):
+        context.assert_authority_fresh()
+        record = self._scoped_record(context.session.session_id, project_id=context.session.project_id)
+        if record.binding != context.session.binding:
+            raise error("pi_session_authority_stale")
+        return record, self._quick_study(record)["data_source"]
+
     def _submit_quick_answer(self, context, reading, *, message_job_id):
         # The reading restates the turn's bound question: the typed message,
         # or the transition's saved question. A turn without one offers none.
         if not context.quick_question:
             raise error("quick_question_unbound")
-        record = self._scoped_record(context.session.session_id, project_id=context.session.project_id)
-        study = self._quick_study(record)
-        context.assert_authority_fresh()
-        source = study["data_source"]
         store = self._quick_store()
-        with store.lock(record.session_id), public_demo_egress_scope(source["path"]):
+        with store.lock(context.session.session_id):
             if context.quick_reading_repair_finished:
                 raise error("quick_reading_repair_exhausted")
+            repair = context.quick_reading_to_repair
+            # A repair that reaches the owner consumes the slot even if the
+            # owner stops. Schema validation and a decline happen before here.
+            context.quick_reading_repair_finished = repair is not None
+            record, source = self._quick_turn_source(context)
+            if repair is not None:
+                registered = sources.registered_source_identity(source["path"])
+                if registered is None or registered.to_dict() != repair[1]:
+                    raise error("quick_source_changed")
             identity = "qa_" + uuid4().hex
             directory = store.path(record.session_id, identity).parent
             try:
-                proposal, prepared = prepare_registered_question(
-                    reading, question=context.quick_question, export_path=source["path"],
-                    database=source["database"], output_dir=directory / "prepared",
-                    provider=self._quick_provider(record, source["database"]),
-                )
+                with public_demo_egress_scope(source["path"]):
+                    proposal, prepared = prepare_registered_question(
+                        reading, question=context.quick_question, export_path=source["path"],
+                        database=source["database"], output_dir=directory / "prepared",
+                        provider=self._quick_provider(record, source["database"]),
+                    )
             except QuickStop as exc:
                 raise error(exc.code) from exc
-            context.assert_authority_fresh()
-            if proposal.reading_issues and context.quick_reading_to_repair is None:
-                context.quick_reading_to_repair = reading
+            record, current_source = self._quick_turn_source(context)
+            registered = sources.registered_source_identity(current_source["path"])
+            bound_source = proposal.expand.source
+            if (current_source != source or registered is None or registered.to_dict() != bound_source
+                    or (repair is not None and repair[1] != bound_source)):
+                raise error("quick_source_changed")
+            if proposal.reading_issues and repair is None:
+                context.quick_reading_to_repair = (reading, bound_source)
                 return proposal
             # An unresolved reading after repair carries its own explanation
             # and expand action, including on the data-source transition.
             if context.quick_question_offered and proposal.status == "full_study" and not proposal.reading_issues:
-                context.quick_reading_repair_finished = context.quick_reading_to_repair is not None
                 return None
             row = {
                 "quick_answer_id": identity, "session_id": record.session_id,
@@ -162,14 +179,18 @@ class QuickAnswerService:
                 "answer": None, "created_at": utc_now(),
             }
             store.write(row)
-            context.quick_reading_repair_finished = context.quick_reading_to_repair is not None
         return public_attachment(row)
 
     def _finish_quick_reading_repair(self, context, *, message_job_id):
         # A re-read can decline or fail schema validation before reaching the
         # preparation owner. Give the original unresolved reading its handoff.
-        if context.quick_reading_to_repair is not None and not context.quick_reading_repair_finished:
-            self._submit_quick_answer(context, context.quick_reading_to_repair, message_job_id=message_job_id)
+        repair = context.quick_reading_to_repair
+        if repair is not None and not context.quick_reading_repair_finished:
+            try:
+                self._submit_quick_answer(context, repair[0], message_job_id=message_job_id)
+            except PiCopilotError:
+                # The handoff is optional and cannot outlive its authority.
+                return
 
     def _quick_row(self, record, quick_answer_id):
         study = self._quick_study(record)

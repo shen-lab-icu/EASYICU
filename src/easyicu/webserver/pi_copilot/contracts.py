@@ -529,7 +529,7 @@ class ToolExecutionContext:
         self.quick_question = self.user_message
         # True only for that transition: its study is already a full study.
         self.quick_question_offered = False
-        self.quick_reading_to_repair: QuickReading | None = None
+        self.quick_reading_to_repair: tuple[QuickReading, dict[str, str]] | None = None
         self.quick_reading_repair_finished = False
         self.bind_question_wording_context(
             user_turns if user_turns is not None else (
