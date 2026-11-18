@@ -43,8 +43,10 @@ from ..authority.numeric_claim_identity import (
     quantity_kind_refuses_claim,
     unnamed_fact_identity,
 )
-from ..contracts.manuscript_sentence_context import PROSE_SENTENCE_END
 from ..schema import ResearchContext
+from .manuscript_audit_repair import (
+    LOSS_STOP, SentenceSpan, sentence_deletion_edit, sentence_spans,
+)
 from .writer_repair_decision import coerce_writer_repair_decisions
 from .manuscript_sentence_context import contextual_sentence_deletion
 from .manuscript_surface import claim_token_stands_in_block
@@ -1740,7 +1742,6 @@ def _select_numeric_claim(
 
 _NUMERIC_PARAGRAPH_BOUNDARY = r"(?P<paragraph>\r?\n[^\S\r\n]*\r?\n)"
 _NUMERIC_SENTENCE_BOUNDARY_RE = re.compile(rf"[.!?](?=\s|$)|{_NUMERIC_PARAGRAPH_BOUNDARY}")
-_NUMERIC_REMOVAL_BOUNDARY_RE = re.compile(rf"{PROSE_SENTENCE_END.pattern}|{_NUMERIC_PARAGRAPH_BOUNDARY}")
 
 _EFFECT_SCALE_PHRASE_PATTERNS = {
     NumericEffectScale.ODDS_RATIO: re.compile(r"\bodds[\s-]+ratios?\b", re.I),
@@ -1948,17 +1949,12 @@ def _numeric_sentence_context(text: str, *, start: int, end: int) -> str:
 
 
 def _numeric_sentence_bounds(
-    text: str, *, start: int, end: int, for_removal: bool = False,
+    text: str, *, start: int, end: int,
 ) -> Tuple[int, int]:
-    """Locate binding context or the whole prose sentence for a rejected value."""
+    """Locate local evidence for STRICT numeric binding."""
 
     context_start = 0
-    boundaries = _NUMERIC_REMOVAL_BOUNDARY_RE if for_removal else _NUMERIC_SENTENCE_BOUNDARY_RE
-    # Abbreviation lookahead needs to see the text beyond the occurrence start.
-    prior = boundaries.finditer(text) if for_removal else boundaries.finditer(text, 0, start)
-    for match in prior:
-        if match.end() > start:
-            break
+    for match in _NUMERIC_SENTENCE_BOUNDARY_RE.finditer(text, 0, start):
         context_start = match.end()
     # The leading run of citations is KEPT, not skipped. Skipping it was a
     # symmetry argument, and canary39 refuted it on a real manuscript: the
@@ -1968,7 +1964,7 @@ def _numeric_sentence_bounds(
     # neighbouring runs stay in scope. That is safe because the restriction
     # below only ever NARROWS the candidate set: an extra citation costs recall,
     # it cannot by itself produce a wrong bind.
-    next_boundary = boundaries.search(text, end)
+    next_boundary = _NUMERIC_SENTENCE_BOUNDARY_RE.search(text, end)
     context_end = next_boundary.end() if next_boundary is not None else len(text)
     if next_boundary is not None and next_boundary.group("paragraph") is not None:
         # A paragraph can end without punctuation. Do not start a citation walk
@@ -2539,12 +2535,20 @@ def drop_untraceable_numeric_sentences(
         occurrences = (exc.detail or {}).get("untraced_occurrences")
         if not occurrences:
             raise
-    rejected_by_span: Dict[Tuple[int, int], Dict[str, Any]] = {}
-    for occurrence in occurrences:
+    candidates = iter(sentence_spans(manuscript, include_structural=True))
+    owner = next(candidates, None)
+    rejected_by_span: dict[SentenceSpan, dict[str, Any]] = {}
+    for occurrence in sorted(occurrences, key=lambda item: item["start"]):
         start, end = occurrence["start"], occurrence["end"]
-        span = _numeric_sentence_bounds(manuscript, start=start, end=end, for_removal=True)
-        detail = rejected_by_span.setdefault(span, {
-            "sentence": manuscript[span[0]:span[1]].strip(), "untraced": [], "miscited": [],
+        while owner is not None and owner.end <= start:
+            owner = next(candidates, None)
+        if owner is None or not (owner.start <= start < end <= owner.end):
+            raise EvidenceEnforcementError(
+                f"{LOSS_STOP}: a rejected number has no exact manuscript span.",
+                detail={"code": LOSS_STOP, "losses": [], "removals": []},
+            )
+        detail = rejected_by_span.setdefault(owner, {
+            "sentence": manuscript[owner.start:owner.end].strip(), "untraced": [], "miscited": [],
         })
         detail["untraced"].append(occurrence["value"])
         if "miscited" in occurrence:
@@ -2552,26 +2556,30 @@ def drop_untraceable_numeric_sentences(
         if "unnamed_fact_identity" in occurrence:
             detail.setdefault("unnamed_fact_identity", []).append(occurrence["unnamed_fact_identity"])
 
-    merged: List[Tuple[int, int, List[Dict[str, Any]]]] = []
-    for (start, end), detail in sorted(rejected_by_span.items()):
-        deletion = contextual_sentence_deletion(manuscript, start, end)
-        end = deletion.end
-        if deletion.dependent_sentences:
-            detail["dependent_context_drops"] = list(deletion.dependent_sentences)
-        if merged and start <= merged[-1][1]:
-            previous_start, previous_end, previous_details = merged[-1]
+    merged: List[Tuple[int, int, str, List[Dict[str, Any]]]] = []
+    for owner, detail in rejected_by_span.items():
+        end = owner.end
+        if not owner.structural:
+            deletion = contextual_sentence_deletion(manuscript, owner.start, end)
+            end = deletion.end
+            if deletion.dependent_sentences:
+                detail["dependent_context_drops"] = list(deletion.dependent_sentences)
+        start, end, replacement = sentence_deletion_edit(manuscript, owner, end=end)
+        if merged and start < merged[-1][1]:
+            previous_start, previous_end, previous_replacement, previous_details = merged[-1]
             merged[-1] = (
                 previous_start,
                 max(previous_end, end),
+                previous_replacement,
                 [*previous_details, detail],
             )
         else:
-            merged.append((start, end, [detail]))
+            merged.append((start, end, replacement, [detail]))
     filtered = manuscript
-    for start, end, _details in reversed(merged):
-        filtered = filtered[:start] + filtered[end:]
+    for start, end, replacement, _details in reversed(merged):
+        filtered = filtered[:start] + replacement + filtered[end:]
     removed: List[Dict[str, Any]] = []
-    for start, end, details in merged:
+    for start, end, _replacement, details in merged:
         if removal_spans is not None:
             positions = tuple(item["start"] for item in occurrences if start <= item["start"] < end)
             removal_spans.append((start, end, positions))

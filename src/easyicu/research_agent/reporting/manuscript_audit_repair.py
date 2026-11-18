@@ -18,7 +18,8 @@ from typing import Any, Callable, Mapping, Sequence
 from ..authority.evidence_store import EvidenceEnforcementError
 from ..bounded_repair import BoundedRepair, RepairFeedback
 from ..contracts.manuscript_sentence_context import (
-    AUDIT_MARKUP_RE, EVIDENCE_LINK_PATTERN, EVIDENCE_TOKEN_PATTERN, PROSE_SENTENCE_END,
+    EVIDENCE_LINK_PATTERN, EVIDENCE_TOKEN_PATTERN, MARKDOWN_REGION_RE, SENTENCE_CITATIONS_RE,
+    prose_sentence_ends,
 )
 from .descriptive_report_facts import insert_question_fact_tokens
 from .manuscript_labels import recorded_definition_section_errors
@@ -506,26 +507,15 @@ def run_manuscript_audit_repair(
     return current, binding
 
 
-_REGION = re.compile(
-    r"(?m)^##[ \t]+(?P<section>[^\r\n]+)"
-    r"|(?P<structural>^[ \t]*(?:#{1,6}[ \t]+|\||!\[|\[\^|\*\*Keywords:\*\*)[^\r\n]*)"
-    r"|^[ \t]*\*\*(?:Background|Methods|Results|Conclusions?):\*\*[ \t]*"
-    r"|\r?\n[ \t]*\r?\n",
-    re.I,
-)
 _HIDDEN = re.compile(r"<!--.*?-->|^ *```[^\n]*\n.*?^ *```[^\n]*", re.M | re.S)
 _ID = re.compile(r"[A-Za-z_][A-Za-z0-9_.-]*")
 _SPACE = re.compile(r"\s*")
-_CITATIONS = re.compile(
-    rf"(?:{AUDIT_MARKUP_RE.pattern})(?:\s*;\s*(?:{AUDIT_MARKUP_RE.pattern}))*|\[@[^\]\n]+\]",
-    re.S,
-)
 _EVIDENCE_REFERENCE = re.compile(rf"(?P<token>{EVIDENCE_TOKEN_PATTERN})|(?P<link>{EVIDENCE_LINK_PATTERN})")
 
 
 def sentence_key(text: str) -> str:
     """Normalize scaffolds and rendered citations to the same internal key."""
-    text = _CITATIONS.sub("", text)
+    text = SENTENCE_CITATIONS_RE.sub("", text)
     return _normalized_text(text).casefold()
 
 
@@ -553,60 +543,107 @@ class SentenceSpan:
     key: str
     evidence_ids: frozenset[str] = frozenset()
     structural: bool = False
+    section_heading: str | None = None
+
+
+def _heading_owner(heading: str) -> tuple[str, str]:
+    """Resolve an H2 alias or an exact section name before a colon."""
+    key = manuscript_section_key(heading)
+    if key in _SECTION_ORDER:
+        return key, heading.strip()
+    label = re.split(r"[:：]", heading, maxsplit=1)[0].strip()
+    owner = manuscript_section_key(label)
+    return (owner, label) if owner in _SECTION_ORDER else (key, "")
 
 
 def sentence_spans(text: str, *, include_structural: bool = False) -> tuple[SentenceSpan, ...]:
-    """Locate prose, standalone claims, and optionally non-H2 Markdown lines."""
+    """Locate prose and optionally complete Markdown lines in source coordinates."""
     visible = _HIDDEN.sub(lambda m: re.sub(r"[^\r\n]", " ", m[0]), text)
-    markup = _CITATIONS.sub(lambda m: re.sub(r"[^\r\n]", " ", m[0]), visible)
     sentences = []
     section = "title"
     start = 0
-    for region in (*_REGION.finditer(visible), None):
+    for region in (*MARKDOWN_REGION_RE.finditer(visible), None):
         stop = region.start() if region else len(text)
         position = start
-        for ending in (*PROSE_SENTENCE_END.finditer(markup, start, stop), None):
-            # A trailing citation belongs to the sentence immediately before it.
-            end = ending.end() if ending else stop
+        for end in (*[start + offset for offset in prose_sentence_ends(text[start:stop])], stop):
+            if end <= position:
+                continue
+            # Visible trailing citations belong to the preceding sentence.
+            # Leading annotations remain available to dependent-context deletion.
             citation_end = end
-            while ending:
+            while citation_end < stop:
                 token_start = _SPACE.match(visible, citation_end, stop).end()
-                token = _CITATIONS.match(visible, token_start, stop)
+                token = SENTENCE_CITATIONS_RE.match(visible, token_start, stop)
                 if not token:
                     break
                 citation_end = token.end()
             raw = visible[position:citation_end]
             if key := sentence_key(raw):
-                sentences.append(SentenceSpan(section, position, citation_end, key, _sentence_evidence_names(raw)))
-            position = max(position, citation_end)
+                source = text[position:citation_end]
+                left = position + len(source) - len(source.lstrip())
+                right = position + len(source.rstrip())
+                sentences.append(SentenceSpan(section, left, right, key, _sentence_evidence_names(raw)))
+            position = citation_end
         if region:
+            heading_label = None
             if heading := region["section"]:
-                section = manuscript_section_key(heading)
-            elif include_structural and (raw := region["structural"]):
+                section, heading_label = _heading_owner(heading)
+            if include_structural and (heading or region["structural"]):
+                raw = region[0]
                 sentences.append(SentenceSpan(
                     section, region.start(), region.end(), sentence_key(raw),
-                    _sentence_evidence_names(raw), structural=True,
+                    _sentence_evidence_names(raw), structural=True, section_heading=heading_label,
                 ))
             start = region.end()
     return tuple(sentences)
+
+
+def _sentence_deletion_bounds(text: str, start: int, end: int) -> tuple[int, int]:
+    """Consume the line ending only if the deletion owns the whole line."""
+    line_start = text.rfind("\n", 0, start) + 1
+    newline = text.find("\n", end)
+    line_end = newline if newline != -1 else len(text)
+    if text[line_start:start].strip():
+        return start, end
+    tail = text[end:line_end]
+    if tail.strip():
+        return start, end + len(tail) - len(tail.lstrip(" \t"))
+    return line_start, newline + 1 if newline != -1 else line_end
+
+
+def _section_heading_replacement(span: SentenceSpan) -> str:
+    """Keep a rejected H2's section delimiter when its owner is unambiguous."""
+    if span.section_heading:
+        return "## " + span.section_heading
+    raise EvidenceEnforcementError(
+        f"{LOSS_STOP}: a rejected section heading has no Writer section owner.",
+        detail={"code": LOSS_STOP, "losses": [], "removals": [
+            RepairFeedback(NUMERIC_REMOVAL, "manuscript").as_dict(),
+        ]},
+    )
+
+
+def sentence_deletion_edit(text: str, span: SentenceSpan, *, end: int | None = None) -> tuple[int, int, str]:
+    """Return the exact source edit for a rejected sentence or Markdown line."""
+    if span.section_heading is not None:
+        return span.start, span.end, _section_heading_replacement(span)
+    start, stop = _sentence_deletion_bounds(text, span.start, span.end if end is None else end)
+    return start, stop, ""
 
 
 def delete_spans(text: str, spans: Sequence[SentenceSpan]) -> str:
     pieces = []
     cursor = 0
     for span in sorted(set(spans), key=lambda item: item.start):
-        # Keep a separator after a preceding sentence on the same line.
-        start = span.start
-        if start and text[start - 1] in ".!?。！？" and text[start:start + 1] in {" ", "\t"}:
-            start += 1
-        pieces.append(text[cursor:start])
-        cursor = span.end
+        start, end, replacement = sentence_deletion_edit(text, span)
+        pieces.extend((text[cursor:start], replacement))
+        cursor = end
     return "".join((*pieces, text[cursor:]))
 
 
 def _section_at(text: str, position: int) -> str:
-    headings = list(_H2.finditer(text, 0, position))
-    return manuscript_section_key(headings[-1][1]) if headings else "title"
+    headings = [match for match in _H2.finditer(text) if match.start() <= position]
+    return _heading_owner(headings[-1][1])[0] if headings else "title"
 
 
 def _section_owner(section: str) -> str:

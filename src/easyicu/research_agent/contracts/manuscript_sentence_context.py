@@ -21,22 +21,29 @@ _DEPENDENT_OPENER = re.compile(
     r"minimum representation)\b)",
     re.I,
 )
-_PARAGRAPH_BOUNDARY = re.compile(r"\n[ \t]*\n")
-# These abbreviations have a visible continuation on the same line. A period
-# after a citation ending in "et al." can still terminate a sentence.
-PROSE_SENTENCE_END = re.compile(
-    r"""(?x:
+_PARAGRAPH_BOUNDARY = re.compile(r"\r?\n[ \t]*\r?\n")
+_SOFT_SPACE = r"(?:[ \t]*\r?\n[ \t]*|[ \t]+)"
+_PROSE_SENTENCE_END = re.compile(
+    rf"""(?x:
         (?:
             [!?。！？]
             | \. (?!
-                (?<=(?i:\bvs\.)) [ \t]+ \S
-                | (?<=(?i:\bet[ \t]al\.)) [ \t]+ [a-z(]
-                | (?<=(?i:\bfig\.)) [ \t]+ [Ss]?\d
+                (?<=(?i:\bvs\.)) {_SOFT_SPACE} \S
+                | (?<=(?i:\bet[ \t]al\.)) {_SOFT_SPACE} [a-z(]
+                | (?<=(?i:\bfig\.)) {_SOFT_SPACE} [Ss]?\d
             )
         )
         (?=\s|$)
     )"""
 )
+MARKDOWN_REGION_RE = re.compile(
+    r"(?m)^##[ \t]+(?P<section>[^\r\n]+)"
+    r"|(?P<structural>^[ \t]*(?:#{1,6}[ \t]+|\||!\[|\[\^|\*\*Keywords:\*\*)[^\r\n]*)"
+    r"|^[ \t]*\*\*(?:Background|Methods|Results|Conclusions?):\*\*[ \t]*"
+    r"|\r?\n[ \t]*\r?\n",
+    re.I,
+)
+_OTHER_BLOCK_START = re.compile(r"^[ \t]*(?:```|~~~|>|(?:[-+*]|\d+[.)])[ \t]+)")
 # Audit-only markup: a scaffold evidence token, its bound link, a numeric
 # claim footnote marker, and an annotation comment (an unresolved evidence
 # token is demoted to one).  Readers never see any of them, and a Writer often
@@ -51,8 +58,41 @@ _CITATION = "|".join(
 )
 #: Every piece of audit-only markup, for owners that strip it.
 AUDIT_MARKUP_RE = re.compile(_CITATION, re.S)
-_CITATION_MARKUP = AUDIT_MARKUP_RE
+SENTENCE_CITATIONS_RE = re.compile(rf"(?:{_CITATION})(?:\s*;\s*(?:{_CITATION}))*|\[@[^\]\n]+\]", re.S)
 _LEADING_CITATION_MARKUP = re.compile(rf"(?:[ \t]*(?:{_CITATION}))*[ \t]*", re.S)
+
+
+def _blank_sentence_citations(text: str) -> str:
+    return SENTENCE_CITATIONS_RE.sub(lambda match: re.sub(r"[^\r\n]", " ", match[0]), text)
+
+
+def prose_sentence_ends(text: str) -> tuple[int, ...]:
+    """Return punctuation endpoints in source coordinates for one prose region."""
+    return tuple(match.end() for match in _PROSE_SENTENCE_END.finditer(_blank_sentence_citations(text)))
+
+
+def soft_wrapped_prose_lines(text: str) -> list[str]:
+    """Keep line-oriented grammar, joining only recognized abbreviation continuations."""
+    lines = text.splitlines(keepends=True)
+    blocks = []
+    start = 0
+    for index, (line, following) in enumerate(zip(lines, lines[1:])):
+        if following.strip() and not any(
+            pattern.match(value)
+            for pattern in (MARKDOWN_REGION_RE, _OTHER_BLOCK_START)
+            for value in (lines[start], following)
+        ):
+            visible = _blank_sentence_citations(line).rstrip()
+            if visible.endswith(".") and len(visible) not in prose_sentence_ends(line + following):
+                # A period visible at the end of the first line was a
+                # boundary in isolation. Only the known abbreviation rules
+                # can suppress that boundary when the next line is present.
+                continue
+        blocks.append("".join(lines[start:index + 1]))
+        start = index + 1
+    if lines:
+        blocks.append("".join(lines[start:]))
+    return blocks
 
 
 @dataclass(frozen=True)
@@ -83,7 +123,7 @@ def contextual_sentence_deletion(
     paragraph_start = boundaries[-1].end() if boundaries else 0
     # A heading with no blank line also starts a new paragraph. Any other
     # surviving prose before the target may still supply its antecedent.
-    before = _CITATION_MARKUP.sub("", text[paragraph_start:start]).strip()
+    before = AUDIT_MARKUP_RE.sub("", text[paragraph_start:start]).strip()
     if before and not re.fullmatch(r"#{1,6}[^\n]*\n?", before):
         return ContextualSentenceDeletion(start, end)
 
@@ -100,14 +140,10 @@ def contextual_sentence_deletion(
         remaining = suffix[sentence_start:]
         if not has_dependent_opener(remaining):
             break
-        # A leading citation goes with its sentence; a period inside a link
-        # label never ends that sentence.
-        terminal = PROSE_SENTENCE_END.search(
-            remaining, _LEADING_CITATION_MARKUP.match(remaining).end(),
-        )
+        terminal = next(iter(prose_sentence_ends(remaining)), None)
         if terminal is None:
             break  # Do not guess the end of an incomplete sentence.
-        sentence_end = sentence_start + terminal.end()
+        sentence_end = sentence_start + terminal
         dependent.append(suffix[sentence_start:sentence_end].strip())
         cursor = len(suffix) - len(suffix[sentence_end:].lstrip(" \t"))
     return ContextualSentenceDeletion(

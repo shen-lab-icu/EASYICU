@@ -21,7 +21,9 @@ from ..contracts.manuscript_result_structure import (
     PRIMARY_RESULT_HEADINGS,
     RESULT_HEADINGS_BY_ROLE,
 )
-from ..contracts.manuscript_sentence_context import PROSE_SENTENCE_END, contextual_sentence_deletion
+from ..contracts.manuscript_sentence_context import (
+    contextual_sentence_deletion, prose_sentence_ends, soft_wrapped_prose_lines,
+)
 
 ClaimResolver = Callable[[str], Optional[ScientificClaim]]
 EvidenceResolver = Callable[[str], bool]
@@ -514,9 +516,9 @@ def _canonical_duplicate_claim_token(
 def _split_sentences(text: str) -> list[str]:
     parts = []
     start = 0
-    for ending in PROSE_SENTENCE_END.finditer(text):
-        parts.append(text[start:ending.end()].strip())
-        start = ending.end()
+    for end in prose_sentence_ends(text):
+        parts.append(text[start:end].strip())
+        start = end
     if tail := text[start:].strip():
         parts.append(tail)
     return parts
@@ -843,7 +845,7 @@ def filter_evidence_bound_scaffold(
     findings_depth: int | None = None
     in_abstract = False
     abstract_findings = True
-    for raw_line in scaffold.splitlines():
+    for raw_line in soft_wrapped_prose_lines(scaffold):
         line = raw_line.rstrip()
         stripped = line.strip()
         if re.fullmatch(r"##\s+.+", stripped):

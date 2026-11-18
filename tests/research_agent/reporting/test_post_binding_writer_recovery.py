@@ -540,21 +540,159 @@ def test_binding_filter_boundary_keeps_abbreviated_rejections_intact(rejected):
     assert tuple(text[span.start:span.end].strip() for span in sentence_spans(text)) == (rejected, kept)
 
 
-@pytest.mark.parametrize("line", [
-    "### Recruitment window of 867 days {evidence:renal_result}",
-    "| Recruitment window | 867 days {evidence:renal_result} |",
+@pytest.mark.parametrize("before, rejected, after", [
+    (
+        "",
+        "### Recruitment window of 867 days {evidence:renal_result}",
+        "Enrollment windows were prespecified.",
+    ),
+    (
+        "| Field | Source |\n| --- | --- |\n| Referral | Intake forms |\n",
+        "| Recruitment window | 867 days {evidence:renal_result} |",
+        "| Selection | Consecutive |\nEnrollment windows were prespecified.",
+    ),
 ])
-def test_numeric_filter_removes_rejected_markdown_from_the_repair_source(strict_writer_run, line):
+def test_numeric_filter_removes_rejected_markdown_from_the_repair_source(
+    tmp_path, strict_writer_run, before, rejected, after,
+):
     run, client, _, _ = strict_writer_run
     opener = "Potassium measurements can inform the design of prognostic research."
-    initial = _STRICT_GOOD.replace(opener, f"{opener}\n\n{line}")
-    response = f"## Introduction\n\n{opener} Enrollment windows were prespecified."
+    initial = _STRICT_GOOD.replace(opener, f"{opener}\n\n{before}{rejected}\n{after}")
+    response = f"## Introduction\n\n{opener}\n\n{before}{after}"
     _, binding = run(initial, [response])
     assert binding.manuscript_critique.status == "pass"
     assert len(client.calls) == 1
     prompt = "\n".join(message.content for message in client.calls[0][0])
     assert "Recruitment window" not in prompt
+    assert before + after in prompt
+    numeric_filtered = (tmp_path / "manuscript_scaffold_numeric_filtered.md").read_text()
+    assert before + after in numeric_filtered
     assert _section(binding.bound, "Audit") == "1 sentence(s) were removed for unbindable values."
+
+
+@pytest.mark.parametrize(("before", "rejected", "after"), [
+    (
+        "| Measure | Value |\r\n| --- | --- |\r\n"
+        "| Discrimination | {manuscript_value:auroc} |\r\n",
+        "| Review interval | 867 days {evidence:renal_result} |\r\n",
+        "| Sampling | Consecutive |\r\nThe registry retained complete intake forms.\r\n",
+    ),
+    (
+        "",
+        "### Review interval of 867 days {evidence:renal_result}\n",
+        "The discrimination estimate was {manuscript_value:auroc}.  \n",
+    ),
+    (
+        "### Intake forms\n",
+        "The log recorded 867 referrals\n",
+        "| Sampling | Consecutive |\nThe registry retained complete intake forms.\n",
+    ),
+])
+def test_numeric_removal_preserves_adjacent_markdown_and_prose(strict_writer_run, before, rejected, after):
+    from easyicu.research_agent.reporting.manuscript_audit_repair import (
+        numeric_removal_feedback, scaffold_without_removed_sentences,
+    )
+    from easyicu.research_agent.reporting.manuscript_post import drop_untraceable_numeric_sentences
+
+    *_, store = strict_writer_run
+    prefix = "## Results\n\n"
+    suffix = "## Discussion\n\nThe archives were incomplete.\n"
+    scaffold = prefix + before + rejected + after + suffix
+    citation = "{evidence:renal_result}"
+    bound = scaffold.replace(citation, store.bind_manuscript(citation))
+    spans = []
+    filtered, removed = drop_untraceable_numeric_sentences(bound, evidence=store, removal_spans=spans)
+    expected = prefix + before + after + suffix
+    assert filtered == expected
+    assert len(removed) == 1
+
+    _, drops, feedback = numeric_removal_feedback(bound, spans)
+    assert len(drops) == len(feedback) == 1
+    assert feedback[0].path == "results"
+    assert scaffold_without_removed_sentences(scaffold, drops) == expected
+
+
+@pytest.mark.parametrize("markup", [
+    "{evidence:renal_result}",
+    "[renal_result](evidence/ref.md)",
+    "[^claim_7]",
+    "<!-- interim. still annotation -->",
+    "[@local_reference]",
+])
+def test_numeric_removal_uses_the_same_sentence_as_audit(strict_writer_run, markup):
+    from easyicu.research_agent.reporting.manuscript_audit_repair import (
+        numeric_removal_feedback, scaffold_without_removed_sentences, sentence_spans,
+    )
+    from easyicu.research_agent.reporting.manuscript_post import drop_untraceable_numeric_sentences
+
+    *_, store = strict_writer_run
+    rejected = f"Mora et al. {markup} documented 867 referrals."
+    kept = "The archives were incomplete."
+    bound = f"## Introduction\n\n{rejected} {kept}\n"
+    spans = []
+    filtered, removed = drop_untraceable_numeric_sentences(bound, evidence=store, removal_spans=spans)
+    assert rejected == removed[0]["sentence"]
+    assert filtered.strip() == f"## Introduction\n\n{kept}"
+    assert tuple(bound[span.start:span.end].strip() for span in sentence_spans(bound)) == (rejected, kept)
+    _, drops, feedback = numeric_removal_feedback(bound, spans)
+    assert len(drops) == len(feedback) == 1
+    assert scaffold_without_removed_sentences(bound, drops).strip() == filtered.strip()
+
+
+@pytest.mark.parametrize("separator", [" ", "\n", "\r\n  "])
+def test_evidence_filter_keeps_a_cited_comparison_across_wraps(separator):
+    comparison = f"The intake logs recorded 812 vs.{separator}913 referrals {{evidence:intake_registry}}."
+    scaffold = f"## Introduction\n\n{comparison}\n"
+    result = filter_evidence_bound_scaffold(
+        scaffold, resolve_claim=lambda _: None, resolve_evidence={"intake_registry"}.__contains__,
+    )
+    assert result.filtered_sentences == ()
+    assert result.scaffold == scaffold
+
+
+@pytest.mark.parametrize("separator", [" ", "\n"])
+def test_evidence_filter_keeps_citation_after_abbreviated_author(separator):
+    sentence = f"867 referrals were logged by Mora et al.{separator}{{evidence:intake_registry}} at intake."
+    scaffold = f"## Introduction\n\n{sentence}\n"
+    result = filter_evidence_bound_scaffold(
+        scaffold, resolve_claim=lambda _: None, resolve_evidence={"intake_registry"}.__contains__,
+    )
+    assert result.filtered_sentences == ()
+    assert result.scaffold == scaffold
+
+
+def test_rejected_second_level_heading_preserves_the_section_owner(strict_writer_run):
+    from easyicu.research_agent.reporting.manuscript_audit_repair import (
+        numeric_removal_feedback, scaffold_without_removed_sentences,
+    )
+    from easyicu.research_agent.reporting.manuscript_post import drop_untraceable_numeric_sentences
+
+    *_, store = strict_writer_run
+    scaffold = (
+        "## Methods\n\nThe catalogue used intake records.\n\n"
+        "## Findings: 867 referrals {evidence:renal_result}\n"
+        "The registry retained complete intake forms.\n\n"
+        "## Discussion\n\nThe archives were incomplete.\n"
+    )
+    bound = store.bind_manuscript(scaffold)
+    spans = []
+    filtered, _ = drop_untraceable_numeric_sentences(bound, evidence=store, removal_spans=spans)
+    _, drops, feedback = numeric_removal_feedback(bound, spans)
+    assert [item.path for item in feedback] == ["results"]
+    expected = scaffold.replace("## Findings: 867 referrals {evidence:renal_result}", "## Findings")
+    assert filtered == store.bind_manuscript(expected)
+    assert scaffold_without_removed_sentences(scaffold, drops) == expected
+
+
+def test_rejected_second_level_heading_without_a_section_owner_stops(strict_writer_run):
+    from easyicu.research_agent.reporting.manuscript_audit_repair import LOSS_STOP
+    from easyicu.research_agent.reporting.manuscript_post import drop_untraceable_numeric_sentences
+
+    *_, store = strict_writer_run
+    manuscript = "## Intake catalogue of 867 referrals\nThe registry used complete forms.\n"
+    with pytest.raises(EvidenceEnforcementError, match=LOSS_STOP) as stop:
+        drop_untraceable_numeric_sentences(manuscript, evidence=store)
+    assert stop.value.detail["code"] == LOSS_STOP
 
 
 def test_numeric_filter_maps_rewritten_opener_back_to_the_repair_source(strict_writer_run):
@@ -1474,3 +1612,68 @@ def test_final_repair_covers_the_distribution_question(
         assert not resumed_binding.question_coverage_findings
     else:
         assert "host_fallback" not in receipt
+
+
+@pytest.mark.parametrize("keep_protected_tokens", [False, True])
+def test_methods_adjustment_repair_checks_both_protected_sources(tmp_path, monkeypatch, keep_protected_tokens):
+    repeated = "The hospital archive supplied the index forms for this retrospective assessment."
+    original = GOOD.replace("## Discussion\n\n", f"## Discussion\n\n{repeated}\n\n").replace(
+        "## Conclusion\n\n", f"## Conclusion\n\n{repeated}\n\n",
+    ).replace(
+        "The executed analysis assessed discrimination",
+        "The adjustment set comprised age and severity",
+    ).replace(
+        "Analyses used registered software artifacts {evidence:renal_summary}.",
+        "Analyses used registered software artifacts {evidence:other_summary}.",
+    ).replace("The AUROC was", "After adjustment for age and sex, the AUROC was")
+    methods = "## Methods\n\n" + _section(original, "Methods").replace("age and severity", "age and sex")
+    conclusion = "## Conclusion\n\n" + _section(GOOD, "Conclusion")
+    if keep_protected_tokens:
+        (_, binding), _, _, _, _ = _exercise(tmp_path, monkeypatch, original, [methods, conclusion])
+        assert binding.manuscript_critique.status == "pass"
+    else:
+        methods = methods.replace("sex {evidence:renal_summary}", "sex").replace(" {evidence:other_summary}", "")
+        with pytest.raises(EvidenceEnforcementError, match="existing evidence or claim binding") as stop:
+            _exercise(tmp_path, monkeypatch, original, [methods, conclusion])
+        assert stop.value.detail["missing_tokens"] == {
+            "{evidence:renal_summary}": 1, "{evidence:other_summary}": 1,
+        }
+    receipt = json.loads((tmp_path / "manuscript_audit_repair.json").read_text())
+    attempt, = receipt["attempts"]
+    assert "methods" in attempt["section_keys"]
+    assert {"MANUSCRIPT_ADJUSTMENT_SET_CONFLICT", "MANUSCRIPT_REPEATED_SENTENCE"} <= set(attempt["audit_codes"])
+    if keep_protected_tokens:
+        assert attempt["status"] == "pass"
+    else:
+        assert attempt["authority_failure"]["check"] == "section_tokens"
+        assert attempt["authority_failure"]["section"] == "methods"
+        assert attempt["numeric_checks"] == "pending"
+
+
+def test_callout_repair_keeps_methods_bytes_despite_whole_draft_rendering(tmp_path, monkeypatch):
+    from easyicu.research_agent.reporting.manuscript_audit_repair import _section_blocks
+    from easyicu.research_agent.reporting.manuscript_quality import repair_reader_internal_phrases
+
+    repeated = "The hospital archive supplied the index forms for this retrospective assessment."
+    original = GOOD.replace("## Discussion\n\n", f"## Discussion\n\n{repeated}\n\n").replace(
+        "## Conclusion\n\n", f"## Conclusion\n\n{repeated}\n\n",
+    ).replace(
+        "The AUROC was 0.74 {evidence:renal_summary}.", "See Figure 1 {evidence:renal_summary}.",
+    ).replace("The executed analysis assessed discrimination", "The executed analysis used intake forms")
+    candidate = original.replace("See Figure 1 {evidence:renal_summary}.",
+                                 "The AUROC was 0.74 {evidence:renal_summary}.")
+    candidate = candidate.replace(f"## Conclusion\n\n{repeated}\n\n", "## Conclusion\n\n")
+    candidate, _ = repair_reader_internal_phrases(
+        candidate, reader_display_labels={"intake forms": "abstracted intake forms"},
+    )
+    candidate = candidate.replace("abstracted intake forms {evidence:renal_summary}", "abstracted intake forms")
+    methods = dict(_section_blocks(original))["methods"]
+    assert dict(_section_blocks(candidate))["methods"] != methods
+    (draft, binding), _, _, _, _ = _exercise(tmp_path, monkeypatch, original, [], full_draft=candidate)
+    assert binding.manuscript_critique.status == "pass"
+    assert dict(_section_blocks(draft.scaffold))["methods"] == methods
+    receipt = json.loads((tmp_path / "manuscript_audit_repair.json").read_text())
+    attempt, = receipt["attempts"]
+    assert attempt["status"] == "pass"
+    assert "methods" not in attempt["section_keys"]
+    assert {"MANUSCRIPT_REPEATED_SENTENCE", "MANUSCRIPT_RESULT_SUBSECTION_CALLOUT_ONLY"} <= set(attempt["audit_codes"])

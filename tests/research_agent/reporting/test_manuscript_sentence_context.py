@@ -136,3 +136,13 @@ def test_already_removed_dependent_cannot_hide_a_foreign_citation():
             ],
             allowed_evidence_ids=["source"],
         )
+
+
+def test_dependent_sentence_boundary_ignores_internal_citation_punctuation():
+    target = "The original definition was rejected."
+    dependent = "It follows Mora et al. [Mora et al. registry](evidence/source.md) in the coding manual."
+    next_sentence = "The archive remains available."
+    manuscript = f"{target} {dependent} {next_sentence}"
+    deletion = contextual_sentence_deletion(manuscript, 0, len(target))
+    assert deletion.dependent_sentences == (dependent,)
+    assert manuscript[deletion.end:] == next_sentence
