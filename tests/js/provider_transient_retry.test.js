@@ -171,6 +171,7 @@ async function harness(attempts, config = {}) {
     emit: envelope => { order.push('retry'); notices.push(envelope); },
     hostPostToolFinalization: () => config.finalization || null,
     quickAnswerOfferReply: () => config.quickOfferReply || '',
+    quickAnswerReadingNeedsRepair: () => false,
     settleQuickAnswerOffer: finalization?.settleQuickAnswerOffer,
     ...retry, retryTransientProviderStream: retryWithFastSleep,
   }, { filename: mainFile });

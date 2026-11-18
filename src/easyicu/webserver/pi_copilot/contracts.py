@@ -29,6 +29,7 @@ from easyicu.webserver.personal_preferences import PersonalPreferences
 
 if TYPE_CHECKING:
     from easyicu.extensions import ExtensionRegistry
+    from easyicu.webserver.quick_answer.contracts import QuickProposal, QuickReading
     from easyicu.webserver.research_multi_contracts import MultiDatabaseRequest
     from .workspace import ProjectWorkspace
 
@@ -505,7 +506,7 @@ class ToolExecutionContext:
         extension_registry: Optional["ExtensionRegistry"] = None,
         data_handling: str = "unspecified",
         note_credentialed_history: Optional[Callable[[], None]] = None,
-        quick_answer_submit: Optional[Callable[..., Dict[str, Any]]] = None,
+        quick_answer_submit: Callable[..., dict | QuickProposal | None] | None = None,
         propose_multi_database: Optional[Callable[[MultiDatabaseRequest], Dict[str, Any]]] = None,
         expected_replan_source_run_id: str = "",
     ) -> None:
@@ -528,6 +529,8 @@ class ToolExecutionContext:
         self.quick_question = self.user_message
         # True only for that transition: its study is already a full study.
         self.quick_question_offered = False
+        self.quick_reading_to_repair: QuickReading | None = None
+        self.quick_reading_repair_finished = False
         self.bind_question_wording_context(
             user_turns if user_turns is not None else (
                 [{"text": self.user_message, "message_origin": "typed"}] if self.user_message else []

@@ -601,6 +601,13 @@ function dataSourceSelectionText(language, catalog, text = "") {
     : `The research question is saved. Choose the database for this study first; EasyICU then proposes the research plan.\n\n**Next step:**\n${choices.join("\n")}`;
 }
 
+export function quickAnswerReadingNeedsRepair(result) {
+  return result?.role === "toolResult" && result.toolName === "easyicu_quick_answer"
+    && result.isError !== true && result.details?.code === "quick_reading_concept_unregistered"
+    && Array.isArray(result.details?.details?.reading_issues)
+    && result.details.details.reading_issues.length > 0;
+}
+
 /**
  * Finalize the narrow initial-question save path from the typed EasyICU receipt.
  * The first provider call still interprets the user's question and invokes the
@@ -609,6 +616,11 @@ function dataSourceSelectionText(language, catalog, text = "") {
  */
 export function hostPostToolFinalization(model, context, language) {
   const latest = context?.messages?.at(-1);
+  if (quickAnswerReadingNeedsRepair(latest)) return null;
+  if (latest?.role === "toolResult" && latest.toolName === "easyicu_quick_answer"
+      && quickAnswerReadingNeedsRepair(context.messages.at(-3))) {
+    return completedStream(finalizedMessage(model, ""));
+  }
   const quick = latest?.details?.details?.quick_answer;
   if (latest?.role === "toolResult" && latest.toolName === "easyicu_quick_answer"
       && latest.isError !== true && quick?.proposal
@@ -618,7 +630,7 @@ export function hostPostToolFinalization(model, context, language) {
     return completedStream(finalizedMessage(model, ""));
   }
   if (latest?.role === "toolResult" && quickAnswerOffered(context)) {
-    // An offer allows one call; its acknowledgement is already written. A
+    // The offer's acknowledgement is already written. A
     // call the host refused leaves the transition as it is without an offer.
     return completedStream(finalizedMessage(model, ""));
   }

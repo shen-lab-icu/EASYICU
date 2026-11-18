@@ -224,6 +224,21 @@ test('a question that is not quick says why and offers the full study, never a c
   assert.doesNotMatch(unknown, /quick_unlisted_code/);
 });
 
+test('an unresolved concept offers the full study in both languages', () => {
+  const item = attachment({ proposal: { status: 'full_study', reason: 'quick_reading_concept_unregistered',
+    expand: { action: 'expand_into_full_study', reading: READING, source: SOURCE } } });
+  for (const [language, reason, action] of [
+    ['en', /could not match a measure or grouping to a registered concept/, /Make it a full study/],
+    ['zh', /无法将某个指标或分组对应到已登记的概念/, /改为完整研究/],
+  ]) {
+    const html = rendered(owners(language).cards, item);
+    assert.match(html, reason);
+    assert.match(html, action);
+    assert.match(html, /data-gpi-quick-expand="qa_1"/);
+    assert.doesNotMatch(html, /data-gpi-quick-approve/);
+  }
+});
+
 test('a stopped comparison over repeated stays offers the first-stay question only where it can be prepared', () => {
   const cases = [
     ['quick_repeated_units_ask_first_stay', 'zh', /同一患者有多次 ICU 入住。可改问每位患者的首次 ICU 入住，或改为完整研究。/],

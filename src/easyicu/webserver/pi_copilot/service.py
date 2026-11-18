@@ -2967,6 +2967,8 @@ class PiCopilotService(SkillAttachmentService, QuickAnswerService):
                     event_sink=emit,
                     tool_context=active_tool_context,
                 )
+                if not job.cancel_requested:
+                    self._finish_quick_reading_repair(active_tool_context, message_job_id=job.id)
                 if revision_run_id and not job.cancel_requested and not revision_receipt["submitted"]:
                     raise RuntimeError("pi_plan_revision_not_submitted")
                 refreshed = self._get_record(record.session_id)

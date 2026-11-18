@@ -10,7 +10,7 @@ could ever be offered on this path.
 
 Now the transition offers the saved question to the quick-answer owner when it
 is, word for word, a message the researcher typed.  The host binds the turn's
-question to it, the conversation's model may submit one reading, and the host
+question to it, the conversation's model may submit a reading, and the host
 qualifies it into the same digest-bound card the researcher clicks.  A reading
 that rewords the question is not qualified.  A study question, a stopped
 proposal or no call keep today's acknowledgement and automatic plan: the page
@@ -61,6 +61,8 @@ class ModelGateway(FakeGateway):
         self.submitted: list[dict[str, Any]] = []
         self.call_quick_answer_anyway = False
         self.declines = False
+        self.initial_fields: dict[str, Any] = {}
+        self.repair_fields: dict[str, Any] | None = None
 
     def request(self, method: str, params: dict[str, Any], **kwargs: Any) -> dict[str, Any]:
         response = super().request(method, params, **kwargs)
@@ -70,13 +72,16 @@ class ModelGateway(FakeGateway):
             return response
         if method == "session.prompt" and context is not None and (offered or self.call_quick_answer_anyway):
             # The sidecar hands a host refusal back to the model as a tool error.
-            try:
-                self.submitted.append(execute_tool(
-                    "easyicu_quick_answer", {"reading": reading(offered or QUESTION)}, context,
-                ))
-            except PiCopilotError as exc:
-                self.submitted.append({"status": "blocked", "code": exc.code})
+            self.submit_reading(context, {**reading(offered or QUESTION), **self.initial_fields})
+            if self.submitted[-1].get("details", {}).get("reading_issues") and self.repair_fields is not None:
+                self.submit_reading(context, {**reading(offered or QUESTION), **self.repair_fields})
         return response
+
+    def submit_reading(self, context, request):
+        try:
+            self.submitted.append(execute_tool("easyicu_quick_answer", {"reading": request}, context))
+        except PiCopilotError as exc:
+            self.submitted.append({"status": "blocked", "code": exc.code})
 
 
 @pytest.fixture
@@ -86,8 +91,9 @@ def conversation(tmp_path, monkeypatch):
         longitudinal=pd.DataFrame({"stay_id": range(60), "charttime": [1.0] * 60,
                                    "lact": [float(i % 15 + 1) / 2 for i in range(60)]}),
         longitudinal_concepts=["lact"],
-        statics=pd.DataFrame({"stay_id": range(60), "age": [45] * 60, "sex": ["Male"] * 30 + ["Female"] * 30}),
-        static_concepts=["age", "sex"],
+        statics=pd.DataFrame({"stay_id": range(60), "age": [45] * 60, "sex": ["Male"] * 30 + ["Female"] * 30,
+                              "los_icu": [1.5] * 60}),
+        static_concepts=["age", "sex", "los_icu"],
         outcome=pd.DataFrame({"stay_id": range(60), "charttime": [0.0] * 60, "icu_death": [False] * 30 + [True] * 30}),
         outcome_concepts=["icu_death"],
     )
@@ -165,6 +171,102 @@ def test_the_transition_offers_the_typed_question_and_its_card_follows_that_turn
     )["quick_answer"]["answer"]
     assert answer["status"] == "ok", answer["reason"]
     assert next(row["value"] for row in answer["rows"] if row["statistic"] == "median") == 4
+
+
+@pytest.mark.parametrize("field,value,replacement", [
+    ("measure.concept", "icu_stay_hours", "los_icu"),
+    ("grouping[0]", "first_icu_stay", "sex"),
+    ("measure.concept", "quartz_metric_zz", "lact"),
+])
+@pytest.mark.parametrize("repaired", [True, False], ids=["qualified", "full-study"])
+def test_unregistered_concepts_get_one_re_read(conversation, field, value, replacement, repaired):
+    service, record, gateway = conversation
+    question = QUESTION
+    measure = reading()["measure"]
+    if value == "icu_stay_hours":
+        question = "在 eICU demo 中，ICU 住院时长的中位数是多少？"
+        measure = {"concept": "los_icu", "statistic": "median"}
+        study = study_contexts.upsert_context({"id": record.binding.study_context_id, "question": question})
+        record.binding = service._binding_for_context(study)
+        service._save_record(record)
+    typed_turn(service, record, question)
+
+    def fields_for(concept):
+        if field == "grouping[0]":
+            return {"grouping": [concept]}
+        return {"measure": {**measure, "concept": concept}}
+
+    gateway.initial_fields = fields_for(value)
+    gateway.repair_fields = fields_for(replacement if repaired else value)
+    job_id = confirm_source_and_continue(service, record)
+
+    first, second = gateway.submitted
+    assert first["status"] == "ok" and first["code"] == "quick_reading_concept_unregistered"
+    assert first["details"] == {"reading_issues": [{
+        "field": field, "received": value, "message": "not a registered concept id", "candidates": [],
+    }]}
+    [card] = service.get_session(record.session_id, project_id=record.project_id)["session"]["quick_answers"]
+    assert card["message_job_id"] == job_id
+    proposal = card["proposal"]
+    assert second["details"]["quick_answer"]["proposal"] == proposal
+    assert proposal["expand"]["reading"]["question"] == question
+    assert proposal["expand"]["action"] == "expand_into_full_study"
+    if repaired:
+        assert proposal["status"] == "approval_required" and second["code"] == "quick_qualified"
+        assert proposal["card"]["approval_action"] == "approve_quick_answer"
+        plan = proposal["card"]["plan"]
+        if field == "grouping[0]":
+            assert plan["group_column"] == replacement
+        else:
+            assert plan["effective_reading"]["measure"]["concept"] == replacement
+        if replacement == "los_icu":
+            answer = service.approve_quick_answer(
+                record.session_id, project_id=record.project_id, quick_answer_id=card["quick_answer_id"],
+                card_sha256=proposal["card"]["sha256"],
+            )["quick_answer"]["answer"]
+            median = next(row for row in answer["rows"] if row["statistic"] == "median")
+            assert (median["value"], median["unit"]) == (1.5, "days")
+    else:
+        assert proposal["status"] == "full_study" and second["code"] == "quick_reading_concept_unregistered"
+        assert proposal["reading_issues"] == first["details"]["reading_issues"]
+        assert proposal["capability"] is None and proposal["card"] is None
+        handoff = service.expand_quick_answer(
+            record.session_id, project_id=record.project_id, quick_answer_id=card["quick_answer_id"],
+        )
+        assert handoff["expand"]["reading"]["question"] == question
+
+
+@pytest.mark.parametrize("repair_fields", [None, {"measure": {"statistic": "not-a-statistic"}}], ids=["declined", "invalid"])
+def test_a_re_read_without_a_valid_submission_leaves_a_handoff(conversation, repair_fields):
+    service, record, gateway = conversation
+    gateway.initial_fields = {"measure": {"concept": "quartz_metric_zz", "statistic": "median"}}
+    gateway.repair_fields = repair_fields
+    typed_turn(service, record, QUESTION)
+    confirm_source_and_continue(service, record)
+    assert len(gateway.submitted) == (1 if repair_fields is None else 2)
+    [card] = service.get_session(record.session_id, project_id=record.project_id)["session"]["quick_answers"]
+    proposal = card["proposal"]
+    assert (proposal["status"], proposal["reason"]) == ("full_study", "quick_reading_concept_unregistered")
+    assert proposal["expand"]["action"] == "expand_into_full_study"
+
+
+def test_a_registered_but_unassessed_concept_does_not_get_a_re_read(conversation, monkeypatch):
+    from easyicu.concept.loader import load_concept_dict_cached
+    from easyicu.webserver.quick_answer import preparation
+
+    service, record, gateway = conversation
+    concept = "feurea"
+    assert concept in load_concept_dict_cached()
+    gateway.initial_fields = {"measure": {"concept": concept, "statistic": "median"}}
+    monkeypatch.setattr(preparation, "acquire_universe_for_question", lambda **_kwargs: pytest.fail("allocated rows"))
+    typed_turn(service, record, QUESTION)
+    confirm_source_and_continue(service, record)
+    [result] = gateway.submitted
+    proposal = result["details"]["quick_answer"]["proposal"]
+    assert (proposal["status"], proposal["reason"]) == ("stopped", "quick_capability_unassessed")
+    assert proposal["capability"]["database"] == "eicu_demo"
+    assert proposal["capability"]["unassessed_concepts"] == [concept]
+    assert proposal["expand"]["action"] == "expand_into_full_study"
 
 
 def test_a_study_question_is_offered_alike_and_a_declined_offer_leaves_no_card(conversation):
@@ -356,7 +458,8 @@ def test_only_the_transition_may_offer_and_only_the_quick_answer_tool():
     transition = main.split(': turnIntent === "advance_after_data_source_confirmation"', 1)[1].split(
         ": turnIntent ===", 1)[0]
     assert "${QUICK_ANSWER_OFFER_MARKER}" in transition
-    assert "call easyicu_quick_answer exactly once with a QuickReading whose question is exactly that text" in transition
+    assert "call easyicu_quick_answer with a QuickReading whose question is exactly that text" in transition
+    assert "one corrected reading only if the host requests it" in transition
     assert "Never calculate or state a value" in transition
 
 

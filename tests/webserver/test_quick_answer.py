@@ -4,6 +4,8 @@ from __future__ import annotations
 
 import json
 from dataclasses import replace
+from datetime import datetime, timezone
+from itertools import product
 from pathlib import Path
 from tempfile import TemporaryDirectory
 from time import monotonic
@@ -278,15 +280,17 @@ def test_an_exact_group_label_takes_priority_over_a_shorter_phrase_match(prepare
 
 
 @pytest.mark.parametrize("label", ["local triage category", CONCEPT_DICTIONARY["o2sat"][1]])
-def test_an_unknown_or_ambiguous_group_name_stops_with_a_typed_reason(prepared, label):
+def test_an_unknown_or_ambiguous_group_name_hands_off_with_a_typed_reason(prepared, label):
     question = f"What is the median age by {label}?"
     request = reading(question, grouping=[label], measure={"concept": "age", "statistic": "median"})
     source = with_group(with_group(prepared, "spo2", (94, 98)), "o2sat", (93, 97))
 
     assert bind_concept_names(request).grouping == (label,)
     proposal = prepare_quick_answer(request, source=source, provider=None, question=question)
-    assert (proposal.status, proposal.reason) == ("stopped", "quick_capability_unassessed")
-    assert proposal.card is None
+    assert (proposal.status, proposal.reason) == ("full_study", "quick_reading_concept_unregistered")
+    assert proposal.card is None and proposal.capability is None
+    issue, = proposal.reading_issues
+    assert (issue.field, issue.received) == ("grouping[0]", label)
 
 
 @pytest.mark.parametrize(("replay", "update_distribution", "stop"), [
@@ -353,14 +357,56 @@ def test_icu_stay_by_icu_type_is_answered_not_left_unassessed(tmp_path):
     assert run(proposal, source, tmp_path).status == "ok"
 
 
-def test_a_name_that_reads_as_no_concept_stays_as_typed(prepared):
+def test_registered_icu_length_of_stay_keeps_its_card_digest(tmp_path):
+    # Fixed bytes and context let the plan-only test pin digest values from
+    # before reading repair without depending on Parquet encoder versions.
+    path = tmp_path / "synthetic.parquet"
+    path.write_bytes(b"fixed synthetic quick-card source bytes")
+    identity = SourceIdentity(database="eicu_demo", registration_id="src_digest_fixture")
+    context = ResearchContext(
+        research_question="Prepared source",
+        cohort=CohortDescriptor(cohort_name="Synthetic stays", database="eicu_demo", n_stays=40,
+                                id_columns=["stay_id", "subject_id"]),
+        variables=[
+            ConceptDescriptor(name="icu_unit_type", dtype="object", role="demographic",
+                              observed_domain={"levels": ["MICU", "Med-Surg ICU"]}),
+            ConceptDescriptor(name="los_icu", dtype="float64", role="outcome", unit="days"),
+        ],
+        user_preferences=UserPreferences(data_constraints=json.dumps({"source_identity": identity.to_dict()})),
+        created_at=datetime(2026, 1, 1, tzinfo=timezone.utc),
+    )
+    source = bind_prepared_source(path, context=context, identity=identity,
+                                  unit_column="stay_id", patient_column="subject_id")
+    expected = {
+        "median": "2a4c1791550f88abada05e5078b2cce9c41d159d11a3ba537e362562d44d335d",
+        "mean": "7b5df88873a6575a0a2efdeae22825a6e73c0d7f63a67d0aa54a72bca7268ee7",
+        "iqr": "38631ac015e8945abc05dd9332cda25e7a3c5179c7ff5894bc0cb128b852fdcc",
+        "distribution": "a86f7e8bb3d68a5bad7835681e29eea8611addd1e455606e4f2fa3407a78ed56",
+    }
+    question = "在 eICU demo 中，不同 ICU 类型的患者，ICU 住院时长有什么差别？"
+    cases = [*product(expected, ("icu_unit_type", "icu_type", "unit_type")), ("median", "unittype")]
+    for statistic, group in cases:
+        request = reading(question, intent="compare", grouping=[group],
+                          measure={"concept": "los_icu", "statistic": statistic})
+        proposal = prepare_quick_answer(request, source=source, provider=None)
+        assert proposal.status == "approval_required", proposal.reason
+        assert proposal.card.sha256 == expected[statistic]
+
+
+def test_dictionary_candidates_are_feedback_without_binding(prepared):
     request = reading("Summarize the first-day peak glucose.", measure={
         "concept": "glucose", "statistic": "median", "summary": "max",
         "window": {"start_hours": 0, "end_hours": 24},
     })
     proposal = prepare_quick_answer(request, source=prepared, provider=None)
-    assert proposal.card is None and proposal.reason == "quick_capability_unassessed"
+    assert proposal.status == "full_study" and proposal.reason == "quick_reading_concept_unregistered"
+    assert proposal.card is None and proposal.capability is None
     assert proposal.expand.reading.measure.concept == "glucose"
+    issue, = proposal.reading_issues
+    assert issue.model_dump(mode="json") == {
+        "field": "measure.concept", "received": "glucose",
+        "message": "not a registered concept id", "candidates": ["glu"],
+    }
 
 
 def test_the_interpreter_is_told_a_conventional_reading_is_not_an_ambiguity():
@@ -914,12 +960,15 @@ def test_a_population_quote_must_come_from_this_question(prepared):
     assert prepare_quick_answer(request, source=prepared, provider=None).reason == "quick_reading_ambiguous"
 
 
-def test_unassessed_vocabulary_cannot_be_claimed_as_supported(prepared):
+def test_an_unregistered_local_column_cannot_be_used_as_a_measure(prepared):
     variables = [*prepared.context.variables, ConceptDescriptor(name="local_metric", dtype="float64")]
     prepared = rebound(prepared, context=prepared.context.model_copy(update={"variables": variables}))
     proposal = prepare_quick_answer(reading(measure={"concept": "local_metric", "statistic": "median"}),
                                     source=prepared, provider=None)
-    assert proposal.reason == "quick_capability_unassessed"
+    assert proposal.status == "full_study" and proposal.reason == "quick_reading_concept_unregistered"
+    assert proposal.capability is None
+    issue, = proposal.reading_issues
+    assert (issue.field, issue.received, issue.candidates) == ("measure.concept", "local_metric", ())
 
 
 def test_context_cannot_change_under_the_prepared_handle(prepared, tmp_path):

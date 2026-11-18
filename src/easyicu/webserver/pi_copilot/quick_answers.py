@@ -28,6 +28,16 @@ def submit_quick_question(context: ToolExecutionContext, params) -> dict:
     if context.quick_answer_submit is None:
         raise error("quick_conversation_required")
     attachment = context.quick_answer_submit(context, reading)
+    if isinstance(attachment, QuickProposal):
+        return PiToolResult(
+            status="ok", code=attachment.reason,
+            summary=("Re-read the original question once and submit the corrected QuickReading. "
+                     "Use registered concept ids that preserve the question's meaning and scope. "
+                     "If you cannot resolve it, the host will offer the full study."),
+            owner="easyicu.webserver.quick_answer",
+            details={"reading_issues": [issue.model_dump(mode="json") for issue in attachment.reading_issues]},
+            authority=context.session.binding.model_dump(mode="json"),
+        ).model_dump(mode="json")
     if attachment is None:
         return PiToolResult(
             status="ok", code="quick_full_study_continues", summary="",
@@ -123,6 +133,8 @@ class QuickAnswerService:
         source = study["data_source"]
         store = self._quick_store()
         with store.lock(record.session_id), public_demo_egress_scope(source["path"]):
+            if context.quick_reading_repair_finished:
+                raise error("quick_reading_repair_exhausted")
             identity = "qa_" + uuid4().hex
             directory = store.path(record.session_id, identity).parent
             try:
@@ -134,9 +146,13 @@ class QuickAnswerService:
             except QuickStop as exc:
                 raise error(exc.code) from exc
             context.assert_authority_fresh()
-            # The offered question already continues as a full study, so a
-            # card that only says so would repeat the conversation.
-            if context.quick_question_offered and proposal.status == "full_study":
+            if proposal.reading_issues and context.quick_reading_to_repair is None:
+                context.quick_reading_to_repair = reading
+                return proposal
+            # An unresolved reading after repair carries its own explanation
+            # and expand action, including on the data-source transition.
+            if context.quick_question_offered and proposal.status == "full_study" and not proposal.reading_issues:
+                context.quick_reading_repair_finished = context.quick_reading_to_repair is not None
                 return None
             row = {
                 "quick_answer_id": identity, "session_id": record.session_id,
@@ -146,7 +162,14 @@ class QuickAnswerService:
                 "answer": None, "created_at": utc_now(),
             }
             store.write(row)
+            context.quick_reading_repair_finished = context.quick_reading_to_repair is not None
         return public_attachment(row)
+
+    def _finish_quick_reading_repair(self, context, *, message_job_id):
+        # A re-read can decline or fail schema validation before reaching the
+        # preparation owner. Give the original unresolved reading its handoff.
+        if context.quick_reading_to_repair is not None and not context.quick_reading_repair_finished:
+            self._submit_quick_answer(context, context.quick_reading_to_repair, message_job_id=message_job_id)
 
     def _quick_row(self, record, quick_answer_id):
         study = self._quick_study(record)
