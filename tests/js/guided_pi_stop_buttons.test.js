@@ -15,10 +15,14 @@ const edit = action('edit_plan', 'plan_edit', { intent: 'candidate_plan', planne
 const run = { run_ref: 'r1', run_id: 'synthetic', run_status: 'failed',
   artifact_names: ['source_run_manifest.json'], next_actions: [action('retry', 'retry', { stage: 'execution' }), edit] };
 let workflow = { next_action_code: 'failed_pipeline_execution_retry_available', runs: [{ ...run, authoritative: true }] };
-const owner = modules.require('runStop').create({ tr, runFailureText: () => tr('Stopped.', '已停止。'),
+const { runFailureText = () => tr('Stopped.', '已停止。') } = modules.optional('errorText')?.create({
+  tr, staticPreview: () => false,
+}) || {};
+const owner = modules.require('runStop').create({ tr, runFailureText,
   workflow: () => workflow, latestRun: () => workflow.runs.find(row => row.authoritative),
   resourceButton: (resource, label, options) => `<button class="${(options && options.className) || 'gpi-resource-link'}" data-resource="${resource.artifact}">${label}</button>`,
-  canAct: () => true, canPreview: () => true });
+  canAct: () => true, canPreview: () => true,
+  credentialVerifiedAt: () => state.runtime?.configuration?.verified_at });
 let statedDetail;
 modules.require('runStop').create({ tr, runFailureText: (_code, detail) => {
   statedDetail = detail;
@@ -31,7 +35,7 @@ assert.equal(statedDetail.cause, 'stated_adjustment_name_unresolved');
 const confirmation = modules.optional('confirmation')?.create({
   tr, esc: window.EU_HTML.esc, iconHtml: () => '', resourceButton: () => '',
   workflow: () => workflow, session: () => state.session, busy: () => false,
-  sessionIsStale: () => false,
+  sessionIsStale: () => false, runFailureText,
   studyFamilyGapText: () => ({ refusal: 'The data do not support this study.', instead: 'Change the study or source.' }),
 });
 const events = {};
@@ -129,6 +133,7 @@ if (!catalog) {
       finished_at_epoch: Date.parse('2026-01-05T18:00:00Z') / 1000, next_actions: [offer],
     };
     state.session.archived_child_jobs = [job];
+    state.runtime = { configuration: { verified_at: '2026-01-05T16:00:00Z' } };
     workflow = state.workflow = { next_action_code: reason, next_actions: [offer], runs: [] };
     const clickJob = () => clickControl('[data-gpi-stop-action]', {
       gpiStopJob: job.job_id, gpiStopAction: offer.action_id, gpiStopWorkflow: workflow.next_action_code,
@@ -138,22 +143,76 @@ if (!catalog) {
     assert.ok(route === 'data' ? calls.pop() === 'begin_local_selection' : state.showSetup);
     state.showSetup = false;
     workflow.next_actions = [];
-    assert.equal(owner.renderJob(state.session), '', 'a withdrawn workflow offer clears the job card');
+    workflow.active_job = { job_id: job.job_id, status: 'failed' };
+    assert.equal(owner.renderJob(state.session), '', 'a withdrawn offer for this job clears its card');
     clickJob();
     assert.deepEqual(calls, []);
     assert.equal(state.showSetup, false);
     workflow.next_actions = [offer];
+    delete workflow.active_job;
     workflow.next_action_code = resolved;
-    assert.equal(owner.renderJob(state.session), '', 'the old stop cannot follow a resolved workflow');
-    clickJob();
-    assert.deepEqual(calls, []);
-    assert.equal(state.showSetup, false);
+    assert.match(owner.renderJob(state.session), /data-gpi-job-stop/,
+      'a change in the workflow label alone cannot dismiss a stop');
+    const supersedingDate = '2026-01-05T19:00:00Z';
+    for (const [where, setRevision, resetRevision] of [
+      ['study', () => { workflow.study_setup_receipt = { updated_at: supersedingDate }; },
+        () => { delete workflow.study_setup_receipt; }],
+      ['session binding', () => {
+        state.session.binding = { study_context_id: 'evening_assays', study_revision: 4 };
+        workflow.study_setup_receipt = { study_context_id: 'evening_assays', revision: 5 };
+      }, () => { delete state.session.binding; delete workflow.study_setup_receipt; }],
+      ...(kind === 'extract'
+        ? [['export', () => { workflow.bound_export_updated_at = supersedingDate; },
+          () => { delete workflow.bound_export_updated_at; }]]
+        : [['credentials', () => { state.runtime = { configuration: { verified_at: supersedingDate } }; },
+          () => { delete state.runtime; }]]),
+    ]) {
+      setRevision();
+      assert.equal(owner.renderJob(state.session), '', `a new ${where} revision supersedes the job`);
+      clickJob();
+      assert.deepEqual(calls, []);
+      assert.equal(state.showSetup, false);
+      resetRevision();
+    }
+    if (kind === 'agent-run') {
+      state.session.research_provider = { provider: 'codex' };
+      state.runtime = { configuration: { verified_at: supersedingDate } };
+      assert.match(owner.renderJob(state.session), /data-gpi-job-stop/,
+        'the API verification is unrelated to the evening Codex attempt');
+      delete state.session.research_provider;
+      delete state.runtime;
+    }
     workflow.next_action_code = reason;
     workflow.runs = [{ run_id: 'night_shift_candidate', updated_at: '2026-01-05T19:00:00Z' }];
     assert.equal(owner.renderJob(state.session), '', 'a newer run owns the workflow');
     clickJob();
     assert.deepEqual(calls, []);
     assert.equal(state.showSetup, false);
+  }
+  const job = {
+    job_id: 'dusk_assay_export', kind: 'extract', status: 'failed', error_code: 'no_export_files',
+    next_actions: [action('reexport_data', 'data_extraction', { requires_explicit_choice: true })],
+  };
+  state.session.archived_child_jobs = [job];
+  workflow = state.workflow = { next_action_code: 'provider_ready_to_generate_plan',
+    next_actions: [], runs: [{ run_id: 'prior_dusk_assay' }] };
+  assert.match(owner.renderJob(state.session), /data-gpi-job-stop/,
+    'a failed export still offers recovery when the study has a prior export and an undated run');
+  clickControl('[data-gpi-stop-action]', {
+    gpiStopJob: job.job_id, gpiStopAction: job.next_actions[0].action_id, gpiStopWorkflow: workflow.next_action_code,
+  });
+  assert.deepEqual(calls.splice(0), ['begin_local_selection']);
+
+  workflow.next_action_code = job.error_code;
+  workflow.next_actions = job.next_actions;
+  for (const [finishedAt, runUpdatedAt] of [
+    [Date.parse('2026-01-05T18:00:00Z') / 1000, undefined],
+    [undefined, '2026-01-05T17:00:00Z'],
+  ]) {
+    job.finished_at_epoch = finishedAt;
+    workflow.runs[0].updated_at = runUpdatedAt;
+    assert.match(owner.renderJob(state.session), /data-gpi-job-stop/,
+      'missing dates cannot establish that an old run replaced the evening export failure');
   }
   console.log('job stops: current workflow offer and supersession checks passed');
 }
@@ -204,9 +263,66 @@ if (catalog) {
       const name = [surface, code, cause, language].filter(Boolean).join('/');
       try {
         calls.length = drafts.length = 0;
-        workflow = state.workflow = { ...offer, runs: run ? [{ ...run, authoritative: true }] : [] };
+        workflow = state.workflow = { ...offer, runs: run ? [{ ...run, authoritative: true }] : offer.runs || [] };
         state.latestRun = run || null;
         state.session.archived_child_jobs = job ? [job] : [];
+        if (surface === 'coordinate-recovery') {
+          const card = confirmation.workflowConfirmationHtml();
+          const stop = owner.render({ savedRuns: [run] });
+          const html = card + stop;
+          assert.ok(html.trim());
+          const actions = offer.next_actions;
+          if (code === 'study_coordinate_unrecognized') {
+            assert.match(html, /dusk_assay/);
+            assert.doesNotMatch(html, /Choose a database that records it|请换一个记录了它的数据库/);
+            assert.doesNotMatch(html, /data-gpi-confirm-action/, 'the unknown coordinate needs clarification');
+          }
+          const canPlan = actions.some(({ kind, params }) => kind === 'retry'
+            || kind === 'drop_variable' || kind === 'rerun_without_element'
+            || (kind === 'edit_plan' && params.change_question !== true));
+          if (canPlan && code.startsWith('failed_pipeline_')) {
+            if (code === 'failed_pipeline_execution_retry_available') {
+              assert.match(card, /data-gpi-confirm-edit/, 'the retry card also offers fresh planning');
+              const canRetry = actions.some(choice => choice.kind === 'retry' && choice.params.stage === 'execution');
+              assert.equal(card.includes('data-gpi-confirm-action'), canRetry, 'only a projected retry offers execution');
+              if (cause.startsWith('research_pipeline_provider_timeout')) {
+                assert.deepEqual(actions.map(choice => choice.kind), ['retry', 'edit_plan']);
+              }
+            } else {
+              assert.match(card, /data-gpi-confirm-action/, 'the failed attempt keeps its workflow confirmation');
+            }
+          }
+          for (const choice of actions) {
+            assert.ok(html.includes(choice.action_id), `the ${choice.kind} choice stays visible`);
+          }
+          const controls = [...html.matchAll(/<button(?![^>]* disabled)[^>]*>/g)].map(match => match[0]);
+          assert.ok(controls.length, 'at least one visible executable action');
+          for (const button of controls) {
+            calls.length = drafts.length = 0;
+            for (const [attribute, expected] of [
+              ['data-gpi-confirm-action', 'confirm'], ['data-gpi-confirm-edit', 'edit'],
+            ]) {
+              if (button.includes(attribute)) {
+                clickControl(`[${attribute}]`, {});
+                assert.deepEqual(calls, [expected]);
+              }
+            }
+            const id = /data-gpi-stop-action="([^"]+)"/.exec(button)?.[1];
+            if (id) {
+              const choice = actions.find(action => action.action_id === id);
+              assert.ok(choice, 'the button has a projected choice');
+              const route = modules.require('runStop').actionRoute(choice, workflow);
+              clickControl('[data-gpi-stop-action]', {
+                gpiStopAction: id, gpiStopWorkflow: code,
+                ...(button.includes('data-gpi-stop-review') ? { gpiStopReview: '' } : { gpiStopRun: run.run_id }),
+              });
+              if (route === 'draft') assert.equal(drafts.length, 1);
+              else assert.deepEqual(calls, [route]);
+            }
+            assert.equal(calls.length + drafts.length, 1, 'every visible button reaches its owner');
+          }
+          continue;
+        }
         if (surface === 'outcome') {
           workflow.stages = [{ id: 'analysis', status: 'complete' }];
           const html = outcome.render(run, workflow);

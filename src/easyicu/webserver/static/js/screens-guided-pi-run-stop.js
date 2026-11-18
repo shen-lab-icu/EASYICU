@@ -34,7 +34,7 @@
 
   // Shared by rendering and click-time validation. A stale control cannot
   // act on the new run that has replaced the one it was rendered for.
-  function actionRoute(action, workflow) {
+  function actionRoute(action, workflow, job = null) {
     const params = action && action.params || {};
     const kind = action && action.kind;
     if (!action || !/^[a-z_]+_[a-f0-9]{16}$/.test(action.action_id || '')
@@ -42,15 +42,17 @@
       || action.label_key !== `stop_next_actions.${kind}`) return '';
     const code = String(workflow && workflow.next_action_code || '');
     if (kind === 'retry' && params.route === 'retry') {
-      if (params.stage === 'execution' && code === 'failed_pipeline_execution_retry_available') return 'retry';
-      return params.stage === 'planning'
-        && (PLAN_RETRY_CODES.has(code) || code === 'failed_pipeline_execution_retry_futile') ? 'confirm' : '';
+      if (!job && params.stage === 'execution' && code === 'failed_pipeline_execution_retry_available') return 'retry';
+      if (params.stage !== 'planning') return '';
+      if (job && code !== 'provider_ready_to_generate_plan') return 'draft';
+      return PLAN_RETRY_CODES.has(code) || code === 'failed_pipeline_execution_retry_futile' ? 'confirm' : '';
     }
     if (['edit_plan', 'rerun_without_element', 'use_alternative_concept', 'drop_variable'].includes(kind)
       && params.route === 'plan_edit' && params.intent === 'candidate_plan'
       && params.planner_start_mode === 'fresh' && params.requires_explicit_choice === true
       && params.requires_plan_approval === true) {
       if (kind !== 'edit_plan' || params.concept || params.element || params.step_id || params.change_question === true) return 'draft';
+      if (job && code.startsWith('failed_pipeline_')) return 'draft';
       return ['failed_pipeline_requires_fresh_plan', 'failed_pipeline_execution_retry_futile'].includes(code) ? 'confirm' : 'edit';
     }
     if (kind === 'edit_study' && params.route === 'study_edit'
@@ -74,14 +76,34 @@
       : Array.isArray(run && run.next_actions) ? run.next_actions : [];
   }
 
-  function latestJobStop(session, workflow) {
-    if (workflow?.active_job?.present) return null;
+  function jobActions(job, workflow) {
+    const reason = gateReason(job) || job.error_code;
+    // A matching workflow stop may withdraw or refine the job's offer. A
+    // prior run's actions belong to that run and cannot replace this job's.
+    const sameStop = workflow?.active_job?.job_id === job.job_id && reason === workflow.next_action_code;
+    return offeredActions(job, sameStop ? workflow : null);
+  }
+
+  function latestJobStop(session, workflow, credentialVerifiedAt) {
+    if (session?.stale?.stale || workflow?.active_job?.status === 'running'
+      || workflow?.next_action_code === 'starting') return null;
     const job = session?.archived_child_jobs?.at(-1);
     if (!job?.job_id || job.run_id || !STOP_STATUSES.has(job.status) || !['agent-run', 'extract'].includes(job.kind)) return null;
-    const reason = gateReason(job) || job.error_code;
-    if (!reason || reason !== workflow?.next_action_code) return null;
-    const started = (job.created_at_epoch || job.finished_at_epoch) * 1000;
-    if (workflow.runs?.some(run => run.run_id && !(Date.parse(run.updated_at) < started))) return null;
+    const study = workflow?.study_setup_receipt;
+    const binding = session.binding;
+    if (binding?.study_context_id && study?.study_context_id
+      && (binding.study_context_id !== study.study_context_id || binding.study_revision !== study.revision)) return null;
+    const started = (job.created_at_epoch ?? job.finished_at_epoch ?? NaN) * 1000;
+    const finished = (job.finished_at_epoch ?? NaN) * 1000;
+    const newerThan = (date, epoch) => {
+      const updated = Date.parse(date);
+      return Number.isFinite(updated) && Number.isFinite(epoch) && updated > epoch;
+    };
+    const apiCredentialChanged = job.kind === 'agent-run' && session.research_provider?.provider !== 'codex'
+      && newerThan(credentialVerifiedAt, started);
+    if (newerThan(session.created_at, started) || newerThan(study?.updated_at, finished)
+      || newerThan(workflow?.bound_export_updated_at, finished) || apiCredentialChanged
+      || workflow?.runs?.some(run => run.run_id && newerThan(run.updated_at, started))) return null;
     return job;
   }
 
@@ -102,11 +124,11 @@
     const tr = deps.tr;
     const runFailureText = typeof deps.runFailureText === 'function' ? deps.runFailureText : () => '';
 
-    function actionButtons(actions, workflow, attribute, coordinate) {
+    function actionButtons(actions, workflow, attribute, coordinate, job = null) {
       const controls = [];
       const seen = new Set();
       for (const action of actions) {
-        const route = actionRoute(action, workflow);
+        const route = actionRoute(action, workflow, job);
         const key = route === 'draft' ? action.action_id : route;
         if (!route || seen.has(key)) continue;
         const label = actionLabel(action, route, workflow, tr);
@@ -141,11 +163,19 @@
     }
 
     function cause(run) {
-      const status = String(run.run_status || '').toLowerCase();
+      const status = String(run.run_status || run.status || '').toLowerCase();
       const code = gateReason(run) || String(run.error_code || '')
-        || (status === 'cancelled' ? 'research_pipeline_cancelled' : '');
+        || (status === 'cancelled' ? (run.kind === 'extract' ? 'extract_cancelled' : 'research_pipeline_cancelled') : '');
       const detail = run.gate_detail && typeof run.gate_detail === 'object' ? run.gate_detail : {};
       const reason = detail.reason_code || run.gate_detail_code;
+      const workflow = deps.workflow?.();
+      const coordinateStop = workflow?.next_action_code;
+      if (['study_coordinate_unavailable', 'study_coordinate_unrecognized'].includes(coordinateStop)
+        && currentRun(run, workflow, deps.latestRun?.())) {
+        const missing = workflow.next_actions?.map(action => action.params?.concept).filter(Boolean);
+        const currentCause = runFailureText(coordinateStop, { missing });
+        if (currentCause) return currentCause;
+      }
       if (reason === 'provider_http_error' || reason === 'provider_timeout'
         || code === 'research_pipeline_provider_timeout') {
         const message = tr(
@@ -170,9 +200,9 @@
 
     function renderJob(session) {
       const workflow = deps.workflow?.();
-      const job = latestJobStop(session, workflow);
+      const job = latestJobStop(session, workflow, deps.credentialVerifiedAt?.());
       if (!deps.canAct?.() || !job || !window.EU_PRODUCT_LABELS?.stopAction) return '';
-      const controls = actionButtons(offeredActions(job, workflow), workflow, 'data-gpi-stop-job', job.job_id);
+      const controls = actionButtons(jobActions(job, workflow), workflow, 'data-gpi-stop-job', job.job_id, job);
       if (!controls.length) return '';
       return `<div class="gpi-run-stop" role="note" data-gpi-job-stop><p>${esc(cause(job))}</p><div class="gpi-run-stop-actions">${controls.join('')}</div></div>`;
     }
@@ -185,5 +215,5 @@
     return Object.freeze({ render, renderJob, stopped });
   }
 
-  window.EasyICU.guidedPi.declare('runStop', { create, stopped, actionRoute, currentRun, offeredActions, latestJobStop });
+  window.EasyICU.guidedPi.declare('runStop', { create, stopped, actionRoute, currentRun, offeredActions, jobActions, latestJobStop });
 })();

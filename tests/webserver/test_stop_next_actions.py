@@ -6,6 +6,7 @@ import ast
 import inspect
 import json
 import subprocess
+from itertools import product
 from pathlib import Path
 from types import SimpleNamespace
 from typing import get_args
@@ -19,6 +20,7 @@ from easyicu.research_agent.planning.progressive_contract import (
 from easyicu.webserver import agent_pipeline_runs
 from easyicu.webserver import agent_runs, stop_next_actions as owner
 from easyicu.webserver.pi_copilot.projections import (
+    project_archived_job_stop,
     project_job,
     project_run_outcome,
     project_run_row,
@@ -305,12 +307,11 @@ _DESIGN_STOPS = frozenset({
     "research_pipeline_metadata_provider_capacity_unavailable",
     "research_pipeline_metadata_shared_scope_unavailable",
     "research_pipeline_planning_native_metadata_invalid",
-    "study_coordinate_unrecognized",
 })
 
 
 def _wrapped_stop_routes(reason, cause):
-    codes = {reason, cause}
+    codes = {reason} if owner.STOP_POLICIES.get(reason) == "retry" else {reason, cause}
     policies = {owner.STOP_POLICIES.get(code) for code in codes}
     if codes & _DESIGN_STOPS:
         return []
@@ -324,6 +325,7 @@ def _wrapped_stop_routes(reason, cause):
         "question_treatment_use_unrecorded",
         "question_mean_survival_unplanned",
         "study_stated_variable_unrecorded",
+        "study_coordinate_unrecognized",
         "research_pipeline_hospital_first_stay_restriction_unverified",
     }:
         return ["draft"]
@@ -349,6 +351,13 @@ def _stop_card_cases():
 
     terminal = _owned_terminal_codes() | CAPABILITY_APPROVAL_CODES | {"caller_bound_population_mode_conflict"}
     assert terminal <= owner.STOP_POLICIES.keys(), sorted(terminal - owner.STOP_POLICIES.keys())
+    from tests.webserver.copilot.research_workflow_fixtures import complete_study
+
+    study = {**complete_study(), "question": "Can collection shifts explain the evening assay distribution?"}
+    job_workflow = build_research_workflow_snapshot(
+        study=study, active_export_present=True, active_job=None, latest_run=None,
+    ).model_dump(mode="json")
+    assert job_workflow["next_action_code"] == "provider_ready_to_generate_plan"
     cases = []
     for code, policy in sorted(owner.STOP_POLICIES.items()):
         if code == "human_plan_review_required":
@@ -365,12 +374,9 @@ def _stop_card_cases():
         workflow_code = "failed_pipeline_requires_fresh_plan" if policy == "retry" else code
         cases.append({
             "code": code, "surface": "job",
-            "job": {**job, "job_id": "evening_export", "kind": "agent-run"},
-            "design": code in _DESIGN_STOPS or policy == "retry",
-            "workflow": {
-                "next_action_code": "provider_ready_to_generate_plan" if policy == "retry" else code,
-                "next_actions": actions if policy != "retry" else [],
-            },
+            "job": {**job, "kind": "extract" if code == "no_export_files" else "agent-run"},
+            "design": code in _DESIGN_STOPS,
+            "workflow": job_workflow,
         })
         if code in PLAN_APPROVAL_STOPS or code == "operator_plan_approval_required":
             # An approval pause renders in the confirmation owner, not as a failed run.
@@ -380,6 +386,11 @@ def _stop_card_cases():
                 "code": code, "surface": "run", "design": code in _DESIGN_STOPS,
                 "run": {**run, "next_actions": actions}, "workflow": {"next_action_code": workflow_code},
             })
+    for kind in ("agent-run", "extract"):
+        job = project_job({"id": "evening_collection_cancelled", "kind": kind, "status": "cancelled"})
+        legacy = project_archived_job_stop({**job, "next_actions": []})
+        assert legacy["next_actions"] == job["next_actions"]
+        cases.append({"code": kind, "surface": "job", "job": legacy, "workflow": job_workflow})
     analysis_reasons = set(get_args(get_args(AnalysisOutcome.model_fields["reason_code"].annotation)[0]))
     manuscript_reasons = set(get_args(get_args(ManuscriptOutcome.model_fields["reason_code"].annotation)[0]))
     details = {
@@ -403,10 +414,11 @@ def _stop_card_cases():
         }
         gate = {"status": "blocked", "reason": "research_agent_pipeline_failed_closed", "detail": detail}
         actions = owner.project_stop_next_actions(gate)
+        routes = _wrapped_stop_routes(reason, cause)
         cases.append({
             "code": reason, "cause": cause, "surface": "run",
-            "design": bool({reason, cause} & _DESIGN_STOPS),
-            "routes": _wrapped_stop_routes(reason, cause),
+            "design": not routes,
+            "routes": routes,
             "run": {
                 "run_id": "synthetic", "run_status": "failed",
                 "gate_reason": gate["reason"], "gate_detail": detail,
@@ -515,7 +527,7 @@ def _stop_card_cases():
         "plan_scientific_changes_required", "planner_checkpoint_resume_available",
         "scientific_plan_review_policy_stale", "study_family_database_out_of_scope",
         "study_family_reading_disagreement", "study_primary_outcome_confirmation_required",
-        "study_coordinate_unavailable", "plan_icd_source_unverified",
+        "study_coordinate_unavailable", "study_coordinate_unrecognized", "plan_icd_source_unverified",
     ):
         cases.append({
             "code": code, "surface": "review", "workflow": {
@@ -532,6 +544,97 @@ def _stop_card_cases():
     return cases
 
 
+def _recovery_contract_cases(monkeypatch):
+    from easyicu.research_agent import concept_availability
+    from easyicu.webserver import study_contexts
+    from tests.webserver.copilot.research_workflow_fixtures import complete_study
+
+    # Cross the renderer's inputs independently, including receipt shapes
+    # without a plan. The source cases below also exercise the real workflow.
+    codes = (
+        "failed_pipeline_requires_fresh_plan",
+        "failed_pipeline_execution_retry_available",
+        "failed_pipeline_execution_retry_futile",
+        "provider_ready_to_generate_plan",
+        "planner_checkpoint_resume_available",
+        "plan_execution_upgrade_required",
+    )
+    stops = (
+        ("research_pipeline_execution_failed", ({}, {"step_id": "align_dusk_assays"})),
+        ("design_element_unsupported", (
+            {}, {"element": "dusk_calibration"}, {"element": "dusk_calibration", "concept": "dusk_assay",
+                                                 "question_required": False},
+        )),
+        ("research_pipeline_required_concept_without_values", (
+            {}, {"concept": "dusk_assay"}, {"missing_concepts": ["dusk_assay", "synthetic_source"]},
+        )),
+        ("research_pipeline_provider_timeout", ({}, {"step_id": "align_dusk_assays"})),
+    )
+    for (reason, details), code, wrapped, has_plan in product(stops, codes, (False, True), (False, True)):
+        for coordinates in details:
+            detail = {"message": "The dusk assays were logged against different reference windows.",
+                      **coordinates}
+            gate_reason = reason
+            if wrapped:
+                gate_reason = "research_agent_pipeline_failed_closed"
+                detail["reason_code"] = reason
+            if reason == "research_pipeline_required_concept_without_values":
+                detail["database"] = "miiv"
+            actions = owner.project_stop_next_actions(
+                {"status": "blocked", "reason": gate_reason, "detail": detail},
+                execution_retry_available=code == "failed_pipeline_execution_retry_available",
+            )
+            yield {
+                "code": code, "surface": "coordinate-recovery",
+                "cause": f"{reason}/{list(coordinates)}/{wrapped=}/{has_plan=}",
+                "run": {
+                    "run_id": "dusk_assays", "run_status": "failed", "gate_status": "blocked",
+                    "gate_reason": gate_reason, "gate_detail": detail,
+                    "artifact_names": ["agent_plan.json"] if has_plan else [],
+                    "next_actions": actions,
+                },
+                "workflow": {"next_action_code": code, "next_actions": actions},
+            }
+
+
+    study = {**complete_study(), "question": "Compare the evening reading across sampling schedules."}
+    for wrapped, has_plan, available, recognized in product((False, True), repeat=4):
+        if available and not recognized:
+            continue
+        gate_reason = "research_agent_pipeline_failed_closed" if wrapped else "study_coordinate_unavailable"
+        detail = {
+            **({"reason_code": "study_coordinate_unavailable"} if wrapped else {}),
+            "missing_concepts": ["dusk_assay"],
+            "message": "The night register may use a different name for this measurement.",
+        }
+        run = {
+            "run_id": "night_register", "run_type": "full", "run_status": "failed",
+            "engine": "easyicu.research_agent.pipeline", "gate_status": "blocked",
+            "gate_reason": gate_reason, "gate_detail": detail,
+            "scientific_configuration_sha256": study_contexts.scientific_configuration_sha256(study),
+            "artifact_names": [
+                "source_run_manifest.json",
+                *(["agent_plan.json", "evidence_ledger.json"] if has_plan else []),
+            ],
+        }
+        with monkeypatch.context() as patch:
+            patch.setattr(
+                concept_availability, "explain_concept_availability",
+                lambda **_kw: SimpleNamespace(available=available, reason=(
+                    "recorded" if available else "absent_from_source" if recognized else "concept_not_found"
+                )),
+            )
+            workflow = build_research_workflow_snapshot(
+                study=study, active_export_present=True, active_job=None, latest_run=run,
+            )
+        yield {
+            "code": workflow.next_action_code, "surface": "coordinate-recovery",
+            "cause": f"source-coordinate/{wrapped=}/{has_plan=}/{available=}/{recognized=}",
+            "run": {**run, "artifact_names": [name for name in run["artifact_names"] if name != "source_run_manifest.json"]},
+            "workflow": workflow.model_dump(mode="json"),
+        }
+
+
 def test_every_stop_card_has_a_forward_action_with_an_owner(monkeypatch) -> None:
     monkeypatch.setattr(
         owner, "concept_selection_policy",
@@ -539,7 +642,7 @@ def test_every_stop_card_has_a_forward_action_with_an_owner(monkeypatch) -> None
         if concept == "synthetic_source" else None,
     )
     monkeypatch.setattr(owner, "explain_concept_availability", lambda **_kw: SimpleNamespace(available=True))
-    cases = _stop_card_cases()
+    cases = [*_stop_card_cases(), *_recovery_contract_cases(monkeypatch)]
     root = Path(__file__).resolve().parents[2]
     js = root / "src/easyicu/webserver/static/js"
     result = subprocess.run(
@@ -550,7 +653,7 @@ def test_every_stop_card_has_a_forward_action_with_an_owner(monkeypatch) -> None
                 "screens-guided-pi-confirmation-data.js", "screens-guided-pi-confirmation.js",
                 "screens-guided-pi-target-trial.js", "screens-guided-pi-run-stop.js",
                 "screens-guided-pi-events.js", "screens-guided-pi-run-outcome.js",
-                "screens-guided-pi-plan-actions.js",
+                "screens-guided-pi-plan-actions.js", "screens-guided-pi-error-text.js",
             )),
         ],
         cwd=root, input=json.dumps(cases), capture_output=True, text=True, timeout=30,
@@ -885,10 +988,8 @@ def test_study_coordinates_without_alternatives_keep_their_own_edit_paths(monkey
 def test_a_planning_menu_gap_offers_no_plan_change() -> None:
     # The source provides the concept; EasyICU's menu lacks it. No edit, drop
     # or alternative fixes that on this build.
-    for code, concept in (("planning_menu_missing_supported_concept", "icu_death"),
-                          ("study_coordinate_unrecognized", "icu_mortality_72h")):
-        detail = {"reason_code": code, "missing_concepts": [concept]}
-        assert owner.next_actions_for_stop("data_foundation_blocked", detail, database="hirid") == []
+    detail = {"reason_code": "planning_menu_missing_supported_concept", "missing_concepts": ["icu_death"]}
+    assert owner.next_actions_for_stop("data_foundation_blocked", detail, database="hirid") == []
 
 
 def test_a_typed_single_missing_concept_can_be_dropped() -> None:
@@ -987,6 +1088,83 @@ def test_one_recovered_coordinate_leaves_the_other_coordinate_blocked(monkeypatc
     assert snapshot.next_action_code == "failed_pipeline_requires_fresh_plan"
     assert [action.kind for action in snapshot.next_actions] == ["edit_plan"]
     assert snapshot.next_actions[0].params.change_question is None
+
+
+@pytest.mark.parametrize("shape", ["wrapped", "gate_reason", "gate_reason_code"])
+@pytest.mark.parametrize("state", ["available", "futile", "concept_not_found", "superseded"])
+def test_a_source_stop_is_recomputed_for_the_current_study(monkeypatch, shape, state):
+    from easyicu.research_agent import concept_availability
+    from easyicu.webserver import study_contexts
+    from tests.webserver.copilot.research_workflow_fixtures import complete_study
+
+    study = {**complete_study(), "question": "Do dusk assay readings move with the shift schedule?"}
+    run = {
+        "run_id": "dusk_assay", "run_type": "full", "run_status": "failed",
+        "engine": "easyicu.research_agent.pipeline", "gate_status": "blocked",
+        "scientific_configuration_sha256": study_contexts.scientific_configuration_sha256(study),
+        "artifact_names": ["agent_plan.json", "evidence_ledger.json", "source_run_manifest.json"],
+        "gate_detail": {
+            "missing_concepts": ["dusk_assay"],
+            "message": "The assay recorded after handover uses a different codebook.",
+        },
+    }
+    if shape == "wrapped":
+        run["gate_reason"] = "research_agent_pipeline_failed_closed"
+        run["gate_detail"].update(
+            reason_code="deterministic_standard_executor_failed_closed",
+            cause_code="study_coordinate_unavailable",
+        )
+    else:
+        run[shape] = "study_coordinate_unavailable"
+    available = False
+    reason = "absent_from_source"
+    monkeypatch.setattr(
+        concept_availability, "explain_concept_availability",
+        lambda **_kw: SimpleNamespace(available=available, reason=reason),
+    )
+    monkeypatch.setattr(owner, "concept_selection_policy", lambda _concept: None)
+    inputs = dict(study=study, active_export_present=True, active_job=None, latest_run=run,
+                  execution_retry={"state": state})
+    assert build_research_workflow_snapshot(**inputs).next_action_code == "study_coordinate_unavailable"
+
+    if state == "superseded":
+        inputs["study"] = {**study, "question": "Which assay has the most complete evening records?"}
+    else:
+        available = state != "concept_not_found"
+        reason = "recorded" if available else "concept_not_found"
+    snapshot = build_research_workflow_snapshot(**inputs)
+    if state == "concept_not_found":
+        assert snapshot.next_action_code == "study_coordinate_unrecognized"
+        assert [(action.kind, action.params.change_question) for action in snapshot.next_actions] == [
+            ("edit_plan", True),
+        ]
+    elif shape == "wrapped" and state in {"available", "futile"}:
+        retry = state == "available"
+        assert snapshot.next_action_code == (
+            "failed_pipeline_execution_retry_available" if retry else "failed_pipeline_execution_retry_futile"
+        )
+        assert [action.kind for action in snapshot.next_actions] == (["retry", "edit_plan"] if retry else ["edit_plan"])
+    else:
+        assert snapshot.next_action_code == "failed_pipeline_requires_fresh_plan"
+        assert [action.kind for action in snapshot.next_actions] == ["edit_plan"]
+
+
+def test_a_wrapped_retry_owns_the_stop_even_with_unfinished_work_detail():
+    gate = {
+        "status": "blocked", "reason": "research_agent_pipeline_failed_closed",
+        "detail": {
+            "reason_code": "research_pipeline_provider_timeout", "cause_code": "study_coordinate_unavailable",
+            "intake_error_code": "export_time_window_unbounded",
+            "step_id": "match_dusk_assays", "element": "dusk_calibration",
+            "missing_concepts": ["dusk_assay"],
+            "message": "The model timed out while reconciling the two evening sampling windows.",
+        },
+    }
+    assert [choice["kind"] for choice in owner.project_stop_next_actions(gate)] == ["retry"]
+    choices = owner.project_stop_next_actions(gate, execution_retry_available=True)
+    assert [(choice["kind"], choice["params"].get("stage")) for choice in choices] == [
+        ("retry", "execution"), ("edit_plan", None),
+    ]
 
 
 def test_typed_missing_data_survives_the_exception_receipt(tmp_path) -> None:

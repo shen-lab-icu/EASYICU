@@ -99,15 +99,18 @@ def test_an_assessment_never_reaches_a_run_that_is_not_a_failed_execution() -> N
 def _project(monkeypatch: pytest.MonkeyPatch, row: dict, answer: Any) -> Any:
     from easyicu.webserver.pi_copilot import workflow as owner
 
-    monkeypatch.setattr(owner.sources, "load_registry", lambda **_kwargs: {})
-    monkeypatch.setattr(owner, "registered_export_matches_study", lambda *_args: True)
+    study = {**complete_study(), "updated_at": "2026-10-01T06:30:00Z"}
+    registry = {"sources": [{
+        "path": study["data_source"]["path"], "ok": True,
+        "generated": "Evening export of the assay roster", "registered_at": "2026-10-01T06:15:00Z",
+    }]}
+    monkeypatch.setattr(owner.sources, "load_registry", lambda **_kwargs: registry)
     monkeypatch.setattr(owner, "list_bound_run_history", lambda **_kwargs: [row])
     monkeypatch.setattr(owner.agent_pipeline_runs, "pending_review", lambda _run_id: None)
     monkeypatch.setattr(owner.agent_runs, "read_run_review", lambda _project_dir: {})
     monkeypatch.setattr(
         owner.agent_pipeline_runs, "execution_retry_assessment", answer
     )
-    study = complete_study()
     return owner.build_project_workflow_projection(
         study_context_id=study["id"], study_override=study,
     ).workflow
@@ -128,6 +131,8 @@ def test_the_project_projection_asks_the_resume_owner_for_the_failed_run(
     workflow = _project(monkeypatch, _failed_execution(complete_study()), answer)
 
     assert workflow.next_action_code == "failed_pipeline_execution_retry_futile"
+    assert workflow.study_setup_receipt.updated_at == "2026-10-01T06:30:00+00:00"
+    assert workflow.bound_export_updated_at == "2026-10-01T06:15:00+00:00"
     assert [call["source_run_id"] for call in asked] == ["run-execution-failed"]
     assert "max_age_seconds" not in asked[0]
 

@@ -32,6 +32,7 @@
     const stopOwner = MODULES.optional('runStop');
     const RUN_STOP = stopOwner ? stopOwner.create({ tr, runFailureText,
       workflow: () => state.workflow, latestRun: () => state.latestRun,
+      credentialVerifiedAt: () => state.runtime?.configuration?.verified_at,
       canAct: () => Boolean(state.session) && !state.busy && !state.childJobId && !state.projectLoading && !sessionIsStale(),
       canPreview: () => Boolean(MODULES.optional('preview')),
       resourceButton: RESOURCE_OWNER.button,

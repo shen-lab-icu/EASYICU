@@ -332,6 +332,7 @@ _EDIT_CODES = frozenset(
 
 # Regeneration on an unchanged question replays these refusals.
 _QUESTION_EDIT_CODES = frozenset({
+    "study_coordinate_unrecognized",
     *WINDOWED_SUMMARY_STOP_MESSAGES,
     "question_named_level_undistinguished",
     "question_treatment_use_unrecorded",
@@ -405,12 +406,6 @@ _STUDY_EDIT_FIELDS = {
     "research_pipeline_demo_planning_authority_stale": "source",
     "study_coordinate_unavailable": "source_or_question",
 }
-# These detail codes may be wrapped by a run-level gate. Neither a generic
-# edit nor regeneration can fix the application's missing reader or menu.
-_UNAVAILABLE_OWNER_CODES = frozenset({
-    "planning_menu_missing_supported_concept",
-    "study_coordinate_unrecognized",
-})
 STOP_POLICIES = {
     # An occupied request may still be using the remote service; neither a
     # plan edit nor retry establishes that its capacity is available.
@@ -433,7 +428,9 @@ STOP_POLICIES = {
     **dict.fromkeys(_DATA_CODES, "data"),
     **dict.fromkeys(_SCOPE_CODES, "scope"),
     **dict.fromkeys(_STUDY_EDIT_FIELDS, "study_edit"),
-    **dict.fromkeys(_UNAVAILABLE_OWNER_CODES, "none"),
+    # Only the application can restore a supported coordinate to its menu.
+    "planning_menu_missing_supported_concept": "none",
+    "study_coordinate_unrecognized": "edit_plan",
     **dict.fromkeys({
         "research_pipeline_codex_user_auth_provider_required",
         "research_pipeline_codex_user_auth_required",
@@ -443,6 +440,7 @@ STOP_POLICIES = {
     **dict.fromkeys({
         "result_append_source_changed",
         "no_export_files",
+        "extract_cancelled",
         "research_pipeline_manifest_invalid",
         "research_pipeline_manifest_required",
         "research_pipeline_export_cohort_mismatch",
@@ -567,6 +565,16 @@ def _available_alternative(
     return alternative if availability.available else None
 
 
+def stop_reason_codes(reason: str, detail: Mapping[str, Any]) -> tuple[str, ...]:
+    """Read the controlling reason and its typed diagnostic codes."""
+
+    codes = (_code(reason), _code(detail.get("reason_code")))
+    for index, code in enumerate(codes, start=1):
+        if code in _RETRY_CODES:
+            return tuple(item for item in codes[:index] if item is not None)
+    return tuple(item for item in (*codes, _code(detail.get("cause_code"))) if item is not None)
+
+
 def next_actions_for_stop(
     reason_code: str,
     detail: Mapping[str, Any] | None = None,
@@ -586,14 +594,14 @@ def next_actions_for_stop(
     reason = _code(reason_code)
     if reason is None:
         return []
-    cause = _code(detail.get("cause_code"))
-    inner = _code(detail.get("reason_code"))
-    # A transport or cancellation stop can carry details about the unfinished
-    # work. Its own retry policy still applies.
-    codes = (reason,) if reason in _RETRY_CODES else (reason, inner, cause)
-    policies = {STOP_POLICIES.get(code) for code in codes if code is not None}
+    codes = stop_reason_codes(reason, detail)
+    policies = {STOP_POLICIES.get(code) for code in codes}
     if "none" in policies:
         return []
+    # A retry stop may also describe the work it interrupted. Keep its
+    # recovery independent of that work's coordinates and intake details.
+    if reason in _RETRY_CODES or _code(detail.get("reason_code")) in _RETRY_CODES:
+        return [_action("retry", RetryParams())]
     if "data_extraction" in policies or "export_time_window_unbounded" in (
         *codes, _code(detail.get("intake_error_code")),
     ):
@@ -621,6 +629,8 @@ def next_actions_for_stop(
     edit = _action("edit_plan", PlanEditParams(
         **coordinates, change_question=True if question_edit or (data_stop and not concept) else None,
     ))
+    if question_edit:
+        return [edit]
     # The study's own exposure or outcome cannot simply be dropped.
     if (data_stop or coordinate_absent) and concepts:
         actions = []
@@ -644,7 +654,7 @@ def next_actions_for_stop(
         return actions if coordinate_absent else [*actions, edit]
     if coordinate_absent:
         return [_action("edit_study", StudyEditParams(field="source_or_question"))]
-    if question_edit or data_stop:
+    if data_stop:
         return [edit]
     if "retry" in policies:
         return [_action("retry", RetryParams())]
@@ -709,7 +719,10 @@ def project_stop_next_actions(
         for action in actions
     ):
         fallback = [action for action in actions if action.kind != "retry"]
-        actions = [_action("retry", RetryParams(stage="execution")), *fallback]
+        actions = [
+            _action("retry", RetryParams(stage="execution")),
+            *(fallback or [_action("edit_plan", PlanEditParams())]),
+        ]
     return [
         action.model_dump(mode="json", exclude_none=True)
         for action in actions
@@ -721,4 +734,5 @@ __all__ = [
     "StopNextAction",
     "next_actions_for_stop",
     "project_stop_next_actions",
+    "stop_reason_codes",
 ]

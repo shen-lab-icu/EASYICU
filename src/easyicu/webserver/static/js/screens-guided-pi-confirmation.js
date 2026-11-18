@@ -41,6 +41,10 @@
         ) : tr('I want to change the data source or research question as follows: ', '我想按以下内容修改数据源或研究问题：'),
       ],
     }[field];
+    if (action.kind === 'retry') pair = [
+      tr('Discuss retrying the stopped task', '讨论如何重试已停止的任务'),
+      tr('I want to retry the stopped task. Help me review what is needed to run it again. ', '我想重试已停止的任务。请帮我检查需要满足哪些条件。'),
+    ];
     if (action.kind === 'edit_plan' && action.params?.change_question === true) pair = [
       tr('Revise the research question', '修改研究问题'),
       tr('To address the issue above, I want to revise the research question as follows: ', '为解决上述问题，我想按以下内容修改研究问题：'),
@@ -48,6 +52,10 @@
     else if (action.kind === 'edit_plan' && target) pair = [
       tr(`Revise ${target} in the plan`, `修改计划中的 ${target}`),
       tr(`I want to revise ${target} as follows: `, `我想按以下内容修改 ${target}：`),
+    ];
+    else if (action.kind === 'edit_plan') pair = [
+      tr('Revise the plan', '修改计划'),
+      tr('I want to revise the plan for the stopped task as follows: ', '我想按以下内容修改已停止任务的计划：'),
     ];
     if (action.kind === 'rerun_without_element' && target) pair = [
       tr(`Plan without ${target}`, `制定不含 ${target} 的计划`),
@@ -70,10 +78,10 @@
       || (action.kind === 'edit_plan' && action.params?.change_question === true));
   }
 
-  function offersFreshPlan(actions) {
+  function offersPlanRecovery(actions) {
     return !Array.isArray(actions) || actions.some(({ kind, params }) =>
-      (kind === 'retry' && params.stage === 'planning')
-      || (kind === 'edit_plan' && !params.concept && !params.element && !params.step_id && !params.change_question));
+      ['retry', 'rerun_without_element', 'drop_variable'].includes(kind)
+      || (kind === 'edit_plan' && params.change_question !== true));
   }
 
   function create(host) {
@@ -198,9 +206,10 @@
       ));
       // The failed run may require a changed question or source, or have no
       // authorized remedy. Its typed choices also govern this review card.
-      const freshPlanOffered = offersFreshPlan(workflow.next_actions);
-      if ((failedRun || workflow.next_actions?.length) && !freshPlanOffered
-        && ['failed_pipeline_requires_fresh_plan', 'failed_pipeline_execution_retry_futile'].includes(code)) {
+      const planRecoveryOffered = offersPlanRecovery(workflow.next_actions);
+      if ((failedRun || workflow.next_actions?.length) && !planRecoveryOffered
+        && ['failed_pipeline_requires_fresh_plan', 'failed_pipeline_execution_retry_futile',
+          'failed_pipeline_execution_retry_available'].includes(code)) {
         return studyStopConfirmation(workflow, code);
       }
       const failureReason = typeof host.runFailureText !== 'function'
@@ -303,8 +312,9 @@
         approve: tr('Generate fresh plan', '重新生成计划'),
       };
       if (code === 'failed_pipeline_execution_retry_available') return {
-        code, grants: ['provider_run'],
-        hideEdit: !freshPlanOffered,
+        code, grants: ['provider_run'], hideEdit: !planRecoveryOffered,
+        nonApprovable: Array.isArray(workflow.next_actions)
+          && !workflow.next_actions.some(action => action.kind === 'retry' && action.params?.stage === 'execution'),
         message: tr(
           'Retry analysis from the failed step using the exact approved plan and unchanged study configuration. Reuse completed steps and do not run the Planner again.',
           '研究配置未改变。请复用精确批准的计划和已完成步骤，从失败步骤重新执行分析；不要再次运行 Planner。',

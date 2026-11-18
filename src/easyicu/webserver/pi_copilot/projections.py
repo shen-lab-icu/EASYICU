@@ -5,6 +5,7 @@ from __future__ import annotations
 import hashlib
 import json
 import re
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Dict, Iterable, List, Literal, Mapping, Optional
 
@@ -38,6 +39,7 @@ class StudySetupReceipt(BaseModel):
     )
     study_context_id: str
     revision: int = Field(ge=0)
+    updated_at: Optional[str] = None
     configured_fields: List[str] = Field(default_factory=list, max_length=24)
     configuration: Mapping[str, Any]
 
@@ -410,6 +412,18 @@ def project_study_context(
     )
 
 
+def project_revision_timestamp(value: Any) -> Optional[str]:
+    """Limit revision metadata to a timezone-qualified timestamp."""
+
+    if not isinstance(value, str) or len(value) > 64:
+        return None
+    try:
+        stamp = datetime.fromisoformat(value.replace("Z", "+00:00"))
+        return stamp.astimezone(timezone.utc).isoformat() if stamp.tzinfo else None
+    except (ValueError, OverflowError):
+        return None
+
+
 def project_study_setup_receipt(study: Mapping[str, Any]) -> StudySetupReceipt:
     """Project the exact bounded StudyContext fields used by workflow review."""
 
@@ -489,9 +503,32 @@ def project_study_setup_receipt(study: Mapping[str, Any]) -> StudySetupReceipt:
     return StudySetupReceipt(
         study_context_id=str(projected.get("id") or ""),
         revision=int(projected.get("revision") or 0),
+        updated_at=project_revision_timestamp(study.get("updated_at")),
         configured_fields=[key for key, value in configuration.items() if bool(value)],
         configuration=configuration,
     )
+
+
+def _job_launch_stop_gate(status: Any, kind: Any, error_code: Optional[str]) -> Dict[str, Any]:
+    if status == "failed" and error_code in STOP_POLICIES:
+        return {"status": "blocked", "reason": error_code}
+    if status == "cancelled" and kind in ("extract", "agent-run"):
+        reason = "extract_cancelled" if kind == "extract" else "research_pipeline_cancelled"
+        return {"status": "blocked", "reason": reason}
+    return {}
+
+
+def project_archived_job_stop(job: Mapping[str, Any]) -> Dict[str, Any]:
+    """Restore choices for a bare archived launch using its typed receipt."""
+
+    projected = dict(job)
+    if job.get("kind") in ("extract", "agent-run") and not (
+        job.get("run_id") or job.get("gate_reason_code") or job.get("next_actions")
+    ):
+        gate = _job_launch_stop_gate(job.get("status"), job.get("kind"), stable_code(job.get("error_code")))
+        if gate:
+            projected["next_actions"] = project_stop_next_actions(gate)
+    return projected
 
 
 def project_job(snapshot: Optional[Mapping[str, Any]]) -> Dict[str, Any]:
@@ -598,12 +635,10 @@ def _project_job(
     run_id = stable_code(result.get("run_id"))
     gate = result.get("gate")
     gate = RunGate.from_payload(gate).to_dict() if isinstance(gate, Mapping) else {}
-    stop_gate = gate
     error_code = _safe_error_code(snapshot.get("error"))
-    if not gate.get("reason") and snapshot.get("status") == "failed" and error_code in STOP_POLICIES:
-        # A launch may stop before it has a run receipt. The existing job
-        # projection already owns this code; no message supplies coordinates.
-        stop_gate = {"status": "blocked", "reason": error_code}
+    stop_gate = gate if gate.get("reason") else _job_launch_stop_gate(
+        snapshot.get("status"), snapshot.get("kind"), error_code,
+    )
     gate_checks = {
         str(item.get("id") or "").strip(): bool(item.get("passed"))
         for item in (gate.get("checks") or [])
@@ -1815,10 +1850,12 @@ __all__ = [
     "ensure_safe_projection",
     "gate_detail_projection",
     "path_digest",
+    "project_archived_job_stop",
     "project_artifacts",
     "project_capabilities",
     "project_job",
     "project_job_for_replay",
+    "project_revision_timestamp",
     "project_run_row",
     "project_study_context",
     "project_study_setup_receipt",

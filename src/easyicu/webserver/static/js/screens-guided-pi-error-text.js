@@ -838,8 +838,8 @@
           : tr('EasyICU\'s own planning list is missing a variable it can read from this database. This is a gap in EasyICU, not in your data. Planning stopped before calling the model; download the problem report and send it to support.', 'EasyICU 自己的规划清单漏了一个它能从这个数据库读取的变量。这是 EasyICU 的问题，不是数据的问题。已在调用模型前停止；请下载问题报告发给支持人员。'),
         // EasyICU named a variable its own dictionary does not know.
         study_coordinate_unrecognized: list
-          ? tr(`EasyICU did not recognise the name it gave this study's outcome or exposure: ${list}. This is a gap in EasyICU, not in your data. Planning stopped before calling the model; download the problem report and send it to support.`, `EasyICU 没有识别出它给本研究结局或暴露变量起的名字：${list}。这是 EasyICU 的问题，不是数据的问题。已在调用模型前停止；请下载问题报告发给支持人员。`)
-          : tr('EasyICU did not recognise the name it gave this study\'s outcome or exposure. This is a gap in EasyICU, not in your data. Planning stopped before calling the model; download the problem report and send it to support.', 'EasyICU 没有识别出它给本研究结局或暴露变量起的名字。这是 EasyICU 的问题，不是数据的问题。已在调用模型前停止；请下载问题报告发给支持人员。'),
+          ? tr(`EasyICU did not recognise the name it gave this study's outcome or exposure: ${list}. Check the variable name and clarify it in the research question.`, `EasyICU 没有识别出它给本研究结局或暴露变量起的名字：${list}。请核对变量名称，并在研究问题中写清楚。`)
+          : tr('EasyICU did not recognise the name it gave this study\'s outcome or exposure. Check the variable name and clarify it in the research question.', 'EasyICU 没有识别出它给本研究结局或暴露变量起的名字。请核对变量名称，并在研究问题中写清楚。'),
         outcome_concept_undeclared: tr('No executable outcome variable was named; state the outcome in the question (for example in-hospital death).', '没有可执行的结局变量；请在问题中写明结局（例如住院死亡）。'),
         outcome_concept_unavailable: list
           ? tr(`The outcome variable ${list} is not in this data.`, `结局变量 ${list} 不在这份数据里。`)
@@ -1007,6 +1007,9 @@
       }
       const value = String(code || '').trim();
       if (!value) return '';
+      if (value === 'study_coordinate_unavailable' || value === 'study_coordinate_unrecognized') {
+        return runFailureDetailText({ ...detail, code: value });
+      }
       const resumeFailure = developmentResumeFailureText(value);
       if (resumeFailure) return resumeFailure;
       const suffix = runFailureDetailText(detail);
@@ -1027,6 +1030,10 @@
         research_pipeline_first_observed_input_binding_unavailable: tr(
           'The first ICU population cannot currently be bound to the research input, so analysis has not started. Check the data source and preparation result, or contact support for help.',
           '当前尚无法将首次 ICU 人群准备结果绑定到实际研究数据，分析尚未开始。请核对数据源和准备结果，或联系支持人员处理。',
+        ),
+        extract_cancelled: tr(
+          'Data extraction was cancelled. When ready, choose the data to extract.',
+          '数据提取已取消。准备好后，请选择要提取的数据。',
         ),
         extraction_database_filter_unsupported: tr(
           'The data filter could not process this official Demo; update EasyICU before retrying extraction.',
