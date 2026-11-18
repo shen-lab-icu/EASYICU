@@ -49,6 +49,8 @@ from ..authority.manuscript_claim_policy import (
     missing_scientific_claims_in_results,
     place_scientific_claim_tokens_in_results,
 )
+from ..authority.reader_numeric_display import round_reader_numeric_display
+from ..bounded_repair import RepairFeedback
 from ..authority.runtime_artifacts import (
     current_step_records,
     verified_run_evidence_path,
@@ -85,6 +87,18 @@ from .manuscript_quality import (
     render_reader_manuscript,
 )
 from .manuscript_baseline import baseline_reporting_mentions
+from .manuscript_audit_repair import (
+    EVIDENCE_REMOVAL,
+    FILTER_FINDING_CODES,
+    NUMERIC_REMOVAL,
+    UnregisteredEvidence,
+    enforce_after_evidence_removals,
+    numeric_removal_feedback,
+    removal_losses,
+    scaffold_without_removed_sentences,
+    sentence_key,
+    unregistered_evidence_feedback,
+)
 from .manuscript_labels import reader_claim_labels
 from .administrative_authority import load_manuscript_administrative_authority
 from .manuscript_provenance import (
@@ -784,6 +798,7 @@ class _DraftStageResult:
     scaffold: str
     reader_tables: tuple[ReaderTableCallout, ...] = ()
     absent_owner_claim_targets: tuple[Mapping[str, Any], ...] = ()
+    unregistered_evidence: tuple[UnregisteredEvidence, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -797,6 +812,9 @@ class _BindingStageResult:
     numeric_binding_map: Mapping[str, Any] = dataclass_field(default_factory=dict)
     untraced_numerics: tuple[str, ...] = ()
     question_coverage_findings: tuple[ValidationFinding, ...] = ()
+    filter_feedback: tuple[RepairFeedback, ...] = ()
+    filter_loss: tuple[RepairFeedback, ...] = ()
+    repair_scaffold: str | None = None
 
 
 def _activate_publication_figure(
@@ -1990,13 +2008,21 @@ def _draft_manuscript(
         per_step_records,
         findings,
     )
+    before_evidence_removal = scaffold
+    unregistered_locations = []
     scaffold, removed_unregistered_placeholders = (
         _remove_unregistered_evidence_placeholders(
             scaffold,
             allowed_evidence_ids=current_evidence_names,
+            on_remove=lambda offset, evidence_id: unregistered_locations.append((offset, evidence_id)),
         )
     )
-    if removed_unregistered_placeholders:
+    strict = pipeline._evidence_enforcement_mode is EvidenceEnforcementMode.STRICT
+    unregistered_evidence = (
+        unregistered_evidence_feedback(before_evidence_removal, unregistered_locations)
+        if strict and unregistered_locations else ()
+    )
+    if removed_unregistered_placeholders and not strict:
         findings.append(
             ValidationFinding(
                 validator="evidence_bound_writer",
@@ -2069,12 +2095,12 @@ def _draft_manuscript(
                 detail={"repairs": context_citation_repairs},
             )
         )
-    # A resumed scaffold can contain the exact host slots selected during
-    # bounded repair. The final binder resolves them against current facts.
-    defer_validation = section_repair is not None or (
+    # The final binder owns stale-citation removals so their sentence loss
+    # reaches the bounded repair guard. It also resolves resumed host slots.
+    defer_validation = section_repair is not None or bool(unregistered_evidence) or (
         "{claim:" in scaffold and ".report_fact_" in scaffold
     )
-    if scaffold and not defer_validation and pipeline._evidence_enforcement_mode is EvidenceEnforcementMode.STRICT:
+    if scaffold and not defer_validation and strict:
         strict_missing_sentences: List[str] = []
         strict_scientific_claim_sentences: List[str] = []
         try:
@@ -2180,7 +2206,10 @@ def _draft_manuscript(
         defer_validation=defer_validation,
     )
     if section_repair is None:
-        _store_raw_scaffold(run_dir, scaffold, evidence=evidence, prompt_version=prompt_version)
+        # Keep stale tokens in the checkpoint until a repair passes. A resume
+        # must observe the same removal and loss guard as the original run.
+        checkpoint = before_evidence_removal if unregistered_evidence else scaffold
+        _store_raw_scaffold(run_dir, checkpoint, evidence=evidence, prompt_version=prompt_version)
     return _DraftStageResult(
         current_verified_evidence_records=current_verified_evidence_records,
         current_evidence_names=current_evidence_names,
@@ -2189,6 +2218,7 @@ def _draft_manuscript(
         scaffold=scaffold,
         reader_tables=reader_tables,
         absent_owner_claim_targets=absent_owner_claim_targets,
+        unregistered_evidence=unregistered_evidence,
     )
 
 
@@ -2395,6 +2425,71 @@ def _bound_host_fact_findings(
     return [finding for finding in found if finding is not None]
 
 
+def _headline_sentence_keys(plan, claims, facts, claim_labels):
+    primary_steps = {step.step_id for step in plan.steps if step.planned_analysis_role == "primary"} if plan else set()
+    primary_claims = [claim for claim in claims if claim.step_id in primary_steps and claim.analysis_role == "primary"]
+    texts = [claim.placeholder for claim in primary_claims]
+    texts.extend(
+        round_reader_numeric_display(
+            claim.render_reader_text(labels=claim_labels, include_estimate=include_estimate),
+        )[0]
+        for claim in primary_claims for include_estimate in (True, False)
+    )
+    texts.extend(
+        text for fact in facts if fact.required_result_sections
+        for text in (fact.text, fact.abstract_text) if text
+    )
+    return tuple(sentence_key(text).rstrip(".!?。！？") for text in texts)
+
+
+def _record_binding_filter(findings, feedback, *, validator, reason_code, removed_count, evidence_ids=()):
+    findings.append(ValidationFinding(
+        validator=validator, severity="warning",
+        message=f"{len(feedback)} binding-filter finding(s) recorded; {removed_count} sentence(s) removed.",
+        evidence_ids=list(evidence_ids),
+        detail={
+            "reason_code": reason_code, "removed_sentence_count": removed_count,
+            "removals": [item.as_dict() for item in feedback],
+        },
+    ))
+
+
+def _filter_manuscript_numbers(
+    bound, *, strict, writer_scaffold, evidence_drops, evidence, per_step_records,
+    literature, plan, primary_result_facts, claim_labels, run_dir, findings,
+):
+    if not strict:
+        return bound, (), (), None
+    numeric_spans = []
+    filtered, removed = drop_untraceable_numeric_sentences(
+        bound, evidence=evidence, per_step_records=per_step_records, literature=literature,
+        removal_spans=numeric_spans, **method_fact_binding(evidence, per_step_records),
+    )
+    if not (removed or evidence_drops):
+        return filtered, (), (), None
+    before, numeric_drops, feedback = numeric_removal_feedback(bound, numeric_spans)
+    all_drops = [*evidence_drops, *numeric_drops]
+    headline_keys = _headline_sentence_keys(
+        plan, evidence.authoritative_scientific_claims(per_step_records), primary_result_facts, claim_labels,
+    )
+    loss = removal_losses([*evidence_drops, *before], all_drops, headline_keys)
+    repair_scaffold = scaffold_without_removed_sentences(writer_scaffold, all_drops)
+    if removed:
+        numeric_filtered_path = run_dir / "manuscript_scaffold_numeric_filtered.md"
+        numeric_filtered_path.write_text(filtered, encoding="utf-8")
+        evidence.register_file(
+            kind="log", description="Manuscript after STRICT numeric provenance sentence filtering.",
+            source_path=numeric_filtered_path, evidence_id="manuscript_scaffold_numeric_filtered",
+            producer="pipeline", generation_mode="system", on_sha_change="new_id",
+        )
+        _record_binding_filter(
+            findings, feedback, validator="manuscript_numeric_auditor",
+            reason_code=NUMERIC_REMOVAL, removed_count=len(numeric_drops),
+            evidence_ids=("manuscript_scaffold_numeric_filtered",),
+        )
+    return filtered, feedback, loss, repair_scaffold
+
+
 def _bind_and_review_manuscript(
     pipeline: Any,
     *,
@@ -2414,9 +2509,11 @@ def _bind_and_review_manuscript(
     context: ResearchContext | None = None,
     plan: AnalysisPlan | None = None,
     reader_tables: Sequence[ReaderTableCallout] = (),
+    unregistered_evidence: Sequence[UnregisteredEvidence] = (),
 ) -> _BindingStageResult:
     """Bind manuscript claims to current evidence and persist the critique."""
     claim_labels = reader_claim_labels(context, reader_display_labels)
+    writer_scaffold = scaffold
     primary_result_facts = compile_primary_counts_only_report_facts(
         per_step_records, evidence=evidence, reader_display_labels=reader_display_labels,
         context=context, manuscript_language=manuscript_language, plan=plan,
@@ -2465,9 +2562,15 @@ def _bind_and_review_manuscript(
         run_dir=run_dir, findings=findings,
     )
 
-    evidence_bound_scaffold, removed_sentences = (
-        evidence.enforce_evidence_bound_scaffold(scaffold, per_step_records=per_step_records)
+    enforce = partial(evidence.enforce_evidence_bound_scaffold, per_step_records=per_step_records)
+    evidence_bound_scaffold, removed_sentences, evidence_drops, evidence_feedback = (
+        enforce_after_evidence_removals(scaffold, unregistered_evidence, enforce)
     )
+    if evidence_feedback:
+        _record_binding_filter(
+            findings, evidence_feedback, validator="evidence_bound_writer",
+            reason_code=EVIDENCE_REMOVAL, removed_count=len(evidence_drops),
+        )
     from .manuscript_surface import repair_filtered_section_openers
 
     evidence_bound_scaffold = repair_filtered_section_openers(
@@ -2531,44 +2634,12 @@ def _bind_and_review_manuscript(
             f"placeholders before submission.",
             detail={"tbd_sentences": removed_tbd_sentences},
         )
-    removed_numeric_sentences: List[Dict[str, Any]] = []
-    if pipeline._evidence_enforcement_mode is EvidenceEnforcementMode.STRICT:
-        bound, removed_numeric_sentences = drop_untraceable_numeric_sentences(
-            bound,
-            evidence=evidence,
-            per_step_records=per_step_records,
-            literature=literature,
-            **method_fact_binding(evidence, per_step_records),
-        )
-    if removed_numeric_sentences:
-        numeric_filtered_path = run_dir / "manuscript_scaffold_numeric_filtered.md"
-        numeric_filtered_path.write_text(bound, encoding="utf-8")
-        evidence.register_file(
-            kind="log",
-            description=(
-                "Manuscript scaffold after deterministic removal of "
-                "sentences rejected by strict numeric provenance binding."
-            ),
-            source_path=numeric_filtered_path,
-            evidence_id="manuscript_scaffold_numeric_filtered",
-            producer="pipeline",
-            generation_mode="system",
-            on_sha_change="new_id",
-        )
-        findings.append(
-            ValidationFinding(
-                validator="manuscript_numeric_auditor",
-                severity="warning",
-                message=(
-                    "Removed "
-                    f"{len(removed_numeric_sentences)} sentence(s) rejected by "
-                    "the unchanged STRICT numeric provenance gate; the full "
-                    "manuscript is revalidated after this deterministic filter."
-                ),
-                evidence_ids=["manuscript_scaffold_numeric_filtered"],
-                detail={"removed_sentences": removed_numeric_sentences},
-            )
-        )
+    bound, numeric_feedback, filter_loss, repair_scaffold = _filter_manuscript_numbers(
+        bound, strict=pipeline._evidence_enforcement_mode is EvidenceEnforcementMode.STRICT,
+        writer_scaffold=writer_scaffold, evidence_drops=evidence_drops, evidence=evidence,
+        per_step_records=per_step_records, literature=literature, plan=plan, primary_result_facts=primary_result_facts,
+        claim_labels=claim_labels, run_dir=run_dir, findings=findings,
+    )
     # A Writer that failed wrote no sections for the host's sentences to survive in.
     if not writer_error_message:
         findings.extend(_bound_host_fact_findings(
@@ -2666,6 +2737,12 @@ def _bind_and_review_manuscript(
         literature=literature,
         **method_fact_binding(evidence, per_step_records),
     )
+    filter_counts = [
+        finding.detail["removed_sentence_count"] for finding in findings
+        if (finding.detail or {}).get("reason_code") in FILTER_FINDING_CODES
+    ]
+    if filter_counts:
+        bound = bound.rstrip() + f"\n\n## Audit\n\n{sum(filter_counts)} sentence(s) were removed for unbindable values.\n"
     numeric_binding_findings: List[ValidationFinding] = []
     if untraced_numerics:
         numeric_binding_findings.append(
@@ -2893,6 +2970,9 @@ def _bind_and_review_manuscript(
         numeric_binding_map=numeric_binding_map,
         untraced_numerics=tuple(untraced_numerics),
         question_coverage_findings=tuple(question_coverage_findings),
+        filter_feedback=evidence_feedback + numeric_feedback,
+        filter_loss=filter_loss,
+        repair_scaffold=repair_scaffold,
     )
 
 
@@ -3773,10 +3853,10 @@ def _draft_bind_and_repair_manuscript(
     from .manuscript_audit_repair import REPAIRABLE_MANUSCRIPT_CODES, run_manuscript_audit_repair
     from .manuscript_sections import quality_repair_section_errors
 
-    initial_scaffold = None
+    initial_draft = None
 
     def draft_candidate(section_repair):
-        nonlocal initial_scaffold
+        nonlocal initial_draft
         if section_repair is not None:
             emit_progress(
                 "writer", "Repairing sections rejected by final manuscript checks.",
@@ -3802,7 +3882,7 @@ def _draft_bind_and_repair_manuscript(
             section_repair=section_repair,
         )
         if section_repair is None:
-            initial_scaffold = candidate.scaffold
+            initial_draft = candidate
         return candidate
 
     def bind_candidate(draft):
@@ -3824,6 +3904,7 @@ def _draft_bind_and_repair_manuscript(
             context=context,
             plan=execute_result.plan,
             reader_tables=draft.reader_tables,
+            unregistered_evidence=getattr(draft, "unregistered_evidence", ()),
         )
 
     def section_errors(draft, binding):
@@ -3844,7 +3925,9 @@ def _draft_bind_and_repair_manuscript(
         draft=draft_candidate, bind=bind_candidate, section_errors=section_errors,
         findings=findings, run_dir=run_dir, evidence=evidence, skip_repair=writer_probe_mode, context=context,
     )
-    if draft.scaffold != initial_scaffold:
+    if draft.scaffold != initial_draft.scaffold or (
+        getattr(initial_draft, "unregistered_evidence", ()) and draft is not initial_draft
+    ):
         _store_raw_scaffold(run_dir, draft.scaffold, evidence=evidence, prompt_version=prompt_version)
     _report_absent_owner_claim_targets(draft.absent_owner_claim_targets, findings)
     return draft, binding

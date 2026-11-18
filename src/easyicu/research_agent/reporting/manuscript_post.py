@@ -387,6 +387,7 @@ def _remove_unregistered_evidence_placeholders(
     text: str,
     *,
     allowed_evidence_ids: Sequence[str],
+    on_remove: Callable[[int, str], None] | None = None,
 ) -> tuple[str, List[str]]:
     """Delete only evidence tokens absent from the current registry.
 
@@ -408,6 +409,8 @@ def _remove_unregistered_evidence_placeholders(
         if evidence_id in allowed:
             return match.group(0)
         removed.append(evidence_id)
+        if on_remove is not None:
+            on_remove(match.start("id"), evidence_id)
         return ""
 
     rewritten = re.sub(
@@ -2501,6 +2504,7 @@ def drop_untraceable_numeric_sentences(
     literature: LiteratureBundle | None = None,
     method_facts: Sequence[ManuscriptMethodFact] = (),
     bind_fact: Optional[Callable[[str], str]] = None,
+    removal_spans: list[tuple[int, int, tuple[int, ...]]] | None = None,
 ) -> Tuple[str, List[Dict[str, Any]]]:
     """Remove only sentences that the unchanged STRICT numeric gate rejects.
 
@@ -2560,6 +2564,9 @@ def drop_untraceable_numeric_sentences(
         filtered = filtered[:start] + filtered[end:]
     removed: List[Dict[str, Any]] = []
     for start, end, details in merged:
+        if removal_spans is not None:
+            positions = tuple(item["start"] for item in occurrences if start <= item["start"] < end)
+            removal_spans.append((start, end, positions))
         if len(details) == 1:
             removed.append(details[0])
             continue
