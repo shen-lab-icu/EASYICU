@@ -1,6 +1,7 @@
 """Final binding failures feed only affected sections back through the gates."""
 
 import json
+import re
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -201,7 +202,7 @@ def _section(text, name):
     return text.split(f"## {name}\n", 1)[1].split("\n## ", 1)[0].strip()
 
 
-def _exercise(tmp_path, monkeypatch, bad, responses, *, changed_bindings=False, initial_findings=(), baseline_mentions=None, definition_labels=None, grouping=None):
+def _exercise(tmp_path, monkeypatch, bad, responses, *, changed_bindings=False, initial_findings=(), baseline_mentions=None, definition_labels=None, grouping=None, full_draft=None):
     context = ResearchContext.model_validate({
         "research_question": "Assess potassium-based renal readmission prediction.",
         "cohort": {"cohort_name": "synthetic", "database": "miiv", "n_stays": 120},
@@ -245,6 +246,8 @@ def _exercise(tmp_path, monkeypatch, bad, responses, *, changed_bindings=False, 
         if section_repair is None:
             text = bad
             findings.extend(initial_findings)
+        elif full_draft is not None:
+            text = full_draft
         else:
             try:
                 text, _ = writer.repair_sections(section_repair[0], section_errors=section_repair[1],
@@ -425,8 +428,9 @@ def test_section_repair_cannot_change_an_existing_bound_fact(tmp_path, monkeypat
     with pytest.raises(EvidenceEnforcementError, match="MANUSCRIPT_REPAIR_AUTHORITY_CHANGED"):
         _exercise(tmp_path, monkeypatch, bad, [replacement], changed_bindings=change == "binding")
     receipt = json.loads((tmp_path / "manuscript_audit_repair.json").read_text())
-    assert receipt["status"] == "rejected"
-    assert len(receipt["attempts"]) == 1
+    assert receipt["status"] == ("rejected" if change == "evidence" else "exhausted")
+    assert len(receipt["attempts"]) == (1 if change == "evidence" else 3)
+    assert all(row["status"] == "rejected" for row in receipt["attempts"])
 
 
 def test_an_unregistered_number_fails_closed_before_any_section_repair(tmp_path, monkeypatch):
@@ -605,22 +609,52 @@ def test_adjustment_repair_keeps_methods_tokens_verbatim(tmp_path, monkeypatch, 
         assert "{evidence:renal_summary}" in feedback and "4 occurrence(s)" in feedback
 
 
-def test_adjustment_repair_still_refuses_an_unaffected_section_change():
-    from easyicu.research_agent.reporting.manuscript_audit_repair import _require_preserved_sections
-
-    changed = GOOD.replace("Interpretation is limited", "Interpretation remains limited")
-    with pytest.raises(EvidenceEnforcementError, match="unaffected section") as failure:
-        _require_preserved_sections(GOOD, changed, ("methods",))
-    assert failure.value.detail == {"check": "unaffected_section", "section": "discussion"}
-
-
-def test_a_repair_candidate_with_new_filter_removals_is_still_rejected(tmp_path, monkeypatch):
-    bad = GOOD.replace("The AUROC was 0.74 {evidence:renal_summary}.", "See Figure 1 {evidence:renal_summary}.")
-    response = "## Results\n\n" + _section(GOOD, "Results") + "\n\nThere were 991 deaths {evidence:renal_summary}."
-    with pytest.raises(EvidenceEnforcementError, match="MANUSCRIPT_AUDIT_NON_REPAIRABLE"):
-        _exercise(tmp_path, monkeypatch, bad, [response], definition_labels={"age=older": "patients aged 65 years or older"})
+@pytest.mark.parametrize("drop_token", [False, True])
+def test_final_repair_splices_results_into_the_original_scaffold(tmp_path, monkeypatch, drop_token):
+    original = GOOD.replace(
+        "Interpretation is limited to the studied population.",
+        "Interpretation is limited to the studied population.  \n\nOriginal follow-up.",
+    ).replace("The AUROC was 0.74", "See Figure 1")
+    candidate = GOOD.replace(
+        "Interpretation is limited to the studied population.",
+        "There were 991 deaths {evidence:unverified}.",
+    )
+    if drop_token:
+        candidate = candidate.replace(
+            "The AUROC was 0.74 {evidence:renal_summary}.", "The AUROC was 0.74.",
+        )
+        with pytest.raises(EvidenceEnforcementError, match="existing evidence or claim binding"):
+            _exercise(tmp_path, monkeypatch, original, [], full_draft=candidate)
+    else:
+        (draft, binding), _, _, bindings, _ = _exercise(tmp_path, monkeypatch, original, [], full_draft=candidate)
+        assert binding.manuscript_critique.status == "pass"
+        assert draft.scaffold == bindings[-1]
+        assert draft.scaffold.split("## Discussion", 1)[1] == original.split("## Discussion", 1)[1]
     receipt = json.loads((tmp_path / "manuscript_audit_repair.json").read_text())
-    assert receipt["status"] == "rejected" and len(receipt["attempts"]) == 1
+    assert receipt["attempts"][0]["spliced_section_keys"] == ["results"]
+    if drop_token:
+        assert receipt["attempts"][0]["authority_failure"]["check"] == "section_tokens"
+
+
+@pytest.mark.parametrize("recovers", [False, True])
+def test_a_repair_candidate_with_new_filter_removals_is_still_rejected(tmp_path, monkeypatch, recovers):
+    bad = GOOD.replace("The AUROC was 0.74 {evidence:renal_summary}.", "See Figure 1 {evidence:renal_summary}.")
+    good = "## Results\n\n" + _section(GOOD, "Results")
+    unsupported = good + "\n\nThere were 991 deaths {evidence:renal_summary}."
+    options = {"definition_labels": {"age=older": "patients aged 65 years or older"}}
+    if recovers:
+        (_, binding), client, _, _, _ = _exercise(tmp_path, monkeypatch, bad, [unsupported, good], **options)
+        assert binding.manuscript_critique.status == "pass"
+        assert "991" not in binding.bound
+        assert "MANUSCRIPT_AUDIT_NON_REPAIRABLE" in client.calls[1][0][-1].content
+    else:
+        with pytest.raises(EvidenceEnforcementError, match="MANUSCRIPT_AUDIT_NON_REPAIRABLE"):
+            _exercise(tmp_path, monkeypatch, bad, [unsupported], **options)
+    receipt = json.loads((tmp_path / "manuscript_audit_repair.json").read_text())
+    assert receipt["status"] == ("pass" if recovers else "exhausted")
+    assert [row["status"] for row in receipt["attempts"]] == (
+        ["rejected", "pass"] if recovers else ["rejected"] * 3
+    )
 
 
 def test_adjustment_repair_cannot_drop_a_definition_written_in_scientific_notation(tmp_path, monkeypatch):
@@ -629,8 +663,11 @@ def test_adjustment_repair_cannot_drop_a_definition_written_in_scientific_notati
                        "The adjustment set comprised age and severity, using " + label)
     bad = bad.replace("The AUROC was", "After adjustment for age and sex, the AUROC was")
     response = "## Methods\n\n" + _section(bad, "Methods").replace("age and severity, using " + label, "age and sex")
-    with pytest.raises(EvidenceEnforcementError, match="existing bound number or source changed"):
+    with pytest.raises(EvidenceEnforcementError, match="MANUSCRIPT_REPAIR_AUTHORITY_CHANGED"):
         _exercise(tmp_path, monkeypatch, bad, [response], definition_labels={"potassium=low": label})
+    receipt = json.loads((tmp_path / "manuscript_audit_repair.json").read_text())
+    assert all("existing bound number or source changed" in row["findings"][0]["facts"]["message"]
+               for row in receipt["attempts"])
 
 
 def test_cited_paraphrases_do_not_block_repair_of_a_callout_only_subsection(tmp_path, monkeypatch):
@@ -725,3 +762,167 @@ def test_an_unsupported_dictionary_definition_never_reaches_editorial_repair():
             section_errors=lambda *_: {}, findings=[], run_dir=None, evidence=None, context=context,
         )
     assert drafted == [None]
+
+
+@pytest.mark.parametrize(("writer_action", "exposure", "outcome", "group"), [
+    ("add", "sepsis", "mortality", "Sepsis"),
+    ("omit", "sepsis", "mortality", "Sepsis"),
+    ("no_fact", "sepsis", "mortality", "Sepsis"),
+    ("add", "aki", "prolonged_length_of_stay", "Acute kidney injury"),
+])
+def test_final_repair_covers_the_distribution_question(
+    tmp_path, monkeypatch, writer_action, exposure, outcome, group,
+):
+    from ..authority.test_scientific_claim_authority import _descriptive_distribution_summary
+    from easyicu.research_agent.audits.envelope_consumers import RegisteredOutputEnvelopeConsumer
+
+    source_id = "distribution_summary"
+    product = "table:exposure_outcome_distribution"
+    summary = _descriptive_distribution_summary()
+    summary.update(status="ok", adjusted_effect=None, exposure=exposure, outcome=outcome,
+                   interval_method="patient_cluster_robust_wald")
+    summary["descriptive_estimates"]["exposure_prevalence"] = [] if writer_action == "no_fact" else [
+        {
+            **{k: v for k, v in level.items() if k != "events"},
+            "n": 100, "denominator": 200, "estimate_pct": 50.0,
+            "ci_low_pct": 46.080072, "ci_high_pct": 53.919928,
+        }
+        for level in summary["descriptive_estimates"]["outcome_absolute_risks"]
+    ]
+    store = EvidenceStore(tmp_path, enforcement_mode=EvidenceEnforcementMode.STRICT)
+    store.register_json(kind="statistic", description="Synthetic clustered distribution", payload=summary,
+                        filename="distribution.json", evidence_id=source_id, produced_by_step="distribution",
+                        generation_mode="deterministic_standard")
+    store.register_step_summary_numerics(step_id="distribution", evidence_id=source_id, summary=summary)
+    store.register_step_summary_scientific_claims(step_id="distribution", evidence_id=source_id, summary=summary)
+    records = [{"step_id": "distribution", "status": "ok", "step_summary": summary,
+                "step_summary_evidence_id": source_id, "evidence_ids": [source_id]}]
+    monkeypatch.setattr(RegisteredOutputEnvelopeConsumer, "authoritative_writer_records",
+                        lambda self, records, **kwargs: records)
+    context = ResearchContext.model_validate({
+        "research_question": "Describe the synthetic distribution.",
+        "cohort": {"cohort_name": "synthetic", "database": "miiv", "n_stays": 200},
+        "primary_exposure": exposure, "target_outcome": outcome,
+        "variables": [{"name": exposure, "dtype": "bool", "description": group},
+                      {"name": outcome, "dtype": "bool", "description": outcome.replace("_", " ")}],
+    })
+    plan = AnalysisPlan(
+        research_question=context.research_question,
+        analysis_type="descriptive_epidemiology",
+        display_labels={f"{exposure}=0": f"No {group.lower()}", f"{exposure}=1": group,
+                        outcome: outcome.replace("_", " ")},
+        steps=[AnalysisStep(
+            step_id="distribution", intent="Describe the exposure and outcome.",
+            planned_analysis_role="primary", expected_outputs=[product], inputs=[exposure, outcome],
+            exposure_outcome_distribution_spec={
+                "exposure": exposure, "exposure_levels": [0, 1],
+                "outcome": outcome, "outcome_levels": [0, 1], "outcome_positive_value": 1,
+                "level_match_policy": "exact_typed", "denominator_policy": "all_declared_rows",
+                "missing_outcome_policy": "fail_closed", "confidence_level": 0.95,
+            },
+        )],
+    )
+    claims = store.scientific_claims()
+    tokens = "\n\n".join(claim.placeholder for claim in claims)
+    initial = (GOOD.replace("The cohort comprised 120 ICU stays", "The analysis cohort comprised 200 ICU stays")
+               .replace("renal_summary", source_id)
+               .replace("These estimates describe predictive discrimination within the study population.",
+                        "\n\n" + claims[-1].placeholder)
+               .replace("### Model performance\nThe AUROC was 0.74 {evidence:distribution_summary}.",
+                        "### Descriptive results\n" + tokens)
+               .replace("\n### Secondary analyses\nThe outcome count was 15 {evidence:distribution_summary}.\n", "")
+               .replace("The evaluation addresses discrimination for renal readmission within the study population.",
+                        claims[-1].placeholder))
+    try:
+        store.enforce_evidence_bound_scaffold(initial, per_step_records=records)
+    except EvidenceEnforcementError as exc:
+        pytest.fail(str(exc.detail))
+    client = ScriptedMockLLMClient([], repeat_last=True)
+    writer = WriterAgent(client)
+    drafts = []
+
+    def draft(*_args, section_repair, **_kwargs):
+        drafts.append(section_repair)
+        scaffold = initial
+        if section_repair:
+            response = "## Results\n\n" + _section(initial, "Results")
+            if writer_action == "add":
+                feedback = " ".join(section_repair[1]["results"])
+                token = re.search(r"\{claim:distribution\.[^}]+\}", feedback).group()
+                response = response.replace("### Descriptive results", "### Descriptive results\n\n" + token)
+            client.responses.append(response)
+            try:
+                scaffold, _ = writer.repair_sections(
+                    section_repair[0], section_errors=section_repair[1], context=context,
+                    evidence_ids=(source_id,), analysis_plan=plan,
+                )
+            except Exception as exc:
+                candidate = completed_section_repair_candidate(exc, expected_section_keys=tuple(section_repair[1]))
+                if candidate is None:
+                    raise
+                scaffold = candidate[0]
+        return write_phase._DraftStageResult((), (source_id,), None, None, scaffold)
+
+    monkeypatch.setattr(write_phase, "_draft_manuscript", draft)
+    monkeypatch.setattr(write_phase, "_persist_reader_artifacts", lambda **kwargs: None)
+    findings = [ValidationFinding(
+        validator="writer_question_coverage", severity="error", message="Prior draft coverage failure.",
+        detail={"step_id": "distribution", "reason_code": "writer_question_part_uncovered"},
+    )]
+    critique_pass = CritiqueReport(reviewer="scripted", status="pass")
+    draft, binding = write_phase._draft_bind_and_repair_manuscript(
+        SimpleNamespace(_evidence_enforcement_mode=EvidenceEnforcementMode.STRICT),
+        context=context, agent_context=context, evidence=store, findings=findings, literature=None,
+        per_step_records=records, plan_result=SimpleNamespace(resume_state=None),
+        execute_result=SimpleNamespace(plan=plan), critic=SimpleNamespace(review_manuscript=lambda **_: critique_pass),
+        role_resolver=None, prompt_version="test", runtime_state=None, run_dir=tmp_path,
+        run_id="synthetic", run_language="en", writer_probe_mode=False, writer_probe_failed_steps=(),
+        emit_progress=lambda *_args, **_kwargs: None,
+    )
+    audit = json.loads((tmp_path / "manuscript_quality_audit.json").read_text())
+    assert audit["status"] == "pass"
+    receipt = json.loads((tmp_path / "manuscript_audit_repair.json").read_text())
+    active, _, _ = write_phase.current_validation_findings(
+        plan=plan, per_step_records=records, findings=findings, evidence=store,
+        run_dir=tmp_path, manuscript_text=binding.bound, context=context,
+    )
+    coverage = [f for f in active if f.validator == "writer_question_coverage"]
+    if writer_action == "no_fact":
+        assert len(drafts) == 1
+        assert binding.manuscript_critique.status == "blocked"
+        assert any("writer_question_coverage" in c for c in binding.manuscript_critique.concerns)
+        assert all("quality audit" not in c for c in binding.manuscript_critique.concerns)
+        assert [f.detail["outcome"] for f in coverage] == ["exposure_distribution"]
+        assert coverage[0].detail["reason_code"] == "writer_question_part_uncovered"
+        assert receipt["status"] == "non_repairable"
+        assert receipt["remaining_codes"] == ["writer_question_part_uncovered"]
+        return
+
+    assert len(client.calls) == (1 if writer_action == "add" else 3)
+    assert binding.manuscript_critique.status == "pass" and coverage == []
+    assert not any(f.validator in {"writer_question_coverage", "critic_agent"} for f in active)
+    assert binding.numeric_binding_map and not binding.untraced_numerics
+    assert "50.00%" in binding.bound
+    assert group in _section(binding.bound, "Results")
+    assert "{claim:" in draft.scaffold and "{claim:" not in binding.bound
+    assert receipt["status"] == "pass"
+    first = receipt["attempts"][0]
+    assert first["audit_codes"] == ["writer_question_part_uncovered"]
+    feedback = first["feedback"][0]["facts"]
+    assert (feedback["step_id"], feedback["product_id"], feedback["outcome"]) == (
+        "distribution", product, "exposure_distribution",
+    )
+    fact, = feedback["repair_facts"]
+    assert fact["claim_placeholder"] in draft.scaffold
+    assert group in fact["text"]
+    prompt = client.calls[0][0][-1].content
+    assert all(part in prompt for part in ("distribution", product, "exposure_distribution", group, fact["claim_placeholder"]))
+    assert (tmp_path / "manuscript_scaffold.md").read_text() == draft.scaffold
+    if writer_action == "omit":
+        fallback = receipt["host_fallback"]
+        assert fallback["status"] == "pass"
+        assert fallback["numeric_checks"] == fallback["evidence_checks"] == "pass"
+        assert all(row["status"] == "unresolved" for row in receipt["attempts"])
+        assert draft.scaffold.count(fact["claim_placeholder"]) == 1
+    else:
+        assert "host_fallback" not in receipt

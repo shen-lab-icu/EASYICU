@@ -959,6 +959,9 @@ def _step_id_referenced_in_finding(finding: ValidationFinding) -> Optional[str]:
     the finding is global (e.g. "no manuscript generated") and should
     NOT be superseded by per-step success.
     """
+    if finding.validator == "writer_question_coverage":
+        # The step coordinate identifies the manuscript's missing result.
+        return None
     if finding.detail and isinstance(finding.detail.get("step_id"), str):
         return finding.detail["step_id"]
     message = finding.message or ""

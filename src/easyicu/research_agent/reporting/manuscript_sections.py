@@ -1037,6 +1037,9 @@ def repair_named_manuscript_sections(
                 **common,
             ),
         )
+        # A section response may contain additional level-two headings.
+        # Only its requested section can participate in the repair checks.
+        repaired = _existing_scientific_sections(repaired).get(spec.key, repaired)
         for marker, literal in preserved_values.items():
             repaired = repaired.replace(marker, literal)
         if _PRESERVED_VALUE.search(repaired):

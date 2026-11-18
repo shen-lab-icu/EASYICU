@@ -28,7 +28,9 @@ from ..audits.envelope_consumers import RegisteredOutputEnvelopeConsumer
 from .bibtex import render_bibtex
 from .descriptive_report_facts import (
     compile_primary_counts_only_report_facts,
+    place_descriptive_report_facts,
     render_descriptive_report_claims,
+    take_question_fact_tokens,
     writer_question_coverage,
 )
 from ..review.causal_audit import run_causal_audit
@@ -794,6 +796,7 @@ class _BindingStageResult:
     primary_result_facts: tuple[Any, ...] = ()
     numeric_binding_map: Mapping[str, Any] = dataclass_field(default_factory=dict)
     untraced_numerics: tuple[str, ...] = ()
+    question_coverage_findings: tuple[ValidationFinding, ...] = ()
 
 
 def _activate_publication_figure(
@@ -1634,6 +1637,7 @@ def _place_host_claims_and_restore_structure(
     per_step_records: Sequence[Dict[str, Any]],
     plan: Optional[AnalysisPlan],
     findings: List[ValidationFinding],
+    defer_validation: bool = False,
 ) -> str:
     """Place the run's host claims, then restore structure from the draft's prose.
 
@@ -1654,7 +1658,7 @@ def _place_host_claims_and_restore_structure(
         scaffold, analysis_plan=plan, claims=claims,
     )
     if structural_repairs:
-        if pipeline._evidence_enforcement_mode is EvidenceEnforcementMode.STRICT:
+        if not defer_validation and pipeline._evidence_enforcement_mode is EvidenceEnforcementMode.STRICT:
             evidence.enforce_evidence_bound_scaffold(scaffold, per_step_records=per_step_records)
         findings.append(
             ValidationFinding(
@@ -1938,6 +1942,16 @@ def _draft_manuscript(
                     ),
                 )
             )
+    if section_repair is not None and not writer_error_message:
+        from .manuscript_audit_repair import require_preserved_section_tokens, splice_manuscript_sections
+
+        before, requested = section_repair
+        scaffold, spliced_keys = splice_manuscript_sections(before, scaffold, tuple(requested))
+        try:
+            require_preserved_section_tokens(before, scaffold, tuple(requested))
+        except EvidenceEnforcementError as exc:
+            exc.detail["spliced_section_keys"] = spliced_keys
+            raise
     if repair_receipts := getattr(writer, "structural_repair_receipts", ()):
         findings.append(ValidationFinding(
             validator="writer_recovery", severity="info",
@@ -2055,10 +2069,12 @@ def _draft_manuscript(
                 detail={"repairs": context_citation_repairs},
             )
         )
-    if (
-        scaffold
-        and pipeline._evidence_enforcement_mode is EvidenceEnforcementMode.STRICT
-    ):
+    # A resumed scaffold can contain the exact host slots selected during
+    # bounded repair. The final binder resolves them against current facts.
+    defer_validation = section_repair is not None or (
+        "{claim:" in scaffold and ".report_fact_" in scaffold
+    )
+    if scaffold and not defer_validation and pipeline._evidence_enforcement_mode is EvidenceEnforcementMode.STRICT:
         strict_missing_sentences: List[str] = []
         strict_scientific_claim_sentences: List[str] = []
         try:
@@ -2161,8 +2177,10 @@ def _draft_manuscript(
         per_step_records=per_step_records,
         plan=execute_result.plan,
         findings=findings,
+        defer_validation=defer_validation,
     )
-    _store_raw_scaffold(run_dir, scaffold, evidence=evidence, prompt_version=prompt_version)
+    if section_repair is None:
+        _store_raw_scaffold(run_dir, scaffold, evidence=evidence, prompt_version=prompt_version)
     return _DraftStageResult(
         current_verified_evidence_records=current_verified_evidence_records,
         current_evidence_names=current_evidence_names,
@@ -2402,7 +2420,9 @@ def _bind_and_review_manuscript(
     primary_result_facts = compile_primary_counts_only_report_facts(
         per_step_records, evidence=evidence, reader_display_labels=reader_display_labels,
         context=context, manuscript_language=manuscript_language, plan=plan,
+        include_repair_facts=True,
     )
+    scaffold, selected_question_facts = take_question_fact_tokens(scaffold, primary_result_facts)
     scaffold, mistyped_literature_repairs = repair_evidence_ids_mistyped_as_literature(
         scaffold,
         literature,
@@ -2478,7 +2498,9 @@ def _bind_and_review_manuscript(
 
     # The model grammar has already passed. Project only envelope-verified host
     # facts here, then apply the unchanged evidence and per-value binding gates.
-    evidence_bound_scaffold = render_descriptive_report_claims(evidence_bound_scaffold, primary_result_facts)
+    evidence_bound_scaffold = render_descriptive_report_claims(
+        place_descriptive_report_facts(evidence_bound_scaffold, selected_question_facts), primary_result_facts,
+    )
     from .manuscript_quality import repair_registered_display_callouts
 
     # Scientific filtering can remove a model-authored Table/Figure sentence.
@@ -2580,10 +2602,6 @@ def _bind_and_review_manuscript(
     )
     if result_claim_finding is not None:
         findings.append(result_claim_finding)
-    question_coverage_findings = writer_question_coverage(
-        bound, plan=plan, facts=primary_result_facts, evidence=evidence,
-    )
-    findings.extend(question_coverage_findings)
     side_findings = collect_side_findings(per_step_records)
     bound, language_guard_detail = enforce_writer_claim_language(
         bound,
@@ -2754,6 +2772,11 @@ def _bind_and_review_manuscript(
         *manuscript_value_findings,
     ]
 
+    question_coverage_findings = writer_question_coverage(
+        bound, plan=plan, facts=primary_result_facts, evidence=evidence,
+        claims=evidence.authoritative_scientific_claims(per_step_records), claim_labels=claim_labels,
+    )
+    findings.extend(question_coverage_findings)
     manuscript_quality_errors = _persist_manuscript_quality_artifacts(
         bound=bound,
         analysis_plan=plan,
@@ -2810,7 +2833,7 @@ def _bind_and_review_manuscript(
             unsupported_claims=[finding.message for finding in manuscript_numeric_findings],
             concerns=["Manuscript numeric claims disagree with registered step_summary values."],
         )
-    if manuscript_quality_errors or question_coverage_findings:
+    if manuscript_quality_errors:
         manuscript_critique = _blocked_critique(
             manuscript_critique,
             concerns=[
@@ -2818,8 +2841,14 @@ def _bind_and_review_manuscript(
                 "terminology, or cross-section consistency errors."
             ],
             suggested_repairs=[
-                item.message for item in (*manuscript_quality_errors, *question_coverage_findings)[:8]
+                item.message for item in manuscript_quality_errors[:8]
             ],
+        )
+    if question_coverage_findings:
+        manuscript_critique = _blocked_critique(
+            manuscript_critique,
+            concerns=["writer_question_coverage found unanswered planned result parts."],
+            suggested_repairs=[item.message for item in question_coverage_findings[:8]],
         )
     _persist_manuscript_critique(
         critique=manuscript_critique,
@@ -2863,6 +2892,7 @@ def _bind_and_review_manuscript(
         primary_result_facts=tuple(primary_result_facts),
         numeric_binding_map=numeric_binding_map,
         untraced_numerics=tuple(untraced_numerics),
+        question_coverage_findings=tuple(question_coverage_findings),
     )
 
 
@@ -3743,13 +3773,16 @@ def _draft_bind_and_repair_manuscript(
     from .manuscript_audit_repair import REPAIRABLE_MANUSCRIPT_CODES, run_manuscript_audit_repair
     from .manuscript_sections import quality_repair_section_errors
 
+    initial_scaffold = None
+
     def draft_candidate(section_repair):
+        nonlocal initial_scaffold
         if section_repair is not None:
             emit_progress(
                 "writer", "Repairing sections rejected by final manuscript checks.",
                 run_id=run_id, section_keys=list(section_repair[1]),
             )
-        return _draft_manuscript(
+        candidate = _draft_manuscript(
             pipeline,
             context=context,
             agent_context=agent_context,
@@ -3768,6 +3801,9 @@ def _draft_bind_and_repair_manuscript(
             emit_progress=emit_progress,
             section_repair=section_repair,
         )
+        if section_repair is None:
+            initial_scaffold = candidate.scaffold
+        return candidate
 
     def bind_candidate(draft):
         return _bind_and_review_manuscript(
@@ -3808,6 +3844,8 @@ def _draft_bind_and_repair_manuscript(
         draft=draft_candidate, bind=bind_candidate, section_errors=section_errors,
         findings=findings, run_dir=run_dir, evidence=evidence, skip_repair=writer_probe_mode, context=context,
     )
+    if draft.scaffold != initial_scaffold:
+        _store_raw_scaffold(run_dir, draft.scaffold, evidence=evidence, prompt_version=prompt_version)
     _report_absent_owner_claim_targets(draft.absent_owner_claim_targets, findings)
     return draft, binding
 

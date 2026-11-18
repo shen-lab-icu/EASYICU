@@ -7,6 +7,7 @@ It neither fits a model nor grants clinical, inferential or publication authorit
 
 import csv
 from dataclasses import replace
+from hashlib import sha256
 import io
 import json
 from pathlib import Path
@@ -32,6 +33,7 @@ from ..contracts.exposure_group_rules import (
 from ..authority.reader_numeric_display import round_reader_numeric_display
 from ..orchestration.exposure_group_labels import exposure_group_label_rows
 from ..schema import ValidationFinding
+from .manuscript_result_structure import primary_result_heading
 from .manuscript_surface import in_sentence_label
 from .report_fact import DescriptiveReportFact
 from .manuscript_provenance import verified_evidence_json as _verified_evidence_json
@@ -165,8 +167,9 @@ def compile_counts_only_report_facts(
     context: Any = None,
     manuscript_language: str = "en",
     plan: Any = None,
+    include_repair_facts: bool = False,
 ) -> tuple[DescriptiveReportFact, ...]:
-    """Compile verified primary counts and reviewed independent Wilson intervals."""
+    """Compile primary counts, reviewed Wilson intervals and optional repair facts."""
 
     from .manuscript_labels import source_bound_manuscript_labels
 
@@ -181,16 +184,18 @@ def compile_counts_only_report_facts(
         if not _writer_distribution_receipt(summary):
             continue
         method = summary.get("interval_method")
-        if method not in {"none_counts_only", "wilson"}:
-            continue
-        if method == "wilson":
-            estimates = summary["descriptive_estimates"]
-            if (summary.get("effective_interval_method", method) != "wilson"
-                    or estimates.get("dependence") is not None
-                    or estimates.get("risk_difference") is not None):
-                # Those designs have their own uncertainty/contrast semantics;
-                # retain their existing unsupported-fact behavior.
+        estimates = summary["descriptive_estimates"]
+        exposure_only = method != "none_counts_only" and (
+            method != "wilson" or summary.get("effective_interval_method", method) != "wilson"
+            or estimates.get("dependence") is not None or estimates.get("risk_difference") is not None
+        )
+        if exposure_only:
+            step = next((step for step in getattr(plan, "steps", ()) if step.step_id == record["step_id"]), None)
+            spec = getattr(step, "exposure_outcome_distribution_spec", None)
+            if (not include_repair_facts or spec is None or step.planned_analysis_role != "primary"
+                    or spec.exposure != summary.get("exposure") or spec.outcome != summary.get("outcome")):
                 continue
+        elif method == "wilson":
             # A recorded interval is not proof that the reviewed plan asked
             # for that level, endpoint or independent-row method.
             matching = [step for step in getattr(plan, "steps", ())
@@ -213,8 +218,7 @@ def compile_counts_only_report_facts(
             raise ValueError("Report fact source does not belong to the verified step")
         if not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9_.-]*", source.evidence_id):
             raise ValueError("Invalid report fact source id")
-        estimates = summary["descriptive_estimates"]
-        if estimates.get("dependence") is not None or estimates.get("risk_difference") is not None:
+        if not exposure_only and (estimates.get("dependence") is not None or estimates.get("risk_difference") is not None):
             raise ValueError("Counts-only report facts cannot introduce an inferential contrast")
         cohort_n = _count(summary.get("cohort_n"), positive=True)
         subset = summary.get("analysis_set") == "exposure_observed_rows_within_bound_typed_cohort"
@@ -235,13 +239,14 @@ def compile_counts_only_report_facts(
                              .replace("<", "below").replace(">", "above"))
                 for text in rules.values()
             )
-            facts.append(DescriptiveReportFact(
-                subsection="Cohort characteristics",
-                text=f"Groups were defined from {in_sentence_label(grouping_measure_description(parameters[exposure]))}: {definition}",
-                evidence_id=grouping_record.evidence_id, source_sha256=grouping_record.sha256,
-                source_fields=(f"compiled.{exposure}.derivation",),
-                required_result_sections=("Results",),
-            ))
+            if not exposure_only:
+                facts.append(DescriptiveReportFact(
+                    subsection="Cohort characteristics",
+                    text=f"Groups were defined from {in_sentence_label(grouping_measure_description(parameters[exposure]))}: {definition}",
+                    evidence_id=grouping_record.evidence_id, source_sha256=grouping_record.sha256,
+                    source_fields=(f"compiled.{exposure}.derivation",),
+                    required_result_sections=("Results",),
+                ))
         prevalence = estimates["exposure_prevalence"]
         outcomes = estimates["outcome_absolute_risks"]
         if len(prevalence) != len(outcomes):
@@ -262,7 +267,11 @@ def compile_counts_only_report_facts(
             denominator = _count(row.get("denominator"), positive=True)
             if count > denominator or denominator != cohort_n:
                 raise ValueError("Prevalence fact denominator differs from the cohort")
-            if method == "wilson":
+            if exposure_only:
+                # The observed distribution is descriptive regardless of the
+                # outcome contrast's uncertainty model. Copy the verified shares.
+                estimate, interval = _recorded_share(row, count, denominator)[0], None
+            elif method == "wilson":
                 estimate, interval = _reviewed_wilson(row, count, denominator, reviewed_level)
             else:
                 estimate, interval = _estimate(row, count, denominator), None
@@ -275,14 +284,16 @@ def compile_counts_only_report_facts(
                              if interval is not None else "")
             share_parts.append(f"{count:,} ({estimate:.2f}%{interval_text}) {'had ' if not share_parts else ''}{label}")
             shares.append(DescriptiveReportFact(
-                subsection="Cohort characteristics",
+                subsection=primary_result_heading(plan) if exposure_only else "Cohort characteristics",
                 text="",
                 evidence_id=source.evidence_id, source_sha256=source.sha256,
                 source_fields=tuple(f"{prefix}.{key}" for key in (
                     "level", "n", "denominator", "estimate_pct",
                     *(("ci_low_pct", "ci_high_pct", "confidence_level") if interval is not None else ()),
                 )),
-                cohort_n=analysis_n, cohort_source_field=cohort_field, analysis_unit=unit,
+                cohort_n=None if exposure_only else analysis_n,
+                cohort_source_field=cohort_field, analysis_unit=unit,
+                required_result_sections=() if exposure_only else ("Abstract", "Results"),
                 supporting_evidence_ids=(
                     *label_citations.get(coordinate, ()),
                     *((grouping_record.evidence_id,) if exposure in parameters else ()),
@@ -309,8 +320,12 @@ def compile_counts_only_report_facts(
             abstract_share_text = share_text.replace(
                 f"{measure} recorded{window_phrase}", f"{measure} recorded{recorded_window}", 1,
             )
-        facts.extend(replace(fact, abstract_text=abstract_share_text)
-                     for fact in _combined_facts(shares, share_text))
+        combined = _combined_facts(shares, share_text)
+        facts.extend((combined[0],) if exposure_only else (
+            replace(fact, abstract_text=abstract_share_text) for fact in combined
+        ))
+        if exposure_only:
+            continue
         seen_outcomes: set[int] = set()
         outcome_label = _reader_name(reader_display_labels.get(summary["outcome"], summary["outcome"]))
         outcome_facts, outcome_parts = [], []
@@ -367,7 +382,7 @@ def compile_counts_only_report_facts(
     return tuple(facts)
 
 
-def verified_descriptive_source_records(projected, evidence):
+def verified_descriptive_source_records(projected, evidence, *, include_repair_facts=False):
     """Recover the exact primary result contract from its sealed summary."""
 
     records = []
@@ -376,7 +391,7 @@ def verified_descriptive_source_records(projected, evidence):
         if not (
             isinstance(summary, dict) and "descriptive_estimates" in summary
             and summary.get("analysis_role") == "primary"
-            and summary.get("interval_method") in {"none_counts_only", "wilson"}
+            and (include_repair_facts or summary.get("interval_method") in {"none_counts_only", "wilson"})
         ):
             continue
         source = _verified_evidence_json(
@@ -695,7 +710,8 @@ def _compile_study_population_occurrence_report_facts(projected, evidence, reade
 
 
 def compile_primary_counts_only_report_facts(records, *, evidence, reader_display_labels,
-                                           context=None, manuscript_language="en", plan=None):
+                                           context=None, manuscript_language="en", plan=None,
+                                           include_repair_facts=False):
     """Shared full-run/report-only admission; loose wrapper counts are not facts.
 
     Admits the grouped Table 1 cohort count, a signed survival suite's
@@ -712,11 +728,12 @@ def compile_primary_counts_only_report_facts(records, *, evidence, reader_displa
         records, evidence_store=evidence,
     )
     descriptive_facts = compile_counts_only_report_facts(
-        verified_descriptive_source_records(projected, evidence), evidence=evidence,
+        verified_descriptive_source_records(projected, evidence, include_repair_facts=include_repair_facts),
+        evidence=evidence,
         reader_display_labels=reader_display_labels,
         context=context, manuscript_language=manuscript_language,
         scientific_claims=load_registered_scientific_claims(root=evidence.root, records=evidence.records()),
-        plan=plan,
+        plan=plan, include_repair_facts=include_repair_facts,
     )
     return (
         *_compile_grouped_table_one_cohort_report_facts(projected, evidence, context=context),
@@ -747,7 +764,7 @@ def _primary_result_regions(manuscript: str):
     every count. Their actual claims still pass the scientific/numeric gates.
     """
     for section in ("Abstract", "Results"):
-        match = re.search(rf"^## {section}[ \t]*\n(?P<body>.*?)(?=^##\s|\Z)", manuscript, re.M | re.S)
+        match = re.search(rf"^## {section}[ \t]*\r?\n(?P<body>.*?)(?=^##\s|\Z)", manuscript, re.M | re.S)
         if match is None:
             continue
         start, end = match.span("body")
@@ -904,7 +921,8 @@ def render_descriptive_report_claims(manuscript: str, facts: Sequence[Descriptiv
                 rf"^[ \t]*\{{claim:{re.escape(fact.replaces_claim_ref)}\}}[.!?]?[ \t]*$",
                 project, manuscript, flags=re.M,
             )
-    return place_primary_result_summaries(place_descriptive_report_facts(manuscript, facts), facts)
+    automatic = tuple(fact for fact in facts if "Results" in fact.required_result_sections)
+    return place_primary_result_summaries(place_descriptive_report_facts(manuscript, automatic), facts)
 
 
 def restore_descriptive_revision_claims(manuscript: str, facts: Sequence[DescriptiveReportFact]) -> str:
@@ -1200,41 +1218,146 @@ def descriptive_table_numeric_claims(evidence, records):
     return claims
 
 
-def writer_question_coverage(manuscript, *, plan, facts, evidence):
+_HIDDEN_MARKDOWN = re.compile(r"<!--.*?(?:-->|\Z)|```.*?(?:```|\Z)|~~~.*?(?:~~~|\Z)", re.S)
+_QUESTION_TOKEN_LINE = re.compile(r"(?m)^[ \t]*(\{claim:[\w.-]+\})[.!?]?[ \t]*\r?$")
+_QUESTION_PART_UNCOVERED = "writer_question_part_uncovered"
+
+
+def _question_fact_token(fact: DescriptiveReportFact) -> str:
+    if fact.replaces_claim_ref:
+        return "{claim:" + fact.replaces_claim_ref + "}"
+    identity = (fact.product_id, fact.outcome, fact.evidence_id, fact.source_sha256, fact.source_fields)
+    fingerprint = sha256(repr(identity).encode()).hexdigest()[:16]
+    return "{claim:" + f"{fact.step_id}.report_fact_{fingerprint}" + "}"
+
+
+def _visible_markdown(manuscript: str) -> str:
+    return _HIDDEN_MARKDOWN.sub(lambda match: re.sub(r"[^\r\n]", " ", match[0]), manuscript)
+
+
+def _question_subsection_spans(visible: str) -> dict[str, int]:
+    """Return visible Results subsection insertion points in the original text."""
+    return {
+        match[1].strip(): start + match.end()
+        for section, start, stop in _primary_result_regions(visible) if section == "Results"
+        for match in re.finditer(r"(?m)^### ([^\r\n]+)(?=\r?$)", visible[start:stop])
+    }
+
+
+def _question_fact_subsection(fact: DescriptiveReportFact, headings: Mapping[str, int]) -> str:
+    if "Descriptive results" in headings and fact.subsection in {"Cohort characteristics", "Primary outcome"}:
+        return "Descriptive results"
+    return fact.subsection
+
+
+def insert_question_fact_tokens(manuscript: str, repairs: Sequence[Mapping[str, Any]]) -> tuple[str, list[dict]]:
+    """Insert exact placeholders at their visible Results subsection headings."""
+    headings = _question_subsection_spans(_visible_markdown(manuscript))
+    inserted = [dict(repair) for repair in repairs if repair["subsection"] in headings]
+    for repair in sorted(inserted, key=lambda item: headings[item["subsection"]], reverse=True):
+        pos = headings[repair["subsection"]]
+        manuscript = manuscript[:pos] + "\n\n" + repair["claim_placeholder"] + "\n" + manuscript[pos:]
+    return manuscript, inserted
+
+
+def take_question_fact_tokens(manuscript: str, facts: Sequence[DescriptiveReportFact]):
+    """Take standalone host-fact slots from visible Results before Writer grammar.
+
+    The ordinary resolver still judges every remaining claim token. Only exact
+    admitted facts are projected after that grammar, before evidence and value binding.
+    """
+    by_token = {_question_fact_token(fact): fact for fact in facts if fact.step_id and not fact.replaces_claim_ref}
+    if not by_token:
+        return manuscript, ()
+    visible = _visible_markdown(manuscript)
+    selected = []
+    for section, start, stop in _primary_result_regions(visible):
+        if section != "Results":
+            continue
+        for match in reversed(tuple(_QUESTION_TOKEN_LINE.finditer(visible, start, stop))):
+            fact = by_token.get(match[1])
+            if fact is not None and match[0] == manuscript[match.start():match.end()]:
+                selected.append(fact)
+                manuscript = manuscript[:match.start()] + manuscript[match.end():]
+    return manuscript, tuple(reversed(selected))
+
+
+def writer_question_coverage(manuscript, *, plan, facts, evidence, claims=(), claim_labels=None):
     """A typed finding for every planned descriptive part without a bound result."""
     requirements = []
     for step in getattr(plan, "steps", ()):
         spec = step.exposure_outcome_distribution_spec
         if spec is not None and step.planned_analysis_role in {"primary", "secondary"}:
             for part in ("exposure_distribution", spec.outcome):
-                requirements.append((step.step_id, "table:exposure_outcome_distribution", part))
+                requirements.append((step, "table:exposure_outcome_distribution", part))
         if CONTINUOUS_OUTCOME_OUTPUT in step.expected_outputs:
-            requirements.extend((step.step_id, CONTINUOUS_OUTCOME_OUTPUT, outcome)
+            requirements.extend((step, CONTINUOUS_OUTCOME_OUTPUT, outcome)
                                 for outcome in continuous_outcome_columns(step)[1:])
-    visible = re.sub(r"<!--.*?-->|```.*?```", "", manuscript, flags=re.S)
-    results = re.search(r"(?ms)^## Results[ \t]*\n(.*?)(?=^## |\Z)", visible)
-    body = results[1] if results else ""
+
+    if not requirements:
+        return []
+    visible = _visible_markdown(manuscript)
+    lines = [
+        line for section, start, stop in _primary_result_regions(visible)
+        if section == "Results" for line in visible[start:stop].splitlines()
+    ]
+    headings = _question_subsection_spans(visible)
+
+    def cited_fact(fact):
+        source = evidence.get(fact.evidence_id)
+        return source if (source is not None and source.sha256 == fact.source_sha256
+                          and source.produced_by_step == fact.step_id) else None
+
+    def covered(fact):
+        source = cited_fact(fact)
+        return source is not None and any(
+            (f"{{evidence:{source.evidence_id}}}" in line or
+             f'({source.relative_path} "sha256={source.sha256[:8]}")' in line)
+            and fact_sentence_visible(line, fact.text)
+            for line in lines
+        )
+
     findings = []
-    for step_id, product, part in requirements:
+    for step, product, part in requirements:
+        step_id = step.step_id
         candidates = [fact for fact in facts if
-                      (fact.step_id, fact.product_id, fact.outcome) == (step_id, product, part)]
-        covered = False
-        for fact in candidates:
-            source = evidence.get(fact.evidence_id)
-            if source is None or source.sha256 != fact.source_sha256 or source.produced_by_step != step_id:
+                      (fact.step_id, fact.product_id, fact.outcome) == (step_id, product, part)
+                      and cited_fact(fact) is not None]
+        if candidates:
+            if any(covered(fact) for fact in candidates):
                 continue
-            for line in body.splitlines():
-                citation = (f"{{evidence:{source.evidence_id}}}" in line or
-                            f'({source.relative_path} "sha256={source.sha256[:8]}")' in line)
-                if citation and fact_sentence_visible(line, fact.text):
-                    covered = True
-        if not covered:
-            findings.append(ValidationFinding(
-                validator="writer_question_coverage", severity="error",
-                message="A planned descriptive question part has no result sentence bound to its product.",
-                detail={"reason_code": "writer_question_part_uncovered", "step_id": step_id,
-                        "product_id": product, "outcome": part},
-            ))
+        elif product == "table:exposure_outcome_distribution" and part != "exposure_distribution":
+            # Interval analyses already report each outcome risk via the
+            # registered scientific claim renderer. Keep its original wording.
+            subsection = ("Secondary analyses" if step.planned_analysis_role == "secondary"
+                          else primary_result_heading(plan))
+            for claim in claims:
+                if (claim.step_id != step_id or claim.outcome != part
+                        or claim.claim_type != "descriptive_absolute_risk"):
+                    continue
+                source = evidence.get(claim.evidence_id)
+                if source is not None and source.produced_by_step == step_id:
+                    candidates.append(DescriptiveReportFact(
+                        subsection, round_reader_numeric_display(claim.render_reader_text(labels=claim_labels))[0],
+                        source.evidence_id, source.sha256, (), replaces_claim_ref=claim.claim_ref,
+                        step_id=step_id, product_id=product, outcome=part,
+                    ))
+            missing = [fact for fact in candidates if not covered(fact)]
+            if candidates and not missing:
+                continue
+            candidates = missing
+        unique = {_question_fact_token(fact): fact for fact in candidates}
+        repairs = [
+            {"subsection": _question_fact_subsection(fact, headings), "text": fact.text,
+             "claim_placeholder": token}
+            for token, fact in unique.items()
+        ]
+        findings.append(ValidationFinding(
+            validator="writer_question_coverage", severity="error",
+            message=f"No bound Results sentence for {step_id} / {product} / {part}.",
+            detail={"reason_code": _QUESTION_PART_UNCOVERED, "step_id": step_id,
+                    "product_id": product, "outcome": part, "repair_facts": repairs},
+        ))
     return findings
 
 
