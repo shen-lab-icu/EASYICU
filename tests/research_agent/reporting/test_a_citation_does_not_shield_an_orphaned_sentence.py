@@ -2,10 +2,9 @@
 
 When a host gate deletes a Variables sentence, the same-paragraph sentences
 that depend on it ("It ...", "This representation ...") go with it. Writers
-often put the citation after the period, and sentence splitting gives that
-citation to the next sentence, so the dependent sentence started with
-audit-only markup and survived. Readers never see the markup: the paragraph
-opened with "This representation ...", and the final quality audit rejected
+often put the citation after the period. Attaching it to the preceding
+sentence also prevents audit-only markup from shielding the dependent
+opener. Without that handling, the paragraph opened with "This representation ...", and the final quality audit rejected
 Methods (MANUSCRIPT_VARIABLE_DEFINITION_CONTEXT_MISSING), which costs a Writer
 section repair. Citation markup is now neither an antecedent nor a separator.
 
@@ -53,8 +52,8 @@ def _delete_opener(text: str):
     return contextual_sentence_deletion(text, start, start + len(OPENER))
 
 
-def test_sentence_splitting_gives_a_trailing_citation_to_the_next_sentence():
-    assert _split_sentences(f"{OPENER} {TOKEN} {DEPENDENT}") == [OPENER, f"{TOKEN} {DEPENDENT}"]
+def test_sentence_splitting_attaches_a_trailing_citation_to_its_sentence():
+    assert _split_sentences(f"{OPENER} {TOKEN} {DEPENDENT}") == [f"{OPENER} {TOKEN}", DEPENDENT]
 
 
 def test_the_orphan_is_what_the_final_audit_rejects():
@@ -68,7 +67,7 @@ def test_a_citation_after_the_period_does_not_shield_the_dependent_sentence(cita
 
     deletion = _delete_opener(text)
 
-    assert deletion.dependent_sentences == (f"{citation} {DEPENDENT}",)
+    assert deletion.dependent_sentences == (DEPENDENT,)
     assert text[: deletion.start] + text[deletion.end :] == _variables(INDEPENDENT)
 
 
@@ -76,7 +75,7 @@ def test_a_period_inside_a_link_label_does_not_end_the_dependent_sentence():
     link = '[Fig. 1 source](evidence/figure_source.json "sha256=' + "b" * 64 + '")'
     text = _variables(f"{OPENER} {link} {DEPENDENT} {INDEPENDENT}")
 
-    assert _delete_opener(text).dependent_sentences == (f"{link} {DEPENDENT}",)
+    assert _delete_opener(text).dependent_sentences == (DEPENDENT,)
 
 
 def test_markup_before_the_deleted_opener_supplies_no_antecedent():
@@ -91,7 +90,7 @@ def test_an_independent_sentence_after_the_citation_is_kept():
     deletion = _delete_opener(text)
 
     assert deletion.dependent_sentences == ()
-    assert deletion.end == text.index(OPENER) + len(OPENER)
+    assert text[:deletion.end] == _variables(f"{OPENER} {TOKEN}").rstrip("\n")
 
 
 @pytest.mark.parametrize(
@@ -116,7 +115,7 @@ def test_a_repair_drop_takes_the_dependent_sentence_with_it():
     )
 
     assert repaired == _variables(INDEPENDENT)
-    assert receipt[0]["dependent_context_drops"] == [f"{TOKEN} {DEPENDENT}"]
+    assert receipt[0]["dependent_context_drops"] == [DEPENDENT]
     assert CODE not in _codes(repaired)
 
 
@@ -131,7 +130,7 @@ def test_a_residual_strict_drop_takes_the_dependent_sentence_with_it():
     repaired, applied = repair_pass._deterministically_drop(text, [OPENER])
 
     assert repaired == _variables(INDEPENDENT)
-    assert applied[0]["dependent_context_drops"] == [f"{TOKEN} {DEPENDENT}"]
+    assert applied[0]["dependent_context_drops"] == [DEPENDENT]
     assert CODE not in _codes(repaired)
 
 
@@ -147,6 +146,6 @@ def test_the_strict_filter_takes_the_dependent_sentence_with_it():
 
     assert rejected not in filtered.scaffold
     assert DEPENDENT not in filtered.scaffold
-    assert f"{TOKEN} {DEPENDENT}" in filtered.filtered_sentences
+    assert filtered.filtered_sentences == (f"{rejected} {TOKEN}", DEPENDENT)
     assert INDEPENDENT in filtered.scaffold
     assert CODE not in _codes(filtered.scaffold)

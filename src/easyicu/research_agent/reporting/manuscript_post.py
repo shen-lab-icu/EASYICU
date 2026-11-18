@@ -45,7 +45,7 @@ from ..authority.numeric_claim_identity import (
 )
 from ..schema import ResearchContext
 from .manuscript_audit_repair import (
-    LOSS_STOP, SentenceSpan, sentence_deletion_edit, sentence_spans,
+    LOSS_STOP, SentenceSpan, sentence_deletion_edits, sentence_spans,
 )
 from .writer_repair_decision import coerce_writer_repair_decisions
 from .manuscript_sentence_context import contextual_sentence_deletion
@@ -2556,59 +2556,31 @@ def drop_untraceable_numeric_sentences(
         if "unnamed_fact_identity" in occurrence:
             detail.setdefault("unnamed_fact_identity", []).append(occurrence["unnamed_fact_identity"])
 
-    merged: List[Tuple[int, int, str, List[Dict[str, Any]]]] = []
-    for owner, detail in rejected_by_span.items():
-        end = owner.end
-        if not owner.structural:
-            deletion = contextual_sentence_deletion(manuscript, owner.start, end)
-            end = deletion.end
-            if deletion.dependent_sentences:
-                detail["dependent_context_drops"] = list(deletion.dependent_sentences)
-        start, end, replacement = sentence_deletion_edit(manuscript, owner, end=end)
-        if merged and start < merged[-1][1]:
-            previous_start, previous_end, previous_replacement, previous_details = merged[-1]
-            merged[-1] = (
-                previous_start,
-                max(previous_end, end),
-                previous_replacement,
-                [*previous_details, detail],
-            )
-        else:
-            merged.append((start, end, replacement, [detail]))
+    edits = tuple(sentence_deletion_edits(manuscript, tuple(rejected_by_span), extend_context=True))
     filtered = manuscript
-    for start, end, replacement, _details in reversed(merged):
-        filtered = filtered[:start] + replacement + filtered[end:]
+    for edit in reversed(edits):
+        filtered = filtered[:edit.start] + edit.replacement + filtered[edit.end:]
     removed: List[Dict[str, Any]] = []
-    for start, end, _replacement, details in merged:
+    for edit in edits:
+        start, end = edit.start, edit.end
         if removal_spans is not None:
             positions = tuple(item["start"] for item in occurrences if start <= item["start"] < end)
             removal_spans.append((start, end, positions))
+        details = [rejected_by_span[owner] for owner in edit.owners]
         if len(details) == 1:
-            removed.append(details[0])
-            continue
-        removed.append(
-            {
+            detail = details[0]
+        else:
+            detail = {
                 "sentence": manuscript[start:end].strip(),
-                "untraced": list(
-                    dict.fromkeys(
-                        value
-                        for detail in details
-                        for value in detail.get("untraced", [])
-                    )
-                ),
-                "miscited": [
-                    item
-                    for detail in details
-                    for item in detail.get("miscited", [])
-                ],
-                **({"dependent_context_drops": [
-                    item for detail in details for item in detail.get("dependent_context_drops", [])
-                ]} if any(detail.get("dependent_context_drops") for detail in details) else {}),
-                **({"unnamed_fact_identity": [
-                    item for detail in details for item in detail.get("unnamed_fact_identity", [])
-                ]} if any(detail.get("unnamed_fact_identity") for detail in details) else {}),
+                "untraced": list(dict.fromkeys(value for item in details for value in item["untraced"])),
+                "miscited": [value for item in details for value in item["miscited"]],
             }
-        )
+            unnamed = [value for item in details for value in item.get("unnamed_fact_identity", ())]
+            if unnamed:
+                detail["unnamed_fact_identity"] = unnamed
+        if edit.dependent_sentences:
+            detail["dependent_context_drops"] = list(edit.dependent_sentences)
+        removed.append(detail)
     return filtered, removed
 
 

@@ -1677,3 +1677,153 @@ def test_callout_repair_keeps_methods_bytes_despite_whole_draft_rendering(tmp_pa
     assert attempt["status"] == "pass"
     assert "methods" not in attempt["section_keys"]
     assert {"MANUSCRIPT_REPEATED_SENTENCE", "MANUSCRIPT_RESULT_SUBSECTION_CALLOUT_ONLY"} <= set(attempt["audit_codes"])
+
+
+@pytest.mark.parametrize("citation", ["[^entry_a]", "{evidence:renal_result}", "[intake notes](references/intake.md)"])
+def test_numeric_filter_removes_the_dependent_sentence_citation(strict_writer_run, citation):
+    from easyicu.research_agent.reporting.manuscript_audit_repair import (
+        numeric_removal_feedback, scaffold_without_removed_sentences,
+    )
+    from easyicu.research_agent.reporting.manuscript_post import drop_untraceable_numeric_sentences
+
+    *_, store = strict_writer_run
+    prefix = "## Results\n\n"
+    source = prefix + f"The warehouse logged 967 crates. It used the dispatch register.{citation}\n"
+    ranges = []
+    filtered, _ = drop_untraceable_numeric_sentences(source, evidence=store, removal_spans=ranges)
+    _, drops, _ = numeric_removal_feedback(source, ranges)
+    assert filtered == scaffold_without_removed_sentences(source, drops) == prefix
+
+
+@pytest.mark.parametrize("fence", ["```python\ncutoff = settings.default.\n```\n", "~~~~text\nfloor = settings.minimum.\n~~~~\n"])
+def test_numeric_filter_preserves_the_whole_fence_before_prose(strict_writer_run, fence):
+    from easyicu.research_agent.reporting.manuscript_post import drop_untraceable_numeric_sentences
+
+    *_, store = strict_writer_run
+    prefix = "## Methods\n\n" + fence
+    suffix = "\n## Results\n"
+    source = prefix + "The archive held 967 ledgers {evidence:renal_result}.\n" + suffix
+    filtered, _ = drop_untraceable_numeric_sentences(source, evidence=store)
+    assert filtered == prefix + suffix
+
+
+@pytest.mark.parametrize(("before", "rejected", "after"), [
+    (
+        "- Source: dispatch register\n",
+        "- Delay: 967 days {evidence:renal_result}\n",
+        "- Custodian: shipping office\n",
+    ),
+    (
+        "> Source: dispatch register\n",
+        "> Delay: 967 days {evidence:renal_result}\n",
+        "The shipping office kept the paper copy.\n",
+    ),
+])
+def test_numeric_filter_preserves_siblings_of_a_markdown_block(strict_writer_run, before, rejected, after):
+    from easyicu.research_agent.reporting.manuscript_post import drop_untraceable_numeric_sentences
+
+    *_, store = strict_writer_run
+    filtered, _ = drop_untraceable_numeric_sentences(before + rejected + after, evidence=store)
+    assert filtered == before + after
+
+
+@pytest.mark.parametrize("second", ["It arrived after dispatch.", "The second warehouse logged 968 crates."])
+def test_adjacent_numeric_deletions_consume_whole_line(strict_writer_run, second):
+    from easyicu.research_agent.reporting.manuscript_audit_repair import (
+        numeric_removal_feedback, scaffold_without_removed_sentences,
+    )
+    from easyicu.research_agent.reporting.manuscript_post import drop_untraceable_numeric_sentences
+
+    *_, store = strict_writer_run
+    prefix = "## Results\n\nThe dispatch register was open.\n\n"
+    suffix = "The paper records were archived.\n"
+    source = prefix + f"The warehouse logged 967 crates. \t{second}\n" + suffix
+    ranges = []
+    filtered, _ = drop_untraceable_numeric_sentences(source, evidence=store, removal_spans=ranges)
+    _, drops, _ = numeric_removal_feedback(source, ranges)
+    assert filtered == scaffold_without_removed_sentences(source, drops) == prefix + suffix
+
+
+@pytest.mark.parametrize("first", ["**Background:** The warehouse logged 967 vs.", "The warehouse logged 967 vs.",
+                                  "The warehouses are compared in Fig."])
+def test_claim_policy_keeps_wrapped_numeric_sentence_with_its_citation(first):
+    continuation = "968 crates {evidence:dispatch}." if first.startswith("**") else "37. {evidence:dispatch}"
+    comparison = f"{first}\n{continuation}"
+    source = f"## Introduction\n\n{comparison}\n"
+    result = filter_evidence_bound_scaffold(
+        source, resolve_claim=lambda _: None, resolve_evidence={"dispatch"}.__contains__,
+    )
+    assert result.filtered_sentences == ()
+    assert result.scaffold == source
+
+
+@pytest.mark.parametrize("newline", ["\n", "\r\n"])
+@pytest.mark.parametrize("citation", ["[^entry_a]", "{evidence:renal_result}", "[ledger](reports/dispatch.md)"])
+@pytest.mark.parametrize(("before", "rejected", "after"), [
+    ("", "The dépôt held 967 crates. It used an alternate source.<cite>\n",
+     "The records are archived.\n"),
+    ("| Facility | Notes |\n", "The dépôt held 967 crates.\tThe annex held 968 crates.<cite>\n",
+     "| Source | Dispatch register |\n"),
+    ("- Dispatch ledger\n", "- The dépôt held 967 crates<cite>\n",
+     "- Paper copy\n"),
+    ("", "````text\nThe dépôt held 967 crates<cite>\n````\n",
+     "## Archive\nThe paper copy remains.\n"),
+    ("", "<div>\nThe dépôt held 967 crates<cite>\n</div>\n",
+     "## Archive\nThe paper copy remains.\n"),
+    ("> Dispatch ledger\n", "> The dépôt held 967 crates<cite>\n",
+     "The paper copy is archived.\n"),
+    ("````text\ndispatch.\n```\narchive.\n````\n", "The dépôt held 967 crates<cite>.\n",
+     "## Archive\nThe paper copy remains.\n"),
+    ("<div>\nDispatch ledger.\n</div>\n", "The dépôt held 967 crates<cite>\n",
+     "## Archive\nThe paper copy remains.\n"),
+    ("", "The dépôt held 967 crates. The annex held 968 crates. It had no spare crates.<cite>\n",
+     "The paper copy is archived.\n"),
+    ("", "The dépôt held\n967 crates.\n<cite>\n", "The paper copy is archived.\n"),
+    ("Facility | Notes\n--- | ---\n", "Dépôt | 967 crates<cite>\n", "Annex | Paper copy\n"),
+    ("", "The dépôt held 967 crates.\t The annex held 968 crates.<cite>  ",
+     "The paper copy is archived.\n"),
+    ("The clerk archived a copy.  ", "The dépôt held 967 crates<cite>.",
+     "  The paper copy is archived.\n"),
+])
+def test_numeric_and_repair_edits_preserve_identical_source_bytes(
+    strict_writer_run, newline, citation, before, rejected, after,
+):
+    from easyicu.research_agent.reporting.manuscript_audit_repair import (
+        numeric_removal_feedback, scaffold_without_removed_sentences,
+    )
+    from easyicu.research_agent.reporting.manuscript_post import drop_untraceable_numeric_sentences
+
+    *_, store = strict_writer_run
+    prefix = ("## Introduction\n\nDépôt dispatch logs.\n\n" + before).replace("\n", newline)
+    rejected = rejected.replace("<cite>", citation).replace("\n", newline)
+    suffix = after.replace("\n", newline)
+    source = prefix + rejected + suffix
+    bound = source.replace(citation, store.bind_manuscript(citation).strip()) if citation.startswith("{evidence:") else source
+    removed_end = len(bound) - len(suffix)
+    ranges = []
+    filtered, _ = drop_untraceable_numeric_sentences(bound, evidence=store, removal_spans=ranges)
+    _, drops, _ = numeric_removal_feedback(bound, ranges)
+    assert [(start, end) for start, end, _ in ranges] == [(len(prefix), removed_end)]
+    assert filtered.encode("utf-8") == (prefix + suffix).encode("utf-8")
+    assert scaffold_without_removed_sentences(source, drops).encode("utf-8") == (prefix + suffix).encode("utf-8")
+
+
+def test_numeric_filter_stops_when_a_rejected_number_has_no_closed_fence(strict_writer_run):
+    from easyicu.research_agent.reporting.manuscript_audit_repair import LOSS_STOP
+    from easyicu.research_agent.reporting.manuscript_post import drop_untraceable_numeric_sentences
+
+    *_, store = strict_writer_run
+    source = "## Introduction\n\n````text\nThe depot recorded 967 deliveries.\n```\n## Archive\n"
+    with pytest.raises(EvidenceEnforcementError, match=LOSS_STOP) as stop:
+        drop_untraceable_numeric_sentences(source, evidence=store)
+    assert stop.value.detail["code"] == LOSS_STOP
+
+
+@pytest.mark.parametrize("placeholder", ["{EVIDENCE:dispatch}", "{CLAIM:dispatch.count}"])
+def test_strict_authority_checks_include_leading_annotations(tmp_path, placeholder):
+    source = f"<!-- {placeholder} --> The shipping office kept the dispatch ledger."
+    store = EvidenceStore(tmp_path, enforcement_mode=EvidenceEnforcementMode.STRICT)
+    with pytest.raises(EvidenceEnforcementError, match="authority placeholders are malformed"):
+        store.bind_manuscript(source)
+    result = filter_evidence_bound_scaffold(source, resolve_claim=lambda _: None)
+    assert result.filtered_sentences == (source,)

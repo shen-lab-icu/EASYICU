@@ -146,3 +146,16 @@ def test_dependent_sentence_boundary_ignores_internal_citation_punctuation():
     deletion = contextual_sentence_deletion(manuscript, 0, len(target))
     assert deletion.dependent_sentences == (dependent,)
     assert manuscript[deletion.end:] == next_sentence
+
+
+@pytest.mark.parametrize("body", [
+    "This subgroup had consistent risk.[^claim_7]\n",
+    "\nThis subgroup summary\n| Sampling | Consecutive |\nThe registry kept forms.\n",
+    "\nIt had a separate annotation\n| Source | Ledger |\nThe archive retained paper records.\n",
+])
+def test_contextual_deletion_keeps_independent_text_and_stops_before_table(body):
+    target = "The dispatch office entered the delivery total."
+    text = target + (" " if not body.startswith("\n") else "") + body
+    deletion = contextual_sentence_deletion(text, 0, len(target))
+    assert not deletion.dependent_sentences
+    assert text[deletion.end:].lstrip(" ") == text[len(target):].lstrip(" ")
