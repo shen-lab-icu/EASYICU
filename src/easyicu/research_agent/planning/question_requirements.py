@@ -1116,12 +1116,12 @@ def judge_question_requirements(
         )
         for item in requirements
     )
-    if question is None or not judged:
-        return judged
-    matcher = QuestionQuoteMatcher(question)
-    return tuple(
-        replace(entry, quote_span=matcher.find(entry.requirement.quote)) for entry in judged
-    )
+    if question is not None and judged:
+        matcher = QuestionQuoteMatcher(question)
+        judged = tuple(
+            replace(entry, quote_span=matcher.find(entry.requirement.quote)) for entry in judged
+        )
+    return judged
 
 
 def _judge(

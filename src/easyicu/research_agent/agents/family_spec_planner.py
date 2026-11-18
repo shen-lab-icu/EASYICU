@@ -117,6 +117,7 @@ from ..planning.progressive_resume import (
     ProgressivePrefixState,
     compile_progressive_prefix,
 )
+from ..planning.requirement_typing.shadow import typing_shadow_enabled
 from ..providers.capabilities import llm_supports_strict_json_schema
 from ..providers.protocol import LLMMessage, StructuredOutputRequest
 from ..providers.strict_json_schema import (
@@ -971,6 +972,12 @@ def family_spec_structured_output_request(
             concept_ids=request.population_concepts,
             stated=request.prediction_time_hours is None,
         )
+    if typing_shadow_enabled():
+        from ..planning.requirement_typing.intake import PROPOSALS_FIELD, typing_proposals_schema
+
+        proposals, definitions = typing_proposals_schema()
+        schema["properties"][PROPOSALS_FIELD] = proposals
+        schema.setdefault("$defs", {}).update(definitions)
     strictify_json_schema(schema)
     try:
         assert_closed_json_schema(schema)
@@ -979,7 +986,9 @@ def family_spec_structured_output_request(
     return StructuredOutputRequest.from_schema(name="family_plan_spec", schema=schema, strict=True)
 
 
-def parse_family_plan_spec(raw: str, request: FamilySpecRequest) -> FamilyPlanSpec:
+def parse_family_plan_spec(
+    raw: str, request: FamilySpecRequest, *, capture_typings: Callable[[object], None] | None = None,
+) -> FamilyPlanSpec:
     """Parse one provider response and validate it against the sealed request.
 
     The host binds the envelope to the request sent in this call; copying an
@@ -990,6 +999,12 @@ def parse_family_plan_spec(raw: str, request: FamilySpecRequest) -> FamilyPlanSp
     payload = json.loads(str(raw or "").strip())
     if not isinstance(payload, dict):
         raise ValueError("family spec response root must be an object")
+    shadow = typing_shadow_enabled()
+    proposals: object = ()
+    if shadow:
+        from ..planning.requirement_typing.intake import PROPOSALS_FIELD
+
+        proposals = payload.pop(PROPOSALS_FIELD, ())
     spec = FamilyPlanSpec.model_validate(
         {
             **payload,
@@ -999,6 +1014,8 @@ def parse_family_plan_spec(raw: str, request: FamilySpecRequest) -> FamilyPlanSp
         }
     )
     validate_family_plan_spec(spec, request)
+    if shadow and capture_typings is not None:
+        capture_typings(proposals)
     return spec
 
 
@@ -1226,6 +1243,10 @@ def family_spec_response_shape(request: FamilySpecRequest) -> str:
             request.variable_roster, effect_measures=_requirement_effect_measures(request)
         )
     )
+    if typing_shadow_enabled():
+        from ..planning.requirement_typing.intake import typing_proposals_instruction
+
+        lines.append(typing_proposals_instruction(include_schema=True))
     if len(family_effect_measures(request)) > 1:
         lines.append(
             '- "effect_measure": null (odds ratio) or one of '
@@ -1362,6 +1383,12 @@ def run_family_spec_attempt(
         # The written shape remains authority when no schema is attached.
         response_shape="" if schema is not None else response_shape,
     )
+    if schema is not None and typing_shadow_enabled():
+        from ..planning.requirement_typing.intake import typing_proposals_instruction
+
+        messages[0] = replace(messages[0], content=(
+            messages[0].content + "\n" + typing_proposals_instruction(include_schema=False)
+        ))
     schema_bytes = schema.payload_bytes if schema is not None else 0
     prompt_request = project_planner_request(
         messages, prompt_blocks, byte_limit=prompt_byte_limit, schema_bytes=schema_bytes,
@@ -1526,11 +1553,20 @@ def run_family_spec_attempt(
     question_anchors = tuple(sealed.coordinate_concepts) if sealed else None
     parse_attempts = 0
 
-    def parse_spec(raw: str) -> tuple[FamilyPlanSpec, FamilySkeletonDraft]:
+    def parse_spec(raw: str) -> tuple[FamilyPlanSpec, FamilySkeletonDraft, object]:
         nonlocal parse_attempts
         parse_attempts += 1
+        staged_typings: object = ()
+
+        def capture_typings(proposals: object) -> None:
+            nonlocal staged_typings
+            staged_typings = proposals
+
         try:
-            spec = parse_family_plan_spec(raw, request)
+            spec = (
+                parse_family_plan_spec(raw, request, capture_typings=capture_typings)
+                if typing_shadow_enabled() else parse_family_plan_spec(raw, request)
+            )
             check_question_requirement_gaps(
                 spec, context=context, planning_contract_context=planning_contract_context
             )
@@ -1568,7 +1604,7 @@ def run_family_spec_attempt(
                 # Progressive step/suffix repair lane, which recompiles below.
                 if retryable_parse_error(exc):
                     raise
-            return spec, draft
+            return spec, draft, staged_typings
         except ValueError as exc:
             if not retryable_parse_error(exc):
                 raise
@@ -1587,7 +1623,7 @@ def run_family_spec_attempt(
                 raise _QuestionRequirementSchemaRefusal(feedback) from exc
             raise
 
-    spec, draft = call_llm_with_structured_retry(
+    spec, draft, staged_typings = call_llm_with_structured_retry(
         llm,
         messages,
         parser=parse_spec,
@@ -1672,6 +1708,7 @@ def run_family_spec_attempt(
     attempt.prompt_metrics["final_skeleton_sha256"] = receipt.skeleton_sha256
     attempt.prompt_metrics["compiled_plan_sha256"] = receipt.analysis_plan_sha256
     capture_efficiency_metrics()
+    attempt.question_requirement_typings = staged_typings
     return plan
 
 
