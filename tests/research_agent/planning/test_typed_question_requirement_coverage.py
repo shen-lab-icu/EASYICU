@@ -20,9 +20,7 @@ from easyicu.research_agent.contracts.model_terms import (
     ImputationVariable,
     MissingDataPlan,
     ModelTermSpec,
-    PlannedModelRequirement,
     WindowAggregation,
-    preparation_method,
 )
 from easyicu.research_agent.contracts.prediction_validation import (
     EXTERNAL_ACTION,
@@ -40,7 +38,6 @@ from easyicu.research_agent.planning.cohort_contract import (
 from easyicu.research_agent.planning.requirement_typing import matcher
 from easyicu.research_agent.planning.requirement_typing.contract import (
     AtomicPart,
-    Binding,
     CohortPredicate,
     CoverageRecord,
     Delivery,
@@ -66,15 +63,12 @@ from easyicu.research_agent.planning.requirement_typing.registry import (
 from easyicu.research_agent.planning.sensitivity_authority import PrespecifiedSensitivitySpec
 from easyicu.research_agent.research_context.clinical_definition import ClinicalDefinitionReference
 from easyicu.research_agent.schema import (
-    AnalysisPlan,
     AnalysisStep,
-    CohortDescriptor,
     ConceptDescriptor,
-    ResearchContext,
     UserPreferences,
 )
 
-from .test_typed_question_requirement_regressions import (
+from tests.support.typed_question_requirements import (
     AUTHORITY,
     CLUSTER,
     DICTIONARY,
@@ -84,6 +78,9 @@ from .test_typed_question_requirement_regressions import (
     KDIGO_48,
     ICU,
     MAX_POTASSIUM,
+    _context,
+    _model,
+    _model_plan,
     bind,
     fact,
     interval,
@@ -237,51 +234,6 @@ def test_method_parameters_bind_by_name_with_strict_values() -> None:
     assert matcher.match(
         asked, authority=AUTHORITY, dictionary=DICTIONARY, facts=(fact(bool_as_int),),
     ).state == "not_covered"
-
-
-def _context(*, preferences=None, first=False, variables=None) -> ResearchContext:
-    provenance = {}
-    if first:
-        provenance["first_icu_stay_restriction"] = {
-            "schema_version": "easyicu.first_icu_stay_restriction/1", "coordinate_sha256": "b" * 64,
-        }
-    if preferences and preferences.data_constraints:
-        provenance["patient_id_columns"] = ["patient_id"]
-    return ResearchContext(
-        research_question="Use peak potassium in the first six hours after ICU entry.",
-        cohort=CohortDescriptor(
-            cohort_name="test_cohort", database="miiv", n_stays=4,
-            time_columns=["clock"], id_columns=["patient_id", "stay_id"], provenance=provenance,
-        ),
-        primary_exposure="k", target_outcome="death",
-        variables=variables if variables is not None else [
-            ConceptDescriptor(name="k", dtype="float64", unit="mmol/L"),
-            ConceptDescriptor(name="death", dtype="bool"),
-        ],
-        user_preferences=preferences,
-    )
-
-
-def _model(*, exposure="k", dependence=None) -> PlannedModelRequirement:
-    return PlannedModelRequirement(
-        requirement_id="m1", outcome="death", outcome_type="binary",
-        method_family="logistic_regression", exposure_source=exposure,
-        analysis_role="primary", analysis_set="complete_case", covariates=[],
-        dependence=dependence,
-    )
-
-
-def _model_plan(preparation=None, *, model=True) -> AnalysisPlan:
-    method = "adjusted_association_models"
-    return AnalysisPlan(
-        research_question="Use peak potassium in the first six hours after ICU entry.",
-        steps=[AnalysisStep(
-            step_id="model", intent="fit a model", inputs=["k", "death", "clock", "stay_id"],
-            method=preparation_method(method, preparation) if preparation is not None else method,
-            expected_outputs=["table:adjusted_association_estimates"],
-            planned_analysis_role="primary", model_requirements=[_model()] if model else [],
-        )],
-    )
 
 
 def _evaluate(key, plan, *, context=None, clocks=()):
