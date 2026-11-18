@@ -1373,16 +1373,12 @@ class ProgressivePlannerAgent:
             action_menu,
             "Sealed literature citation keys:\n"
             + json.dumps(list(allowed_literature_citation_keys), ensure_ascii=False, sort_keys=True),
-            outline_authority_block(
-                "response_shape",
-                "Host-known method layers for sealed citation keys:\n"
-                + canonical_json_bytes([
-                    {"citation_key": key, "method_layers": list(layers)}
-                    for key in allowed_literature_citation_keys
-                    if (layers := method_layers_for_source_keys((key,)))
-                ]).decode("utf-8"),
-                "",
-            ),
+            "Host-known method layers for sealed citation keys:\n"
+            + canonical_json_bytes([
+                {"citation_key": key, "method_layers": list(layers)}
+                for key in allowed_literature_citation_keys
+                if (layers := method_layers_for_source_keys((key,)))
+            ]).decode("utf-8"),
             action_matrix,
             PlannerPromptBlock("action_rows", "Fixed host module action compatibility:\n"
             + json.dumps(PROGRESSIVE_FIXED_MODULE_ACTION_IDS, separators=(",", ":"), sort_keys=True)

@@ -24,6 +24,7 @@ _TRAJECTORY_QUESTION = (
     "在 ICU 入科后，基于纵向呼吸频率轨迹进行聚类，描述轨迹类别与结局的关联。"
     "对齐预先设定的时间窗口并评价重抽样稳定性。轨迹类别不用于 causal inference。"
 )
+_METHOD_LAYERS_HEADER = "Host-known method layers for sealed citation keys:\n"
 _CITATIONS = (
     "strobe_2007", "record_2015", "suissa_immortal_time_2008", "anderson_landmark_1983",
     "grambsch_therneau_ph_1994", "royston_parmar_rmst_2011", "durrleman_splines_1989",
@@ -77,6 +78,15 @@ def _run_to_outline(context, contract):
     pytest.fail("The scripted client did not receive the outline.")
 
 
+def _outline_method_layers(prompt):
+    _, header, payload = prompt.partition(_METHOD_LAYERS_HEADER)
+    assert header, "Outline is missing the citation-to-method-layer authority block"
+    return {
+        row["citation_key"]: row["method_layers"]
+        for row in json.loads(payload.splitlines()[0])
+    }
+
+
 def test_large_trajectory_outline_has_room_under_the_original_limit():
     context = _context(_TRAJECTORY_QUESTION)
     contract = _contract()
@@ -84,7 +94,12 @@ def test_large_trajectory_outline_has_room_under_the_original_limit():
 
     assert metrics["byte_limit"] == 120_000
     assert metrics["source_request_bytes"] > 120_000
-    assert metrics["request_bytes"] <= 102_000
+    assert metrics["request_bytes"] < metrics["byte_limit"]
+    # Keep the existing compaction bounds for the rest of the request.
+    _, header, payload = prompt.partition(_METHOD_LAYERS_HEADER)
+    assert header
+    method_layer_bytes = len((header + payload.splitlines(keepends=True)[0] + "\n").encode("utf-8"))
+    assert metrics["request_bytes"] - method_layer_bytes <= 102_000
     assert metrics["request_bytes"] == sum(metrics["block_bytes"].values())
     assert metrics["request_bytes"] == metrics["message_bytes"] + metrics["schema_bytes"]
     assert 40_000 <= metrics["source_block_bytes"]["action_rows"] <= 44_000
@@ -92,7 +107,7 @@ def test_large_trajectory_outline_has_room_under_the_original_limit():
     assert 18_000 <= metrics["source_block_bytes"]["response_shape"] <= 23_000
     assert metrics["block_bytes"]["planning_contract"] == metrics["source_block_bytes"]["planning_contract"]
     assert metrics["block_bytes"]["action_rows"] <= 30_000
-    assert metrics["block_bytes"]["response_shape"] <= 17_000
+    assert metrics["block_bytes"]["response_shape"] - method_layer_bytes <= 17_000
     assert {receipt["block"] for receipt in metrics["prompt_projection_receipts"]
             if receipt["reason"] == OUTLINE_COMPACTION} == {
         "action_rows", "article_question_context", "response_shape",
@@ -119,6 +134,9 @@ def test_multi_variable_association_retains_questions_and_actions(pressure):
         assert metrics["request_bytes"] <= 110_000
         assert metrics["block_bytes"]["action_rows"] < metrics["source_block_bytes"]["action_rows"]
         assert metrics["block_bytes"]["planning_contract"] == metrics["source_block_bytes"]["planning_contract"]
+        method_layers = _outline_method_layers(prompt)
+        assert "interpretation" in method_layers["strobe_2007"]
+        assert "functional_form" in method_layers["durrleman_splines_1989"]
     else:
         assert metrics["request_bytes"] <= 80_000
         assert metrics["request_bytes"] == metrics["source_request_bytes"]
@@ -190,6 +208,7 @@ def test_compacted_outline_preserves_action_policy_roles_and_response_fields():
             for row in contract["requirements"]
         ]
     assert compact_roles == json.loads(full.split(role_header, 1)[1].splitlines()[0])
+    assert _outline_method_layers(compact) == _outline_method_layers(full)
 
 
 def test_unrecognized_action_contract_fields_stay_in_the_prompt():
