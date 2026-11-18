@@ -296,6 +296,9 @@ def test_extract_database_modules_use_the_shared_catalog() -> None:
        "imv_first_episode": [
            "imv_start_hours", "imv_end_hours", "imv_duration_hours", "episode_status", "episode_evidence",
        ],
+       "imv_recorded_compat": ["imv", "imv_recorded_end_hour"],
+       "observed_peep_set": ["observed_peep_set"],
+       "rrt_time": ["rrt_active"],
        "pao2_arterial_hourly_min": ["po2"]}
     # The SIC case module is explicitly selected, not part of the six-source
     # default extraction order.
