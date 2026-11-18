@@ -628,6 +628,7 @@ def _fork_and_run(target, args) -> int:
     Returns:
         子进程退出码（0 表示成功）
     """
+    timeout_s = float(os.environ.get('EASYICU_BATCH_TIMEOUT_SEC', '3600'))
     pid = os.fork()
     if pid == 0:
         # ---- 子进程 ----
@@ -650,8 +651,7 @@ def _fork_and_run(target, args) -> int:
         # WNOHANG, and force-kill after a generous timeout so the
         # convoy can move on. Same envelope as _popen_and_run (1 h).
         import signal
-        timeout_s = float(os.environ.get('EASYICU_BATCH_TIMEOUT_SEC', '3600'))
-        start = time.time()
+        start = time.monotonic()
         while True:
             try:
                 done_pid, status = os.waitpid(pid, os.WNOHANG)
@@ -659,7 +659,7 @@ def _fork_and_run(target, args) -> int:
                 return -1
             if done_pid != 0:
                 break
-            if time.time() - start > timeout_s:
+            if time.monotonic() - start > timeout_s:
                 logger.warning(
                     f"⚠️ child pid={pid} exceeded {timeout_s:.0f}s, terminating"
                 )
@@ -669,13 +669,14 @@ def _fork_and_run(target, args) -> int:
                     for _ in range(50):
                         done_pid, status = os.waitpid(pid, os.WNOHANG)
                         if done_pid != 0:
-                            return -1
+                            break
                         time.sleep(0.1)
-                    os.kill(pid, signal.SIGKILL)
-                    os.waitpid(pid, 0)
+                    else:
+                        os.kill(pid, signal.SIGKILL)
+                        os.waitpid(pid, 0)
                 except OSError:
                     pass
-                return -1
+                raise TimeoutError(f"worker timed out after {timeout_s:g}s")
             time.sleep(0.2)
         if hasattr(os, 'waitstatus_to_exitcode'):
             return os.waitstatus_to_exitcode(status)
@@ -717,9 +718,6 @@ def _popen_and_run(args: dict, temp_dir: str, batch_num: int) -> int:
             k: [int(x) for x in v]
             for k, v in _json_safe['patient_ids'].items()
         }
-    with open(args_file, 'w', encoding="utf-8") as f:
-        json.dump(_json_safe, f)
-
     # 确保子进程能 import easyicu（处理非 pip 安装的开发模式）
     env = os.environ.copy()
     _easyicu_parent = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
@@ -734,19 +732,18 @@ def _popen_and_run(args: dict, temp_dir: str, batch_num: int) -> int:
         "_subprocess_load_worker(args)"
     )
 
+    timeout_s = float(os.environ.get('EASYICU_BATCH_TIMEOUT_SEC', '3600'))
     try:
+        with open(args_file, 'w', encoding="utf-8") as f:
+            json.dump(_json_safe, f)
         result = subprocess.run(
             [sys.executable, '-c', _code, args_file],
             env=env,
-            timeout=3600,  # 1 hour timeout per batch
+            timeout=timeout_s,
         )
         return result.returncode
-    except subprocess.TimeoutExpired:
-        logger.warning(f"Batch {batch_num} Popen timed out (60min)")
-        return -1
-    except Exception as e:
-        logger.warning(f"Batch {batch_num} Popen failed: {e}")
-        return -1
+    except subprocess.TimeoutExpired as exc:
+        raise TimeoutError(f"worker timed out after {timeout_s:g}s") from exc
     finally:
         try:
             os.unlink(args_file)
@@ -754,7 +751,7 @@ def _popen_and_run(args: dict, temp_dir: str, batch_num: int) -> int:
             pass
 
 
-def _subprocess_load_worker(args: dict) -> str:
+def _subprocess_load_worker(args: dict) -> None:
     """
     在子进程中加载概念数据的 worker 函数。
     
@@ -762,10 +759,7 @@ def _subprocess_load_worker(args: dict) -> str:
     
     Args:
         args: 包含 concepts, patient_ids, database, data_path, interval,
-              output_path, easyicu_data_path 等参数
-    
-    Returns:
-        输出文件路径
+              output_prefix, easyicu_data_path 等参数
     """
     import os
     # 设置环境变量
@@ -796,25 +790,15 @@ def _subprocess_load_worker(args: dict) -> str:
         **load_kwargs,
     )
     
-    # 写入临时 parquet 文件
     output_prefix = args['output_prefix']
+    if not isinstance(result, (pd.DataFrame, dict)):
+        raise TypeError(f"unexpected batch result type: {type(result).__name__}")
+    shards = _write_batch_result_to_parquet(result, output_prefix)
+    # Write the receipt last. An empty shard list proves a completed empty load.
+    receipt = {"shards": sorted(Path(path).name for path in shards)}
     if absence_sink is not None:
-        Path(f"{output_prefix}.absences.json").write_text(
-            json.dumps(absence_sink.codes()), encoding="utf-8",
-        )
-    if isinstance(result, pd.DataFrame) and len(result) > 0:
-        result.to_parquet(f"{output_prefix}.parquet", index=False, engine='pyarrow')
-    elif isinstance(result, dict):
-        # dict 结果：序列化为多个 parquet 文件
-        # 处理 ICUTable/TsTbl/WinTbl 等具有 .data 属性的表对象
-        for k, v in result.items():
-            df = v
-            if hasattr(v, 'data') and isinstance(v.data, pd.DataFrame):
-                df = v.data
-            if isinstance(df, pd.DataFrame) and len(df) > 0:
-                df.to_parquet(f"{output_prefix}.{k}.parquet", index=False, engine='pyarrow')
-    
-    return output_prefix
+        receipt["absences"] = absence_sink.codes()
+    Path(f"{output_prefix}.receipt.json").write_text(json.dumps(receipt), encoding="utf-8")
 
 
 def _estimate_result_size_mb(result: Union[pd.DataFrame, Dict[str, pd.DataFrame]]) -> float:
@@ -840,17 +824,15 @@ def _estimate_result_size_mb(result: Union[pd.DataFrame, Dict[str, pd.DataFrame]
 def _write_batch_result_to_parquet(
     result: Union[pd.DataFrame, Dict[str, pd.DataFrame]],
     output_prefix: str,
-) -> bool:
-    """Persist a batch result to parquet shards.
-
-    Returns True if at least one parquet file was written.
-    """
-    wrote = False
+) -> List[str]:
+    """Persist a batch result and return the paths of its parquet shards."""
+    paths = []
     if isinstance(result, pd.DataFrame):
         if not result.empty:
-            result.to_parquet(f"{output_prefix}.parquet", index=False, engine='pyarrow')
-            wrote = True
-        return wrote
+            path = f"{output_prefix}.parquet"
+            result.to_parquet(path, index=False, engine='pyarrow')
+            paths.append(path)
+        return paths
 
     if isinstance(result, dict):
         for name, frame in result.items():
@@ -858,9 +840,10 @@ def _write_batch_result_to_parquet(
             if hasattr(frame, 'data') and isinstance(frame.data, pd.DataFrame):
                 df = frame.data
             if isinstance(df, pd.DataFrame) and not df.empty:
-                df.to_parquet(f"{output_prefix}.{name}.parquet", index=False, engine='pyarrow')
-                wrote = True
-    return wrote
+                path = f"{output_prefix}.{name}.parquet"
+                df.to_parquet(path, index=False, engine='pyarrow')
+                paths.append(path)
+    return paths
 
 
 def _should_spill_inprocess_batches(
@@ -939,7 +922,7 @@ def _merge_parquet_batches(temp_dir: str) -> Union[pd.DataFrame, Dict[str, pd.Da
     temp_path = Path(temp_dir)
     flat_files = sorted(
         f for f in temp_path.glob('batch_*.parquet')
-        if re.fullmatch(r'batch_\d{4}\.parquet', f.name)
+        if re.fullmatch(r'batch_\d{4,}\.parquet', f.name)
     )
     dict_files = sorted(temp_path.glob('batch_*.*.parquet'))
 
@@ -973,6 +956,30 @@ def _merge_parquet_batches(temp_dir: str) -> Union[pd.DataFrame, Dict[str, pd.Da
     return merged
 
 
+def _run_batch_process(args: dict, attempt_dir: Path, batch_num: int, mode: str) -> Optional[int]:
+    """Run one nested batch, returning its exit status after it stops."""
+    import multiprocessing as mp
+
+    if mode == "os.fork()":
+        return _fork_and_run(_subprocess_load_worker, args)
+    if mode == "Popen":
+        return _popen_and_run(args, str(attempt_dir), batch_num)
+
+    timeout_s = float(os.environ.get('EASYICU_BATCH_TIMEOUT_SEC', '3600'))
+    ctx = mp.get_context('fork' if hasattr(os, 'fork') else 'spawn')
+    proc = ctx.Process(target=_subprocess_load_worker, args=(args,))
+    proc.start()
+    proc.join(timeout=timeout_s)
+    if proc.is_alive():
+        proc.terminate()
+        proc.join(timeout=10)
+        if proc.is_alive():
+            proc.kill()
+            proc.join(timeout=5)
+        raise TimeoutError(f"worker timed out after {timeout_s:g}s")
+    return proc.exitcode
+
+
 def subprocess_batch_load(
     concepts: List[str],
     database: str,
@@ -1003,7 +1010,9 @@ def subprocess_batch_load(
         合并后的 DataFrame
     """
     import multiprocessing as mp
-    
+
+    from ..concept.errors import ConceptExtractionUnavailable
+
     id_col = list(all_patient_ids.keys())[0]
     ids = list(all_patient_ids.values())[0]
     total = len(ids)
@@ -1019,33 +1028,30 @@ def subprocess_batch_load(
         _in_daemon = mp.current_process().daemon
     except Exception:
         pass
-    _use_raw_fork = _in_daemon and hasattr(os, 'fork')
-    # Windows daemon: 无 os.fork 也无 mp.Process → 用 subprocess.Popen
-    _use_popen = _in_daemon and not hasattr(os, 'fork')
-    
+    mode = ("os.fork()" if hasattr(os, 'fork') else "Popen") if _in_daemon else "mp.Process"
+
     if verbose:
-        mode = "os.fork()" if _use_raw_fork else ("Popen" if _use_popen else "mp.Process")
         logger.debug("🔄 Subprocess-isolated batching: %d patients, batch_size=%d, %d batches [%s]",
                      total, batch_size, num_batches, mode)
-    
-    temp_dir = tempfile.mkdtemp(prefix='easyicu_batch_')
-    try:
-        for i in range(0, total, batch_size):
-            batch_num = i // batch_size + 1
-            batch_ids = ids[i:i + batch_size]
-            output_prefix = os.path.join(temp_dir, f'batch_{batch_num:04d}')
-            
-            if verbose:
-                rss = get_rss_mb()
-                logger.debug("   📦 Batch %d/%d: %d patients (RSS: %.0fMB)...",
-                             batch_num, num_batches, len(batch_ids), rss)
-            
+
+    temp_dir = Path(tempfile.mkdtemp(prefix='easyicu_batch_'))
+    part_number = 1
+    part_digits = max(4, len(str(total)))
+    absence_receipts = []
+
+    def load_batch(batch_num: int, batch_ids: list) -> None:
+        nonlocal part_number
+        # A failed worker can leave its own shards behind, even with a receipt.
+        # Only validated attempts can move shards into the merge directory.
+        with tempfile.TemporaryDirectory(dir=temp_dir) as attempt:
+            attempt_dir = Path(attempt)
+            output_prefix = attempt_dir / f"batch_{part_number:0{part_digits}d}"
             args = {
                 'concepts': concepts,
                 'patient_ids': {id_col: batch_ids},
                 'database': database,
                 'data_path': data_path,
-                'output_prefix': output_prefix,
+                'output_prefix': str(output_prefix),
                 'easyicu_data_path': easyicu_data_path,
                 'r_compatible': r_compatible,
                 'merge': merge,
@@ -1054,70 +1060,76 @@ def subprocess_batch_load(
                 'load_kwargs': kwargs,
                 'collect_typed_absences': absence_sink is not None,
             }
-            
-            # 在子进程中运行
-            if _use_raw_fork:
-                # daemon 进程 (Linux/macOS): 用 os.fork() 绕过 mp.Process 的 daemon 限制
-                exitcode = _fork_and_run(_subprocess_load_worker, args)
-            elif _use_popen:
-                # daemon 进程 (Windows): 用 subprocess.Popen 绕过 daemon 限制
-                # Popen 创建完全独立的进程（CreateProcess），不受 daemon 约束
-                exitcode = _popen_and_run(args, temp_dir, batch_num)
-            else:
-                # 非 daemon: 用 mp.Process（更安全的管理方式）
-                # Linux/macOS 使用 fork（快速），Windows 用 spawn
-                _method = 'fork' if hasattr(os, 'fork') else 'spawn'
-                ctx = mp.get_context(_method)
-                proc = ctx.Process(target=_subprocess_load_worker, args=(args,))
-                proc.start()
-                # 2026-05-20 fix (Bug E6): bounded join — see _fork_and_run.
-                _timeout = float(os.environ.get('EASYICU_BATCH_TIMEOUT_SEC', '3600'))
-                proc.join(timeout=_timeout)
-                if proc.is_alive():
-                    logger.warning(
-                        f"Batch {batch_num} mp.Process hang past "
-                        f"{_timeout:.0f}s, terminating"
-                    )
-                    proc.terminate()
-                    proc.join(timeout=10)
-                    if proc.is_alive():
-                        proc.kill()
-                        proc.join(timeout=5)
-                    exitcode = -1
-                else:
-                    exitcode = proc.exitcode
-            
-            if exitcode != 0:
-                logger.warning(f"Batch {batch_num} subprocess exit code: {exitcode}")
-                if verbose:
-                    logger.debug(" ❌ (exit=%s)", exitcode)
-                continue
+            try:
+                exitcode = _run_batch_process(args, attempt_dir, batch_num, mode)
+                if exitcode != 0:
+                    raise RuntimeError(f"worker exited with code {exitcode}")
 
-            if absence_sink is not None:
-                receipt = Path(f"{output_prefix}.absences.json")
-                # A missing receipt leaves the batch's evidence unknown.
-                if receipt.is_file():
-                    codes = json.loads(receipt.read_text(encoding="utf-8"))
-                    absence_sink.observe(concepts, codes)
+                receipt = Path(f"{output_prefix}.receipt.json")
+                if not receipt.is_file():
+                    raise ValueError("worker left no completion receipt")
+                payload = json.loads(receipt.read_text(encoding="utf-8"))
+                output_files = sorted(attempt_dir.glob("*.parquet"), key=lambda path: path.name)
+                if not isinstance(payload, dict) or payload.get("shards") != [
+                    path.name for path in output_files
+                ]:
+                    raise ValueError("worker output shards do not match its completion receipt")
+                if any(
+                    not path.is_file()
+                    or not path.name.startswith(f"{output_prefix.name}.")
+                    or (path.name == f"{output_prefix.name}.parquet") != merge
+                    for path in output_files
+                ):
+                    raise ValueError("worker left an invalid output shard")
+                if absence_sink is not None:
+                    codes = payload.get("absences")
+                    if not isinstance(codes, dict) or not all(
+                        isinstance(code, str) for code in codes.values()
+                    ):
+                        raise ValueError("worker left no valid typed absence receipt")
+            except (OSError, RuntimeError, ValueError, TypeError, AssertionError) as exc:
+                raise ConceptExtractionUnavailable(
+                    concept_id=", ".join(concepts), database=database,
+                    stage="subprocess_batch_load", detail=f"batch {batch_num}: {exc}",
+                ) from exc
 
-            output_files = [f for f in Path(temp_dir).glob(f"batch_{batch_num:04d}*.parquet")]
-            if output_files:
-                if verbose:
-                    file_mb = sum(os.path.getsize(f) for f in output_files) / 1024 / 1024
+            if verbose:
+                if output_files:
+                    file_mb = sum(path.stat().st_size for path in output_files) / 1024 / 1024
                     logger.debug(" ✅ (%.1fMB)", file_mb)
-            else:
-                if verbose:
-                    logger.debug(" ⚠️ (no output)")
+                else:
+                    logger.debug(" ✅ (empty batch)")
+            for path in output_files:
+                path.replace(temp_dir / path.name)
+            if absence_sink is not None:
+                absence_receipts.append(codes)
+            part_number += 1
+
+    try:
+        for i in range(0, total, batch_size):
+            batch_num = i // batch_size + 1
+            batch_ids = ids[i:i + batch_size]
+            if verbose:
+                logger.debug("   📦 Batch %d/%d: %d patients (RSS: %.0fMB)...",
+                             batch_num, num_batches, len(batch_ids), get_rss_mb())
+            try:
+                load_batch(batch_num, batch_ids)
+            except ConceptExtractionUnavailable as exc:
+                # One repair per failed batch: rerun its full scope in smaller
+                # pieces, or repeat the single-stay load once.
+                retry_size = (len(batch_ids) + 1) // 2
+                logger.warning("%s; retrying with batch_size=%d", exc, retry_size)
+                for start in range(0, len(batch_ids), retry_size):
+                    load_batch(batch_num, batch_ids[start:start + retry_size])
 
         # 合并所有 batch 的结果
-        produced_files = list(Path(temp_dir).glob('batch_*.parquet')) + list(Path(temp_dir).glob('batch_*.*.parquet'))
-        if not produced_files:
-            return pd.DataFrame()
-
         if verbose:
             logger.debug("   📋 Merging batch results...")
 
-        result = _merge_parquet_batches(temp_dir)
+        result = _merge_parquet_batches(str(temp_dir)) if any(temp_dir.glob('batch_*.parquet')) else pd.DataFrame()
+        if absence_sink is not None:
+            for codes in absence_receipts:
+                absence_sink.observe(concepts, codes)
 
         if verbose:
             if isinstance(result, pd.DataFrame):
