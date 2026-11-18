@@ -180,6 +180,11 @@ def _continues_prose(line: str, following: str, *, numbered: bool) -> bool:
     )
 
 
+def _leading_indent(line: str) -> int:
+    prefix_end = len(line) - len(line.lstrip(" \t"))
+    return len(line[:prefix_end].expandtabs(4))
+
+
 def manuscript_regions(text: str) -> Iterator[ManuscriptRegion]:
     """Return logical prose lines and atomic Markdown regions in source coordinates."""
     lines = [match[0] for match in re.finditer(r"[^\n]*\n|[^\n]+\Z", text)]
@@ -187,23 +192,36 @@ def manuscript_regions(text: str) -> Iterator[ManuscriptRegion]:
     for line in lines:
         offsets.append(offsets[-1] + len(line))
     content = [line.rstrip("\r\n") for line in lines]
+    indents = [_leading_indent(line) for line in content]
     table_rows = _table_rows(content)
+    list_indents: list[int] = []
     index = 0
     while index < len(lines):
         line = content[index]
         stop = index + 1
         heading = None
         complete = True
-        if not line.strip():
+        blank = not line.strip()
+        while list_indents and not blank and indents[index] < list_indents[-1]:
+            list_indents.pop()
+        if blank:
             kind = "blank"
         elif fence := _FENCE.match(line):
             kind = "fence"
             marker = fence["marker"]
             close = re.compile(rf"[ \t]*{marker[0]}{{{len(marker)},}}[ \t]*")
-            while stop < len(lines) and not close.fullmatch(content[stop]):
+            # Blank lines can occur inside the fence. A nonblank line outside
+            # the enclosing list item cannot close it or belong to its body.
+            fence_indent = list_indents[-1] if list_indents else 0
+            complete = False
+            while stop < len(lines):
+                if indents[stop] < fence_indent and content[stop].strip():
+                    break
+                if close.fullmatch(content[stop]):
+                    stop += 1
+                    complete = True
+                    break
                 stop += 1
-            complete = stop < len(lines)
-            stop += complete
         elif (html_stop := _html_block_stop(content, index)) is not None:
             kind = "html"
             stop, complete = html_stop
@@ -215,9 +233,19 @@ def manuscript_regions(text: str) -> Iterator[ManuscriptRegion]:
             kind = "structural"
         elif marker := _LIST_ITEM.match(line):
             kind = "structural"
+            item_indent = len(marker[0].expandtabs(4))
+            list_indents.append(item_indent)
             while stop < len(lines) and content[stop].strip():
                 continuation = content[stop]
-                if len(continuation) - len(continuation.lstrip(" \t")) < marker.end():
+                if (
+                    indents[stop] < item_indent
+                    or _LIST_ITEM.match(continuation)
+                    or _FENCE.match(continuation)
+                    or _HEADING.match(continuation)
+                    or _STRUCTURAL_LINE.match(continuation)
+                    or stop in table_rows
+                    or _html_block_stop(content, stop) is not None
+                ):
                     break
                 stop += 1
         else:

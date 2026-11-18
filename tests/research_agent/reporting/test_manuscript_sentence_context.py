@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import pytest
 
+from easyicu.research_agent.contracts.manuscript_sentence_context import manuscript_regions
 from easyicu.research_agent.reporting.manuscript_sentence_context import (
     contextual_sentence_deletion,
     has_dependent_opener,
@@ -159,3 +160,23 @@ def test_contextual_deletion_keeps_independent_text_and_stops_before_table(body)
     deletion = contextual_sentence_deletion(text, 0, len(target))
     assert not deletion.dependent_sentences
     assert text[deletion.end:].lstrip(" ") == text[len(target):].lstrip(" ")
+
+
+@pytest.mark.parametrize(("child", "kind"), [
+    ("  - Shelf inventory", "structural"),
+    ("  ### Shelf inventory", "heading"),
+    ("  > Shelf inventory", "structural"),
+    ("  Shelf | Condition\n  --- | ---\n  Lower | Dry", "structural"),
+    ("  <div>\n  The shed was dry.\n  </div>", "html"),
+    ("    ~~~~text\n    samples = catalog\n\n    ~~~\n    ````\n  ~~~~~", "fence"),
+])
+def test_list_item_stops_at_an_indented_child_block(child, kind):
+    parent = "- Storage notes\n  continued from the field notebook"
+    suffix = "## Appendix\nThe catalog is available."
+    source = f"{parent}\n{child}\n\n{suffix}\n"
+    first, second, *_ = manuscript_regions(source)
+    assert (source[first.start:first.end], first.kind) == (parent, "structural")
+    assert second.kind == kind and second.complete
+    if kind in {"html", "fence"}:
+        assert source[second.start:second.end] == child
+    assert all(region.complete for region in manuscript_regions(source))

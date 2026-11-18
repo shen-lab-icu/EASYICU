@@ -1757,6 +1757,21 @@ def test_claim_policy_keeps_wrapped_numeric_sentence_with_its_citation(first):
     assert result.scaffold == source
 
 
+@pytest.mark.parametrize("body", [
+    "- Cabinet setup\n  ```python\n  source = cabinet.catalog\n\n  export = source\n  ```",
+    "- The curator cataloged the notebooks.\n"
+    "  - The labels were kept.\n"
+    "  - The covers were scanned.",
+])
+def test_claim_policy_preserves_list_child_block_lines(body):
+    source = f"## Introduction\n\n{body}\n\n## Results\nSee Table 1 {{evidence:catalog_summary}}.\n"
+    result = filter_evidence_bound_scaffold(
+        source, resolve_claim=lambda _: None, resolve_evidence={"catalog_summary"}.__contains__,
+    )
+    assert result.filtered_sentences == ()
+    assert result.scaffold == source
+
+
 @pytest.mark.parametrize("newline", ["\n", "\r\n"])
 @pytest.mark.parametrize("citation", ["[^entry_a]", "{evidence:renal_result}", "[ledger](reports/dispatch.md)"])
 @pytest.mark.parametrize(("before", "rejected", "after"), [
@@ -1774,6 +1789,17 @@ def test_claim_policy_keeps_wrapped_numeric_sentence_with_its_citation(first):
      "The paper copy is archived.\n"),
     ("````text\ndispatch.\n```\narchive.\n````\n", "The dépôt held 967 crates<cite>.\n",
      "## Archive\nThe paper copy remains.\n"),
+    (
+        "- Index export\n  ```python\n  source = catalog.entries\n\n  export = source\n  ```\n"
+        "\n## Results\n\n",
+        "The cabinet contained 941 specimen labels<cite>.\n",
+        "\n## Archive\nThe paper index is available.\n",
+    ),
+    (
+        "- Cabinet contents\n  - Original labels\n",
+        "  - The cabinet contained 941 specimen labels<cite>\n",
+        "  - Scanned catalog\n",
+    ),
     ("<div>\nDispatch ledger.\n</div>\n", "The dépôt held 967 crates<cite>\n",
      "## Archive\nThe paper copy remains.\n"),
     ("", "The dépôt held 967 crates. The annex held 968 crates. It had no spare crates.<cite>\n",
@@ -1817,6 +1843,22 @@ def test_numeric_filter_stops_when_a_rejected_number_has_no_closed_fence(strict_
     with pytest.raises(EvidenceEnforcementError, match=LOSS_STOP) as stop:
         drop_untraceable_numeric_sentences(source, evidence=store)
     assert stop.value.detail["code"] == LOSS_STOP
+
+
+def test_numeric_filter_stops_at_an_unmatched_list_fence(strict_writer_run):
+    from easyicu.research_agent.reporting.manuscript_audit_repair import LOSS_STOP
+    from easyicu.research_agent.reporting.manuscript_post import drop_untraceable_numeric_sentences
+
+    *_, store = strict_writer_run
+    source = (
+        "- Index export\n  ````text\n  The cabinet contained 941 specimen labels.\n\n  ```\n\n"
+        "## Appendix\n\n````text\nThe archive is available.\n````\n"
+    )
+    ranges = []
+    with pytest.raises(EvidenceEnforcementError, match=LOSS_STOP) as stop:
+        drop_untraceable_numeric_sentences(source, evidence=store, removal_spans=ranges)
+    assert stop.value.detail["code"] == LOSS_STOP
+    assert ranges == []
 
 
 @pytest.mark.parametrize("placeholder", ["{EVIDENCE:dispatch}", "{CLAIM:dispatch.count}"])
