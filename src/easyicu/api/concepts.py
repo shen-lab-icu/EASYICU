@@ -33,6 +33,7 @@ import os
 import re
 import threading
 from collections import OrderedDict
+from collections.abc import Mapping
 from contextlib import contextmanager
 import functools
 import numpy as np
@@ -40,7 +41,9 @@ import pandas as pd
 import logging
 
 from ..base import BaseICULoader
+from ..concept.catalog import C565_RENAL_HISTORY_CONCEPTS, VENT_SETTINGS_CONCEPTS
 from ..concept.data_source_contract import ConceptDataSourceStorage
+from ..concept.stay_tables import selected_stay_ids
 from ..storage_layout import StorageIntegrityError
 from ..value_failures import TYPED_VALUE_FAILURES
 from ..resolver_pool import resolver_call_scope
@@ -103,13 +106,14 @@ def _patient_filter_values(patient_ids):
     """Return concrete IDs from either public patient-filter representation."""
     if patient_ids is None:
         return None
-    if isinstance(patient_ids, dict):
+    if isinstance(patient_ids, Mapping):
         if not patient_ids:
             return []
-        values = next(iter(patient_ids.values()))
-    else:
-        values = patient_ids
-    return list(values)
+        column = str(next(iter(patient_ids)))
+        if len(patient_ids) != 1:
+            raise ValueError(f"Expected one {column} identifier list")
+        return selected_stay_ids(patient_ids, column)
+    return selected_stay_ids(patient_ids, "stay_id")
 
 
 def _restrict_result_to_requested_ids(result, patient_ids):
@@ -1307,13 +1311,18 @@ def load_concepts(
                 patient_ids = {id_key: kwargs.pop(id_key)}
                 break
 
-    # An explicitly empty cohort means "no patients", never "all patients".
-    # Return before constructing a loader so every downstream fast path is
-    # fail-closed, including dedicated outcome/comorbidity loaders.
-    if patient_ids is not None and len(_patient_filter_values(patient_ids)) == 0:
-        if merge:
-            return pd.DataFrame()
-        return {name: pd.DataFrame() for name in requested_concepts}
+    if isinstance(patient_ids, Mapping) and not isinstance(patient_ids, dict):
+        patient_ids = dict(patient_ids)
+    empty_scope = patient_ids is not None and not _patient_filter_values(patient_ids)
+    if empty_scope:
+        empty_result = pd.DataFrame() if merge else {name: pd.DataFrame() for name in requested_concepts}
+        # These owners issue source-level refusals independently of cohort size.
+        source_checks = [
+            name for name in requested_concepts
+            if name in (*VENT_SETTINGS_CONCEPTS, *C565_RENAL_HISTORY_CONCEPTS)
+        ]
+        if not source_checks:
+            return empty_result
     if verbose:
         print(f"📊 使用统一API加载 {len(concepts_list)} 个概念...")
         print(f"   概念: {', '.join(concepts_list)}")
@@ -1326,6 +1335,13 @@ def load_concepts(
         use_sofa2=use_sofa2,
         verbose=verbose,
     )
+    if empty_scope:
+        loader.load_concepts(
+            source_checks, patient_ids=[], merge=False, r_compatible=r_compatible,
+            concept_workers=1, availability_sink=kwargs.get("availability_sink"),
+            _typed_absence_sink=kwargs.get("_typed_absence_sink"),
+        )
+        return empty_result
 
     # 🚀 从 kwargs 中提取患者 ID（支持通过 patientunitstayid=, admissionid=, stay_id= 等传入）
     from ..concept.provenance import record_resolver_inputs
@@ -1684,11 +1700,11 @@ def load_concepts(
     #   <12GB: 始终 subprocess（小内存，pymalloc 碎片致命）
     #   12-32GB: 仅在 cohort > 60K 时 subprocess（典型场景仍走 inprocess）
     #   ≥32GB: 仅在 cohort > 120K 时 subprocess
-    # 显式覆盖：EASYICU_FORCE_INPROCESS_BATCH=1 强制 inprocess；
-    #          EASYICU_FORCE_SUBPROCESS_BATCH=1 强制 subprocess。
+    # These overrides apply to the RAM-based decision. The one-shot budget
+    # above and special-concept routing below can require subprocesses.
     if not use_subprocess and effective_batch_size is not None:
         if os.environ.get("EASYICU_FORCE_INPROCESS_BATCH"):
-            pass  # 用户显式禁用 subprocess，保持 inprocess
+            pass
         elif os.environ.get("EASYICU_FORCE_SUBPROCESS_BATCH"):
             use_subprocess = True
         else:
@@ -1828,8 +1844,6 @@ def load_concepts(
                         str(loader.data_path) if hasattr(loader, "data_path") else None
                     ),
                     verbose=verbose,
-                    merge=merge,
-                    r_compatible=r_compatible,
                     dict_path=dict_path,
                     use_sofa2=use_sofa2,
                     **load_kwargs,
@@ -2191,21 +2205,27 @@ def load_concepts(
     result = _restrict_result_to_requested_ids(result, patient_ids)
 
     availability_sink = kwargs.get("availability_sink")
-    if availability_sink is not None:
+    typed_absence_sink = kwargs.get("_typed_absence_sink")
+    if _special and (availability_sink is not None or typed_absence_sink is not None):
         from ..concept.availability_signal import ConceptAvailabilityRecord
 
         # Dedicated score owners can return no physical output on sparse
         # inputs. This is not evidence of a negative score or exposure.
+        reasons = {}
         for name in _special:
             frame = result.get(name) if isinstance(result, dict) else result
             frame = getattr(frame, "data", frame)
             if frame is None or name not in frame.columns:
-                availability_sink[name] = ConceptAvailabilityRecord(
-                    concept=name, database=loader.database,
-                    reason="source_unavailable", n_rows=0,
-                    reason_code="producer_returned_no_physical_output",
-                    evaluation_status="not_evaluable",
-                )
+                reasons[name] = "producer_returned_no_physical_output"
+                if availability_sink is not None:
+                    availability_sink[name] = ConceptAvailabilityRecord(
+                        concept=name, database=loader.database,
+                        reason="source_unavailable", n_rows=0,
+                        reason_code="producer_returned_no_physical_output",
+                        evaluation_status="not_evaluable",
+                    )
+        if typed_absence_sink is not None:
+            typed_absence_sink.observe(_special, reasons)
 
     # 🆕 内存优化模式：压缩数据类型
     if memory_efficient:

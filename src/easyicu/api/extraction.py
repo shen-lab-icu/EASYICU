@@ -28,7 +28,7 @@ from ..source_bounds import (
     public_bounds,
     strip_private_ledgers,
 )
-from ..concept.availability_signal import ConceptAvailabilityRecord
+from ..concept.availability_signal import TypedAbsenceSink
 from ..concept.catalog import (
     CONCEPT_GROUPS_INTERNAL,
     OPT_IN_MODULE_CONCEPTS,
@@ -2875,16 +2875,6 @@ def _load_module_concepts(load_concepts_fn, *, module_name: str, load_kwargs: Di
     return result
 
 
-def _typed_absence_codes(
-    availability: Mapping[str, ConceptAvailabilityRecord],
-) -> Dict[str, str]:
-    return {
-        concept: record.reason_code
-        for concept, record in availability.items()
-        if record.evaluation_status == "not_evaluable" and record.reason_code is not None
-    }
-
-
 def _stream_batch_bounds_sidecar(part: Path) -> Path:
     """Where an isolated batch process leaves its bounds counts for the parent."""
     return Path(part).with_name(f".{Path(part).name}.bounds.json")
@@ -3018,7 +3008,8 @@ def _write_isolated_stream_batch(
             "merge_empty_index_filled": sorted(set(batch_fills)),
             "loader_concepts": [c for c in concepts if frame is not None and c in frame.columns],
         }
-        absence_codes = _typed_absence_codes(load_kwargs.get("availability_sink") or {})
+        absence_sink = load_kwargs.get("_typed_absence_sink")
+        absence_codes = absence_sink.codes() if absence_sink is not None else {}
         if absence_codes:
             receipt["typed_absence_reasons"] = absence_codes
         if frame is None:
@@ -3616,9 +3607,10 @@ def _stream_module_batches_to_parquet(
             # Keep the inner ``load_concepts`` boundary identical to the outer
             # writer boundary.
             batch_load_kwargs["batch_size"] = len(batch_ids)
-            batch_availability: Dict[str, ConceptAvailabilityRecord] = {}
+            batch_absence_sink = None
             if typed_absence_reasons is not None:
-                batch_load_kwargs["availability_sink"] = batch_availability
+                batch_absence_sink = TypedAbsenceSink()
+                batch_load_kwargs["_typed_absence_sink"] = batch_absence_sink
             batch_sampler = _RSSPeakSampler().start()
             frame = None
             output_rows = 0
@@ -3799,7 +3791,7 @@ def _stream_module_batches_to_parquet(
                         )
                     with source_bounds_accounting(f"stream_batch_commit[{module_name}:{index}]"):
                         batch_bounds = bounds_totals(bounds_records)
-                    batch_absence = _typed_absence_codes(batch_availability)
+                    batch_absence = batch_absence_sink.codes() if batch_absence_sink is not None else {}
                     frame, export_counts = _normalise_counted(batch, concepts, reorder=False)
                     with source_bounds_accounting(f"stream_batch_commit[{module_name}:{index}]"):
                         batch_bounds = merge_bounds_drops(batch_bounds, export_counts)
@@ -4053,11 +4045,9 @@ def _run_module_extraction(
     result = None
     memory_exhausted = False
     stream_failure = None
-    # C565 opts in to publishing its source-level absence codes. Availability
-    # collection can materialize extra frames in other modules' load paths.
-    typed_absence_reasons: Optional[Dict[str, str]] = (
-        {} if module_name == "c565_renal_history" else None
-    )
+    typed_absence_reasons: Dict[str, str] = {}
+    if not stream_output_batches:
+        kwargs["_typed_absence_sink"] = TypedAbsenceSink()
     # Bounds counts of a whole-module load (a streamed module commits its
     # own per batch); a retried load starts its counts afresh.
     module_bounds_scope = bounds_scope()
@@ -4092,8 +4082,6 @@ def _run_module_extraction(
             if stream_info is not None:
                 saved[module_name] = stream_info
         else:
-            if typed_absence_reasons is not None:
-                kwargs["availability_sink"] = {}
             result = _load_module_concepts(_lc, module_name=module_name, load_kwargs=kwargs)
     except MemoryError:
         traceback.print_exc()
@@ -4130,8 +4118,7 @@ def _run_module_extraction(
             # and merge fills are dropped before the retry.
             module_bounds_records.clear()
             module_fills.clear()
-            if "availability_sink" in kwargs:
-                kwargs["availability_sink"].clear()
+            kwargs["_typed_absence_sink"] = TypedAbsenceSink()
             try:
                 result = _load_module_concepts(_lc, module_name=module_name, load_kwargs=kwargs)
             except Exception as e:
@@ -4202,8 +4189,8 @@ def _run_module_extraction(
     memory_stats = module_memory_sampler.stop()
     from ..storage_layout import module_unavailability
 
-    if typed_absence_reasons is not None and not streamed:
-        typed_absence_reasons = _typed_absence_codes(kwargs.get("availability_sink") or {})
+    if "_typed_absence_sink" in kwargs:
+        typed_absence_reasons = kwargs["_typed_absence_sink"].codes()
 
     manifest = {
         "module": module_name,

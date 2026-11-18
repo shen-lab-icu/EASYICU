@@ -130,12 +130,16 @@ class _Run:
 
 @pytest.mark.parametrize("kind", ["bounds", "batch_receipt"])
 def test_a_missing_sidecar_is_a_typed_stream_failure(tmp_path, monkeypatch, kind):
+    source = tmp_path / "source"
+    output = tmp_path / "output"
+    source.mkdir()
+    output.mkdir()
     real = api._write_isolated_stream_batch
 
-    def drop_sidecar(module, concepts, load_kwargs, patient_ids, destination):
-        real(module, concepts, load_kwargs, patient_ids, destination)
+    def drop_sidecar(*worker_args):
+        real(*worker_args)
         sidecar = (api._stream_batch_bounds_sidecar if kind == "bounds" else api._stream_batch_fill_sidecar)
-        sidecar(destination).unlink()
+        sidecar(worker_args[-1]).unlink()
 
     class Context:
         @staticmethod
@@ -150,10 +154,10 @@ def test_a_missing_sidecar_is_a_typed_stream_failure(tmp_path, monkeypatch, kind
     monkeypatch.setattr(api, "_cgroup_oom_kills", lambda: None)
     monkeypatch.setattr(api, "_host_reports_oom_kills", lambda: False)
     api._run_module_extraction(
-        "test_module", ["test_signal"], "eicu", str(tmp_path), {"stay_id": list(range(1, 5))}, 2,
-        str(tmp_path), stream_output_batches=True,
+        "test_module", ["test_signal"], "eicu", str(source), {"stay_id": list(range(1, 5))}, 2,
+        str(output), stream_output_batches=True,
     )
-    manifest = json.loads((tmp_path / "_manifest.json").read_text())
+    manifest = json.loads((output / "_manifest.json").read_text())
     failure = manifest["stream_failure"]
     assert failure["exception_type"] == "StreamBatchReceiptMissing"
     assert failure["failure_class"] == "batch_receipt_missing"

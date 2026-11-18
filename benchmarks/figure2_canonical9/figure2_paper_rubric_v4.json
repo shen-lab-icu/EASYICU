@@ -105,6 +105,7 @@
     "src/easyicu/concept/c565_renal_history.py",
     "src/easyicu/concept/callback_apply.py",
     "src/easyicu/concept/callbacks.py",
+    "src/easyicu/concept/carevue_view.py",
     "src/easyicu/concept/catalog.py",
     "src/easyicu/concept/data_source_contract.py",
     "src/easyicu/concept/definition_identity.py",

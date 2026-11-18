@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import os
 from contextlib import nullcontext
 from pathlib import Path
 from types import SimpleNamespace
@@ -18,6 +19,159 @@ from tests.support.typed_export import typed_export
 class ExportJob:
     def emit(self, payload):
         pass
+
+
+@pytest.mark.skipif(not hasattr(os, "fork"), reason="needs a forked worker to inject an exit")
+@pytest.mark.parametrize("worker_exit", [0, 9], ids=["clean", "exit-9"])
+def test_hosted_web_export_requires_complete_nested_los_batches(tmp_path, monkeypatch, worker_exit):
+    import psutil
+
+    from easyicu import api
+    from easyicu.api import extraction
+    from easyicu.concept.errors import ConceptExtractionUnavailable
+    from easyicu.runtime import memory_manager
+    from easyicu.webserver.jobs import JobManager
+    from tests.support.bucket_storage import b6_source
+
+    source = tmp_path / "input"
+    b6_source(source, "miiv")
+    stays_path = source / "icustays.parquet"
+    cohort_size = 5_001
+    ids = list(range(1, cohort_size + 1))
+    stays = pd.read_parquet(stays_path).iloc[[0, 1] + [2] * (cohort_size - 2)].reset_index(drop=True)
+    stays["stay_id"] = ids
+    stays["subject_id"] = stays["stay_id"] + 10
+    stays["hadm_id"] = stays["stay_id"] + 20
+    stays["los"] = [1.0, 1.5] + [2.0] * (cohort_size - 2)
+    stays["outtime"] = stays["intime"] + pd.to_timedelta(stays["los"], unit="D")
+    stays.to_parquet(stays_path, index=False)
+    pd.DataFrame({
+        "subject_id": stays["subject_id"],
+        "anchor_age": [42, 58] + [67] * (cohort_size - 2), "anchor_year": 2150, "gender": "F",
+    }).to_parquet(source / "patients.parquet", index=False)
+    chart_path = source / "chartevents" / "1.parquet"
+    chart = pd.read_parquet(chart_path)
+    late_batch_hr = chart.loc[chart["itemid"].eq(220045)].iloc[[0, -1]].copy()
+    late_batch_hr = late_batch_hr.assign(
+        stay_id=cohort_size, subject_id=cohort_size + 10, hadm_id=cohort_size + 20,
+        valuenum=[86.0, 92.0],
+    )
+    late_batch_hr["charttime"] = stays["intime"].iloc[-1] + pd.to_timedelta([5, 4500], unit="m")
+    late_batch_hr["storetime"] = late_batch_hr["charttime"]
+    pd.concat([chart, late_batch_hr], ignore_index=True).to_parquet(chart_path, index=False)
+    home = tmp_path / "instance"
+    home.mkdir()
+    out = home / "export"
+    monkeypatch.setenv("EASYICU_HOSTED", "1")
+    monkeypatch.setenv("EASYICU_DATA_ROOTS", str(source))
+    monkeypatch.setenv("EASYICU_HOME", str(home))
+    monkeypatch.delenv("EASYICU_FORCE_INPROCESS_BATCH", raising=False)
+    monkeypatch.delenv("EASYICU_FORCE_SUBPROCESS_BATCH", raising=False)
+    memory = psutil.virtual_memory()._replace(total=8 * 1024**3, available=3 * 1024**3)
+    monkeypatch.setattr(psutil, "virtual_memory", lambda: memory)
+    assert api.plan_extraction_resources("miiv", ["demographics"], cohort_size).mode == "one_shot"
+    plan = api.plan_extraction_resources("miiv", ["vitals"], cohort_size)
+    assert plan.reason_code == "measured_profile_insufficient_memory"
+    batch_size = plan.batch_size
+    assert batch_size < cohort_size <= 2 * batch_size
+
+    bounds = extraction._native_export_stay_time_upper_bounds
+    expected = bounds(api.load_concepts(
+        ["los_icu"], database="miiv", data_path=str(source),
+        patient_ids={"stay_id": ids}, batch_size=cohort_size, verbose=False,
+    ))
+    assert expected == {**dict.fromkeys(ids, 72.0), 1: 48.0, 2: 60.0}
+    bound_calls = []
+
+    def observe_bounds(frame):
+        result = bounds(frame)
+        bound_calls.append(result)
+        return result
+
+    run_batch = memory_manager._run_batch_process
+    load_worker = memory_manager._subprocess_load_worker
+    attempts = []
+
+    def worker(args):
+        if worker_exit and args["concepts"] == ["los_icu"] and cohort_size in args["patient_ids"]["stay_id"]:
+            raise SystemExit(worker_exit)
+        load_worker(args)
+
+    def observe_batch(args, attempt_dir, batch_num, mode):
+        patients = args["patient_ids"]["stay_id"]
+        exitcode = run_batch(args, attempt_dir, batch_num, mode)
+        attempts.append((args["concepts"], patients[0], patients[-1], exitcode))
+        return exitcode
+
+    monkeypatch.setattr(extraction, "_native_export_stay_time_upper_bounds", observe_bounds)
+    monkeypatch.setattr(memory_manager, "_subprocess_load_worker", worker)
+    monkeypatch.setattr(memory_manager, "_run_batch_process", observe_batch)
+    runner = dataio.make_export_runner(
+        data_path=str(source), database="miiv", modules=["demographics", "vitals"],
+        concepts={"demographics": ["age"], "vitals": ["hr"]},
+        export_format="parquet", out_dir=str(out),
+        include_feature_definitions=False,
+    )
+    failures = []
+    written = []
+    write_frame = dataio._write_frame
+
+    def observe_write(frame, dest, export_format):
+        rows = write_frame(frame, dest, export_format)
+        written.append((dest.name, rows))
+        return rows
+
+    monkeypatch.setattr(dataio, "_write_frame", observe_write)
+
+    def run_export(job):
+        try:
+            return runner(job)
+        except dataio.ExportCohortError as exc:
+            failures.append(exc)
+            raise
+
+    manager = JobManager()
+    job = manager.reserve("extract")
+    manager.run_reserved(job.id, run_export)
+    if worker_exit:
+        assert job.status == "failed"
+        assert job.error == "stay_time_upper_bounds_unavailable"
+        assert job.result is None
+        failure, = failures
+        assert failure.detail == {
+            "error": "stay_time_upper_bounds_unavailable", "module": "vitals",
+            "stage": "subprocess_batch_load", "reason": "batch 2: worker exited with code 9",
+        }
+        assert isinstance(failure.__cause__, ConceptExtractionUnavailable)
+        assert bound_calls == []
+        assert written == [("demographics.parquet", cohort_size)]
+        assert not (out / "_manifest.json").exists()
+        assert not list(out.glob("*.parquet"))
+        repair_end = batch_size + (cohort_size - batch_size + 1) // 2
+        assert attempts == [
+            (["los_icu"], 1, batch_size, 0), (["los_icu"], batch_size + 1, cohort_size, 9),
+            (["los_icu"], batch_size + 1, repair_end, 0), (["los_icu"], repair_end + 1, cohort_size, 9),
+        ]
+    else:
+        assert job.status == "done", job.error
+        assert attempts == [
+            (["los_icu"], 1, batch_size, 0), (["los_icu"], batch_size + 1, cohort_size, 0),
+            (["hr"], 1, batch_size, 0), (["hr"], batch_size + 1, cohort_size, 0),
+        ]
+        assert bound_calls == [expected]
+        demographics = pd.read_parquet(out / "demographics.parquet").set_index("stay_id")
+        assert len(demographics) == cohort_size
+        assert demographics.loc[[1, 2, cohort_size], "age"].tolist() == [42, 58, 67]
+        vitals = pd.read_parquet(out / "vitals.parquet").sort_values(["stay_id", "charttime"])
+        assert vitals[["stay_id", "charttime", "hr"]].values.tolist() == [
+            [2, 0.0, 84.0], [cohort_size, 0.0, 86.0],
+        ]
+        assert job.result["module_resource_plans"]["vitals"]["batch_size"] == batch_size
+        manifest = json.loads((out / "_manifest.json").read_text(encoding="utf-8"))
+        assert manifest["time_window_authority"] == {
+            "required": True, "source": "outcome.los_icu", "bounded_stays": cohort_size,
+        }
+    assert "EASYICU_FORCE_INPROCESS_BATCH" not in os.environ
 
 
 @pytest.fixture

@@ -4,6 +4,8 @@ from easyicu.datasource import ICUDataSource
 
 import json
 import os
+import sys
+from collections import UserDict
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -14,6 +16,8 @@ from easyicu import api
 from easyicu.api import concepts as concept_api
 from easyicu.api.cache import data_path_fingerprint
 from easyicu.api import extraction as extraction_api
+from easyicu.concept.availability_signal import TypedAbsenceSink
+from easyicu.concept.errors import ConceptExtractionUnavailable
 from easyicu.config import load_src_cfg
 from easyicu.content_identity import file_content_receipt
 from easyicu.datasource import (
@@ -56,6 +60,438 @@ def test_explicit_empty_cohort_returns_all_requested_special_outputs(monkeypatch
 
     via_alias = api.load_concepts(["hr"], stay_id=[], merge=False, verbose=False)
     assert via_alias["hr"].empty
+
+
+@pytest.mark.parametrize("filters", [
+    {"patientunitstayid": [], "hospitalid": [31]},
+    UserDict({"patientunitstayid": [18], "PatientUnitStayID": [27]}),
+])
+def test_public_load_rejects_ambiguous_id_mappings(tmp_path, filters):
+    with pytest.raises(ValueError, match="Expected one patientunitstayid identifier list"):
+        api.load_concepts("fio2_set", database="eicu", data_path=tmp_path, patient_ids=filters)
+
+
+def test_public_load_preserves_a_user_mapping_with_a_non_miiv_id(tmp_path):
+    pd.DataFrame({
+        "patientunitstayid": [38, 62],
+        "patienthealthsystemstayid": [413, 716],
+    }).to_parquet(tmp_path / "patient.parquet", index=False)
+    pd.DataFrame({
+        "patientunitstayid": [38, 62],
+        "respchartoffset": [23, 23],
+        "respchartvaluelabel": "FiO2",
+        "respcharttypecat": "respFlowSettings",
+        "respchartvalue": ["43", "66"],
+    }).to_parquet(tmp_path / "respiratorycharting.parquet", index=False)
+
+    empty = api.load_concepts("hr", patient_ids=UserDict())
+    result = api.load_concepts(
+        "fio2_set", database="eicu", data_path=tmp_path,
+        patient_ids=UserDict({"patientunitstayid": [62]}), r_compatible=False,
+    )
+
+    assert empty.empty
+    assert result[["patientunitstayid", "fio2_set"]].values.tolist() == [[62, 66.0]]
+
+
+@pytest.mark.parametrize(("failure", "detail"), [
+    ("crash", "worker exited with code 9"),
+    ("timeout", "worker timed out"),
+    ("missing-receipt", "worker left no completion receipt"),
+    ("missing-shard", "worker output shards do not match"),
+    ("missing-absence", "worker left no valid typed absence receipt"),
+])
+@pytest.mark.parametrize("failed_stay", [48, 73], ids=["first-batch", "second-batch"])
+def test_subprocess_batch_failure_refuses_partial_rows_and_absences(
+    monkeypatch, failure, detail, failed_stay,
+):
+    from easyicu.runtime import memory_manager
+
+    sink = TypedAbsenceSink()
+    attempts = []
+
+    def run_batch(args, *_):
+        stay = args["patient_ids"]["stay_id"][0]
+        attempts.append(stay)
+        prefix = Path(args["output_prefix"])
+        shard = prefix.with_suffix(".parquet")
+        receipt = {"shards": [], "absences": {"fio2_set": "carevue_view_required"}}
+        if stay == failed_stay:
+            if failure == "crash":
+                return 9
+            if failure == "timeout":
+                raise TimeoutError("worker timed out")
+            if failure == "missing-receipt":
+                return 0
+            if failure == "missing-shard":
+                receipt["shards"] = [shard.name]
+            if failure == "missing-absence":
+                del receipt["absences"]
+        else:
+            pd.DataFrame({"stay_id": [stay], "hr": [42.0]}).to_parquet(shard, index=False)
+            receipt["shards"] = [shard.name]
+        prefix.with_suffix(".receipt.json").write_text(json.dumps(receipt), encoding="utf-8")
+        return 0
+
+    monkeypatch.setattr(memory_manager, "_run_batch_process", run_batch)
+    with pytest.raises(ConceptExtractionUnavailable, match=detail) as caught:
+        memory_manager.subprocess_batch_load(
+            ["hr", "fio2_set"], "mimic", {"stay_id": [48, 73]}, batch_size=1, _typed_absence_sink=sink,
+        )
+
+    assert caught.value.stage == "subprocess_batch_load"
+    assert attempts == ([48, 48] if failed_stay == 48 else [48, 73, 73])
+    assert sink.codes() == {}
+
+
+@pytest.mark.skipif(not hasattr(os, "fork"), reason="needs a forked worker to inject a hang")
+@pytest.mark.parametrize("daemon", [False, True], ids=["multiprocessing", "raw-fork"])
+def test_subprocess_batch_timeout_is_typed_after_repair(tmp_path, monkeypatch, daemon):
+    import multiprocessing as mp
+    import time
+
+    from easyicu.runtime import memory_manager
+
+    def hang(_args):
+        (tmp_path / f"worker-{os.getpid()}").touch()
+        time.sleep(10)
+
+    monkeypatch.setenv("EASYICU_BATCH_TIMEOUT_SEC", "0.5")
+    if daemon:
+        monkeypatch.setattr(mp, "current_process", lambda: SimpleNamespace(daemon=True))
+    monkeypatch.setattr(memory_manager, "_subprocess_load_worker", hang)
+
+    with pytest.raises(ConceptExtractionUnavailable, match=r"batch 1: worker timed out after 0\.5s"):
+        memory_manager.subprocess_batch_load(["hr"], "miiv", {"stay_id": [48]}, batch_size=1)
+    assert len(list(tmp_path.glob("worker-*"))) == 2
+
+
+def test_subprocess_batch_accepts_empty_output_with_a_receipt(monkeypatch):
+    from easyicu.runtime import memory_manager
+
+    def load_empty(**kwargs):
+        kwargs["_typed_absence_sink"].observe(["fio2_set"], {"fio2_set": "carevue_view_required"})
+        return pd.DataFrame()
+
+    def run_batch(args, *_):
+        memory_manager._subprocess_load_worker(args)
+        return 0
+
+    monkeypatch.setattr(api, "load_concepts", load_empty)
+    monkeypatch.setattr(memory_manager, "_run_batch_process", run_batch)
+    sink = TypedAbsenceSink()
+    result = memory_manager.subprocess_batch_load(
+        ["fio2_set"], "mimic", {"stay_id": [48, 73]}, batch_size=1, _typed_absence_sink=sink,
+    )
+
+    assert result.empty
+    assert sink.codes() == {"fio2_set": "carevue_view_required"}
+
+
+@pytest.mark.parametrize("merge", [True, False])
+def test_subprocess_batch_retry_matches_clean_rows(monkeypatch, merge):
+    from easyicu.runtime import memory_manager
+
+    fail_second_batch = False
+
+    def load_rows(**kwargs):
+        ids = kwargs["patient_ids"]["stay_id"]
+        frame = pd.DataFrame({"stay_id": ids, "hr": [60.0 + stay for stay in ids]})
+        if merge:
+            return frame
+        result = {"hr": frame}
+        if fail_second_batch and ids == [73, 19]:
+            result["uncommitted"] = frame
+        return result
+
+    attempts = []
+
+    def run_batch(args, *_):
+        ids = args["patient_ids"]["stay_id"]
+        attempts.append(ids)
+        memory_manager._subprocess_load_worker(args)
+        # A crashed attempt may already have written its shards and receipt.
+        return 9 if fail_second_batch and ids == [73, 19] else 0
+
+    monkeypatch.setattr(api, "load_concepts", load_rows)
+    monkeypatch.setattr(memory_manager, "_run_batch_process", run_batch)
+    args = (["hr"], "miiv", {"stay_id": [48, 25, 73, 19]})
+    clean = memory_manager.subprocess_batch_load(*args, batch_size=2, merge=merge)
+    assert attempts == [[48, 25], [73, 19]]
+
+    attempts.clear()
+    fail_second_batch = True
+    retried = memory_manager.subprocess_batch_load(*args, batch_size=2, merge=merge)
+
+    assert attempts == [[48, 25], [73, 19], [73], [19]]
+    clean_rows = clean if merge else clean["hr"]
+    assert clean_rows["stay_id"].tolist() == [48, 25, 73, 19]
+    if not merge:
+        assert retried.keys() == clean.keys()
+    pd.testing.assert_frame_equal(retried if merge else retried["hr"], clean_rows)
+
+
+@pytest.mark.skipif(not hasattr(os, "fork"), reason="needs a forked worker to inject an exit")
+def test_second_nested_worker_exit_blocks_native_publication(tmp_path, monkeypatch):
+    from easyicu.runtime import memory_manager
+    from tests.support.bucket_storage import b6_source
+
+    source = b6_source(tmp_path / "source", "miiv")
+    output = tmp_path / "module"
+    output.mkdir()
+    monkeypatch.setenv("EASYICU_FORCE_SUBPROCESS_BATCH", "1")
+    monkeypatch.delenv("EASYICU_FORCE_INPROCESS_BATCH", raising=False)
+    original_worker = memory_manager._subprocess_load_worker
+
+    def exit_second_worker(args):
+        if args["patient_ids"] == {"stay_id": [1]}:
+            raise SystemExit(9)
+        original_worker(args)
+
+    monkeypatch.setattr(memory_manager, "_subprocess_load_worker", exit_second_worker)
+    extraction_api._run_module_extraction(
+        module_name="vitals", concepts=["hr", "map"], database="miiv",
+        data_path=str(source.base_path), patient_ids_filter={"stay_id": [2, 1]},
+        batch_size=1, output_dir=str(output),
+    )
+    module = json.loads((output / "_manifest.json").read_text(encoding="utf-8"))
+    assert module["saved"] == {}
+    assert "batch 2: worker exited with code 9" in module["errors"][0]
+    assert not (output / "vitals.parquet").exists()
+
+    native = tmp_path / "native"
+    native.mkdir()
+    with pytest.raises(ValueError, match="requires every requested module to finish"):
+        extraction_api._publish_native_export_v2(
+            database="miiv", data_path=str(source.base_path), output_dir=str(native),
+            modules=["vitals"], max_patients=None, result={"modules": {"vitals": module}},
+        )
+    assert not (native / "_manifest.json").exists()
+
+
+@pytest.fixture
+def desktop_renal_cohort(tmp_path, monkeypatch):
+    import psutil
+
+    from easyicu.runtime import memory_manager
+    from easyicu.webserver.hosted import deployment_kind
+    from tests.support.renal_export import write_renal_source
+
+    monkeypatch.setenv("EASYICU_DEPLOYMENT", "desktop")
+    monkeypatch.setenv("EASYICU_MP_START_METHOD", "fork")
+    for key in (
+        "EASYICU_HOSTED", "EASYICU_ONESHOT_BUDGET_MB", "EASYICU_AUTO_CHUNK_SIZE",
+        "EASYICU_DISABLE_AUTO_CHUNK", "EASYICU_FORCE_INPROCESS_BATCH",
+        "EASYICU_FORCE_SUBPROCESS_BATCH",
+    ):
+        monkeypatch.delenv(key, raising=False)
+    assert deployment_kind() == "desktop"
+
+    ram = 16 * 1024**3
+    memory = psutil.virtual_memory()._replace(total=ram, available=ram)
+    monkeypatch.setattr(psutil, "virtual_memory", lambda: memory)
+    monkeypatch.setattr(memory_manager, "_read_cgroup_v2_memory_mb", lambda root: (None, None))
+
+    # Put synthetic observations at both ends of a large logical cohort.
+    source = tmp_path / "source"
+    write_renal_source(source, "eicu", stays=24, hours=6, urine_rows_per_hour=1)
+    id_col = "patientunitstayid"
+    cohort_size = 135_003
+    for path in source.glob("*.parquet"):
+        frame = pd.read_parquet(path)
+        if id_col in frame and not frame.empty:
+            ids = frame[id_col]
+            frame[id_col] = ids.where(ids <= 12, ids + cohort_size - 24)
+            if path.name == "patient.parquet":
+                # Every fixture stay is the first in its own hospitalization.
+                frame["unitvisitnumber"] = 1
+            frame.to_parquet(path, index=False)
+    return source, {id_col: list(range(1, cohort_size + 1))}
+
+
+@pytest.mark.skipif(not hasattr(os, "fork"), reason="needs a forked worker to inject an exit")
+@pytest.mark.parametrize("worker_exit", [0, 9], ids=["clean", "exit-9"])
+def test_desktop_renal_automatically_uses_nested_batches(
+    tmp_path, monkeypatch, desktop_renal_cohort, worker_exit,
+):
+    import multiprocessing as mp
+
+    from easyicu.runtime import memory_manager
+
+    source, patient_ids = desktop_renal_cohort
+    id_col, ids = next(iter(patient_ids.items()))
+    concepts = extraction_api.EXTRACT_MODULES["renal"]
+    original_worker = memory_manager._subprocess_load_worker
+    run_batch = memory_manager._run_batch_process
+    batch_log = tmp_path / "nested-batches.jsonl"
+
+    def worker(args):
+        if worker_exit and ids[-1] in args["patient_ids"][id_col]:
+            raise SystemExit(worker_exit)
+        original_worker(args)
+
+    def observe_batch(args, attempt_dir, batch_num, mode):
+        assert os.environ["EASYICU_FORCE_INPROCESS_BATCH"] == "1"
+        batch_ids = args["patient_ids"][id_col]
+        exitcode = run_batch(args, attempt_dir, batch_num, mode)
+        with batch_log.open("a", encoding="utf-8") as log:
+            log.write(json.dumps([batch_num, batch_ids[0], batch_ids[-1], exitcode]) + "\n")
+        return exitcode
+
+    def extract(name, batch_size):
+        output = tmp_path / name
+        worker = mp.get_context("fork").Process(
+            target=extraction_api._extract_module_group_worker,
+            args=([("renal", concepts)], [], "eicu", str(source), patient_ids, batch_size, str(output), False),
+            daemon=True,
+        )
+        worker.start()
+        worker.join()
+        assert worker.exitcode == 0
+        return output / "renal"
+
+    monkeypatch.setattr(memory_manager, "_subprocess_load_worker", worker)
+    monkeypatch.setattr(memory_manager, "_run_batch_process", observe_batch)
+    output = extract("automatic", None)
+    attempts = [json.loads(line) for line in batch_log.read_text(encoding="utf-8").splitlines()]
+    first, second, *repairs = attempts
+    assert first == [1, ids[0], second[1] - 1, 0]
+    assert second == [2, first[2] + 1, ids[-1], worker_exit]
+    manifest = json.loads((output / "_manifest.json").read_text(encoding="utf-8"))
+    if worker_exit:
+        assert [(number, code) for number, _, _, code in repairs] == [(2, 0), (2, 9)]
+        assert manifest["saved"] == {}
+        assert "stage 'subprocess_batch_load': batch 2: worker exited with code 9" in manifest["errors"][0]
+        assert not (output / "renal.parquet").exists()
+    else:
+        assert not repairs
+        assert manifest["errors"] == []
+        one_shot = extract("one-shot", len(ids))
+        assert len(batch_log.read_text(encoding="utf-8").splitlines()) == 2
+        baseline_manifest = json.loads((one_shot / "_manifest.json").read_text(encoding="utf-8"))
+        assert baseline_manifest["errors"] == []
+        actual = pd.read_parquet(output / "renal.parquet")
+        expected = pd.read_parquet(one_shot / "renal.parquet")
+        assert {ids[0], ids[-1]} <= set(expected[id_col])
+        sort_keys = [id_col, "charttime"]
+        pd.testing.assert_frame_equal(
+            actual.sort_values(sort_keys).reset_index(drop=True),
+            expected.sort_values(sort_keys).reset_index(drop=True),
+            check_exact=True,
+        )
+
+
+@pytest.mark.skipif(not hasattr(os, "fork"), reason="needs a forked worker to inject an exit")
+@pytest.mark.parametrize("worker_exit", [0, 9], ids=["clean", "exit-9"])
+def test_desktop_native_export_reports_stream_batch_exit(
+    tmp_path, monkeypatch, desktop_renal_cohort, worker_exit,
+):
+    import psutil
+
+    from tools import formal_run_receipt
+    from tools.formal import v2_bench_local
+
+    source, patient_ids = desktop_renal_cohort
+    id_col, ids = next(iter(patient_ids.items()))
+    stream_worker = extraction_api._write_isolated_stream_batch
+    batch_log = tmp_path / "stream-batches.jsonl"
+
+    def run_stream_batch(module, concepts, load_kwargs, batch_ids, *args):
+        assert os.environ["EASYICU_FORCE_INPROCESS_BATCH"] == "1"
+        if module == "renal":
+            # Record the actual inner load size and patient partition in the child.
+            positions = batch_ids[id_col]
+            with batch_log.open("a", encoding="utf-8") as log:
+                log.write(json.dumps([load_kwargs["batch_size"], positions[0], positions[-1]]) + "\n")
+            if worker_exit and ids[-1] in positions:
+                raise SystemExit(worker_exit)
+        stream_worker(module, concepts, load_kwargs, batch_ids, *args)
+
+    monkeypatch.setattr(extraction_api, "_write_isolated_stream_batch", run_stream_batch)
+    monkeypatch.setattr(extraction_api, "_get_all_patient_ids", lambda *args: (ids, id_col))
+    summary_dir = tmp_path / "eicu"
+    summary_dir.mkdir()
+    monkeypatch.setattr(sys, "argv", ["v2_bench_local.py", "eicu", str(source), str(summary_dir), "full"])
+    monkeypatch.setitem(sys.modules, "formal_boot_live", SimpleNamespace(record={
+        "tools": str(tmp_path), "src": str(tmp_path), "sha": "", "site_packages": "",
+    }))
+    cpu_count = os.cpu_count() or 1
+    monkeypatch.setattr(v2_bench_local, "_affinity_selfcheck", lambda: cpu_count)
+    if not hasattr(psutil.Process, "cpu_affinity"):
+        monkeypatch.setattr(psutil.Process, "cpu_affinity", lambda self: range(cpu_count), raising=False)
+    monkeypatch.setattr(v2_bench_local, "subprocess", SimpleNamespace(run=lambda *args, **kwargs: None))
+    monkeypatch.setattr(v2_bench_local, "_cgroup_dir", lambda: tmp_path / "synthetic-cgroup")
+    # Native longitudinal publication requires the outcome module's LOS bounds.
+    monkeypatch.setenv("BENCH_MODULES", "renal,outcome")
+    monkeypatch.delenv("BENCH_BATCH", raising=False)
+    # Register the environment slot so pytest restores it after main sets it.
+    monkeypatch.setenv("FORMAL_WORKER_ORIGIN_DIR", str(summary_dir / "worker_origin"))
+    v2_bench_local.main()
+
+    summary = json.loads((summary_dir / "summary.json").read_text(encoding="utf-8"))
+    assert summary["batch_size"] is None
+    attempts = [json.loads(line) for line in batch_log.read_text(encoding="utf-8").splitlines()]
+    assert len(attempts) > 1
+    batch_size = attempts[0][0]
+    assert attempts == [
+        [min(batch_size, len(ids) - start), ids[start], ids[min(start + batch_size, len(ids)) - 1]]
+        for start in range(0, len(ids), batch_size)
+    ]
+    output = summary_dir / "export"
+    if worker_exit:
+        with pytest.raises(formal_run_receipt.ReceiptError) as caught:
+            formal_run_receipt._database_section(tmp_path, "eicu", str(source), "", 0, "")
+        assert caught.value.code == "database_run_reported_errors"
+        assert caught.value.details == {
+            "database": "eicu",
+            "root_type": "builtins.ValueError",
+            "root_reason": None,
+            "chain": ["NativeExportPublicationError", "ValueError"],
+        }
+        assert "failures=['renal']" in summary["exception"]
+        manifest_path, = (output / ".easyicu-unpublished").glob("*/renal.manifest.json")
+        module = json.loads(manifest_path.read_text(encoding="utf-8"))
+        assert module["saved"] == {}
+        assert len(module["errors"]) == 1
+        assert module["resource_plan"]["batch_size"] == batch_size
+        failure = module["stream_failure"]
+        expected_failure = {
+            "exception_type": "StreamBatchWorkerKilled",
+            "failure_class": "worker_failed",
+            "memory_evidence": None,
+            "worker_exit_code": worker_exit,
+            "batch_index": len(attempts),
+            "start_offset": batch_size * (len(attempts) - 1),
+            "batch_size": batch_size,
+            "retries_used": 0,
+        }
+        assert {key: failure[key] for key in expected_failure} == expected_failure
+        assert not (output / "_manifest.json").exists()
+        assert not list(output.glob("*.parquet"))
+    else:
+        assert summary.get("errors") == [], summary.get("exception")
+        assert summary["worker_failures"] == 0
+        assert "_manifest.json" in summary["files"]
+        assert "renal.parquet" in summary["files"]
+        published = json.loads((output / "_manifest.json").read_text(encoding="utf-8"))
+        assert published["module_resource_plans"]["renal"]["batch_size"] == batch_size
+        assert published["time_window_authority"]["source"] == "outcome.los_icu"
+        native = pd.read_parquet(output / "renal.parquet", columns=["stay_id"])
+        assert set(native["stay_id"]) == set(range(1, 13)) | set(ids[-12:])
+
+
+@pytest.mark.parametrize("reasons", [{}, {"fio2_set": "required_source_table_missing"}])
+@pytest.mark.parametrize("reverse", [False, True])
+def test_disagreeing_absence_receipts_clear_only_the_disputed_concept(reasons, reverse):
+    sink = TypedAbsenceSink()
+    agreed = {"fio2_set": "carevue_view_required", "renal_excl": "carevue_view_required"}
+    disputed = {**reasons, "renal_excl": "carevue_view_required"}
+    receipts = [disputed, agreed] if reverse else [agreed, disputed]
+
+    for receipt in [*receipts, agreed]:
+        sink.observe(agreed, receipt)
+
+    assert sink.codes() == {"renal_excl": "carevue_view_required"}
 
 
 def test_special_loaders_receive_resolved_source_and_patient_filter(
@@ -200,6 +636,99 @@ def test_batched_load_routes_special_concepts_through_subprocess_with_full_list(
     )
     assert "hr" in captured["concepts"]
     assert "aki" in result
+
+
+@pytest.mark.parametrize("ram_gib", [16, 8, 32], ids=["desktop-16GiB", "hosted-8GiB", "32GiB"])
+@pytest.mark.parametrize("force_inprocess", [False, True], ids=["unset", "inprocess-1"])
+@pytest.mark.parametrize(("reason", "count", "batch_size"), [
+    ("fits-one-batch", 7, 7),
+    ("ram-small-cohort", 7, 3),
+    ("ram-large-cohort", 60_001, 30_001),
+    ("ram-very-large-cohort", 120_001, 60_001),
+    ("force-subprocess", 7, 3),
+    ("special-concept", 7, 3),
+    ("all-stays-explicit-batch", 7, 3),
+    ("filtered-over-budget", 5_003, None),
+    ("all-stays-over-budget", 5_003, None),
+    ("all-stays-prefetch-retry", 5_003, None),
+])
+def test_concept_batch_routes_under_inprocess_override(
+    monkeypatch, tmp_path, ram_gib, force_inprocess, reason, count, batch_size,
+):
+    import psutil
+
+    from easyicu.runtime import memory_manager
+
+    for key in (
+        "EASYICU_FORCE_INPROCESS_BATCH", "EASYICU_FORCE_SUBPROCESS_BATCH",
+        "EASYICU_AUTO_CHUNK_SIZE", "EASYICU_DISABLE_AUTO_CHUNK", "EASYICU_ONESHOT_BUDGET_MB",
+    ):
+        monkeypatch.delenv(key, raising=False)
+    if force_inprocess:
+        monkeypatch.setenv("EASYICU_FORCE_INPROCESS_BATCH", "1")
+    if reason == "force-subprocess":
+        monkeypatch.setenv("EASYICU_FORCE_SUBPROCESS_BATCH", "1")
+
+    total = ram_gib * 1024**3
+    memory = psutil.virtual_memory()._replace(total=total, available=total)
+    monkeypatch.setattr(psutil, "virtual_memory", lambda: memory)
+    ids = list(range(1, count + 1))
+    all_stays = reason.startswith("all-stays")
+    concepts = ["hr", "aki"] if reason == "special-concept" else ["hr"]
+    calls = []
+    sample_attempts = []
+
+    def sample(_loader, total, *_args, sample_strategy, **_kwargs):
+        sample_attempts.append(total)
+        assert sample_strategy == "sorted"
+        if reason == "all-stays-prefetch-retry" and len(sample_attempts) == 1:
+            return None
+        return ids
+
+    def record(route):
+        def load(**kwargs):
+            calls.append((route, kwargs))
+            return pd.DataFrame({"stay_id": [1], "hr": [61.0]})
+        return load
+
+    loader = SimpleNamespace(database="miiv", data_path=tmp_path, load_concepts=record("one-shot"))
+    monkeypatch.setattr(concept_api, "_get_global_loader", lambda **kwargs: loader)
+    monkeypatch.setattr(concept_api, "_get_total_patient_count", lambda _loader: count)
+    monkeypatch.setattr(concept_api, "_sample_patient_ids", sample)
+    monkeypatch.setattr(memory_manager, "estimate_memory_mb", lambda *args: 24_000)
+    monkeypatch.setattr(memory_manager, "auto_batch_size", lambda *args, **kwargs: 2_501)
+    monkeypatch.setattr(memory_manager, "inprocess_batch_load", record("in-process"))
+    monkeypatch.setattr(memory_manager, "subprocess_batch_load", record("subprocess"))
+
+    if reason == "fits-one-batch":
+        expected = "one-shot"
+    elif reason == "special-concept" or batch_size is None:
+        expected = "subprocess"
+    elif force_inprocess or (
+        ram_gib >= 16 and reason in {"ram-small-cohort", "all-stays-explicit-batch"}
+    ) or (ram_gib == 32 and reason == "ram-large-cohort"):
+        expected = "in-process"
+    else:
+        expected = "subprocess"
+
+    result = api.load_concepts(
+        concepts, database="miiv", data_path=tmp_path,
+        patient_ids=None if all_stays else {"stay_id": ids},
+        batch_size=batch_size, concept_workers=1, parallel_workers=1,
+        merge=True, r_compatible=False, verbose=False,
+    )
+    (route, options), = calls
+    assert route == expected
+    assert options["concepts"] == concepts
+    assert options["merge"] is True
+    assert options["r_compatible"] is False
+    scope_key = "all_patient_ids" if route == "subprocess" else "patient_ids"
+    assert options[scope_key] == {"stay_id": ids}
+    if route != "one-shot":
+        assert options["batch_size"] == (2_501 if batch_size is None else batch_size)
+    expected_samples = 2 if reason == "all-stays-prefetch-retry" else int(all_stays)
+    assert sample_attempts == [count] * expected_samples
+    assert result["hr"].tolist() == [61.0]
 
 
 def test_concept_cache_isolates_cohort_source_and_data_fingerprint(

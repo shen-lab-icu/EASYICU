@@ -2,15 +2,13 @@
 
 from __future__ import annotations
 
-from pathlib import Path
-
 import pandas as pd
 
 from ..datasource import FilterOp, FilterSpec, MissingTableSourceError
 from ..table import ICUTable
 from .availability_signal import ConceptAvailabilityRecord, set_table_availability
+from .carevue_view import carevue_view_has_table, is_carevue_view
 from .catalog import C565_RENAL_HISTORY_CONCEPTS as FIELDS
-from .fio2_set import is_carevue_extraction_root
 from .stay_tables import selected_stay_ids
 
 ESRD_ICD10 = frozenset({"N186", "Z992", "Z9115", "I120", "I1311", "I132"})
@@ -80,6 +78,8 @@ def _code_flags(codes, version=None):
 
 
 def _mimic_flags(data_source, stay_column, stays, *, carevue_admissions=None):
+    if stays.empty:
+        return stays[[stay_column]]
     admissions = _history(
         data_source, "admissions", ["hadm_id", "subject_id", "admittime"],
         subject_id=_ids(stays, "subject_id"),
@@ -111,29 +111,6 @@ def _mimic_flags(data_source, stay_column, stays, *, carevue_admissions=None):
     return indexed.assign(ph_dialysis=False, ph_kidney_tx=False)[[stay_column, *FIELDS[:-1]]]
 
 
-def _view_root(path: Path) -> bool:
-    parts = tuple(part.casefold() for part in path.parts)
-    if ("databases", "mimiciii") in zip(parts, parts[1:]):
-        return False
-    return is_carevue_extraction_root(path) or parts[-2:] == ("mimicview", "raw")
-
-
-def _view_has_table(data_source, table):
-    """Use the view's Parquet inputs, including declared links between view layouts."""
-    root = data_source.base_path
-    entries = {f"{table}.parquet", table} if table == "icustays" else {f"{table}.parquet"}
-    # Check link destinations before the storage owner probes Parquet.
-    candidates = set()
-    for parent in (root, root / "raw"):
-        for entry in entries:
-            path = parent / entry
-            if path.exists():
-                real_parent = path.resolve().parent
-                if _view_root(real_parent) or (real_parent.name == "raw" and _view_root(real_parent.parent)):
-                    candidates.add(path)
-    return bool(candidates) and data_source.resolve_loader_from_disk(table) in candidates
-
-
 def _carevue_flags(data_source, stay_column, selected):
     stays = _history(
         data_source, "icustays", [stay_column, "hadm_id", "subject_id"], optional_columns=("dbsource",),
@@ -147,6 +124,8 @@ def _carevue_flags(data_source, stay_column, selected):
     has_any_mv_stay = stays["hadm_id"].isin(_ids(stays.loc[mv_present], "hadm_id"))
     candidates = carevue if known.any() else unknown
     eligible = stays.loc[candidates & ~has_any_mv_stay]
+    if mv_present.any() and eligible.empty:
+        return None, None
     prior_admissions = _ids(eligible, "hadm_id")
     if selected is not None:
         eligible = eligible.loc[eligible[stay_column].isin(selected)]
@@ -172,8 +151,22 @@ def add_carevue_history_window(frame, receipt):
 def _eicu_flags(data_source, stay_column, selected):
     hospital = "patienthealthsystemstayid"
     stays = _history(data_source, "patient", [stay_column, hospital], **{stay_column: selected})
-    siblings = _history(data_source, "patient", [stay_column, hospital], **{hospital: _ids(stays, hospital)})
-    scope = {stay_column: _ids(siblings, stay_column)}
+    if stays.empty:
+        return stays[[stay_column]]
+    hospital_ids = _ids(stays, hospital)
+    siblings = (
+        _history(data_source, "patient", [stay_column, hospital], **{hospital: hospital_ids})
+        if hospital_ids else stays.iloc[:0]
+    )
+    unlinked = stays.loc[stays[hospital].isna(), stay_column]
+    # Linked groups use nonnegative codes. Give each unlinked unit its own
+    # group in a disjoint range so it cannot borrow another stay's history.
+    linked_codes, _ = pd.factorize(siblings[hospital])
+    by_stay = pd.concat([
+        pd.Series(linked_codes, index=siblings[stay_column]),
+        pd.Series(range(-1, -len(unlinked) - 1, -1), index=unlinked, dtype="int64"),
+    ])
+    scope = {stay_column: by_stay.index.tolist()}
 
     diagnoses = _history(data_source, "diagnosis", [stay_column, "icd9code"], **scope).reset_index(drop=True)
     codes = diagnoses["icd9code"].astype("string").str.split(",").explode().astype("string")
@@ -190,12 +183,19 @@ def _eicu_flags(data_source, stay_column, selected):
         ph_dialysis=path.str.contains("renal failure - hemodialysis|renal failure - peritoneal dialysis", na=False),
         ph_kidney_tx=path.str.contains("s/p renal transplant", regex=False, na=False),
     )
-    by_stay = siblings.set_index(stay_column)[hospital]
-    by_hospital = pd.concat([
+    by_group = pd.concat([
         frame.groupby(frame[stay_column].map(by_stay))[list(fields)].any()
         for frame, fields in ((coded, FIELDS[:2]), (past, FIELDS[2:4]))
     ], axis=1)
-    return stays.join(by_hospital, on=hospital).drop(columns=hospital)
+    return stays[[stay_column]].join(by_group, on=stays[stay_column].map(by_stay))
+
+
+def _empty_renal_history(concept, stay_column):
+    return ICUTable(
+        data=pd.DataFrame({stay_column: pd.Series(dtype="int64"), concept: pd.Series(dtype="boolean")}),
+        id_columns=[stay_column],
+        value_column=concept,
+    )
 
 
 def renal_history_absence(concept, data_source, missing=(), *, carevue=False):
@@ -205,11 +205,7 @@ def renal_history_absence(concept, data_source, missing=(), *, carevue=False):
     if missing:
         reason = "required_source_table_missing"
     stay_column = data_source.config.id_configs["icustay"].id
-    result = ICUTable(
-        data=pd.DataFrame({stay_column: pd.Series(dtype="int64"), concept: pd.Series(dtype="boolean")}),
-        id_columns=[stay_column],
-        value_column=concept,
-    )
+    result = _empty_renal_history(concept, stay_column)
     set_table_availability(result, ConceptAvailabilityRecord(
         concept=concept, database=database, reason="source_unavailable" if missing else "unmapped",
         n_rows=0, missing_tables=missing, evaluation_status="not_evaluable", reason_code=reason,
@@ -227,19 +223,28 @@ def load_renal_history_field(concept, data_source, patient_ids):
     carevue = database == "mimic"
     if database not in {"miiv", "eicu", "eicu_demo", "mimic"}:
         return renal_history_absence(concept, data_source)
-    if carevue:
-        root = data_source.base_path
-        if root is None or not _view_root(root) or not _view_root(root.resolve()):
-            return renal_history_absence(concept, data_source)
+    if carevue and not is_carevue_view(data_source.base_path):
+        return renal_history_absence(concept, data_source)
+    if database in {"miiv", "mimic"}:
         required = (*MIMIC_HISTORY_TABLES, "icustays")
-        missing = tuple(table for table in required if not _view_has_table(data_source, table))
-        if missing:
-            return renal_history_absence(concept, data_source, missing=missing, carevue=True)
+    else:
+        required = ("patient", "diagnosis", "pasthistory")
+    # A stay selection with zero matches cannot establish source availability.
+    if carevue:
+        missing = tuple(table for table in required if not carevue_view_has_table(data_source, table))
+    else:
+        missing = tuple(table for table in required if not data_source.has_table_source(table))
+    if missing:
+        return renal_history_absence(concept, data_source, missing=missing, carevue=carevue)
     stay_column = data_source.config.id_configs["icustay"].id
     selected = selected_stay_ids(patient_ids, stay_column)
+    if selected == [] and not carevue:
+        return _empty_renal_history(concept, stay_column)
     try:
         if carevue:
             flags, era_note = _carevue_flags(data_source, stay_column, selected)
+            if flags is None:
+                return renal_history_absence(concept, data_source, carevue=True)
         elif database == "miiv":
             stays = _history(
                 data_source, "icustays", [stay_column, "hadm_id", "subject_id"],
@@ -251,13 +256,16 @@ def load_renal_history_field(concept, data_source, patient_ids):
     except _MissingHistoryTable as exc:
         return renal_history_absence(concept, data_source, missing=(str(exc),), carevue=carevue)
 
-    components = flags[list(FIELDS[:-1])].astype("boolean").fillna(False)
-    components["renal_excl"] = components.any(axis=1).astype("boolean")
-    result = ICUTable(
-        data=flags[[stay_column]].assign(**{concept: components[concept]}),
-        id_columns=[stay_column],
-        value_column=concept,
-    )
+    if flags.empty:
+        result = _empty_renal_history(concept, stay_column)
+    else:
+        components = flags[list(FIELDS[:-1])].astype("boolean").fillna(False)
+        components["renal_excl"] = components.any(axis=1).astype("boolean")
+        result = ICUTable(
+            data=flags[[stay_column]].assign(**{concept: components[concept]}),
+            id_columns=[stay_column],
+            value_column=concept,
+        )
     if carevue:
         set_table_availability(result, ConceptAvailabilityRecord(
             concept=concept, database=database, reason="data_missing" if flags.empty else "mapped_present",

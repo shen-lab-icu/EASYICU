@@ -2,15 +2,13 @@
 
 from __future__ import annotations
 
-import re
-from pathlib import Path
-
 import numpy as np
 import pandas as pd
 
 from ..datasource import FilterOp, FilterSpec, MissingTableSourceError, drop_mimic_chart_errors
 from ..table import ICUTable
 from .availability_signal import ConceptAvailabilityRecord, set_table_availability
+from .carevue_view import carevue_view_has_table, is_carevue_view
 from .merge_time_index import RELATIVE_HOURS
 from .stay_tables import selected_stay_ids
 
@@ -21,13 +19,7 @@ ORIGINS = {
     "hirid": ("general", "admissiontime"),
     "sic": ("cases", "ICUOffset"),
 }
-_CAREVUE_VIEW = re.compile(r"mimic_cv_(?:flat_r13|dir(?:_r13)?|bkt_s[0-9a-f]{9})")
 _HOUR = pd.Timedelta(hours=1)
-
-
-def is_carevue_extraction_root(path):
-    """Recognize the existing flat, directory and bucket CareVue views."""
-    return path is not None and _CAREVUE_VIEW.fullmatch(Path(path).name) is not None
 
 
 def _hourly_result(frame, stay_column):
@@ -37,12 +29,16 @@ def _hourly_result(frame, stay_column):
     )
 
 
-def _settings_absence(database, stay_column, table, reason_code, *, missing_tables=()):
-    result = _hourly_result(pd.DataFrame({
+def _empty_hourly_result(stay_column):
+    return _hourly_result(pd.DataFrame({
         stay_column: pd.Series(dtype="int64"),
         "charttime": pd.Series(dtype="float64"),
         "fio2_set": pd.Series(dtype="float64"),
     }), stay_column)
+
+
+def _settings_absence(database, stay_column, table, reason_code, *, missing_tables=()):
+    result = _empty_hourly_result(stay_column)
     set_table_availability(result, ConceptAvailabilityRecord(
         concept="fio2_set", database=database, reason="source_unavailable", n_rows=0,
         sources_defined=(table,), missing_tables=missing_tables,
@@ -85,8 +81,26 @@ def load_fio2_set(definition, source, data_source, patient_ids):
     stay_filters = [] if selected is None else [FilterSpec(stay_column, FilterOp.IN, selected)]
 
     if database in {"mimic", "mimic_demo"}:
-        if database != "mimic" or not is_carevue_extraction_root(data_source.base_path):
+        if database != "mimic" or not is_carevue_view(data_source.base_path):
             return _settings_absence(database, stay_column, source.table, "carevue_view_required")
+        required = (ORIGINS[database][0], source.table)
+        missing = tuple(table for table in required if not carevue_view_has_table(data_source, table))
+        if missing:
+            return _settings_absence(
+                database, stay_column, source.table, "required_source_table_missing",
+                missing_tables=missing,
+            )
+
+    elif selected == []:
+        origin = ORIGINS.get(database)
+        required = (origin[0], source.table) if origin else (source.table,)
+        missing = tuple(table for table in required if not data_source.has_table_source(table))
+        if missing:
+            return _settings_absence(
+                source_database, stay_column, source.table, "required_source_table_missing",
+                missing_tables=missing,
+            )
+        return _empty_hourly_result(stay_column)
 
     origins = None
     origin_time = None
@@ -106,10 +120,13 @@ def load_fio2_set(definition, source, data_source, patient_ids):
         if database == "mimic":
             if (
                 "dbsource" not in origins
-                or not origins["dbsource"].astype("string").str.lower().eq("carevue").fillna(False).all()
+                or not origins["dbsource"].astype("string").str.strip().str.lower().eq("carevue").fillna(False).all()
             ):
                 return _settings_absence(database, stay_column, source.table, "carevue_view_required")
             origins = origins[columns]
+
+    if selected == []:
+        return _empty_hourly_result(stay_column)
 
     columns = [stay_column, source.index_var, source.value_var, source.sub_var]
     filters = [FilterSpec(source.sub_var, FilterOp.IN, source.ids), *stay_filters]
@@ -136,6 +153,7 @@ def load_fio2_set(definition, source, data_source, patient_ids):
         values = values.mask(values.le(1), values * 100)
     valid = values.between(definition.minimum, definition.maximum) & np.isfinite(time)
     if database == "eicu":
+        # Frozen thesis L-COMMON eICU FiO2 window (r15e DIFF, accepted in #742).
         valid &= time.ge(0) & time.lt(1440)
     hourly = rows.loc[valid, [stay_column]].assign(
         charttime=np.floor(time.loc[valid]).astype("float64"),

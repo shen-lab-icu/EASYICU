@@ -76,9 +76,12 @@ def selected_stay_ids(patient_ids, stay_column):
         if len(keys) != 1:
             raise ValueError(f"Expected one {stay_column} identifier list")
         patient_ids = patient_ids[keys[0]]
-    if patient_ids is None or isinstance(patient_ids, (str, bytes, Mapping)):
+    if isinstance(patient_ids, (str, bytes, Mapping, pd.DataFrame)):
         raise ValueError(f"Expected one {stay_column} identifier list")
-    return list(patient_ids)
+    try:
+        return list(patient_ids)
+    except TypeError as exc:
+        raise ValueError(f"Expected one {stay_column} identifier list") from exc
 
 
 def _bound(data_source, table: str) -> tuple:

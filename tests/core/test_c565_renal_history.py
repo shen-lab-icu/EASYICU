@@ -8,9 +8,13 @@ import pytest
 
 from easyicu.api import EXTRACT_MODULE_ORDER, EXTRACT_MODULES
 from easyicu.api.concepts import clear_global_loader, load_concepts
+from easyicu.base import BaseICULoader
 from easyicu.concept import c565_renal_history
+from easyicu.concept.availability_signal import TypedAbsenceSink, table_availability
 from easyicu.concept.c565_renal_history import FIELDS
+from easyicu.config import load_src_cfg
 from easyicu.datasource import ICUDataSource
+from easyicu.storage_binding import binding_unit
 from tests.support.bucket_storage import write_contract
 from tests.support.source_mortality import source as mortality_source
 
@@ -95,6 +99,102 @@ def test_eicu_all_sibling_units_contribute_codes_and_past_history(tmp_path):
         [True, True, False, False, True],
         [False, False, False, False, False],
     ]
+
+
+def test_eicu_units_without_a_hospital_key_keep_only_their_own_history(tmp_path):
+    _write(tmp_path, "patient", [(41, None), (42, None), (43, -41), (44, -41)],
+           ["patientunitstayid", "patienthealthsystemstayid"])
+    _write(tmp_path, "diagnosis", [(41, "585.6"), (44, "V42.0")],
+           ["patientunitstayid", "icd9code"])
+    _write(tmp_path, "pasthistory", [(41, "background / s/p renal transplant")],
+           ["patientunitstayid", "pasthistorypath"])
+
+    result = _load(tmp_path, "eicu", [41, 42, 43]).set_index("patientunitstayid")
+
+    assert result.loc[[41, 42, 43], list(FIELDS)].values.tolist() == [
+        [True, False, False, True, True],
+        [False, False, False, False, False],
+        [False, True, False, False, True],
+    ]
+    assert _load(tmp_path, "eicu", [41])[list(FIELDS)].values.tolist() == [
+        [True, False, False, True, True],
+    ]
+
+
+@pytest.mark.parametrize(("database", "stay_table", "stay_column"), [
+    ("miiv", "icustays", "stay_id"),
+    ("eicu", "patient", "patientunitstayid"),
+])
+def test_empty_cohort_returns_typed_history_from_bucketed_sources(
+    tmp_path, database, stay_table, stay_column,
+):
+    bucket = tmp_path / f"{stay_table}_bucket"
+    shard = bucket / "bucket_id=0"
+    shard.mkdir(parents=True)
+    context = {"hadm_id": [125], "subject_id": [20]} if database == "miiv" else {
+        "patienthealthsystemstayid": [125],
+    }
+    pd.DataFrame({stay_column: [41], **context}).to_parquet(shard / "stays.parquet", index=False)
+    write_contract(bucket, key=stay_column)
+    if database == "miiv":
+        _write(tmp_path, "admissions", [(125, 20, pd.Timestamp("2021-06-03"))],
+               ["hadm_id", "subject_id", "admittime"])
+        _write(tmp_path, "diagnoses_icd", [(125, "Z99.2", 10)], ["hadm_id", "icd_code", "icd_version"])
+    else:
+        _write(tmp_path, "diagnosis", [(41, "585.6")], [stay_column, "icd9code"])
+        _write(tmp_path, "pasthistory", [(41, "background / renal failure - hemodialysis")],
+               [stay_column, "pasthistorypath"])
+    source = ICUDataSource(load_src_cfg(database), base_path=tmp_path)
+
+    with binding_unit():
+        result = c565_renal_history.load_renal_history_field("renal_excl", source, [])
+
+    assert result.data.empty
+    assert result.data.dtypes.astype(str).to_dict() == {
+        stay_column: "int64", "renal_excl": "boolean",
+    }
+    assert "easyicu_availability" not in result.data.attrs
+
+
+@pytest.mark.parametrize(("database", "missing"), [
+    ("miiv", "diagnoses_icd"),
+    ("eicu", "pasthistory"),
+    ("eicu_demo", "diagnosis"),
+])
+@pytest.mark.parametrize("empty_scope", [False, True], ids=["process-chunks", "explicit-empty"])
+def test_history_source_refusal_survives_a_chunk_without_stays(tmp_path, database, missing, empty_scope):
+    if database == "miiv":
+        stay_column = "stay_id"
+        _write(tmp_path, "icustays", [(41, 16, 125)], [stay_column, "subject_id", "hadm_id"])
+        _write(tmp_path, "admissions", [(125, 16, pd.Timestamp("2021-06-03"))],
+               ["hadm_id", "subject_id", "admittime"])
+    else:
+        stay_column = "patientunitstayid"
+        _write(tmp_path, "patient", [(41, 125)], [stay_column, "patienthealthsystemstayid"])
+        if missing != "diagnosis":
+            _write(tmp_path, "diagnosis", [(41, "585.6")], [stay_column, "icd9code"])
+        if missing != "pasthistory":
+            _write(tmp_path, "pasthistory", [(41, "background / S/P renal transplant")],
+                   [stay_column, "pasthistorypath"])
+
+    sink = TypedAbsenceSink()
+    if empty_scope:
+        availability = {}
+        frame = load_concepts(
+            "renal_excl", patient_ids=[], database=database, data_path=tmp_path,
+            availability_sink=availability, _typed_absence_sink=sink,
+        )
+        assert availability["renal_excl"].missing_tables == (missing,)
+    else:
+        loader = BaseICULoader(database=database, data_path=tmp_path)
+        frame = loader.load_concepts(
+            ["renal_excl"], patient_ids={stay_column: [41, 97]}, chunk_size=1,
+            parallel_workers=2, parallel_backend="process", concept_workers=1,
+            r_compatible=False, _typed_absence_sink=sink,
+        )
+
+    assert frame.empty
+    assert sink.codes() == {"renal_excl": "required_source_table_missing"}
 
 
 @pytest.mark.parametrize("database", ["eicu", "eicu_demo"])
@@ -230,6 +330,30 @@ def test_carevue_reports_when_era_cannot_be_guaranteed(carevue_view, dbsource):
     assert result["prior_window"].tolist() == ["view_admissions_only"]
     assert result["prior_window_note"].tolist() == ["prior_window CareVue-era not guaranteed"]
     assert availability["esrd_dialysis"].prior_window_note == result["prior_window_note"].iloc[0]
+
+
+@pytest.mark.parametrize("source_label", [" MetaVision ", " CareVue ", None])
+def test_carevue_history_checks_source_era_with_no_requested_stays(carevue_view, source_label):
+    stay = (27, 100, 10)
+    if source_label is not None:
+        stay = (*stay, source_label)
+    _carevue_history(carevue_view, [stay], [(10, "585.6")], dbsource=source_label is not None)
+    source = ICUDataSource(load_src_cfg("mimic"), base_path=carevue_view)
+
+    with binding_unit():
+        result = c565_renal_history.load_renal_history_field("renal_excl", source, [])
+
+    assert result.data.empty
+    receipt = table_availability(result, "renal_excl")
+    assert receipt is not None
+    assert receipt.prior_window == "view_admissions_only"
+    if source_label == " MetaVision ":
+        assert receipt.reason_code == "carevue_view_required"
+        assert receipt.evaluation_status == "not_evaluable"
+    else:
+        assert receipt.reason == "data_missing"
+        assert receipt.evaluation_status == "evaluated"
+        assert receipt.prior_window_note == c565_renal_history.CAREVUE_ERA_NOTE
 
 
 @pytest.mark.parametrize("present", [(), ("admissions",), ("diagnoses_icd",)])
@@ -409,6 +533,33 @@ def test_static_module_can_publish_without_longitudinal_stay_bounds(tmp_path):
         assert set(FIELDS) <= set(package.concept_index)
 
 
+def test_static_export_of_a_cohort_with_no_matching_history_stays_opens(tmp_path):
+    from easyicu.api.extraction import extract_database
+    from easyicu.research_agent.intake.export_package import open_export_package
+
+    source = tmp_path / "one-stay-source"
+    source.mkdir()
+    _write(source, "icustays", [(5, 20, 125)], ["stay_id", "subject_id", "hadm_id"])
+    _write(source, "admissions", [(125, 20, pd.Timestamp("2021-09-03"))],
+           ["hadm_id", "subject_id", "admittime"])
+    _write(source, "diagnoses_icd", [(125, "Z99.2", 10)], ["hadm_id", "icd_code", "icd_version"])
+    output = tmp_path / "empty-cohort-export"
+    extract_database(
+        database="miiv", data_path=source, output_dir=output, modules=["c565_renal_history"],
+        patient_ids=[67], max_workers=1, native_export_v2=True, verbose=False,
+    )
+
+    manifest_path = output / "_manifest.json"
+    manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    assert manifest["time_window_authority"]["bounded_stays"] == 0
+    # Model a static publisher that did not require longitudinal stay bounds.
+    manifest["time_window_authority"]["required"] = False
+    manifest_path.write_text(json.dumps(manifest), encoding="utf-8")
+    with open_export_package(output) as package:
+        assert not set(FIELDS).intersection(package.concept_index)
+    assert pd.read_parquet(output / "c565_renal_history.parquet").empty
+
+
 @pytest.mark.parametrize(("database", "reason"), [
     ("aumc", "no_icd_diagnosis_source"),
     ("hirid", "no_icd_diagnosis_source"),
@@ -416,27 +567,69 @@ def test_static_module_can_publish_without_longitudinal_stay_bounds(tmp_path):
     ("mimic", "carevue_view_required"),
 ])
 @pytest.mark.parametrize("stream", [False, True], ids=["whole-module", "streamed"])
-def test_native_export_preserves_typed_renal_history_absence(tmp_path, database, reason, stream):
+@pytest.mark.parametrize("with_outcome", [False, True], ids=["history-only", "with-outcome"])
+def test_native_export_preserves_typed_renal_history_absence(
+    tmp_path, database, reason, stream, with_outcome,
+):
     from easyicu.api.extraction import extract_database
+    from easyicu.research_agent.intake.export_package import open_export_package
 
     source = mortality_source(tmp_path / "source", database)
     if database == "mimic":
         _write(source, "diagnoses_icd", [(11, "5856")], ["hadm_id", "icd9_code"])
+        stays = source / "icustays.parquet"
+        pd.read_parquet(stays).assign(dbsource="carevue", los=1.0).to_parquet(stays, index=False)
+        patients = source / "patients.parquet"
+        pd.read_parquet(patients).assign(
+            dod=["2020-01-02", "2020-01-03", None, None],
+        ).to_parquet(patients, index=False)
+    elif database == "sic":
+        cases = source / "cases.parquet"
+        pd.read_parquet(cases).assign(
+            EstimatedSurvivalObservationTime="1 year",
+        ).to_parquet(cases, index=False)
     output = tmp_path / "output"
     module = "c565_renal_history"
+    modules = ["outcome", module] if with_outcome else [module]
     extract_database(
-        database=database, data_path=source, output_dir=output, modules=[module],
+        database=database, data_path=source, output_dir=output, modules=modules,
         patient_ids=[1, 2], batch_size=1 if stream else None,
         resource_budget_mb=2048 if stream else None, max_workers=1,
         native_export_v2=True, stream_output_batches=stream, verbose=False,
     )
 
-    manifest = json.loads((output / "_manifest.json").read_text(encoding="utf-8"))
+    manifest_path = output / "_manifest.json"
+    manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
     assert manifest["concept_selection"]["modules"][module] == []
-    assert manifest["unavailable_concepts"] == []
-    assert manifest["unavailable_modules"] == [
+    assert not [item for item in manifest["unavailable_concepts"] if item["module"] == module]
+    assert [item for item in manifest["unavailable_modules"] if item["module"] == module] == [
         {"module": module, "reason": reason, "concept_ids": list(FIELDS)},
     ]
     frame = pd.read_parquet(output / f"{module}.parquet")
     assert frame.empty
     assert all(str(frame[field].dtype) == "boolean" for field in FIELDS)
+    with open_export_package(output) as package:
+        assert not set(FIELDS).intersection(package.concept_index)
+    if not with_outcome:
+        assert manifest["time_window_authority"]["bounded_stays"] == 0
+        manifest.pop("time_window_authority")
+        manifest_path.write_text(json.dumps(manifest), encoding="utf-8")
+        with open_export_package(output) as package:
+            assert not set(FIELDS).intersection(package.concept_index)
+
+
+@pytest.mark.parametrize("concept_ids", [[], ["hourly_pulse"]], ids=["empty-receipt", "foreign-concept"])
+def test_empty_history_selection_needs_a_stay_level_absence_receipt(concept_ids):
+    from easyicu.research_agent.intake.export_package import (
+        ExportPackageError,
+        require_export_time_window_authority,
+    )
+
+    module = "c565_renal_history"
+    manifest = {
+        "concept_selection": {"modules": {module: []}},
+        "unavailable_modules": [{"module": module, "concept_ids": concept_ids}],
+    }
+    with pytest.raises(ExportPackageError) as error:
+        require_export_time_window_authority(manifest, modules=[module])
+    assert error.value.code == "export_time_window_unbounded"
