@@ -169,9 +169,14 @@
   function stopAction(kind, tr) {
     const labels = {
       retry: ['Retry from the failed step', '从失败步骤重试'],
+      failed_pipeline_requires_fresh_plan: ['Retry plan generation', '重试生成计划'],
+      provider_ready_to_generate_plan: ['Retry plan generation', '重试生成计划'],
+      planner_checkpoint_resume_available: ['Continue plan generation', '继续生成计划'],
+      plan_execution_upgrade_required: ['Retry data preparation', '重试数据准备'],
       edit_plan: ['Regenerate the plan', '重新生成计划'],
       plan_edit: ['Open plan changes', '打开计划修改'],
       reexport_data: ['Open data preparation', '打开数据准备'],
+      check_connection: ['Check model connection', '检查模型连接'],
       receipt: ['Open failure receipt', '打开失败回执'],
       review: ['Open recovery options', '打开恢复操作'],
     };

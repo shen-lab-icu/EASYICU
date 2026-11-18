@@ -4,9 +4,9 @@
    timeline (screens-guided-pi-run-files.js projectTimeline lists each run
    once). The block says why the run stopped in one readable sentence from
    the error-text owner. Typed stop choices enter existing workflow owners;
-   they never create execution authority. Historical stops offer only their
-   receipt. The run id stays in the run record; this block names the
-   run only by its opaque run_ref. */
+   they never create execution authority. Historical stops retain their
+   receipt and diagnostics. The current failed launch can have choices
+   before it has a run record. */
 (function () {
   'use strict';
 
@@ -14,6 +14,13 @@
   const STOP_STATUSES = new Set(['failed', 'cancelled', 'interrupted']);
   // A blocked gate that waits for review is not a stop (aside.runFacts).
   const FAILURE_GATE = /^research_pipeline_|^data_foundation_blocked$|^research_agent_pipeline_failed_closed$/;
+
+  const PLAN_RETRY_CODES = new Set([
+    'failed_pipeline_requires_fresh_plan',
+    'provider_ready_to_generate_plan',
+    'planner_checkpoint_resume_available',
+    'plan_execution_upgrade_required',
+  ]);
 
   function gateReason(run) {
     return String(run && (run.gate_reason || run.gate_reason_code) || '');
@@ -35,15 +42,22 @@
       || action.label_key !== `stop_next_actions.${kind}`) return '';
     const code = String(workflow && workflow.next_action_code || '');
     if (kind === 'retry' && params.route === 'retry') {
-      return code === 'failed_pipeline_execution_retry_available' ? 'retry' : '';
+      if (params.stage === 'execution' && code === 'failed_pipeline_execution_retry_available') return 'retry';
+      return params.stage === 'planning' && PLAN_RETRY_CODES.has(code) ? 'confirm' : '';
     }
     if (['edit_plan', 'rerun_without_element', 'use_alternative_concept', 'drop_variable'].includes(kind)
       && params.route === 'plan_edit' && params.intent === 'candidate_plan'
       && params.planner_start_mode === 'fresh' && params.requires_explicit_choice === true
       && params.requires_plan_approval === true) {
-      if (kind === 'edit_plan' && ['failed_pipeline_requires_fresh_plan', 'failed_pipeline_execution_retry_futile'].includes(code)) return 'confirm';
-      return 'edit';
+      if (kind !== 'edit_plan' || params.concept || params.element || params.step_id || params.change_question === true) return 'draft';
+      return ['failed_pipeline_requires_fresh_plan', 'failed_pipeline_execution_retry_futile'].includes(code) ? 'confirm' : 'edit';
     }
+    if (kind === 'edit_study' && params.route === 'study_edit'
+      && ['cohort', 'outcome', 'source', 'source_or_question'].includes(params.field)) return 'draft';
+    if (kind === 'rephrase_in_scope' && params.route === 'question_edit'
+      && params.scope_owner === 'easyicu.webserver.study_family_scope') return 'draft';
+    if (kind === 'check_connection' && params.route === 'model_connection'
+      && !window.EasyICU.guidedPi.optional('hosted')?.active()) return 'connect';
     if (kind === 'reexport_data' && params.route === 'data_extraction' && params.requires_explicit_choice === true) return 'data';
     return '';
   }
@@ -59,33 +73,54 @@
       : Array.isArray(run && run.next_actions) ? run.next_actions : [];
   }
 
+  function latestJobStop(session, workflow) {
+    if (workflow?.active_job?.present) return null;
+    const job = session?.archived_child_jobs?.at(-1);
+    return job?.job_id && !job.run_id && STOP_STATUSES.has(job.status)
+      && ['agent-run', 'extract'].includes(job.kind) ? job : null;
+  }
+
+  function actionLabel(action, route, workflow, tr) {
+    if (route === 'draft') return window.EasyICU.guidedPi.optional('confirmation')?.stopActionCopy(action, tr)?.label;
+    const code = workflow?.next_action_code;
+    const labels = {
+      retry: 'retry',
+      data: 'reexport_data',
+      connect: 'check_connection',
+      confirm: action.kind === 'retry' ? code : 'edit_plan',
+      edit: code === 'failed_pipeline_execution_retry_available' ? 'edit_plan' : 'plan_edit',
+    };
+    return window.EU_PRODUCT_LABELS.stopAction(labels[route], tr);
+  }
+
   function create(deps) {
     const tr = deps.tr;
     const runFailureText = typeof deps.runFailureText === 'function' ? deps.runFailureText : () => '';
 
-    function actions(run) {
+    function actionButtons(actions, workflow, attribute, coordinate) {
+      const controls = [];
+      const seen = new Set();
+      for (const action of actions) {
+        const route = actionRoute(action, workflow);
+        const key = route === 'draft' ? action.action_id : route;
+        if (!route || seen.has(key)) continue;
+        const label = actionLabel(action, route, workflow, tr);
+        if (!label) continue;
+        seen.add(key);
+        controls.push(`<button class="btn sm" type="button" data-gpi-stop-action="${esc(action.action_id)}" ${attribute}="${esc(coordinate)}" data-gpi-stop-workflow="${esc(workflow?.next_action_code || '')}">${esc(label)}</button>`);
+      }
+      return controls;
+    }
+
+    function actions(run, hasRecovery) {
       const labels = window.EU_PRODUCT_LABELS;
       if (!labels || typeof labels.stopAction !== 'function') return '';
       const workflow = typeof deps.workflow === 'function' ? deps.workflow() : {};
       const latest = typeof deps.latestRun === 'function' ? deps.latestRun() : null;
-      const live = currentRun(run, workflow, latest) && typeof deps.canAct === 'function' && deps.canAct();
-      const controls = [];
-      if (live) {
-        const seen = new Set();
-        for (const action of offeredActions(run, workflow)) {
-          const route = actionRoute(action, workflow);
-          if (!route || seen.has(route)) continue;
-          seen.add(route);
-          if (route === 'data') {
-            controls.push(`<a class="btn sm" href="#extraction">${esc(labels.stopAction(action.kind, tr))}</a>`);
-          } else {
-            const label = route === 'retry' ? 'retry' : action.kind === 'edit_plan' && (route === 'confirm' || workflow.next_action_code === 'failed_pipeline_execution_retry_available') ? 'edit_plan' : 'plan_edit';
-            controls.push(`<button class="btn sm" type="button" data-gpi-stop-action="${esc(action.action_id)}" data-gpi-stop-run="${esc(run.run_id)}">${esc(labels.stopAction(label, tr))}</button>`);
-          }
-        }
-        if (!controls.length && typeof deps.hasRecovery === 'function' && deps.hasRecovery()) {
-          controls.push(`<button class="btn sm" type="button" data-gpi-stop-recovery>${esc(labels.stopAction('review', tr))}</button>`);
-        }
+      const live = currentRun(run, workflow, latest) && deps.canAct?.();
+      const controls = live ? actionButtons(offeredActions(run, workflow), workflow, 'data-gpi-stop-run', run.run_id) : [];
+      if (live && !controls.length && hasRecovery) {
+        controls.push(`<button class="btn sm" type="button" data-gpi-stop-recovery>${esc(labels.stopAction('review', tr))}</button>`);
       }
       const receipt = (run.artifact_refs || []).find(ref => ref && ref.run_id === run.run_id && ref.artifact === 'source_run_manifest.json')
         || ((run.artifact_names || []).includes('source_run_manifest.json') ? { kind: 'research_artifact', run_id: run.run_id, artifact: 'source_run_manifest.json', media_type: 'application/json' } : null);
@@ -128,13 +163,22 @@
       return text || tr('This run stopped before it finished.', '这次运行在完成前停止。');
     }
 
-    function render(row) {
-      const runs = (Array.isArray(row && row.savedRuns) ? row.savedRuns : []).filter(stopped);
-      return runs.map(run => `<div class="gpi-run-stop" role="note" data-gpi-run-stop="${esc(run.run_ref || '')}"><p>${esc(cause(run))}</p>${actions(run)}</div>`).join('');
+    function renderJob(session) {
+      const workflow = deps.workflow?.();
+      const job = latestJobStop(session, workflow);
+      if (!deps.canAct?.() || !job || !Array.isArray(job.next_actions) || !window.EU_PRODUCT_LABELS?.stopAction) return '';
+      const controls = actionButtons(job.next_actions, workflow, 'data-gpi-stop-job', job.job_id);
+      if (!controls.length) return '';
+      return `<div class="gpi-run-stop" role="note" data-gpi-job-stop><p>${esc(cause(job))}</p><div class="gpi-run-stop-actions">${controls.join('')}</div></div>`;
     }
 
-    return Object.freeze({ render, stopped });
+    function render(row, { hasRecovery = false } = {}) {
+      const runs = (Array.isArray(row && row.savedRuns) ? row.savedRuns : []).filter(stopped);
+      return runs.map(run => `<div class="gpi-run-stop" role="note" data-gpi-run-stop="${esc(run.run_ref || '')}"><p>${esc(cause(run))}</p>${actions(run, hasRecovery)}</div>`).join('');
+    }
+
+    return Object.freeze({ render, renderJob, stopped });
   }
 
-  window.EasyICU.guidedPi.declare('runStop', { create, stopped, actionRoute, currentRun, offeredActions });
+  window.EasyICU.guidedPi.declare('runStop', { create, stopped, actionRoute, currentRun, offeredActions, latestJobStop });
 })();

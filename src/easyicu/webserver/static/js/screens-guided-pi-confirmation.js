@@ -11,6 +11,58 @@
 (function () {
   'use strict';
 
+  function stopActionCopy(action, tr) {
+    const { concept, alternative_concept: alternative, element, step_id: step, field } = action.params || {};
+    const target = concept || element || step || '';
+    let pair;
+    if (action.kind === 'rephrase_in_scope') pair = [
+      tr('Change study design or source', '修改研究设计或数据源'),
+      tr('I want to change the study design or data source: ', '我想修改研究设计或数据来源：'),
+    ];
+    if (action.kind === 'edit_study') pair = {
+      cohort: [
+        tr('Change cohort', '修改人群'),
+        tr('I want to change the cohort and, if needed, the research question as follows: ', '我想按以下内容修改研究人群，并在需要时修改研究问题：'),
+      ],
+      outcome: [
+        tr('Specify the primary outcome', '明确主要结局'),
+        tr('The primary outcome of this study is: ', '本研究的主要结局是：'),
+      ],
+      source: [
+        tr('Request Demo source selection', '请求重新选择 Demo 数据源'),
+        tr('I want to choose the official Demo data source again for this study. Show the available choices.', '我想为本研究重新选择官方 Demo 数据源。请列出可用选项。'),
+      ],
+      source_or_question: [
+        tr('Change data source or question', '修改数据源或研究问题'),
+        target ? tr(
+          `The current source cannot provide ${target}. I want to change the data source or research question as follows: `,
+          `当前数据源无法提供 ${target}。我想按以下内容修改数据源或研究问题：`,
+        ) : tr('I want to change the data source or research question as follows: ', '我想按以下内容修改数据源或研究问题：'),
+      ],
+    }[field];
+    if (action.kind === 'edit_plan' && action.params?.change_question === true) pair = [
+      tr('Revise the research question', '修改研究问题'),
+      tr('To address the issue above, I want to revise the research question as follows: ', '为解决上述问题，我想按以下内容修改研究问题：'),
+    ];
+    else if (action.kind === 'edit_plan' && target) pair = [
+      tr(`Revise ${target} in the plan`, `修改计划中的 ${target}`),
+      tr(`I want to revise ${target} as follows: `, `我想按以下内容修改 ${target}：`),
+    ];
+    if (action.kind === 'rerun_without_element' && target) pair = [
+      tr(`Plan without ${target}`, `制定不含 ${target} 的计划`),
+      tr(`I want to omit the optional ${target} from the next plan. `, `我想在下一版计划中省略可选的 ${target}。`),
+    ];
+    if (action.kind === 'drop_variable' && concept) pair = [
+      tr(`Plan without ${concept}`, `制定不含 ${concept} 的计划`),
+      tr(`I want to omit ${concept} from the next plan. `, `我想在下一版计划中省略 ${concept}。`),
+    ];
+    if (action.kind === 'use_alternative_concept' && concept && alternative) pair = [
+      tr(`Consider ${alternative}`, `考虑使用 ${alternative}`),
+      tr(`I want to consider ${alternative} in place of ${concept} in the next plan. `, `我想在下一版计划中考虑用 ${alternative} 替代 ${concept}。`),
+    ];
+    return pair ? { label: pair[0], draft: pair[1] } : null;
+  }
+
   function create(host) {
     const tr = host.tr;
     const esc = host.esc;
@@ -69,6 +121,7 @@
             '当前导出不符合本研究的人群条件。请按本研究条件请求提取，或选择其他已验证的数据源。',
           ),
           approve: tr('Use the original Demo data for planning', '使用同源原始数据规划'),
+          editLabel: tr('Prepare data for this cohort', '按本研究人群准备数据'),
         };
       }
       // A causal study's target trial (owner: screens-guided-pi-target-trial.js).
@@ -604,6 +657,14 @@
           { kind: 'research_artifact', run_id: reviewedPlanRunId, artifact: 'scientific_plan_review.json', label: tr('View review details', '查看审阅详情'), media_type: 'application/json' },
         ],
       };
+      const studyEdit = (workflow.next_actions || []).find(action => action.kind === 'edit_study');
+      const copy = studyEdit && stopActionCopy(studyEdit, tr);
+      if (copy) return {
+        code, grants: [], nonApprovable: true, editLabel: copy.label,
+        title: code === 'bound_export_cohort_invalid'
+          ? tr('The cohort settings or bound data need review', '请核对人群设置或绑定的数据')
+          : host.runFailureText?.(code) || copy.label,
+      };
       return null;
     }
 
@@ -949,12 +1010,15 @@
       const showPrimaryAction = retryPlanRevision ? !readiness?.connect : !confirmation.nonApprovable;
       const primaryLabel = retryPlanRevision ? confirmation.retryLabel : confirmation.approve;
       const primaryDisabled = confirmation.approveDisabled || (!retryPlanRevision && deferredScopeRejected);
-      return `${planConversation}<section class="gpi-confirmation${confirmation.code === 'plan_scientific_changes_required' ? ' is-science-review' : ''}${confirmation.compactApproval ? ' is-plan-approval' : ''}" aria-label="${tr('Workflow confirmation required', '需要确认科研流程')}">
+      const showEdit = !decisionActions && !confirmation.hideEdit
+        && (confirmation.code !== 'plan_scientific_changes_required' || decisionCount || icdSourceFinding);
+      const hasRecovery = showEdit || decisionActions || readiness?.connect || (showPrimaryAction && !primaryDisabled);
+      return `${planConversation}<section class="gpi-confirmation${confirmation.code === 'plan_scientific_changes_required' ? ' is-science-review' : ''}${confirmation.compactApproval ? ' is-plan-approval' : ''}"${hasRecovery ? ' data-gpi-review-recovery' : ''} aria-label="${tr('Workflow confirmation required', '需要确认科研流程')}">
         <span class="gpi-confirmation-icon" aria-hidden="true">${iconHtml('shield', 17)}</span>
         <div class="gpi-confirmation-body">${failureNotice}<strong>${esc(displayedTitle)}</strong>${confirmation.reason && !firstDecisionCopy ? `<p class="gpi-confirmation-reason">${esc(confirmation.reason)}</p>` : ''}${displayedNote ? `<small>${esc(displayedNote)}</small>` : ''}${desktopProfile}${reviewedPopulation}${deferredInputScope}${populationPreparation}${populationAcceptance}${sourceAdjustments}${flowSteps}${dataStatus}${pendingPreparation}${repeatedStaysDefault}${icdSourceNotice}${reviewStatus}${studyReadings}${trialBody}${groupNotes}${questionNotes}${reviewMaterials}${compactOtherAction}</div>
         <div class="gpi-confirmation-actions${decisionActions ? ' has-decision-options' : ''}">
           ${confirmation.dataStatus && !confirmation.compactApproval ? `<button class="btn sm" type="button" data-gpi-confirm-preview-data>${esc(tr('Preview analysis data', '先预览分析数据'))}</button>` : ''}
-          ${decisionActions || (confirmation.hideEdit || (confirmation.code === 'plan_scientific_changes_required' && !decisionCount && !icdSourceFinding) ? '' : `<button class="btn ${confirmation.code === 'plan_scientific_changes_required' ? 'primary ' : ''}sm" type="button" data-gpi-confirm-edit>${confirmation.editLabel ? esc(confirmation.editLabel) : icdSourceFinding && !decisionCount ? tr('Change cohort', '修改人群') : confirmation.code === 'plan_scientific_changes_required' ? tr('Answer this question', '回答这个问题') : confirmation.code === 'provider_ready_to_generate_plan' ? tr('Add research requirements', '我想先补充研究要求') : confirmation.code === 'failed_pipeline_execution_retry_available' ? tr('Generate a fresh research plan', '重新生成研究计划') : confirmation.compactApproval ? tr('Change plan', '修改计划') : tr('Request changes', '提出修改')}</button>`)}
+          ${decisionActions || (showEdit ? `<button class="btn ${confirmation.code === 'plan_scientific_changes_required' ? 'primary ' : ''}sm" type="button" data-gpi-confirm-edit>${confirmation.editLabel ? esc(confirmation.editLabel) : icdSourceFinding && !decisionCount ? tr('Change cohort', '修改人群') : confirmation.code === 'plan_scientific_changes_required' ? tr('Answer this question', '回答这个问题') : confirmation.code === 'provider_ready_to_generate_plan' ? tr('Add research requirements', '我想先补充研究要求') : confirmation.code === 'failed_pipeline_execution_retry_available' ? tr('Generate a fresh research plan', '重新生成研究计划') : confirmation.compactApproval ? tr('Change plan', '修改计划') : tr('Request changes', '提出修改')}</button>` : '')}
           ${decisionActions && icdSourceFinding ? `<button class="btn sm" type="button" data-gpi-confirm-edit>${esc(tr('Change cohort', '修改人群'))}</button>` : ''}
           ${decisionActions && !icdSourceFinding && firstDecisionCopy && firstDecisionCopy.allowEdit ? `<button class="btn sm" type="button" data-gpi-confirm-edit>${esc(String(firstDecisionItem && firstDecisionItem.code || '') === 'ADJUSTMENT_SET_NOT_USER_CONFIRMED' ? tr('Request plan changes', '提出计划修改') : tr('Choose another approach', '选择其他方案'))}</button>` : ''}
           ${confirmation.rejectMessage && !confirmation.compactApproval ? `<button class="btn sm" type="button" data-gpi-confirm-reject>${esc(confirmation.reject)}</button>` : ''}
@@ -1028,6 +1092,10 @@
         OUTCOME_DEFINITION_UNRESOLVED: tr(
           'Which available clinical endpoint and time horizon should this study use?',
           '这项研究应使用哪个当前数据可支持的临床结局及时间范围？',
+        ),
+        SURVIVAL_LANDMARK_OWNER_NOT_SEALED: tr(
+          'When should survival follow-up start, and what endpoint and follow-up period should the study use?',
+          '生存随访应从何时开始？本研究应使用哪个结局和多长的随访时间？',
         ),
         POST_BASELINE_EXPOSURE_TIMING_NOT_CLOSED: tr(
           'Should the revised study use a prespecified landmark/time-varying design, or remain descriptive?',
@@ -1391,16 +1459,20 @@
       const workflow = host.workflow() || {};
       const findingCodes = (workflow.plan_review_summary || {}).finding_codes;
       if (workflow.next_action_code === 'plan_icd_source_unverified'
-          || (Array.isArray(findingCodes) && findingCodes.includes('HOST_ICD_SOURCE_UNVERIFIED'))) return tr(
-        'I want to change the cohort and, if needed, the research question as follows: ',
-        '我想按以下内容修改研究人群，并在需要时修改研究问题：',
-      );
-      if (['study_family_database_out_of_scope', 'study_family_reading_disagreement'].includes(workflow.next_action_code)) return tr(
-        'I want to change the study design or data source: ', '我想修改研究设计或数据来源：',
+          || (Array.isArray(findingCodes) && findingCodes.includes('HOST_ICD_SOURCE_UNVERIFIED'))) return stopActionCopy({ kind: 'edit_study', params: { field: 'cohort' } }, tr).draft;
+      if (['study_family_database_out_of_scope', 'study_family_reading_disagreement'].includes(workflow.next_action_code)) {
+        return stopActionCopy({ kind: 'rephrase_in_scope' }, tr).draft;
+      }
+      if (workflow.next_action_code === 'bound_export_cohort_mismatch') return tr(
+        'I want to prepare data for this study’s current cohort. Please show the extraction requirements.',
+        '我想按本研究现有的人群条件准备数据，请列出提取要求。',
       );
       const trial = window.EasyICU.guidedPi.optional('targetTrial');
       const trialDraft = trial ? trial.changeDraft(workflow, tr) : '';
       if (trialDraft) return trialDraft;
+      const studyEdit = (workflow.next_actions || []).find(action => action.kind === 'edit_study');
+      const copy = studyEdit && stopActionCopy(studyEdit, tr);
+      if (copy) return copy.draft;
       const review = workflow.plan_review_summary || {};
       const questions = Array.isArray(review.authorization_questions)
         ? review.authorization_questions.filter(item => item && (item.question || item.code))
@@ -1419,5 +1491,5 @@
     };
   }
 
-  window.EasyICU.guidedPi.declare('confirmation', { create });
+  window.EasyICU.guidedPi.declare('confirmation', { create, stopActionCopy });
 })();

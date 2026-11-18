@@ -78,8 +78,14 @@
       return true;
     }
 
+    function openConnection() {
+      state.showSetup = true;
+      state.error = '';
+      render();
+    }
+
     function revealPendingReview() {
-      const card = state.host && state.host.querySelector('.gpi-confirmation');
+      const card = state.host && state.host.querySelector('.gpi-confirmation[data-gpi-review-recovery]');
       if (!card) return;
       card.scrollIntoView({ block: 'center', behavior: 'smooth' });
       card.setAttribute('tabindex', '-1');
@@ -171,16 +177,27 @@
         if (event.target.closest('[data-gpi-stop-recovery]')) { revealPendingReview(); return; }
         const stopAction = event.target.closest('[data-gpi-stop-action]');
         if (stopAction) {
-          if (!state.session || state.busy || state.childJobId || state.session.stale?.stale) return;
+          if (!state.session || state.busy || state.childJobId || state.projectLoading || state.session.stale?.stale) return;
           const owner = window.EasyICU.guidedPi.optional('runStop');
           const workflow = state.workflow || {};
-          const run = (workflow.runs || []).find(row => row.run_id === stopAction.dataset.gpiStopRun);
-          if (!owner || !owner.currentRun(run, workflow, state.latestRun)) return;
-          const action = owner.offeredActions(run, workflow).find(row => row.action_id === stopAction.dataset.gpiStopAction);
+          if (!owner || String(workflow.next_action_code || '') !== stopAction.dataset.gpiStopWorkflow) return;
+          const { gpiStopRun, gpiStopJob, gpiStopAction } = stopAction.dataset;
+          const run = (workflow.runs || []).find(row => row.run_id === gpiStopRun)
+            || (state.latestRun?.run_id === gpiStopRun ? state.latestRun : null);
+          const job = gpiStopJob && owner.latestJobStop(state.session, workflow);
+          const actions = job && job.job_id === gpiStopJob ? job.next_actions
+            : owner.currentRun(run, workflow, state.latestRun) ? owner.offeredActions(run, workflow) : [];
+          const action = actions?.find(row => row.action_id === gpiStopAction);
           const route = owner.actionRoute(action, workflow);
           if (route === 'retry' && typeof retryFailedExecution === 'function') retryFailedExecution();
           if (route === 'confirm' && typeof confirmWorkflowAction === 'function') confirmWorkflowAction();
           if (route === 'edit' && typeof editWorkflow === 'function') editWorkflow();
+          if (route === 'connect') openConnection();
+          if (route === 'data' && typeof authorizeDataSource === 'function') authorizeDataSource('begin_local_selection');
+          if (route === 'draft') {
+            const copy = window.EasyICU.guidedPi.optional('confirmation')?.stopActionCopy(action, tr);
+            if (copy) prepareEntryCompose({ text: copy.draft, intent: '' });
+          }
           return;
         }
         const layoutToggle = event.target.closest('[data-gpi-layout-toggle]');
@@ -639,7 +656,7 @@
         if (childStop) { stopChildJob(childStop.dataset.gpiCancelChildJob); return; }
         if (event.target.closest('[data-gpi-rebind]')) { rebind(); return; }
         if (event.target.closest('[data-gpi-presentation-pin]')) { togglePresentationPin(); return; }
-        if (event.target.closest('[data-gpi-config]')) { state.showSetup = true; state.error = ''; render(); return; }
+        if (event.target.closest('[data-gpi-config]')) { openConnection(); return; }
         if (event.target.closest('[data-gpi-new]')) {
           clearSessionSelection();
           render();
