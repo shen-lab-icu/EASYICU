@@ -50,7 +50,10 @@ COHORT_WINDOW = (0.0, float(TIME_ZERO))
 ONSET_WINDOWS = {concept: (0.0, float(TIME_ZERO + GRACE)) for concept in TREATMENTS}
 
 
-def target_trial_export(root: Path, *, n: int = 600, seed: int = 20261009) -> Path:
+def target_trial_export(
+    root: Path, *, n: int = 600, seed: int = 20261009,
+    baseline_condition: str | None = None,
+) -> Path:
     """Write the synthetic stays as a typed native export at ``root``."""
 
     cohort = synthetic_target_trial_cohort(n=n, seed=seed)
@@ -110,12 +113,18 @@ def target_trial_export(root: Path, *, n: int = 600, seed: int = 20261009) -> Pa
     medications = pd.DataFrame(rows)
     for concept in TREATMENTS:
         medications[concept] = pd.array(medications[concept], dtype="boolean")
+    longitudinal_concepts = [*TREATMENTS, "lact"]
+    if baseline_condition:
+        medications[baseline_condition] = (
+            medications["charttime"].eq(0) & medications["stay_id"].mod(3).ne(0)
+        ).astype("boolean")
+        longitudinal_concepts.append(baseline_condition)
     return typed_native_export(
         root,
         outcome=outcome,
         outcome_concepts=["death", "los_icu", "followup_days_28d", "mort_28d"],
         longitudinal=medications,
-        longitudinal_concepts=[*TREATMENTS, "lact"],
+        longitudinal_concepts=longitudinal_concepts,
         statics=pd.DataFrame({"stay_id": stays, "age": cohort["age"]}),
     )
 

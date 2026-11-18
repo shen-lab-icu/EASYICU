@@ -40,12 +40,18 @@ def requested_candidate_run(
     This is not plan approval. The normal one-turn provider grant and replan
     owner remain responsible for disclosure, freshness and job admission.
     """
-    if message_origin != "typed" or "provider_run" not in infer_explicit_turn_actions(message):
+    if message_origin not in {"typed", "host_prompt"} or "provider_run" not in infer_explicit_turn_actions(message):
         return ""
     if not _REVISION_REQUEST.search(message) or not _has_amendment(message):
         return ""
     workflow = projection.workflow
     review = workflow.plan_review_summary or {}
+    if message_origin == "host_prompt":
+        arrangement = review.get("exposure_arrangement") or {}
+        if not any(
+            message in labels.values() for labels in (arrangement.get("options") or {}).values()
+        ):
+            return ""
     run_id = str(review.get("run_id") or "")
     latest = projection.latest_run or {}
     if not run_id or latest.get("run_id") != run_id or (projection.active_job or {}).get("present"):

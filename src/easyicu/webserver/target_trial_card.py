@@ -44,6 +44,7 @@ from easyicu.research_agent.planning.target_trial_configuration import (
     load_target_trial_design,
 )
 from easyicu.webserver import study_contexts
+from easyicu.webserver.target_trial_proposal import target_trial_proposal
 from easyicu.webserver.target_trial_records import (
     TargetTrialRecordError,
     load_target_trial_record,
@@ -54,7 +55,9 @@ from easyicu.webserver.target_trial_setup import (
     TARGET_TRIAL_COMPILE_STOPS,
     TARGET_TRIAL_COMPILE_SUBMITTED,
     TARGET_TRIAL_SETUP_REFUSALS,
+    TargetTrialSetupError,
     latest_target_trial_compile,
+    submit_target_trial_compile,
     target_trial_database_gap,
     target_trial_family_declared,
 )
@@ -172,7 +175,17 @@ def target_trial_card(
     # the trial first).
     gap = target_trial_database_gap(study)
     if section is None and latest is None and gap is None:
-        return None
+        proposal = target_trial_proposal(study)
+        if proposal is None:
+            return None
+        return {
+            "schema_version": TARGET_TRIAL_CARD_SCHEMA_VERSION,
+            "state": "proposal" if proposal.statement else "clarification",
+            "proposal": proposal.public(int(study.get("revision") or 0)),
+            "approval": None,
+            "approvable": False,
+            "causal_trial_reading": study.get("causal_trial_reading") or None,
+        }
     kept = _kept(study_id, section) if section is not None else None
     stale = _stale(section, latest)
     record = kept.record if kept is not None else {}
@@ -206,6 +219,7 @@ def target_trial_card(
         "limitations": list(record.get("limitations") or ()),
         "evidence_ceiling": record.get("evidence_ceiling"),
         "approvable": approvable,
+        "confirm_all_on_approval": bool(state == "approvable" and latest and latest.get("host_proposal") is True),
         "blocking": list(record.get("approval_blockers") or ()),
         "approval": (
             section.approval.model_dump(mode="json")
@@ -272,6 +286,31 @@ def target_trial_next_action(
     if _section(study) is None and latest is None:
         return "target_trial_statement_needed"
     return "target_trial_review"
+
+
+def compile_target_trial_proposal(
+    study_id: str, *, expected_revision: int, proposal_sha256: str
+) -> dict[str, Any]:
+    """Compile the exact host proposal selected on the current study revision."""
+    study = study_contexts.get_context(study_id)
+    if study is None:
+        raise TargetTrialSetupError(
+            "study_context_not_found", "The study is not known.", status_code=404
+        )
+    if study.get("revision") != expected_revision or target_trial_next_action(
+        study, latest_target_trial_compile(study_id)
+    ) != "target_trial_statement_needed":
+        raise TargetTrialSetupError(
+            "study_context_revision_conflict", "The proposal changed. Review the current card."
+        )
+    proposal = target_trial_proposal(study)
+    statement = proposal.statement if proposal else None
+    if statement is None or statement.request()["request_sha256"] != proposal_sha256:
+        raise TargetTrialSetupError(
+            "target_trial_statement_invalid", "Review the current target trial proposal."
+        )
+    job = submit_target_trial_compile(study, statement, host_proposal=True)
+    return {"ok": True, "job_id": job.id}
 
 
 def approve_target_trial(

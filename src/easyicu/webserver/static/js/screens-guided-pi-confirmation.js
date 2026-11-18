@@ -115,11 +115,21 @@
     // repeated-stay route (plan_decisions.repeated_stays_system_default_route).
     const SYSTEM_DEFAULT_CARDS = new Set(['operator_plan_approval_required', 'plan_execution_upgrade_required']);
 
+    function deferredScopeRejected(review) {
+      return Boolean(review?.deferred_input_scope && !validDeferredInputScope(review.deferred_input_scope));
+    }
+
     function workflowConfirmation() {
       const confirmation = currentWorkflowConfirmation();
-      const readiness = confirmation && host.runReadiness && host.runReadiness(confirmation.code);
-      return readiness ? { ...confirmation, readiness, approveDisabled: true,
-        nonApprovable: readiness.connect || confirmation.nonApprovable } : confirmation;
+      if (!confirmation) return null;
+      const rawReadiness = host.runReadiness?.(confirmation.code);
+      const readiness = confirmation.primaryEdit && !rawReadiness?.connect ? null : rawReadiness;
+      if (readiness) return { ...confirmation, readiness, approveDisabled: true,
+        nonApprovable: readiness.connect || confirmation.nonApprovable };
+      if (!confirmation.retryPlanRevision && deferredScopeRejected(host.workflow()?.plan_review_summary)) {
+        return { ...confirmation, approveDisabled: true };
+      }
+      return confirmation;
     }
 
     function studyStopConfirmation(workflow, code) {
@@ -276,17 +286,17 @@
       if (code === 'study_primary_outcome_confirmation_required') {
         const label = String(workflow.unconfirmed_outcome || '').trim();
         return {
-          code, grants: label ? ['configure'] : [], nonApprovable: !label,
+          code, grants: label ? ['configure'] : [], nonApprovable: !label, clarification: !label,
           message: label ? tr(`Primary outcome: ${label}`, `主要结局：${label}`) : '',
           title: label
             ? tr(`Use “${label}” as the primary outcome?`, `将“${label}”作为主要结局？`)
             : tr('Confirm the primary outcome first', '先确认主要结局'),
-          note: tr(
+          note: !label ? tr('Which outcome should be the primary outcome of this study?', '这项研究应把哪个结局作为主要结局？') : tr(
             'Your question mentions this outcome. Once confirmed, it is saved as the study outcome and the candidate plan can be generated; nothing has been analysed.',
             '你的问题提到了这个结局。确认后它会保存为本研究的主要结局，随后即可生成候选计划；尚未分析任何数据。',
           ),
           approve: tr('Confirm outcome', '确认结局'),
-          editLabel: tr('Use another outcome', '改用其他结局'),
+          editLabel: label ? tr('Use another outcome', '改用其他结局') : tr('Answer this question', '回答这个问题'),
         };
       }
       if (code === 'plan_icd_source_unverified') return {
@@ -544,9 +554,11 @@
         { kind: 'research_artifact', run_id: reviewedPlanRunId, artifact: 'agent_plan.json', label: tr('Open the complete plan', '打开完整计划'), media_type: 'application/json' },
         { kind: 'research_artifact', run_id: reviewedPlanRunId, artifact: 'scientific_plan_review.json', label: tr('View review details', '查看审阅详情'), media_type: 'application/json' },
       ] : [];
+      const editPlanOffered = Array.isArray(workflow.next_actions) && workflow.next_actions.some(action =>
+        action?.kind === 'edit_plan' && action.label_key === 'stop_next_actions.edit_plan');
       const populationAcceptance = (workflow.plan_review_summary || {}).population_acceptance;
       if (code === 'population_criterion_decision_unconfirmed') return {
-        code, grants: [], nonApprovable: true,
+        code, grants: [], nonApprovable: true, primaryEdit: editPlanOffered,
         title: tr('Decide how to apply the population criteria', '请明确人群条件的判定方式'),
         note: tr(
           'The plan needs an explicit choice for missing or unmeasurable values, and the unit for any measurement threshold that needs one. Open the complete plan to review the criteria, then request a revised plan; analysis has not started.',
@@ -619,6 +631,22 @@
         { kind: 'research_artifact', run_id: reviewedPlanRunId, artifact: 'question_requirements_review.json', label: tr('View the question requirements', '查看题面要求'), media_type: 'application/json' },
         ...planStopResources,
       ] : [];
+      const questionOwner = window.EasyICU.guidedPi.optional('questionRequirements');
+      const arrangement = code === 'question_requirement_not_covered'
+        ? questionOwner?.exposureArrangement(workflow, tr) : null;
+      if (arrangement) return {
+        code, grants: ['provider_run', 'literature'], exposureArrangement: arrangement, hideEdit: true,
+        title: tr('Confirm the exposure arrangement', '确认暴露安排'),
+        note: arrangement.note,
+        approve: tr('Continue', '继续'),
+        reviewResources: questionStopResources,
+      };
+      if (code === 'question_requirement_not_covered' && editPlanOffered) return {
+        code, grants: [], nonApprovable: true, primaryEdit: true,
+        title: tr('This plan does not answer an analysis the question asks for', '题面要求的一项分析，这份计划没有回答'),
+        reviewMaterialsTitle: tr('View the plan and review evidence', '查看计划与审阅依据'),
+        reviewResources: questionStopResources,
+      };
       if (code === 'question_requirement_not_covered') return {
         code, grants: ['provider_run', 'literature'],
         message: tr(
@@ -733,8 +761,7 @@
         .map(resource => resourceButton(resource, resource.label));
       const reviewResources = reviewResourceButtons.join('');
       const review = host.workflow() && host.workflow().plan_review_summary;
-      const deferredScopeRejected = review && review.deferred_input_scope
-        && !validDeferredInputScope(review.deferred_input_scope);
+      const scopeRejected = deferredScopeRejected(review);
       const planPreview = host.workflow() && host.workflow().plan_conversation_preview;
       const decisionItems = confirmation.code === 'plan_scientific_changes_required'
         && review && Array.isArray(review.authorization_questions)
@@ -1024,7 +1051,7 @@
         ? planConversationHtml(planPreview)
         : '';
       const displayedTitle = review && review.deferred_input_scope
-        ? deferredScopeRejected ? tr('The plan’s data-read scope is not verified', '计划的数据读取范围尚未核验')
+        ? scopeRejected ? tr('The plan’s data-read scope is not verified', '计划的数据读取范围尚未核验')
           : tr('Review the complete plan and data-read scope', '审阅完整计划与数据读取范围')
         : firstDecisionCopy ? firstDecisionCopy.cardTitle : confirmation.title;
       const displayedNote = review && review.deferred_input_scope ? ''
@@ -1051,23 +1078,26 @@
         const copy = stopActionCopy(action, tr);
         return copy ? `<button class="btn sm" type="button" data-gpi-stop-review data-gpi-stop-action="${esc(action.action_id)}" data-gpi-stop-workflow="${esc(confirmation.code)}">${esc(copy.label)}</button>` : '';
       }).join('');
-      const showPrimaryAction = retryPlanRevision ? !readiness?.connect : !confirmation.nonApprovable;
+      const showPrimaryAction = !readiness?.connect && (retryPlanRevision || !confirmation.nonApprovable);
+      const editPrimary = !readiness?.connect && !showPrimaryAction
+        && (confirmation.primaryEdit || confirmation.clarification || confirmation.code === 'plan_scientific_changes_required');
       const primaryLabel = retryPlanRevision ? confirmation.retryLabel : confirmation.approve;
-      const primaryDisabled = confirmation.approveDisabled || (!retryPlanRevision && deferredScopeRejected);
+      const primaryDisabled = confirmation.approveDisabled ? ' disabled' : '';
       const showEdit = !decisionActions && !confirmation.hideEdit
         && (confirmation.code !== 'plan_scientific_changes_required' || decisionCount || icdSourceFinding);
       const hasRecovery = showEdit || stopEdits || decisionActions || readiness?.connect || (showPrimaryAction && !primaryDisabled);
-      return `${planConversation}<section class="gpi-confirmation${confirmation.code === 'plan_scientific_changes_required' ? ' is-science-review' : ''}${confirmation.compactApproval ? ' is-plan-approval' : ''}"${hasRecovery ? ' data-gpi-review-recovery' : ''} aria-label="${tr('Workflow confirmation required', '需要确认科研流程')}">
+      return `${planConversation}<section class="gpi-confirmation${confirmation.code === 'plan_scientific_changes_required' ? ' is-science-review' : ''}${confirmation.compactApproval ? ' is-plan-approval' : ''}"${hasRecovery ? ' data-gpi-review-recovery' : ''}${confirmation.clarification ? ' data-gpi-clarification' : ''} aria-label="${tr('Workflow confirmation required', '需要确认科研流程')}">
         <span class="gpi-confirmation-icon" aria-hidden="true">${iconHtml('shield', 17)}</span>
         <div class="gpi-confirmation-body">${failureNotice}<strong>${esc(displayedTitle)}</strong>${confirmation.reason && !firstDecisionCopy ? `<p class="gpi-confirmation-reason">${esc(confirmation.reason)}</p>` : ''}${displayedNote ? `<small>${esc(displayedNote)}</small>` : ''}${desktopProfile}${reviewedPopulation}${deferredInputScope}${populationPreparation}${populationAcceptance}${sourceAdjustments}${flowSteps}${dataStatus}${pendingPreparation}${repeatedStaysDefault}${icdSourceNotice}${reviewStatus}${studyReadings}${trialBody}${groupNotes}${questionNotes}${reviewMaterials}${compactOtherAction}</div>
         <div class="gpi-confirmation-actions${decisionActions ? ' has-decision-options' : ''}">
           ${confirmation.dataStatus && !confirmation.compactApproval ? `<button class="btn sm" type="button" data-gpi-confirm-preview-data>${esc(tr('Preview analysis data', '先预览分析数据'))}</button>` : ''}
-          ${decisionActions || stopEdits || (showEdit ? `<button class="btn ${confirmation.code === 'plan_scientific_changes_required' ? 'primary ' : ''}sm" type="button" data-gpi-confirm-edit>${confirmation.editLabel ? esc(confirmation.editLabel) : icdSourceFinding && !decisionCount ? tr('Change cohort', '修改人群') : confirmation.code === 'plan_scientific_changes_required' ? tr('Answer this question', '回答这个问题') : confirmation.code === 'provider_ready_to_generate_plan' ? tr('Add research requirements', '我想先补充研究要求') : confirmation.code === 'failed_pipeline_execution_retry_available' ? tr('Generate a fresh research plan', '重新生成研究计划') : confirmation.compactApproval ? tr('Change plan', '修改计划') : tr('Request changes', '提出修改')}</button>` : '')}
+          ${decisionActions || stopEdits || (showEdit ? `<button class="btn ${editPrimary ? 'primary ' : ''}sm" type="button" data-gpi-confirm-edit>${confirmation.editLabel ? esc(confirmation.editLabel) : icdSourceFinding && !decisionCount ? tr('Change cohort', '修改人群') : confirmation.code === 'plan_scientific_changes_required' ? tr('Answer this question', '回答这个问题') : confirmation.code === 'provider_ready_to_generate_plan' ? tr('Add research requirements', '我想先补充研究要求') : confirmation.code === 'failed_pipeline_execution_retry_available' ? tr('Generate a fresh research plan', '重新生成研究计划') : confirmation.compactApproval ? tr('Change plan', '修改计划') : tr('Request changes', '提出修改')}</button>` : '')}
           ${decisionActions && icdSourceFinding ? `<button class="btn sm" type="button" data-gpi-confirm-edit>${esc(tr('Change cohort', '修改人群'))}</button>` : ''}
           ${decisionActions && !icdSourceFinding && firstDecisionCopy && firstDecisionCopy.allowEdit ? `<button class="btn sm" type="button" data-gpi-confirm-edit>${esc(String(firstDecisionItem && firstDecisionItem.code || '') === 'ADJUSTMENT_SET_NOT_USER_CONFIRMED' ? tr('Request plan changes', '提出计划修改') : tr('Choose another approach', '选择其他方案'))}</button>` : ''}
+          ${confirmation.exposureArrangement ? confirmation.exposureArrangement.alternatives.map(option => `<button class="btn sm" type="button" data-gpi-exposure-arrangement="${esc(option.id)}"${primaryDisabled}>${esc(option.label)}</button>`).join('') : ''}
           ${confirmation.rejectMessage && !confirmation.compactApproval ? `<button class="btn sm" type="button" data-gpi-confirm-reject>${esc(confirmation.reject)}</button>` : ''}
-          ${readiness ? `<small role="status" data-gpi-run-readiness>${esc(readiness.reason)}</small>${readiness.connect ? `<button class="btn sm" type="button" data-gpi-config>${esc(tr('Check connection', '检查连接'))}</button>` : ''}` : ''}
-          ${showPrimaryAction ? `<button class="btn primary sm" type="button" data-gpi-confirm-action${primaryDisabled ? ' disabled' : ''}>${esc(primaryLabel)}</button>` : ''}
+          ${readiness ? `<small role="status" data-gpi-run-readiness>${esc(readiness.reason)}</small>${readiness.connect ? `<button class="btn primary sm" type="button" data-gpi-config>${esc(tr('Check connection', '检查连接'))}</button>` : ''}` : ''}
+          ${showPrimaryAction ? `<button class="btn primary sm" type="button" data-gpi-confirm-action${primaryDisabled}>${esc(primaryLabel)}</button>` : ''}
         </div>
       </section>`;
     }
@@ -1501,6 +1531,9 @@
 
     function planChangeDraft() {
       const workflow = host.workflow() || {};
+      if (workflow.next_action_code === 'study_primary_outcome_confirmation_required') return tr(
+        'Primary outcome: ', '主要结局：',
+      );
       const findingCodes = (workflow.plan_review_summary || {}).finding_codes;
       if (workflow.next_action_code === 'plan_icd_source_unverified'
           || (Array.isArray(findingCodes) && findingCodes.includes('HOST_ICD_SOURCE_UNVERIFIED'))) return stopActionCopy({ kind: 'edit_study', params: { field: 'cohort' } }, tr).draft;

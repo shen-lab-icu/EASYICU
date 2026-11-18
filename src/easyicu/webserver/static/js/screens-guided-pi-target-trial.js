@@ -70,9 +70,56 @@
     return Boolean(card) && card.state === 'approvable' && card.approvable === true && card.stale !== true;
   }
 
+  function confirmationComplete(card) {
+    return card?.confirm_all_on_approval === true
+      ? Boolean(digestOf(card)) && lineCount(card) > 0
+      : allTicked(card);
+  }
+
   function stopReason(card) {
     const latest = (card && card.latest_compile) || {};
     return String((card && card.reason_code) || latest.reason_code || '');
+  }
+
+  const PROPOSAL_FIELDS = {
+    treatment: ['Treatment', '治疗'],
+    treatment_capture: ['Treatment records', '治疗记录'],
+    strategies: ['Strategies', '治疗策略'],
+    strategy_window: ['Strategy rules', '策略规则'],
+    time_zero: ['Time zero', '时间零点'],
+    grace_period: ['Grace period', '宽限期'],
+    outcome: ['Outcome', '结局'],
+    outcome_origin: ['Outcome time origin', '结局的计时起点'],
+    adult_minimum_age: ['Minimum age in years', '最低年龄（岁）'],
+    eligibility: ['Eligibility and clinical indication', '纳入条件和临床适应证'],
+    eligibility_at_zero: ['Eligibility at time zero', '时间零点的纳入条件'],
+    adjustment: ['Baseline adjustment set', '基线调整变量'],
+    protocol: ['Protocol details', '试验方案细节'],
+  };
+  const CLARIFICATION_PROMPTS = {
+    treatment: ['Which treatment should be studied?', '你要研究哪种治疗？'],
+    strategies: ['Which treatment-start strategies should be compared?', '你想比较哪些治疗启动策略？'],
+    time_zero: ['At what hour after ICU admission should follow-up start?', '应在入住 ICU 后第几小时开始随访？'],
+    grace_period: ['How many hours should the initiation window last?', '治疗启动的宽限期为几小时？'],
+    outcome: ['At what fixed horizon should mortality be measured?', '应在哪个固定时间点衡量死亡结局？'],
+    eligibility: ['Which clinical indication and eligibility criteria define this population?', '哪些临床适应证和纳入条件定义本研究人群？'],
+    adjustment: ['Which factors recorded by time zero should the analysis adjust for?', '分析应调整哪些在时间零点前记录的因素？'],
+    protocol: ['Which protocol details should EasyICU use?', 'EasyICU 应采用哪些试验方案细节？'],
+  };
+
+  function proposalConfirmation(base, card, tr) {
+    const clarification = card.state === 'clarification';
+    return {
+      ...base, compileTrialProposal: !clarification, clarification, nonApprovable: clarification,
+      title: clarification
+        ? tr('A few target trial details still need your input', '目标试验仍有待明确的细节')
+        : tr('Proposed target trial', '目标试验草案'),
+      note: clarification
+        ? tr('Review the draft below and answer the remaining questions in the conversation.', '核对以下草案，并在对话里回答尚待明确的问题。')
+        : tr('Continue to check this specification against the selected data. You can review and approve the compiled trial before planning.', '继续后将用所选数据核验此方案。生成计划前，你可以审阅并批准编译完成的试验。'),
+      approve: tr('Continue', '继续'),
+      editLabel: clarification ? tr('Answer this question', '回答这个问题') : tr('Revise in the conversation', '在对话里修改'),
+    };
   }
 
   function confirmation(workflow, tr) {
@@ -80,8 +127,9 @@
     if (!CODES.has(code)) return null;
     const card = cardOf(workflow);
     const base = { code, grants: [], trialCard: true, editLabel: tr('Revise in the conversation', '在对话里修改') };
+    if (code === 'target_trial_statement_needed' && card?.proposal) return proposalConfirmation(base, card, tr);
     if (code === 'target_trial_statement_needed') return {
-      ...base, nonApprovable: true,
+      ...base, nonApprovable: true, clarification: true,
       title: tr('State the target trial this study emulates', '说明本研究模拟的目标试验'),
       note: copyLine(code, tr),
       editLabel: tr('State it in the conversation', '在对话里说明'),
@@ -93,9 +141,12 @@
       approve: tr('Generate the plan on this study’s data', '按本研究数据生成计划'),
     };
     if (approvable(card)) return {
-      ...base, approveTrial: true, approveDisabled: !allTicked(card),
+      ...base, approveTrial: true, approveDisabled: !confirmationComplete(card),
       title: tr('Check and approve the target trial', '核对并批准目标试验'),
-      note: tr(
+      note: card.confirm_all_on_approval === true ? tr(
+        'Review all the lines below. Approving confirms them and records this version of the trial.',
+        '请核对下列各行。批准即确认全部内容并记录这一版试验。',
+      ) : tr(
         'Tick each line to confirm it, then approve. Approving records this version of the trial; no analysis starts.',
         '请逐行勾选确认，再批准。批准只记录这一版试验，不会开始分析。',
       ),
@@ -164,7 +215,7 @@
     const digest = digestOf(card);
     const chosen = tickedLines(card);
     const heading = tr(`Lines to confirm (${lines.length})`, `需要确认的 ${lines.length} 行`);
-    const items = lines.map((row, index) => editable && digest
+    const items = lines.map((row, index) => editable && digest && card.confirm_all_on_approval !== true
       ? `<li><label><input type="checkbox" data-gpi-trial-line="${index}" data-gpi-trial-digest="${esc(digest)}"${chosen.has(index) ? ' checked' : ''}><span lang="en">${esc(String(row.text || ''))}</span></label></li>`
       : `<li><span lang="en">${esc(String(row.text || ''))}</span></li>`).join('');
     return `<details class="gpi-trial-section"${editable ? ' open' : ''}><summary>${esc(heading)}</summary><ul class="gpi-trial-confirmations" data-gpi-trial-lines="${lines.length}">${items}</ul></details>`;
@@ -211,11 +262,35 @@
     return `<details class="gpi-question-requirements gpi-trial-reading"><summary>${esc(tr('Target-trial reading details', '目标试验判断依据'))}</summary><ul>${items.map(row => `<li>${esc(tr(...labels[row.element]))}：${esc(String(row.evidence).slice(0, 300))}</li>`).join('')}</ul></details>`;
   }
 
+  function proposalHtml(proposal, { tr, esc }) {
+    const elements = rows(proposal.elements).filter(row => Object.hasOwn(PROPOSAL_FIELDS, row.key));
+    const details = elements.map(row => {
+      const name = tr(...PROPOSAL_FIELDS[row.key]);
+      const basis = row.source === 'question' ? tr('From your question', '来自你的问题') : tr('EasyICU default', 'EasyICU 默认');
+      let value = row.value;
+      if (row.key === 'outcome_origin' && value === 'icu_admission') value = tr('ICU admission', '入住 ICU');
+      if (row.key === 'eligibility_at_zero') value = tr(
+        'The indication must be recorded before time zero. At time zero, the patient is alive and in ICU with no prior recorded start of the treatment.',
+        '适应证须在时间零点前有记录。患者在时间零点仍存活且在 ICU，此前无该治疗的启动记录。',
+      );
+      if (row.key === 'strategy_window') value = tr(
+        'The grace period starts at time zero. The deferral strategy leaves treatment unrestricted after the grace period.',
+        '宽限期从时间零点开始。推迟治疗组在宽限期结束后可接受治疗。',
+      );
+      return `<dt>${esc(name)}</dt><dd>${esc(value)} <small>${esc(basis)}</small></dd>`;
+    }).join('');
+    const prompts = (Array.isArray(proposal.missing) ? proposal.missing : [])
+      .filter(key => Object.hasOwn(CLARIFICATION_PROMPTS, key))
+      .map(key => `<li>${esc(tr(...CLARIFICATION_PROMPTS[key]))}</li>`).join('');
+    return `<div class="gpi-trial">${details ? `<dl class="gpi-trial-protocol">${details}</dl>` : ''}${prompts ? `<ul>${prompts}</ul>` : ''}</div>`;
+  }
+
   // The card's body under the confirmation's title and note.
   function bodyHtml(workflow, helpers) {
     const card = cardOf(workflow);
     const reading = readingHtml(workflow, helpers);
     if (!card) return reading;
+    if (card.proposal) return proposalHtml(card.proposal, helpers);
     const { tr, esc } = helpers;
     const editable = approvable(card);
     const previous = card.stale === true && (card.protocol || []).length
@@ -224,13 +299,26 @@
     return `<div class="gpi-trial">${reading}${previous}${reasonHtml(card, helpers)}${blockingHtml(card, helpers)}${approvalHtml(card, helpers)}${protocolHtml(card, helpers, editable)}${confirmationsHtml(card, helpers, editable)}${limitationsHtml(card, helpers)}</div>`;
   }
 
+  function proposalRequest(workflow, session, projectId) {
+    const card = cardOf(workflow);
+    const binding = session?.binding || {};
+    const proposal = card?.proposal;
+    if (workflow?.next_action_code !== 'target_trial_statement_needed'
+      || card?.state !== 'proposal' || !DIGEST.test(proposal?.digest || '')
+      || !binding.study_context_id || Number(binding.study_revision) !== proposal.expected_revision) return null;
+    return {
+      project_id: projectId, study_context_id: binding.study_context_id,
+      expected_revision: proposal.expected_revision, proposal_sha256: proposal.digest,
+    };
+  }
+
   // The approval the card's click sends: the record it shows, every line ticked.
   function approvalRequest(workflow, session, projectId) {
     const card = cardOf(workflow);
     const binding = (session && session.binding) || {};
     const studyId = String(binding.study_context_id || '').trim();
     const revision = Number(binding.study_revision || 0);
-    if (!approvable(card) || !allTicked(card) || !studyId || !revision) return null;
+    if (!approvable(card) || !confirmationComplete(card) || !studyId || !revision) return null;
     return {
       project_id: String(projectId || ''),
       study_context_id: studyId,
@@ -283,6 +371,7 @@
     confirmation,
     bodyHtml,
     approvalRequest,
+    proposalRequest,
     refusalText,
     changeDraft,
     noteTick,

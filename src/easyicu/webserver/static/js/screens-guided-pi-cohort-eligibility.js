@@ -93,6 +93,10 @@
       const focused = orderedIds.map(id => byId.get(id)).filter(Boolean);
       const visibleOptions = focused.length === 2 ? focused : options.slice(0, 3);
       const currentDigest = String(value.primary_cohort_contract_sha256 || '');
+      const recommendedOption = visibleOptions.find(option => groupingUnavailable
+        ? firstAdmissionIds.has(String(option.id || ''))
+        : Boolean(currentDigest) && option.primary_cohort_contract_sha256 === currentDigest)
+        || visibleOptions[0];
       const design = analysisDesign();
       // Repeated stays are handled by a patient-level variance: clustered
       // robust, or, for a causal study, a bootstrap that resamples patients.
@@ -131,9 +135,7 @@
           const detail = option.detail || {};
           const localizedLabel = window.EU_LANG === 'zh' ? label.zh : label.en;
           const localizedDetail = window.EU_LANG === 'zh' ? detail.zh : detail.en;
-          const recommended = groupingUnavailable
-            ? firstAdmissionIds.has(String(option.id || ''))
-            : String(option.primary_cohort_contract_sha256 || '') === currentDigest;
+          const recommended = option === recommendedOption;
           return `<button class="btn sm${recommended ? ' primary is-recommended' : ''}" type="button"
             data-gpi-cohort-option="${esc(option.id)}"
             data-gpi-cohort-revision="${esc(option.expected_revision)}"

@@ -3745,7 +3745,8 @@ def test_every_assistant_turn_projects_its_next_step_block() -> None:
     projection = projection[: projection.index("const messageActions")]
     assert "const interactive = Boolean(options && options.interactive);" in projection
     assert "nextOwner.renderPast(nextStep, window.EU_LANG)" in projection
-    assert "nextOwner.bodyText(nextStep, { live: interactive })" in projection
+    assert "nextOwner.bodyText(nextStep, { live: interactive && !options?.hostContinuation })" in projection
+    assert "!options?.hostContinuation && typeof nextOwner.render === 'function'" in projection
 
 
 def test_type_scale_lifts_the_small_end_of_the_copilot_ui() -> None:
@@ -6626,7 +6627,7 @@ def test_result_summary_uses_cohort_ledger_when_audit_summary_has_generic_stage_
     assert claims["overall_outcome.risk_pct"] == 10.021385
 
 
-def test_latest_idea_exploration_turn_hides_unrelated_project_continuation_cards() -> None:
+def test_latest_idea_exploration_turn_hides_project_results_but_keeps_current_decisions() -> None:
     node = shutil.which("node")
     if node is None:
         pytest.skip("Node is not installed")
@@ -6661,10 +6662,11 @@ def test_latest_idea_exploration_turn_hides_unrelated_project_continuation_cards
     session_panel = guided[
         guided.index("function sessionPanel()") : guided.index("function demoPanel()")
     ]
-    assert "showProjectContinuationCards" in session_panel
-    assert "showProjectContinuationCards ? RUN_OUTCOME.render" in session_panel
-    assert "showProjectContinuationCards ? dataConsentHtml" in session_panel
-    assert "showProjectContinuationCards && !dataConsentRequired" in session_panel
+    assert "showProjectResults ? RUN_OUTCOME.render" in session_panel
+    assert "const showProjectResults = !workspace && !lightweight && !freshTask && !ideaExplorationTurn" in session_panel
+    assert "const continuation = showHostDecision && !dataConsentRequired ? continuationCardsHtml()" in session_panel
+    log = session_panel.split("data-gpi-log>", 1)[1].split("data-gpi-dismiss-error", 1)[0]
+    assert "${dataConsentHtml}" in log and "${continuation}" in log
     assert "return { transcriptMessages, latestTurnCompletedIdeaExploration," in transcript
     index = _read("index.html")
     assert "screens-guided-pi-transcript.js?v=20261030-preparation1" in index
