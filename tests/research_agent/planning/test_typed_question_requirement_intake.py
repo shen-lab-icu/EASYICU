@@ -3,12 +3,14 @@
 from __future__ import annotations
 
 import json
-import logging
 from dataclasses import dataclass, replace
 from functools import partial
+from types import SimpleNamespace
 from typing import Callable
 
 import pytest
+
+from tests.support.progressive_retry import _RecordingEvidence
 
 from easyicu.clinical_contracts import load_clinical_contracts
 from easyicu.research_agent.agents.family_spec_planner import (
@@ -16,16 +18,23 @@ from easyicu.research_agent.agents.family_spec_planner import (
     family_spec_structured_output_request,
     parse_family_plan_spec,
 )
+from easyicu.research_agent.agents.progressive_planner import FAMILY_SPEC_STRATEGY, ProgressivePlannerAgent
+from easyicu.research_agent.contracts.association_execution import association_execution_verdict
 from easyicu.research_agent.contracts.endpoint import EndpointSpec
 from easyicu.research_agent.contracts.model_terms import DataPreparationPlan, ModelTermSpec, WindowAggregation
-from easyicu.research_agent.orchestration.progressive_planning import question_requirement_outcome
+from easyicu.research_agent.orchestration.progressive_planning import question_requirement_outcome, run_progressive_planner
 from easyicu.research_agent.planning.cohort_contract import CohortDefinition, ConceptPredicate
 from easyicu.research_agent.planning.cohort_contract import TimeWindow as PredicateWindow
 from easyicu.research_agent.planning.dependence_authority import context_dependence_authority
+from easyicu.research_agent.planning.preplan_know_how import PlannerKnowHowBinding
 from easyicu.research_agent.planning.question_requirements import (
+    QUESTION_REQUIREMENTS_FILENAME,
+    QUESTION_REQUIREMENTS_REVIEW_FILENAME,
+    JudgedRequirement,
     QuestionRequirement,
     judge_question_requirements,
     question_requirement_host_facts,
+    question_requirements_on_plan_under_review,
 )
 from easyicu.research_agent.planning.requirement_typing.contract import (
     AtomicPart, CohortPredicate, Delivery, Grading, Method, Parameter, Point, RequirementKey,
@@ -34,21 +43,24 @@ from easyicu.research_agent.planning.requirement_typing.contract import (
 from easyicu.research_agent.planning.requirement_typing.facts import ProjectedFacts, project_facts
 from easyicu.research_agent.planning.requirement_typing.intake import PROPOSALS_FIELD, TypingIntake
 from easyicu.research_agent.planning.requirement_typing.registry import contract_registry_sha256, registered_dictionary
-from easyicu.research_agent.planning.requirement_typing.shadow import FLAG, LOGGER
+from easyicu.research_agent.planning.requirement_typing import shadow
+from easyicu.research_agent.planning.requirement_typing.shadow import FLAG, observe_requirements
 from easyicu.research_agent.planning.sensitivity_authority import PrespecifiedSensitivitySpec
+from easyicu.research_agent.providers.mocks import ScriptedMockLLMClient
 from easyicu.research_agent.research_context.clinical_definition import ClinicalDefinitionReference
 from easyicu.research_agent.schema import (
     AnalysisPlan, AnalysisStep, ConceptDescriptor, ObservationSemantics, ResearchContext, UserPreferences,
 )
 
 from .family_spec_fixtures import _context as _family_context
-from .family_spec_fixtures import _request, _run, _spec_payload
+from .family_spec_fixtures import ALLOWED_CITATIONS, DIRECT_COMPARATORS, _request, _run, _spec_payload
 from .test_typed_question_requirement_coverage import _context, _model, _model_plan
 from .test_typed_question_requirement_regressions import (
     AUTHORITY, CASES, CLUSTER, DIALYSIS16, DICTIONARY, FIRST_ONLY, ICU, REPORT_STAYS, STUDY_POPULATION,
     bind, fact, interval, key,
 )
 from .test_typed_question_requirement_shadow import _shadow_event, proposal
+from .test_typed_question_requirement_shadow import shadow_events as shadow_events
 
 
 def _clock() -> ConceptDescriptor:
@@ -137,6 +149,16 @@ def _model_terms(concept):
     return context, plan
 
 
+def _binary_association():
+    context, plan = _with_exposure("k", preparation=DataPreparationPlan())
+    step = plan.steps[0]
+    step.model_requirements[0].model_terms = [
+        ModelTermSpec(name="k", role="exposure", coding="continuous", transform="identity"),
+    ]
+    assert association_execution_verdict(step).claimed
+    return context, plan
+
+
 @dataclass(frozen=True)
 class Pair:
     id: str
@@ -222,7 +244,7 @@ def _pairs():
         "method-odds", "Report the odds ratio for potassium and mortality", "报告血钾与死亡的比值比",
         key(Method(action_id="binary_effect_measure", parameters=(Parameter(name="measure", value="odds_ratio"),)),
             bind("k"), bind("death", "outcome")),
-        partial(_with_exposure, "k"), state="not_covered", scripted=True,
+        _binary_association, scripted=True,
     )
     for concept, en, zh, hours, operand, value, polarity in (
         ("k", "potassium", "血钾", 24, ">=", 5.5, "include"),
@@ -283,23 +305,23 @@ def _judge(quote, context, plan, *, kind="analysis", concepts=(), outputs=(), pr
         id="r1", kind=kind, quote=quote, concepts=list(concepts), clauses=list(clauses),
         deliverable_kinds=list(outputs), coverage="plan",
     )
-    return judge_question_requirements(
+    judged = judge_question_requirements(
         [item], plan=plan, family_template=True, relatives=lambda concept: frozenset({concept}),
-        check_gap=lambda gap: pytest.fail("fixture declared no gap"), question=quote, shadow_context=context,
+        check_gap=lambda gap: pytest.fail("fixture declared no gap"), question=quote,
         host_facts=question_requirement_host_facts(context=context, plan=plan, requirements=[item]),
-        typing_proposals=proposals,
     )
+    observe_requirements(judged, plan=plan, question=quote, context=context, proposals=proposals)
+    return judged
 
 
 @pytest.mark.parametrize(("pair", "language", "quote"), LARGER_CASES)
-def test_larger_bilingual_fixture(pair, language, quote, monkeypatch, caplog) -> None:
+def test_larger_bilingual_fixture(pair, language, quote, monkeypatch, shadow_events) -> None:
     monkeypatch.setenv(FLAG, "shadow")
-    caplog.set_level(logging.DEBUG, logger=LOGGER.name)
     context, plan = pair.build()
     scripted = [proposal("r1", quote, pair.key)] if pair.scripted else ()
     outputs = (pair.key.facet.output_id,) if pair.kind == "delivery" else ()
     _judge(quote, context, plan, kind=pair.kind, concepts=pair.legacy_concepts, outputs=outputs, proposals=scripted)
-    [row] = _shadow_event(caplog)["parts"]
+    [row] = _shadow_event(shadow_events)["parts"]
     assert row["v2"] == pair.state
     assert row["result"]["part"]["origin"] == ("model_proposal_host_validated" if pair.scripted else pair.origin)
     if row["v2"] == "covered":
@@ -314,6 +336,20 @@ def test_larger_bilingual_fixture(pair, language, quote, monkeypatch, caplog) ->
         "v2": row["v2"], "reason": row["v1_reason"],
         "bucket": pair.bucket if row["v1"] == "covered" and row["v2"] != "covered" else None,
     }))
+
+
+@pytest.mark.parametrize("quote", ["Report the odds ratio for potassium and mortality", "报告血钾与死亡的比值比"])
+def test_non_executable_binary_association_is_not_covered(quote, monkeypatch, shadow_events) -> None:
+    monkeypatch.setenv(FLAG, "shadow")
+    context, plan = _binary_association()
+    step = plan.steps[0]
+    step.model_requirements[0].model_terms = None
+    assert not association_execution_verdict(step).claimed
+    asked = key(Method(action_id="binary_effect_measure", parameters=(Parameter(name="measure", value="odds_ratio"),)),
+                bind("k"), bind("death", "outcome"))
+    _judge(quote, context, plan, proposals=[proposal("r1", quote, asked)])
+    [row] = _shadow_event(shadow_events)["parts"]
+    assert row["v2"] == "not_covered"
 
 
 @pytest.mark.parametrize("case", CASES, ids=lambda case: case.id)
@@ -349,14 +385,13 @@ def test_wrong_facts_remain_uncovered_through_intake(case) -> None:
         assert decide((case.requested,), ()) == "covered"
 
 
-def test_matching_but_misbound_proposal_is_unknown(monkeypatch, caplog) -> None:
+def test_matching_but_misbound_proposal_is_unknown(monkeypatch, shadow_events) -> None:
     monkeypatch.setenv(FLAG, "shadow")
-    caplog.set_level(logging.DEBUG, logger=LOGGER.name)
     context, plan = _window("lact", 6, "max")
     quote = "Use peak potassium in the first six hours after ICU entry"
     wrong = key(Window(purpose="aggregation", operation="max"), bind("lact"), time=interval(0, 6))
     _judge(quote, context, plan, proposals=[proposal("r1", quote, wrong)])
-    [row] = _shadow_event(caplog)["parts"]
+    [row] = _shadow_event(shadow_events)["parts"]
     assert row["v2"] == "unknown"
     assert row["v2_reason"] == "unbound_source_coordinates"
     assert row["repair"] == [{"path": f"{PROPOSALS_FIELD}[0].key", "code": "coordinates_need_source_binding"}]
@@ -385,29 +420,27 @@ def test_even_a_perfect_fact_match_cannot_rebind_vasopressor_to_dialysis() -> No
               "time": {"kind": "not_applicable"}, "facet": {"kind": "delivery", "output_id": "private_export"}}},
      "key.facet.delivery.output_id"),
 ])
-def test_malformed_proposal_has_bounded_repair_path(change, path, monkeypatch, caplog) -> None:
+def test_malformed_proposal_has_bounded_repair_path(change, path, monkeypatch, shadow_events) -> None:
     monkeypatch.setenv(FLAG, "shadow")
-    caplog.set_level(logging.DEBUG, logger=LOGGER.name)
     context, plan = _with_exposure("k", unit="mmol/L")
     quote = "Specify potassium units in mmol/L"
     typing = proposal("r1", quote, key(Unit(code="mmol/L"), bind("k")))
     _judge(quote, context, plan, proposals=[{**typing, **change}])
-    [row] = _shadow_event(caplog)["parts"]
+    [row] = _shadow_event(shadow_events)["parts"]
     assert row["v2"] == "unknown"
     assert row["result"]["part"]["key"] is None
     assert f"{PROPOSALS_FIELD}[0].{path}" in {issue["path"] for issue in row["repair"]}
     assert len(row["repair"]) <= 8
 
 
-def test_unresolved_alternatives_remain_open_even_with_one_matching_fact(monkeypatch, caplog) -> None:
+def test_unresolved_alternatives_remain_open_even_with_one_matching_fact(monkeypatch, shadow_events) -> None:
     monkeypatch.setenv(FLAG, "shadow")
-    caplog.set_level(logging.DEBUG, logger=LOGGER.name)
     context, plan = _stays(True)
     quote = "Choose the first ICU stay per patient or retain repeated ICU stays and cluster by patient"
     _judge(quote, context, plan, proposals=[proposal(
         "r1", quote, None, facet="repeat_stay_policy", alternatives=(FIRST_ONLY, CLUSTER),
     )])
-    [row] = _shadow_event(caplog)["parts"]
+    [row] = _shadow_event(shadow_events)["parts"]
     assert row["v2"] == "unknown"
     assert row["v2_reason"] == "unresolved_alternatives"
     assert len(row["result"]["part"]["alternatives"]) == 2
@@ -432,49 +465,45 @@ def test_current_provenance_and_facts_are_required_at_intake() -> None:
         ).judge(part)[0].decision.state == state
 
 
-def test_proposal_may_express_the_same_window_in_an_equivalent_time_unit(monkeypatch, caplog) -> None:
+def test_proposal_may_express_the_same_window_in_an_equivalent_time_unit(monkeypatch, shadow_events) -> None:
     monkeypatch.setenv(FLAG, "shadow")
-    caplog.set_level(logging.DEBUG, logger=LOGGER.name)
     context, plan = _window("k", 6, "max")
     quote = "Use peak potassium in the first six hours after ICU entry"
     asked = key(Window(purpose="aggregation", operation="max"), bind("k"), time=interval(0, 360, unit="min"))
     _judge(quote, context, plan, proposals=[proposal("r1", quote, asked)])
-    [row] = _shadow_event(caplog)["parts"]
+    [row] = _shadow_event(shadow_events)["parts"]
     assert row["v2"] == "covered"
     assert row["result"]["part"]["origin"] == "model_proposal_host_validated"
 
 
-def test_delivery_alternatives_and_uncontracted_exports_do_not_get_credit(monkeypatch, caplog) -> None:
+def test_delivery_alternatives_and_uncontracted_exports_do_not_get_credit(monkeypatch, shadow_events) -> None:
     monkeypatch.setenv(FLAG, "shadow")
-    caplog.set_level(logging.DEBUG, logger=LOGGER.name)
     context, plan = _with_exposure("k")
     result_tables = key(Delivery(output_id="result_tables"), STUDY_POPULATION)
     for quote in ("Deliver result tables or figures", "Deliver a patient-level spreadsheet"):
-        caplog.clear()
+        shadow_events.clear()
         _judge(quote, context, plan, kind="delivery", outputs=("result_tables",),
                proposals=[proposal("r1", quote, result_tables)])
-        [row] = _shadow_event(caplog)["parts"]
+        [row] = _shadow_event(shadow_events)["parts"]
         assert row["v1"] == "covered"
         assert row["v2"] == "unknown"
 
 
-def test_multiple_outputs_keep_distinct_parts_even_with_the_same_span(monkeypatch, caplog) -> None:
+def test_multiple_outputs_keep_distinct_parts_even_with_the_same_span(monkeypatch, shadow_events) -> None:
     monkeypatch.setenv(FLAG, "shadow")
-    caplog.set_level(logging.DEBUG, logger=LOGGER.name)
     context, plan = _with_exposure("k")
     quote = "Deliver result tables and figures"
     wrong = proposal("r1/delivery/figures", quote, key(Delivery(output_id="result_tables"), STUDY_POPULATION))
     _judge(quote, context, plan, kind="delivery", outputs=("result_tables", "figures"), proposals=[wrong])
-    table, figures = _shadow_event(caplog)["parts"]
+    table, figures = _shadow_event(shadow_events)["parts"]
     assert table["source_span"] == figures["source_span"]
     assert table["v2"] == "covered"
     assert figures["v2"] == "unknown"
     assert figures["repair"][0]["path"] == f"{PROPOSALS_FIELD}[0].key.facet.output_id"
 
 
-def test_a_plan_declared_note_stays_prose_only(monkeypatch, caplog) -> None:
+def test_a_plan_declared_note_stays_prose_only(monkeypatch, shadow_events) -> None:
     monkeypatch.setenv(FLAG, "shadow")
-    caplog.set_level(logging.DEBUG, logger=LOGGER.name)
     context, plan = _with_exposure("k")
     question = "external validation, calibration"
     items = [
@@ -483,15 +512,16 @@ def test_a_plan_declared_note_stays_prose_only(monkeypatch, caplog) -> None:
         QuestionRequirement(id="r2", kind="analysis", quote="external validation", coverage="plan",
                             note="An external demonstration will be discussed."),
     ]
-    judge_question_requirements(
+    judged = judge_question_requirements(
         items, plan=plan, family_template=True, relatives=lambda concept: frozenset({concept}),
-        check_gap=lambda gap: pytest.fail("fixture declared no gap"), question=question, shadow_context=context,
+        check_gap=lambda gap: pytest.fail("fixture declared no gap"), question=question,
     )
-    first = _shadow_event(caplog)["parts"][0]
+    observe_requirements(judged, plan=plan, question=question, context=context, proposals=())
+    first = _shadow_event(shadow_events)["parts"][0]
     assert (first["v1"], first["v1_reason"], first["v2"]) == ("covered", "plan_declared", "unknown")
 
 
-def test_family_response_typings_stay_out_of_v1_and_flow_to_shadow(monkeypatch, caplog, tmp_path) -> None:
+def test_family_response_typings_stay_out_of_v1_and_flow_to_shadow(monkeypatch, shadow_events, tmp_path) -> None:
     quote = "Deliver result tables"
     context = _family_context().model_copy(update={"research_question": _family_context().research_question + " " + quote})
     request = _request(context)
@@ -508,7 +538,6 @@ def test_family_response_typings_stay_out_of_v1_and_flow_to_shadow(monkeypatch, 
     payload[PROPOSALS_FIELD] = [{**typing, "source_span": {"start": -1, "end": 3}}]
 
     monkeypatch.setenv(FLAG, "shadow")
-    caplog.set_level(logging.DEBUG, logger=LOGGER.name)
     assert PROPOSALS_FIELD in family_spec_response_shape(request)
     schema = json.loads(family_spec_structured_output_request(request).schema_json)
     assert PROPOSALS_FIELD in schema["required"]
@@ -516,22 +545,205 @@ def test_family_response_typings_stay_out_of_v1_and_flow_to_shadow(monkeypatch, 
     llm, planned = _run(context, [json.dumps(payload)])
     assert len(llm.calls) == 1
     assert planned.facts.question_requirement_typings == payload[PROPOSALS_FIELD]
-    assert question_requirement_outcome(context=context, plan=planned.output, facts=planned.facts, run_dir=tmp_path) == []
-    [row] = _shadow_event(caplog)["parts"]
+    metrics = {}
+    assert question_requirement_outcome(
+        context=context, plan=planned.output, facts=planned.facts, run_dir=tmp_path, prompt_metrics=metrics,
+    ) == []
+    assert metrics[shadow.SHADOW_METRICS_FIELD]["proposal_rejections"] == {"greater_than_equal": 1}
+    [row] = _shadow_event(shadow_events)["parts"]
     assert row["v1"] == "covered"
     assert row["v2"] == "unknown"
     assert row["repair"][0]["path"] == f"{PROPOSALS_FIELD}[0].source_span.start"
+
+
+def test_live_run_records_only_aggregates_and_isolates_a_raising_shadow(monkeypatch, tmp_path, caplog) -> None:
+    quote = "Deliver result tables"
+    context = _family_context().model_copy(update={"research_question": f"{_family_context().research_question} {quote}"})
+    payload = _spec_payload(_request(context), question_requirements=[{
+        "id": "r1", "quote": quote, "kind": "delivery", "coverage": "plan",
+        "concepts": [], "deliverable_kinds": ["result_tables"], "note": None, "gap": None,
+    }])
+    typing = proposal(
+        "r1", quote, key(Delivery(output_id="result_tables"), STUDY_POPULATION),
+        start=context.research_question.index(quote),
+    )
+    cohort_path = tmp_path / "catalog.parquet"
+    cohort_path.write_bytes(b"synthetic catalog identity")
+
+    def run(name, response):
+        run_dir = tmp_path / name
+        run_dir.mkdir()
+        llm = ScriptedMockLLMClient([json.dumps(response)])
+        binding = PlannerKnowHowBinding()
+        evidence = _RecordingEvidence()
+        findings = []
+        result = run_progressive_planner(
+            planner=ProgressivePlannerAgent(llm), context=context, run_dir=run_dir, evidence=evidence,
+            prompt_pack_version="test-v1", resume_checkpoint_path=None, resume_checkpoint_sha256=None,
+            cohort_path=cohort_path, llm_signature="mock:test", know_how_binding=binding,
+            planning_contract_context="", finding_sink=findings.append,
+            planner_kwargs={
+                "planner_strategy": FAMILY_SPEC_STRATEGY,
+                "allowed_literature_citation_keys": ALLOWED_CITATIONS,
+                "direct_comparator_literature_keys": DIRECT_COMPARATORS,
+                "comparison_literature_keys": DIRECT_COMPARATORS,
+                "enforce_article_contract": True,
+                "article_contract_context": context,
+                "required_primary_cohort_selection_mode": "predicate_filtered",
+            },
+        )
+        assert len(llm.calls) == 1
+        binding.persist_prompt_metrics(result.prompt_metrics, run_dir=run_dir, evidence=evidence)
+        review = question_requirements_on_plan_under_review(findings, plan=result.plan, run_dir=run_dir)
+        v1 = (
+            result.plan.model_dump_json(), findings, review,
+            (run_dir / QUESTION_REQUIREMENTS_FILENAME).read_bytes(),
+            (run_dir / QUESTION_REQUIREMENTS_REVIEW_FILENAME).read_bytes(),
+        )
+        return v1, json.loads((run_dir / "planner_prompt_metrics.json").read_bytes())
+
+    def raising_shadow(*args, **kwargs):
+        raise RuntimeError(f"synthetic private payload: {context.research_question}")
+
+    monkeypatch.delenv(FLAG, raising=False)
+    evaluator = shadow.observe_requirements
+    monkeypatch.setattr(shadow, "observe_requirements", raising_shadow)
+    baseline, off_metrics = run("off", payload)
+    assert shadow.SHADOW_METRICS_FIELD not in off_metrics
+
+    monkeypatch.setenv(FLAG, "shadow")
+    response = {**payload, PROPOSALS_FIELD: [typing]}
+    monkeypatch.setattr(shadow, "observe_requirements", evaluator)
+    caplog.clear()
+    successful, metrics = run("shadow", response)
+    assert successful == baseline
+    assert metrics[shadow.SHADOW_METRICS_FIELD] == {
+        "schema_version": "easyicu.requirement_coverage_v2_shadow/1",
+        "proposal_count": 1,
+        "parts_total": 1,
+        "by_facet": {"delivery": {"covered": 1, "not_covered": 0, "unknown": 0}},
+        "by_language": {"en": {"covered": 1, "not_covered": 0, "unknown": 0}},
+        "disagreements": {"true_false_pass": 0, "prose_proven": 0, "v2_under_typing": 0},
+        "proposal_rejections": {},
+    }
+    assert not any(hasattr(entry, "requirement_coverage_shadow") for entry in caplog.records)
+
+    monkeypatch.setattr(shadow, "observe_requirements", raising_shadow)
+    failed, error_metrics = run("error", response)
+    assert failed == baseline
+    assert error_metrics[shadow.SHADOW_METRICS_FIELD] == {
+        "schema_version": "easyicu.requirement_coverage_v2_shadow/1",
+        "proposal_count": 1,
+        "shadow_error": "shadow_evaluation_failed",
+    }
+    assert "synthetic private payload" not in caplog.text
+
+
+def test_flag_off_keeps_v1_artifact_and_metrics_bytes_with_supplied_typings(monkeypatch, tmp_path) -> None:
+    context = _context().model_copy(update={"research_question": "Deliver result tables"})
+    plan = _model_plan()
+    item = QuestionRequirement(
+        id="r1", kind="delivery", quote=context.research_question, coverage="plan", deliverable_kinds=["result_tables"],
+    )
+    monkeypatch.delenv(FLAG, raising=False)
+    monkeypatch.setattr(shadow, "observe_requirements", lambda *a, **kw: pytest.fail("shadow ran with flag off"))
+    receipts = []
+    for name, typings in (("baseline", ()), ("supplied", [{"part_id": "r1", "private": "synthetic"}])):
+        facts = SimpleNamespace(family_template=True, question_requirements=[item], question_requirement_typings=typings)
+        run_dir = tmp_path / name
+        run_dir.mkdir()
+        metrics = {"total_bytes": 42}
+        findings = question_requirement_outcome(
+            context=context, plan=plan, facts=facts, run_dir=run_dir, prompt_metrics=metrics,
+        )
+        PlannerKnowHowBinding().persist_prompt_metrics(metrics, run_dir=run_dir, evidence=_RecordingEvidence())
+        receipts.append((
+            findings, (run_dir / QUESTION_REQUIREMENTS_FILENAME).read_bytes(),
+            (run_dir / "planner_prompt_metrics.json").read_bytes(),
+        ))
+    assert receipts[0] == receipts[1]
+
+
+def test_shadow_counts_directions_languages_and_rejections() -> None:
+    context, plan = _with_exposure("k")
+    quotes = (
+        "Report the odds ratio for potassium and mortality",
+        "Compare calibration",
+        "说明模型的局限",
+        "交付结果表",
+        "Specify a measurement without a unique span",
+    )
+    question = ". ".join((*quotes, quotes[-1]))
+    items = tuple(
+        QuestionRequirement(id=f"r{index + 1}", quote=quote, kind="analysis" if index != 3 else "delivery", coverage="plan")
+        for index, quote in enumerate(quotes)
+    )
+    judged = tuple(
+        JudgedRequirement(item, "covered" if index < 3 else "not_covered",
+                          "plan_declared" if index == 1 else "typed_plan_owner_present")
+        for index, item in enumerate(items)
+    )
+    odds = key(Method(action_id="binary_effect_measure", parameters=(Parameter(name="measure", value="odds_ratio"),)),
+               bind("k"), bind("death", "outcome"))
+    proposals = [
+        proposal("r1", quotes[0], odds),
+        {"part_id": "bogus"},
+        {
+            **proposal("r3", quotes[2], None, start=question.index(quotes[2])),
+            "source_span": {"start": "bad", "end": "bad"},
+        },
+        proposal("r3", quotes[2], None, start=question.index(quotes[2])),
+        proposal("r5", quotes[4], None, start=question.index(quotes[4])),
+    ]
+    metrics = observe_requirements(judged, plan=plan, context=context, question=question, proposals=proposals)
+    assert metrics == {
+        "schema_version": "easyicu.requirement_coverage_v2_shadow/1",
+        "proposal_count": 5,
+        "parts_total": 5,
+        "by_facet": {
+            "method": {"covered": 0, "not_covered": 1, "unknown": 0},
+            "untyped": {"covered": 0, "not_covered": 0, "unknown": 3},
+            "delivery": {"covered": 1, "not_covered": 0, "unknown": 0},
+        },
+        "by_language": {
+            "en": {"covered": 0, "not_covered": 1, "unknown": 2},
+            "zh": {"covered": 1, "not_covered": 0, "unknown": 1},
+        },
+        "disagreements": {"true_false_pass": 1, "prose_proven": 1, "v2_under_typing": 1},
+        "proposal_rejections": {
+            "unknown_part": 1, "int_type": 1, "duplicate_part": 1, "span_does_not_bind_part": 1,
+        },
+    }
+
+
+@pytest.mark.parametrize(("typings", "count", "rejections"), [
+    ([], 0, {}),
+    ([{"part_id": "missing"}], 1, {"unknown_part": 1}),
+    (None, 0, {"invalid_proposal_batch": 1}),
+])
+def test_live_shadow_collects_returned_typings_without_legacy_parts(typings, count, rejections, monkeypatch, tmp_path) -> None:
+    monkeypatch.setenv(FLAG, "shadow")
+    context = _context().model_copy(update={"research_question": "Generic study question"})
+    facts = SimpleNamespace(family_template=True, question_requirements=[], question_requirement_typings=typings)
+    metrics = {}
+    assert question_requirement_outcome(
+        context=context, plan=_model_plan(), facts=facts, run_dir=tmp_path, prompt_metrics=metrics,
+    ) == []
+    assert not (tmp_path / QUESTION_REQUIREMENTS_FILENAME).exists()
+    observed = metrics[shadow.SHADOW_METRICS_FIELD]
+    assert observed["parts_total"] == 0
+    assert observed["proposal_count"] == count
+    assert observed["proposal_rejections"] == rejections
 
 
 @pytest.mark.parametrize(("source_concept", "scope", "expected"), [
     ("kdigo_aki", "kdigo_aki and mortality", "covered"),
     ("death", "mortality and death", "not_covered"),
 ], ids=["distinct-concepts", "same-concept"])
-def test_compiled_binary_model_needs_distinct_concepts(source_concept, scope, expected, monkeypatch, caplog, tmp_path) -> None:
+def test_compiled_binary_model_needs_distinct_concepts(source_concept, scope, expected, monkeypatch, shadow_events, tmp_path) -> None:
     from easyicu.research_agent.planning.planner_output_contract import validate_fresh_planner_typed_product_specs
 
     monkeypatch.setenv(FLAG, "shadow")
-    caplog.set_level(logging.DEBUG, logger=LOGGER.name)
     quote = f"Please report the odds ratio for {scope}."
     context = _family_context()
     context = context.model_copy(update={"research_question": f"{context.research_question} {quote}"})
@@ -548,8 +760,10 @@ def test_compiled_binary_model_needs_distinct_concepts(source_concept, scope, ex
     assert len(llm.calls) == 1
     assert planned.facts.compile_receipt is not None
     validate_fresh_planner_typed_product_specs(planned.output, context=context)
-    question_requirement_outcome(context=context, plan=planned.output, facts=planned.facts, run_dir=tmp_path)
-    [row] = _shadow_event(caplog)["parts"]
+    question_requirement_outcome(
+        context=context, plan=planned.output, facts=planned.facts, run_dir=tmp_path, prompt_metrics={},
+    )
+    [row] = _shadow_event(shadow_events)["parts"]
     assert row["v2"] == expected
 
 
@@ -602,47 +816,44 @@ def test_mortality_landmark_binds_the_actual_event_column(name, event_column, de
     "Deliver result tables and a patient-level spreadsheet",
     "Do not include figures", "不要包含图件", "请勿交付结果表",
 ])
-def test_delivery_requires_a_complete_affirmative_request(quote, monkeypatch, caplog) -> None:
+def test_delivery_requires_a_complete_affirmative_request(quote, monkeypatch, shadow_events) -> None:
     from easyicu.research_agent.planning.requirement_typing.source import source_supports
 
     monkeypatch.setenv(FLAG, "shadow")
-    caplog.set_level(logging.DEBUG, logger=LOGGER.name)
     context, plan = _with_exposure("k")
     output = "figures" if ("figures" in quote or "图件" in quote) else "result_tables"
     asked = key(Delivery(output_id=output), STUDY_POPULATION)
     dictionary = registered_dictionary(context.cohort.database)
     assert not source_supports(quote, asked, context=context, dictionary=dictionary)
     for proposals in ((), [proposal("r1", quote, asked)]):
-        caplog.clear()
+        shadow_events.clear()
         _judge(quote, context, plan, kind="delivery", outputs=(output,), proposals=proposals)
-        [row] = _shadow_event(caplog)["parts"]
+        [row] = _shadow_event(shadow_events)["parts"]
         assert row["v2"] == "unknown"
 
 
-def test_unregistered_unit_cannot_be_registered_by_an_applied_variable(monkeypatch, caplog) -> None:
+def test_unregistered_unit_cannot_be_registered_by_an_applied_variable(monkeypatch, shadow_events) -> None:
     monkeypatch.setenv(FLAG, "shadow")
-    caplog.set_level(logging.DEBUG, logger=LOGGER.name)
     context, plan = _with_exposure("k", unit="mg/24h")
     quote = "Specify potassium units in mg/24h"
     asked = key(Unit(code="mg/24h"), bind("k"))
     for proposals in ((), [proposal("r1", quote, asked)]):
-        caplog.clear()
+        shadow_events.clear()
         _judge(quote, context, plan, proposals=proposals)
-        [row] = _shadow_event(caplog)["parts"]
+        [row] = _shadow_event(shadow_events)["parts"]
         assert row["v2"] == "unknown"
         if proposals:
             assert row["v2_reason"] == "unregistered_coordinate"
 
 
 @pytest.mark.parametrize("submits_wrong_key", [False, True], ids=["abstention", "unmatched-key"])
-def test_proposal_cannot_override_host_bound_window(submits_wrong_key, monkeypatch, caplog) -> None:
+def test_proposal_cannot_override_host_bound_window(submits_wrong_key, monkeypatch, shadow_events) -> None:
     monkeypatch.setenv(FLAG, "shadow")
-    caplog.set_level(logging.DEBUG, logger=LOGGER.name)
     context, plan = _window("k", 6, "max")
     quote = "Use peak potassium in the first 6 hours after ICU entry"
     wrong = key(Window(purpose="aggregation", operation="max"), bind("lact"), time=interval(0, 6))
     _judge(quote, context, plan, proposals=[proposal("r1", quote, wrong if submits_wrong_key else None)])
-    [row] = _shadow_event(caplog)["parts"]
+    [row] = _shadow_event(shadow_events)["parts"]
     assert row["v2"] == "covered"
     assert row["result"]["part"]["origin"] == "plan_contract"
     assert row["result"]["part"]["key"]["bindings"][0]["concept_id"] == "k"
@@ -682,14 +893,13 @@ def test_proposal_preserves_conflicting_host_evidence(claim) -> None:
     (key(Window(purpose="aggregation", operation="max"), bind("k"), time=interval(0, 6)),),
     (key(Delivery(output_id="figures"), STUDY_POPULATION),),
 ], ids=["mixed-facets", "wrong-facet", "wrong-output"])
-def test_delivery_checks_every_alternative(choices, monkeypatch, caplog) -> None:
+def test_delivery_checks_every_alternative(choices, monkeypatch, shadow_events) -> None:
     monkeypatch.setenv(FLAG, "shadow")
-    caplog.set_level(logging.DEBUG, logger=LOGGER.name)
     context, plan = _with_exposure("k")
     quote = "Deliver result tables"
     _judge(quote, context, plan, kind="delivery", outputs=("result_tables",),
            proposals=[proposal("r1", quote, None, alternatives=choices)])
-    [row] = _shadow_event(caplog)["parts"]
+    [row] = _shadow_event(shadow_events)["parts"]
     assert row["v2_reason"] == "invalid_typing_proposal"
     assert not row["result"]["part"]["alternatives"]
 
@@ -757,9 +967,8 @@ def test_rejected_family_response_does_not_publish_typings(refusal, monkeypatch)
     ("Specify the urine output grading according to KDIGO 2012", False),
     ("明确肌酐的KDIGO 2024分级", False),
 ], ids=["en", "zh", "wrong-criterion", "wrong-version"])
-def test_kdigo_paraphrase_binds_the_exact_registered_grading(quote, is_requested, monkeypatch, caplog) -> None:
+def test_kdigo_paraphrase_binds_the_exact_registered_grading(quote, is_requested, monkeypatch, shadow_events) -> None:
     monkeypatch.setenv(FLAG, "shadow")
-    caplog.set_level(logging.DEBUG, logger=LOGGER.name)
     context, plan = _grading("kdigo_creat", "kdigo_aki_2012")
     expected = key(Grading(contract_id="kdigo_aki_2012", version="2012"), bind("kdigo_creat"))
     dictionary = registered_dictionary(context.cohort.database)
@@ -767,7 +976,7 @@ def test_kdigo_paraphrase_binds_the_exact_registered_grading(quote, is_requested
     [receipt] = [item for item in projected.facts if item.key == expected]
     assert receipt.provenance.source_field == "context.variables[0].clinical_definition"
     for proposals in ((), [proposal("r1", quote, expected)]):
-        caplog.clear()
+        shadow_events.clear()
         _judge(quote, context, plan, concepts=("kdigo_creat",), proposals=proposals)
-        [row] = _shadow_event(caplog)["parts"]
+        [row] = _shadow_event(shadow_events)["parts"]
         assert (row["v2"] == "covered") == is_requested

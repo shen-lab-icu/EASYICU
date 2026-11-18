@@ -176,6 +176,13 @@ class TypingIntake:
                 except ValidationError as error:
                     entry = _Submission(index, None, _schema_repairs(index, error))
             self.submissions[part_id] = entry
+            self.repair.extend(entry.repair)
+
+    def missing_span_repair(self, part_id: str) -> tuple[RepairField, ...]:
+        submission = self.submissions.get(part_id)
+        if submission is None or submission.value is None:
+            return ()
+        return (submission.field("source_span", "span_does_not_bind_part"),)
 
     def _source_supports(self, source: str, key: RequirementKey) -> bool:
         return source_supports(source, key, context=self.context, dictionary=self.dictionary)

@@ -42,6 +42,7 @@ from ..planning.approval_stops import PLAN_APPROVAL_STOPS
 from ..planning.capability_gap import check_capability_gap
 from ..planning.family_spec.request import sealed_trajectory_suite_coordinates
 from ..planning.question_requirements import (
+    JudgedRequirement,
     QuestionRequirementsError,
     bind_named_question_concepts,
     concept_relatives,
@@ -57,6 +58,7 @@ from ..planning.question_requirements import (
     write_question_requirements,
 )
 from ..planning.preplan_know_how import PlannerKnowHowBinding
+from ..planning.requirement_typing import shadow as requirement_shadow
 from ..planning.exposure_group_reader_names import exposure_group_label_findings
 from ..planning.question_interpretation import (
     QUESTION_SUBSTANCE_FORMS_KEY,
@@ -507,6 +509,25 @@ def refuse_substance_form_substitution(
         )
 
 
+def _collect_requirement_shadow(
+    metrics: dict[str, Any] | None, judged: tuple[JudgedRequirement, ...], *,
+    context: ResearchContext, plan: AnalysisPlan, facts: Any,
+) -> None:
+    if metrics is None or not requirement_shadow.typing_shadow_enabled():
+        return
+    proposals = getattr(facts, "question_requirement_typings", ())
+    if proposals == ():
+        return
+    try:
+        observation = requirement_shadow.observe_requirements(
+            judged, plan=plan, context=context, question=context.research_question, proposals=proposals,
+        )
+    except Exception:
+        # This diagnostic is advisory and must not affect the compiled plan or approval.
+        observation = requirement_shadow.shadow_failure(proposals)
+    metrics[requirement_shadow.SHADOW_METRICS_FIELD] = observation
+
+
 def question_requirement_outcome(
     *,
     context: ResearchContext,
@@ -514,6 +535,7 @@ def question_requirement_outcome(
     facts: Any,
     run_dir: Path,
     planning_contract_context: str = "",
+    prompt_metrics: dict[str, Any] | None = None,
 ) -> list[ValidationFinding]:
     """Judge the question's requirements on the compiled plan and record them.
 
@@ -549,6 +571,7 @@ def question_requirement_outcome(
         stated_measures, plan=plan, requirements=requirements
     )
     if not requirements and not named and not stated_measures and not measures:
+        _collect_requirement_shadow(prompt_metrics, (), context=context, plan=plan, facts=facts)
         return []
     sealed = tuple(
         value
@@ -575,8 +598,6 @@ def question_requirement_outcome(
         sealed_owner_concepts=sealed_owner_concepts,
         host_facts=host_facts, sealed=sealed,
         question=context.research_question,
-        shadow_context=context,
-        typing_proposals=getattr(facts, "question_requirement_typings", ()),
     )
     unstated = (
         ()
@@ -607,7 +628,9 @@ def question_requirement_outcome(
             host_facts=host_facts,
         ),
     )
-    return question_requirement_findings(judged, unstated=unstated, measures=measures)
+    findings = question_requirement_findings(judged, unstated=unstated, measures=measures)
+    _collect_requirement_shadow(prompt_metrics, judged, context=context, plan=plan, facts=facts)
+    return findings
 
 
 def run_progressive_planner(
@@ -805,6 +828,7 @@ def run_progressive_planner(
         facts=facts,
         run_dir=run_dir,
         planning_contract_context=planning_contract_context,
+        prompt_metrics=prompt_metrics,
     ):
         finding_sink(registered_stop(finding))
     return ProgressivePlannerRunResult(
