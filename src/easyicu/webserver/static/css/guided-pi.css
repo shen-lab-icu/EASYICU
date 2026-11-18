@@ -313,6 +313,13 @@
 .gpi-confirmation.is-plan-approval .gpi-confirmation-data-status.is-compact strong{font-size:12.5px}
 .gpi-confirmation.is-plan-approval .gpi-confirmation-data-status.is-compact small{margin-top:2px;font-size:12px}
 .gpi-confirmation-more{margin-top:7px}.gpi-confirmation-more>summary{width:max-content;cursor:pointer;color:var(--ink-4);font-size:11.5px}.gpi-confirmation-more>button{display:block;margin-top:5px;padding:0;border:0;background:transparent;color:var(--danger);font:500 11.5px/1.4 var(--font);cursor:pointer}
+.gpi-plan-deliverables{min-width:0;margin:10px 0 0;padding:8px 10px;border:1px solid var(--hair-2);border-radius:8px}
+.gpi-plan-deliverables legend{padding:0 4px;font-weight:600}
+.gpi-plan-deliverable-choices{display:flex;flex-wrap:wrap;gap:6px 12px;margin-bottom:8px}
+.gpi-plan-deliverable-choices label{display:inline-flex;align-items:center;gap:5px}
+.gpi-plan-deliverable-choices select{width:auto;max-width:100%;color:inherit;font:inherit}
+.gpi-plan-deliverables [data-gpi-deliverables-article]{margin-bottom:7px}
+.gpi-plan-deliverables [data-gpi-deliverables-article][hidden]{display:none}
 .gpi-confirmation.is-science-review{grid-template-columns:auto minmax(0,1fr);align-items:start;padding:17px 18px;gap:13px}
 .gpi-confirmation.is-science-review .gpi-confirmation-actions{grid-column:2;justify-content:flex-start;flex-wrap:wrap}
 .gpi-confirmation-review-status{margin-top:11px;padding:11px 12px;border:1px solid color-mix(in srgb,var(--accent) 24%,var(--hair-2));border-radius:10px;background:color-mix(in srgb,var(--accent) 5%,var(--paper))}

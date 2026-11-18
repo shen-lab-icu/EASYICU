@@ -103,19 +103,38 @@ def post_study_context(body: Dict[str, Any]) -> dict:
     active = body_bool(patch, "active", True)
     patch.pop("active", None)
     expected_revision = patch.pop("expected_revision", None)
+    delivery_run_id = patch.pop("deliverables_source_run_id", None)
     content_fields = set(patch) - {"id"}
     try:
+        if delivery_run_id is not None:
+            if set(patch) != {"id", "plan_deliverables"} or patch["plan_deliverables"] is None:
+                raise context_store.StudyContextError({"error": "plan_deliverables_invalid"})
+            _verify_deliverable_edit(patch["id"], delivery_run_id)
         context = context_store.upsert_context(
             patch,
             active=active,
             expected_revision=expected_revision,
             require_revision=bool(content_fields),
             lifecycle_write=False,
+            _server_plan_deliverables_write=delivery_run_id is not None,
         )
         result = context_store.list_contexts()
     except context_store.StudyContextError as exc:
         _raise_context_error(exc)
     return {"ok": True, "context": context, "active_id": result.get("active_id")}
+
+
+def _verify_deliverable_edit(study_id: str, run_id: str) -> None:
+    from easyicu.webserver.pi_copilot.workflow import build_project_workflow_projection
+
+    study = context_store.get_context(study_id)
+    if study is not None:
+        projection = build_project_workflow_projection(study_context_id=study_id, study_override=study)
+        summary = projection.workflow.plan_review_summary or {}
+        editing = summary.get("deliverables")
+        if editing and summary.get("run_id") == run_id and not study.get("active_job_id"):
+            return
+    raise HTTPException(status_code=409, detail={"error": "plan_deliverables_review_required"})
 
 
 @router.post("/api/study-contexts/handoff")

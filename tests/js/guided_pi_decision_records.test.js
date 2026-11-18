@@ -22,7 +22,7 @@ global.window = { EU_LANG: language, document: { addEventListener() {} },
 global.document = { addEventListener() {}, getElementById: () => null };
 for (const file of files) require(path.resolve(file));
 const modules = window.EasyICU.guidedPi;
-for (const name of ['target-trial-copy', 'target-trial', 'question-requirements', 'run-stop']) {
+for (const name of ['target-trial-copy', 'target-trial', 'question-requirements', 'run-stop', 'plan-actions']) {
   require(path.resolve(`src/easyicu/webserver/static/js/screens-guided-pi-${name}.js`));
 }
 // Owners this page loads elsewhere; only what the conversation asks of them.
@@ -474,4 +474,114 @@ test('a pending plan action is inline when the workflow arrives before the trans
   });
   const log = html.slice(html.indexOf('data-gpi-log'), html.indexOf('data-gpi-input'));
   assert.match(log, /data-gpi-confirm-action disabled[^>]*>批准并开始分析<\/button>/);
+});
+
+test('the inline plan-review card requires a choice for each uncertain deliverable', () => {
+  for (const messages of [[], researchTurn]) {
+    const html = conversation(pendingSession, messages, null, {
+      next_action_code: 'host_delivery_request_ambiguous',
+      stages: [{ id: 'plan', status: 'review_required', reason_code: 'host_delivery_request_ambiguous' }],
+      plan_review_summary: {
+        run_id: 'ward-recovery-plan',
+        deliverables: { source: 'detector_prefill', requested: ['references'], check: ['manuscript_pdf'], confirmed: false },
+      },
+    });
+    const log = html.slice(html.indexOf('data-gpi-log'), html.indexOf('data-gpi-input'));
+    assert.equal((log.match(/aria-label="需要确认科研流程"/g) || []).length, 1);
+    assert.match(log, /交付物/);
+    assert.match(log, /<form[^>]*data-gpi-plan-deliverables[^>]*>/);
+    assert.match(log, /<select name="manuscript_pdf" required[^>]*>\s*<option value="" selected/);
+    assert.match(log, /<select name="references" required[^>]*>[\s\S]*?<option value="yes" selected/);
+    assert.match(log, /data-gpi-deliverables-apply[^>]*>重新生成计划<\/button>/);
+    assert.doesNotMatch(log, /data-gpi-confirm-action/);
+  }
+});
+
+test('a reviewable plan keeps the existing approval alongside editable deliverables', () => {
+  const html = pendingDecisionHtml({
+    next_action_code: 'operator_plan_approval_required',
+    plan_review_summary: {
+      run_id: 'morning-recovery-plan',
+      deliverables: { source: 'user_edit', requested: ['article_preview'], check: [], confirmed: true },
+    },
+  });
+  const log = html.slice(html.indexOf('data-gpi-log'), html.indexOf('data-gpi-input'));
+  assert.match(log, /<select name="article_preview" required[^>]*>[\s\S]*?<option value="yes" selected/);
+  assert.match(log, /data-gpi-confirm-action[^>]*>Approve and start analysis<\/button>/);
+});
+
+test('choosing an article output for an analysis-only review shows the composer route', () => {
+  const fields = ['manuscript_pdf', 'article_preview', 'references'].map(name => ({
+    name, value: 'no', dataset: { gpiDeliverableOriginal: 'no' },
+  }));
+  const approve = { disabled: false, dataset: {} };
+  const route = { hidden: true };
+  const forward = { disabled: true };
+  const form = {
+    querySelectorAll: () => fields,
+    querySelector: selector => selector.includes('article') ? route : forward,
+    closest: () => ({ querySelector: () => approve }),
+    hasAttribute: name => name === 'data-gpi-analysis-deliverables',
+  };
+  const owner = modules.require('planActions');
+  const html = owner.deliverablesField({
+    requested: ['manuscript_pdf'], check: [], confirmed: true, article_required: true,
+  }, { tr: en => en, esc, disabled: false });
+  assert.match(html, /separate article run/);
+  assert.match(html, /data-gpi-confirm-edit[^>]*>Revise in the conversation<\/button>/);
+  fields[0].value = 'yes';
+  assert.equal(owner.deliverableSelection(form), null);
+  assert.equal(route.hidden, false);
+  assert.equal(approve.disabled, true);
+  fields[0].value = 'no';
+  assert.equal(owner.deliverableSelection(form), null);
+  assert.equal(route.hidden, true);
+  assert.equal(approve.disabled, false);
+  fields[0].dataset.gpiDeliverableOriginal = '';
+  assert.deepEqual(owner.deliverableSelection(form), []);
+  assert.equal(forward.disabled, false);
+});
+
+test('saving a check choice starts a new plan review and never submits approval', async () => {
+  const calls = [];
+  const session = {
+    session_id: 'session-ward',
+    binding: { study_context_id: 'study-ward', study_revision: 6, run_id: 'review-ward' },
+  };
+  let workflow = {
+    next_action_code: 'host_delivery_request_ambiguous',
+    plan_review_summary: { run_id: 'review-ward', deliverables: { confirmed: false, check: ['manuscript_pdf'] } },
+  };
+  let busy = false;
+  const owner = modules.require('planActions').create({
+    tr: en => en,
+    session: () => session,
+    sessionIsStale: () => false,
+    projectId: () => 'project-ward',
+    workflow: () => workflow,
+    busy: () => busy,
+    setBusy: value => { busy = value; },
+    setError: value => assert.equal(value, ''),
+    render: () => {},
+    refreshSession: async () => {},
+    loadWorkflow: async () => { workflow = { next_action_code: 'plan_configuration_superseded' }; },
+    appendMessage: () => {},
+    watchChildJob: id => calls.push(['watch', id]),
+    api: () => ({
+      saveStudyContext: async request => calls.push(['edit', request]),
+      loadStudyContext: async () => ({ context: { question: 'Describe shift recovery.', data_source: { path: '/synthetic/ward' } } }),
+      startAgentRun: async request => { calls.push(['generate', request]); return { job_id: 'candidate-job' }; },
+      submitAgentRunReview: () => assert.fail('Selecting a deliverable is never approval'),
+    }),
+  });
+  await owner.confirmDecision({ deliverables: [] });
+  assert.deepEqual(calls[0], ['edit', {
+    id: 'study-ward', expected_revision: 6, active: false,
+    deliverables_source_run_id: 'review-ward',
+    plan_deliverables: { requested: [], confirmed: true, source: 'user_edit' },
+  }]);
+  assert.equal(calls[1][0], 'generate');
+  assert.equal(calls[1][1].question, 'Describe shift recovery.');
+  assert.equal(calls[1][1].planner_start_mode, 'fresh');
+  assert.deepEqual(calls[2], ['watch', 'candidate-job']);
 });

@@ -110,8 +110,8 @@ from ..canonical_json import canonical_sha256
 from ..contracts.association_execution import primary_binary_effect_measure
 from ..contracts.model_tokens import BinaryEffectMeasure
 from ..contracts.product_files import (
-    DeliverableKind, DeliveryRequest, HOST_DELIVERY_CLARIFICATION, HOST_DELIVERY_CLARIFICATION_MESSAGE,
-    HOST_DELIVERY_REASON, RUN_DELIVERABLES, delivery_requests, requested_deliverable_kinds,
+    DeliverableKind, HOST_DELIVERY_CLARIFICATION, HOST_DELIVERY_CLARIFICATION_MESSAGE, HOST_DELIVERY_KINDS,
+    HOST_DELIVERY_REASON, RUN_DELIVERABLES, neutral_delivery_kinds,
 )
 from ..schema import AnalysisPlan, ResearchContext, ValidationFinding
 from .progressive_contract import (
@@ -188,6 +188,7 @@ UNREADABLE_REASON = "question_requirements_unreadable"
 #: Every code this owner refuses approval with.
 QUESTION_REQUIREMENT_STOP_CODES: tuple[str, ...] = (
     *QUESTION_REQUIREMENT_APPROVAL_STOPS.values(),
+    HOST_DELIVERY_CLARIFICATION,
     UNREADABLE_REASON,
 )
 
@@ -212,8 +213,8 @@ QUESTION_REQUIREMENTS_GUIDE = (
     " Delivery-only requests use kind delivery and deliverable_kinds from the host "
     "delivery contract: " + ", ".join(RUN_DELIVERABLES) + ". "
     "Quote only the requested outputs, keeping scientific requirements "
-    "separate. The host checks that each requested output has a typed owner in this plan "
-    "and asks the user to clarify uncertain delivery instructions. "
+    "separate. For PDF, online preview and bibliography, the host binds owners to the "
+    "confirmed Deliverables field on the plan review card. "
     "For other requirements use deliverable_kinds=[]. Quote generic requests for study design, "
     "methods and reporting separately from named scientific methods or data. The host checks "
     "each generic request against the typed owners actually present in this plan."
@@ -1120,7 +1121,6 @@ def judge_question_requirements(
     """
 
     requirements = tuple(requirements)
-    requested_deliveries = delivery_requests(question or getattr(plan, "research_question", None) or "")
     judged = tuple(
         _judge(
             item,
@@ -1130,7 +1130,6 @@ def judge_question_requirements(
             check_gap=check_gap,
             sealed_owner_concepts=sealed_owner_concepts or {},
             requirements=requirements, host_facts=host_facts, sealed=sealed,
-            requested_deliveries=requested_deliveries,
         )
         for item in requirements
     )
@@ -1153,7 +1152,6 @@ def _judge(
     requirements: Sequence[QuestionRequirement],
     host_facts: Sequence[Mapping[str, Any]],
     sealed: Sequence[str],
-    requested_deliveries: Mapping[DeliverableKind, DeliveryRequest],
 ) -> JudgedRequirement:
     planned = (
         requested_plan_deliverables(item.quote)
@@ -1161,14 +1159,17 @@ def _judge(
         and not (item.gap and item.gap.concept) else ()
     )
     stated_deliveries = requirement_delivery_kinds(item)
-    if any(requested_deliveries.get(kind) is DeliveryRequest.AMBIGUOUS for kind in stated_deliveries):
+    selection = getattr(plan, "deliverables", None)
+    host_kinds = set(stated_deliveries).intersection(HOST_DELIVERY_KINDS)
+    if selection and host_kinds and not selection.confirmed:
         return JudgedRequirement(
             item, "needs_clarification", HOST_DELIVERY_CLARIFICATION, host_judged=True,
             gap=item.gap, verification="unverified" if item.gap else None,
             fact=HOST_DELIVERY_CLARIFICATION_MESSAGE,
         )
     delivery_kinds = tuple(
-        kind for kind in stated_deliveries if requested_deliveries.get(kind) is not DeliveryRequest.NOT_REQUESTED
+        kind for kind in stated_deliveries
+        if kind not in host_kinds or selection is None or kind in selection.requested
     )
     if stated_deliveries and not delivery_kinds:
         return JudgedRequirement(
@@ -1316,7 +1317,7 @@ def _judge(
         item,
         "not_covered",
         QUESTION_REQUIREMENT_APPROVAL_STOPS["not_covered"],
-        reading_step_ids=reading,
+        reading_step_ids=reading, host_judged=item.kind == "delivery",
     )
 
 
@@ -1342,10 +1343,16 @@ def requirement_delivery_kinds(
         return ()
     if not ignore_gap_concept and item.gap is not None and item.gap.concept is not None:
         return ()
-    # Stored untyped requirements need a conservative compatibility reader.
-    return item.deliverable_kinds or (
-        requested_deliverable_kinds(item.quote) if item.kind in {"analysis", "delivery"} else ()
-    )
+    if item.kind not in {"analysis", "delivery"} or item.clauses:
+        return ()
+    if item.deliverable_kinds and not set(item.deliverable_kinds).intersection(HOST_DELIVERY_KINDS):
+        # Figures and tables already bind to the scientific plan's products.
+        return item.deliverable_kinds
+    kinds = neutral_delivery_kinds(item.quote)
+    # The Planner's kind is a claim. A mixed quote must stay with science.
+    if item.deliverable_kinds and set(item.deliverable_kinds) != set(kinds):
+        return ()
+    return kinds
 
 
 def _judge_effect_measure(
@@ -1673,6 +1680,17 @@ def question_requirement_findings(
     """The approval stops, then the visible records: claims, definitions, unstated names."""
 
     findings: list[ValidationFinding] = []
+    pending = [entry for entry in judged if entry.disposition == "needs_clarification"]
+    if pending:
+        findings.append(ValidationFinding(
+            validator="question_requirements",
+            severity="error",
+            message=HOST_DELIVERY_CLARIFICATION_MESSAGE,
+            detail={
+                "reason": HOST_DELIVERY_CLARIFICATION, "human_review_required": True,
+                "approval_allowed": False, "requirements": [entry.row() for entry in pending],
+            },
+        ))
     causes = {
         "not_covered": "no step of the plan answers",
         "capability_gap": "this plan cannot answer",
@@ -1903,7 +1921,7 @@ def question_requirements_record(
         "schema_version": QUESTION_REQUIREMENTS_SCHEMA_VERSION,
         "route": route,
         "compiled_plan_sha256": analysis_plan_sha256(plan),
-        **({"question": question} if question and question != plan.research_question else {}),
+        "question": question or plan.research_question,
         "stated": [item.model_dump(mode="json") for item in requirements],
         "named_concepts": [item.model_dump(mode="json") for item in named],
         "denoted_columns": {
@@ -2046,12 +2064,11 @@ def judge_recorded_requirements(
         check_gap=lambda gap: checks[_gap_key(gap)],
         sealed_owner_concepts=sealed_owner_concepts,
         host_facts=host_facts, sealed=sealed,
-        question=question or recorded_question,
+        question=recorded_question or question or plan.research_question,
     )
-    if quote_spans:
-        judged = tuple(
-            replace(entry, quote_span=quote_spans.get(entry.requirement.id)) for entry in judged
-        )
+    judged = tuple(
+        replace(entry, quote_span=quote_spans.get(entry.requirement.id)) for entry in judged
+    )
     unstated = (
         ()
         if route == "family_template"
@@ -2075,6 +2092,7 @@ def judge_recorded_requirements(
             "plan_sha256": analysis_plan_sha256(plan),
             "planning_record_sha256": record_sha256,
             "route": route,
+            "question": recorded_question or question or plan.research_question,
             "judged": [
                 *(entry.row() for entry in judged),
                 *(entry.row() for entry in measures),

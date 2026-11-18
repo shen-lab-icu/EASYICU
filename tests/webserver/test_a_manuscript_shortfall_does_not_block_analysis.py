@@ -151,9 +151,15 @@ def test_deliverable_verdicts_use_typed_codes_without_changing_analysis(change, 
     ("article_preview", "Show the collection report in the browser"),
     ("references", "Provide the source bibliography for the collection report"),
 ])
-def test_a_promised_host_deliverable_without_a_current_artifact_fails_closed(tmp_path, kind, intent):
+@pytest.mark.parametrize("has_owner", [True, False])
+def test_a_promised_host_deliverable_without_a_current_artifact_fails_closed(tmp_path, kind, intent, has_owner):
+    from easyicu.research_agent.contracts.product_files import PlanDeliverables
+
     step = AnalysisStep(step_id="report_delivery", intent=intent, host_delivery_kind=kind)
-    plan = AnalysisPlan(research_question=intent, steps=[step])
+    plan = AnalysisPlan(
+        research_question=intent, steps=[step] if has_owner else [],
+        deliverables=PlanDeliverables(requested=(kind,), confirmed=True, source="user_edit"),
+    )
     old_name = {
         "article_preview": "manuscript_provenance.json",
         "manuscript_pdf": "manuscript_pdf_receipt.json",
@@ -167,9 +173,10 @@ def test_a_promised_host_deliverable_without_a_current_artifact_fails_closed(tmp
     reason = f"research_pipeline_{kind}_delivery_unverified"
     assert gate["status"] == "blocked"
     assert gate["reason"] == reason
-    assert gate["host_delivery_steps"] == [
+    expected_steps = [
         {"step_id": "report_delivery", "kind": kind, "status": "unverified", "reason_code": reason},
-    ]
+    ] if has_owner else []
+    assert gate["host_delivery_steps"] == expected_steps
     assert gate["manuscript_outcome"] == {"status": "not_passed", "reason_code": reason}
     assert gate["draft_unlocked"] is False
     assert gate["reportable"] is False
@@ -286,7 +293,11 @@ def test_the_writer_delivers_only_the_current_run_plan_and_artifact(tmp_path, mo
         ]
         loaded = read_run_artifact_bytes(str(wrapper), name)
         assert loaded["ok"], loaded
-        assert any(row["name"] == name and row["bytes"] for row in result["artifacts"])
+        artifacts = {row["name"] for row in result["artifacts"] if row["bytes"]}
+        assert name in artifacts
+        assert artifacts.intersection({
+            "manuscript_draft.json", "manuscript_scaffold.pdf", "manuscript_scaffold.bib",
+        }) == {name}
 
 
 @pytest.mark.parametrize("change, status, manuscript", [
@@ -319,3 +330,23 @@ def test_delivery_checks_follow_execution_analysis_and_writer_policy(tmp_path, c
     assert gate["manuscript_outcome"] == manuscript
     assert gate["reason"] != "research_pipeline_manuscript_pdf_delivery_unverified"
     assert "host_delivery_steps" not in gate
+
+
+def test_lost_plan_hides_promised_pdf_even_while_delivery_is_inactive(tmp_path, monkeypatch):
+    from easyicu.research_agent.contracts.product_files import HOST_DELIVERY_RECEIPT, HOST_DELIVERY_RECEIPT_SCHEMA
+    from easyicu.webserver import agent_pipeline_runs
+
+    def prepare(run_dir, axes):
+        (run_dir / HOST_DELIVERY_RECEIPT).write_text(json.dumps({
+            "schema_version": HOST_DELIVERY_RECEIPT_SCHEMA, "run_id": run_dir.name,
+            "planned_owners": {"manuscript_pdf": "pdf"}, "deliveries": {},
+        }))
+
+    def documents(run_dir):
+        assert run_dir is None, "the lost plan cannot authorize reading an old PDF"
+        return None, []
+
+    monkeypatch.setattr(agent_pipeline_runs, "_validated_manuscript_documents", documents)
+    result = _project(tmp_path, prepare=prepare, analysis_validated=False)
+    assert result["gate"]["status"] == "blocked"
+    assert "manuscript_scaffold.pdf" not in {row["name"] for row in result["artifacts"]}

@@ -58,6 +58,52 @@
       && Array.isArray(repairs) && repairs.length > 0;
   }
 
+  const DELIVERABLE_KINDS = ['manuscript_pdf', 'article_preview', 'references'];
+
+  function deliverablesField(selection, { tr, esc, disabled }) {
+    if (!selection) return '';
+    const names = ['PDF', tr('Online preview', '在线预览'), tr('References', '参考文献')];
+    const requested = selection.requested || [];
+    const check = selection.check || [];
+    const fields = DELIVERABLE_KINDS.map((kind, index) => {
+      const value = check.includes(kind) ? '' : requested.includes(kind) ? 'yes' : 'no';
+      const option = (key, label) => `<option value="${key}"${value === key ? ' selected' : ''}>${esc(label)}</option>`;
+      return `<label>${esc(names[index])}<select name="${kind}" required data-gpi-deliverable-original="${value}"${disabled ? ' disabled' : ''}>
+        ${check.includes(kind) ? option('', tr('Choose', '请选择')) : ''}${option('yes', tr('Yes', '是'))}${option('no', tr('No', '否'))}
+      </select></label>`;
+    }).join('');
+    const articleConflict = selection.article_required && requested.length;
+    return `<form data-gpi-plan-deliverables${selection.article_required ? ' data-gpi-analysis-deliverables' : ''}>
+      <fieldset class="gpi-plan-deliverables">
+        <legend>${esc(tr('Deliverables', '交付物'))}</legend>
+        <div class="gpi-plan-deliverable-choices">${fields}</div>
+        <div data-gpi-deliverables-article${articleConflict ? '' : ' hidden'}>
+          <small>${esc(tr('Start a separate article run to keep these deliverables.', '如需保留这些交付物，请另行启动论文任务。'))}</small>
+          <button type="button" class="btn sm" data-gpi-confirm-edit${disabled ? ' disabled' : ''}>${esc(tr('Revise in the conversation', '在对话里修改'))}</button>
+        </div>
+        <button type="submit" class="btn primary sm" data-gpi-deliverables-apply disabled>${esc(tr('Generate fresh plan', '重新生成计划'))}</button>
+      </fieldset>
+    </form>`;
+  }
+
+  function deliverableSelection(form) {
+    const fields = Array.from(form.querySelectorAll('select[data-gpi-deliverable-original]'));
+    const requested = fields.filter(field => field.value === 'yes').map(field => field.name);
+    const changed = fields.some(field => field.value !== field.dataset.gpiDeliverableOriginal);
+    const complete = fields.length === DELIVERABLE_KINDS.length
+      && fields.every(field => field.value === 'yes' || field.value === 'no');
+    const requiresArticle = form.hasAttribute('data-gpi-analysis-deliverables') && requested.length > 0;
+    const forward = form.querySelector('[data-gpi-deliverables-apply]');
+    forward.disabled = !complete || !changed || requiresArticle || fields.some(field => field.disabled);
+    form.querySelector('[data-gpi-deliverables-article]').hidden = !requiresArticle;
+    const approve = form.closest('.gpi-confirmation')?.querySelector('[data-gpi-confirm-action]');
+    if (approve) {
+      approve.dataset.originalDisabled ??= String(approve.disabled);
+      approve.disabled = approve.dataset.originalDisabled === 'true' || changed;
+    }
+    return forward.disabled ? null : requested;
+  }
+
   function create(host) {
     const tr = host.tr;
     const regeneration = host.regeneration;
@@ -943,8 +989,40 @@
       await host.sendText(confirmation.rejectMessage, confirmation.grants, undefined, true, 'host_prompt');
     }
 
+    async function saveDeliverables(requested) {
+      const session = host.session() || {};
+      const binding = session.binding || {};
+      const project = host.projectId();
+      const review = (host.workflow() || {}).plan_review_summary || {};
+      if (!review.deliverables || !review.run_id || !binding.study_context_id || !binding.study_revision) return;
+      const stillCurrent = () => host.projectId() === project && host.session()?.session_id === session.session_id;
+      setPending(true);
+      try {
+        await host.api().saveStudyContext({
+          id: binding.study_context_id, expected_revision: binding.study_revision, active: false,
+          deliverables_source_run_id: review.run_id,
+          plan_deliverables: { requested, confirmed: true, source: 'user_edit' },
+        });
+        if (!stillCurrent()) return;
+        await host.refreshSession(true);
+        await host.loadWorkflow();
+        if (!stillCurrent()) return;
+        host.setBusy(false);
+        if (workflowCode() === 'plan_configuration_superseded') {
+          await startFormalPlanGeneration('plan_configuration_superseded');
+        } else {
+          host.render();
+        }
+      } catch (error) {
+        if (!stillCurrent()) return;
+        host.setBusy(false);
+        showRunFailure(error, false);
+      }
+    }
+
     async function confirmDecision(selection) {
       if (!selection || unavailable()) return;
+      if (Array.isArray(selection.deliverables)) return saveDeliverables(selection.deliverables);
       const session = host.session() || {};
       const binding = session.binding || {};
       const expectedRevision = Number(binding.study_revision || 0);
@@ -1049,5 +1127,5 @@
     });
   }
 
-  window.EasyICU.guidedPi.declare('planActions', { create, canRetryStoppedPlan });
+  window.EasyICU.guidedPi.declare('planActions', { create, canRetryStoppedPlan, deliverablesField, deliverableSelection });
 })();

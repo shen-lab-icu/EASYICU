@@ -2845,9 +2845,16 @@ class ResearchAgentPipeline:
         validate_plan_against_adjustment_authority(plan=plan, context=agent_context)
         self._scientific_runtime_authorities.validate_plan(plan)
         if not reused_prior_plan:
-            from .planning.requirement_typing.delivery import bind_requested_host_delivery
+            from .contracts.product_files import PlanDeliverables
+            from .planning.requirement_typing.delivery import (
+                bind_confirmed_host_delivery, bind_requested_host_delivery,
+            )
 
-            plan = bind_requested_host_delivery(plan, question=context.research_question)
+            selection = self._config.bound_plan_deliverables
+            if selection is None:
+                plan = bind_requested_host_delivery(plan, question=context.research_question)
+            else:
+                plan = bind_confirmed_host_delivery(plan, PlanDeliverables.model_validate(selection))
         plan_path = (
             migrated_plan_path or reused_plan_path or (run_dir / "analysis_plan.json")
         )
@@ -5000,7 +5007,7 @@ class ResearchAgentPipeline:
 
         def _human_review_invoker(plan_result):
             return _pipeline_run___human_review_invoker(
-                plan_result, reviewed_plan=reviewed_plan, self=self
+                plan_result, reviewed_plan=reviewed_plan, self=self, stop_after_analysis=stop_after_analysis,
             )
 
         def _human_review_recorder(records):
@@ -7172,13 +7179,14 @@ def _pipeline_run___review_evidence_store(
     return EvidenceStore(run_dir, enforcement_mode=self._evidence_enforcement_mode)
 
 
-def _pipeline_run___human_review_invoker(plan_result, *, reviewed_plan: Any, self: Any):
+def _pipeline_run___human_review_invoker(plan_result, *, reviewed_plan: Any, self: Any, stop_after_analysis=False):
     from .orchestration.workflow import human_review_requests_for_plan
     from .planning.approval_stops import delivery_approval_stop
 
     question = getattr(getattr(plan_result, "context", None), "research_question", None)
+    article_allowed = not stop_after_analysis and getattr(self._config, "generate_manuscript", None) is not False
     delivery_stop = (
-        delivery_approval_stop(plan_result.plan, question)
+        delivery_approval_stop(plan_result.plan, article_allowed=article_allowed)
         if isinstance(plan_result.plan, AnalysisPlan) else None
     )
     if delivery_stop is None:
@@ -7230,7 +7238,7 @@ def _pipeline_run___human_review_invoker(plan_result, *, reviewed_plan: Any, sel
             plan=plan_result.plan,
             evidence=plan_evidence,
             require_plan_review=self._config.require_human_plan_review,
-            question=question,
+            question=question, article_allowed=article_allowed,
         )
         if not requests_without_execution:
             return requests_without_execution
@@ -7259,7 +7267,7 @@ def _pipeline_run___human_review_invoker(plan_result, *, reviewed_plan: Any, sel
         evidence=plan_evidence,
         execution_authority=execution_authority,
         require_plan_review=self._config.require_human_plan_review,
-        question=question,
+        question=question, article_allowed=article_allowed,
     )
     return requests
 

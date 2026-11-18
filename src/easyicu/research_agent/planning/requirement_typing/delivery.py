@@ -10,8 +10,8 @@ from ...contracts.model_terms import PreparationRefusal, preparation_for_step
 from ...contracts.primary_cohort import primary_analysis_cohort_producer_uses_universe
 from ...contracts.prediction_subgroup import prediction_subgroup_step_matches
 from ...contracts.product_files import (
-    DeliverableKind, DeliveryRequest, HOST_DELIVERY_KINDS, RUN_DELIVERY_SCHEMA_VERSION,
-    delivery_requests, host_delivery_coverage,
+    DeliverableKind, DeliveryRequest, HOST_DELIVERY_KINDS, PlanDeliverables, RUN_DELIVERY_SCHEMA_VERSION,
+    delivery_requests, host_delivery_coverage, host_delivery_owners,
 )
 from ...contracts.product_identity import is_canonical_typed_product_token, typed_product
 from ..question_quote import normalize_question_quote
@@ -135,20 +135,24 @@ def _owns(kind: PlanDeliverableKind, step: AnalysisStep, plan: AnalysisPlan) -> 
     )
 
 
-def bind_requested_host_delivery(plan: AnalysisPlan, *, question: str | None = None) -> AnalysisPlan:
-    """Append the requested terminal steps to the scientific plan."""
+def prefill_plan_deliverables(question: str) -> PlanDeliverables:
+    requests = delivery_requests(question)
+    check = tuple(kind for kind, state in requests.items() if state is DeliveryRequest.CHECK)
+    return PlanDeliverables(
+        requested=tuple(kind for kind, state in requests.items() if state is DeliveryRequest.REQUESTED),
+        check=check, confirmed=not check, source="detector_prefill",
+    )
+
+
+def bind_confirmed_host_delivery(plan: AnalysisPlan, selection: PlanDeliverables) -> AnalysisPlan:
+    """Bind the selected terminal owners to the current scientific plan."""
     from ...schema import AnalysisStep
 
-    requests = delivery_requests(question or plan.research_question)
-    kept = [
-        step for step in plan.steps
-        if step.host_delivery_kind is None or requests.get(step.host_delivery_kind) is DeliveryRequest.AMBIGUOUS
-    ]
-    kinds = () if first_result(plan) else tuple(
-        kind for kind in HOST_DELIVERY_KINDS if requests.get(kind) is DeliveryRequest.REQUESTED
+    kept = [step for step in plan.steps if step.host_delivery_kind is None]
+    kinds = (
+        tuple(kind for kind in HOST_DELIVERY_KINDS if kind in selection.requested)
+        if selection.confirmed and not first_result(plan) else ()
     )
-    if not kinds and len(kept) == len(plan.steps):
-        return plan
     used_ids = {step.step_id for step in kept}
     intents = {
         "article_preview": "Deliver the evidence-bound article preview",
@@ -161,7 +165,12 @@ def bind_requested_host_delivery(plan: AnalysisPlan, *, question: str | None = N
         while step_id in used_ids:
             step_id += "_host"
         added.append(AnalysisStep(step_id=step_id, intent=intents[kind], host_delivery_kind=kind))
-    return plan.model_copy(update={"steps": [*kept, *added]})
+    return plan.model_copy(update={"deliverables": selection, "steps": [*kept, *added]})
+
+
+def bind_requested_host_delivery(plan: AnalysisPlan, *, question: str | None = None) -> AnalysisPlan:
+    """Initialize a fresh candidate with the host's reading of the original question."""
+    return bind_confirmed_host_delivery(plan, prefill_plan_deliverables(question or plan.research_question))
 
 
 def planned_run_delivery_evidence(
@@ -169,10 +178,11 @@ def planned_run_delivery_evidence(
 ) -> dict[str, object] | None:
     """Bind each run deliverable to the plan that this judgment will review."""
     product_kinds: dict[DeliverableKind, str] = {"figures": "figure", "result_tables": "table"}
+    owners = host_delivery_owners(plan.model_dump(mode="json")) if getattr(plan, "deliverables", None) is not None else {}
     return host_delivery_coverage({
         kind: [
             step.step_id for step in plan.steps
-            if step.host_delivery_kind == kind or any(
+            if step.step_id == owners.get(kind) or any(
                 is_canonical_typed_product_token(output) and output.partition(":")[0] == product_kinds.get(kind)
                 for output in step.expected_outputs
             )

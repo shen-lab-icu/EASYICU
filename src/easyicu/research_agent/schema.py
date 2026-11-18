@@ -33,6 +33,7 @@ from pydantic import (
     model_serializer,
     model_validator,
 )
+from pydantic.json_schema import SkipJsonSchema
 
 from .contracts.capability_declaration import (
     validate_scientific_capability_declarations,
@@ -70,7 +71,7 @@ from .contracts.model_tokens import (
     normalise_model_contract_token as _normalise_model_contract_token,
 )
 from .contracts.post_analysis import EValueConversionSpec, SubgroupAnalysisSpec
-from .contracts.product_files import HostDeliveryKind
+from .contracts.product_files import HostDeliveryKind, PlanDeliverables
 from .contracts.product_identity import is_canonical_typed_product_token
 from .contracts.runtime_outcomes import RuntimeOutcomeContract
 from .contracts.runtime_dependence import RuntimeDependencePlanFields
@@ -2251,6 +2252,10 @@ class AnalysisPlan(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     research_question: str
+    deliverables: SkipJsonSchema[PlanDeliverables | None] = Field(
+        default=None, exclude_if=lambda value: value is None,
+        description="Host-owned deliverable selection bound to the plan's approval.",
+    )
     analysis_type: Optional[str] = Field(
         default=None,
         description=(

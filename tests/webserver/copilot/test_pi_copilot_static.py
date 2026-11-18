@@ -32,7 +32,7 @@ def test_node_prompt_obeys_owner_order_before_internal_resolution() -> None:
 
 def test_pi_shell_assets_are_explicitly_wired_before_guided_owner() -> None:
     index = _read("index.html")
-    assert "css/guided-pi.css?v=20261028-wait1-cfg1" in index
+    assert "css/guided-pi.css?v=20261118-s1368" in index
     assert "css/guided-pi-clinical-card.css?v=20261025-owner-split1" in index
     # The connection dialog sheet reads the provider tokens the base sheet defines.
     assert index.index("css/guided-pi.css?v=") < index.index("css/guided-pi-connect.css?v=20261026-openrouter1") < index.index("css/guided-pi-header.css?v=")
@@ -99,7 +99,7 @@ def test_pi_shell_assets_are_explicitly_wired_before_guided_owner() -> None:
         "js/screens-guided-pi-connect.js"
     ) < index.index("js/screens-guided-pi.js")
     assert "js/screens-guided-pi-study-workspace.js?v=20261102-ui1" in index
-    assert "js/screens-guided-pi-events.js?v=20261117-fix1" in index
+    assert "js/screens-guided-pi-events.js?v=20261118-s1368" in index
     assert "js/screens-guided-pi-project.js?v=20261026-projects1" in index
     assert "js/screens-guided-pi-data-consent.js?v=20261102-demo2" in index
     assert "js/screens-guided-pi-data-binding.js?v=20261029-journey3" in index
@@ -118,7 +118,7 @@ def test_pi_shell_assets_are_explicitly_wired_before_guided_owner() -> None:
         < index.index("js/screens-guided-pi-confirmation.js")
     )
     assert "js/screens-guided-pi-confirmation-data.js?v=20261102-population1" in index
-    assert "js/screens-guided-pi-confirmation.js?v=20261118-e2e1v" in index
+    assert "js/screens-guided-pi-confirmation.js?v=20261118-s1368" in index
     assert index.index("js/screens-guided-pi-confirmation-data.js") < index.index("js/screens-guided-pi-confirmation.js")
     # The plan-approval card renders the database capability review through this owner.
     assert "js/screens-guided-pi-source-adjustments.js?v=20261026-quick2" in index
@@ -137,7 +137,7 @@ def test_pi_shell_assets_are_explicitly_wired_before_guided_owner() -> None:
     assert "js/screens-guided-pi-review-items.js?v=20261026-review1" in index
     assert index.index("js/screens-guided-pi-review-items.js") < index.index("js/screens-guided-pi-run-outcome.js")
     assert "css/guided-pi-source-adjustments.css?v=20261026-six1" in index
-    assert "js/screens-guided-pi-plan-actions.js?v=20261117-run2" in index
+    assert "js/screens-guided-pi-plan-actions.js?v=20261118-s1368" in index
     assert "js/screens-guided-pi-quick-answers.js?v=20261117-distribution1" in index
     assert "js/screens-guided-pi-childjob.js?v=20261026-recovered1" in index
     assert "js/screens-guided-pi-error-text.js?v=20261111-s872" in index

@@ -4948,11 +4948,12 @@ def _check_host_manuscript_delivery(
     pdf_receipt: Optional[Dict[str, Any]],
 ) -> set[str]:
     from easyicu.research_agent.contracts.product_files import (
-        host_delivery_failure_code, verified_host_deliveries,
+        confirmed_host_delivery_kinds, host_delivery_failure_code, verified_host_deliveries,
     )
     from easyicu.research_agent.reporting.completion import completion_outcomes
 
-    if not owners:
+    requested = confirmed_host_delivery_kinds(plan) if "deliverables" in plan else tuple(owners)
+    if not requested:
         return set()
     verified = verified_host_deliveries(
         run_dir, run_id=run_dir.name, plan_sha256=canonical_sha256(plan), owners=owners,
@@ -4978,7 +4979,7 @@ def _check_host_manuscript_delivery(
         documents[:] = [row for row in documents if row["name"] != name]
         documents.append({"name": name, "content": bibliography[name], "media_type": _MANUSCRIPT_DOCUMENT_SPECS[name][0]})
 
-    failures = {kind: host_delivery_failure_code(kind) for kind in owners if kind not in verified}
+    failures = {kind: host_delivery_failure_code(kind) for kind in requested if kind not in verified}
     gate["host_delivery_steps"] = [
         {"kind": kind, "step_id": step_id, "status": "verified" if kind in verified else "unverified",
          "reason_code": failures.get(kind)}
@@ -5216,16 +5217,17 @@ def _write_projection(
         run_dir is not None and pending is None and not blocked_reason and host_delivery_checks_apply(axes)
     )
     delivery_owners = host_delivery_owners(plan)
-    if delivery_active and not plan:
+    if run_dir is not None and not plan:
         delivery_owners = recorded_host_delivery_owners(run_dir, run_id=run_dir.name)
         delivery_owners.update(host_delivery_owners({"steps": [
             {"host_delivery_kind": row.get("kind"), "step_id": row.get("step_id")}
             for row in (axes.get("host_delivery_steps") or ()) if isinstance(row, Mapping)
         ]}))
     planned_pdf = "manuscript_pdf" in delivery_owners
+    explicit_delivery = isinstance(plan.get("deliverables"), Mapping)
     try:
         pdf_receipt, manuscript_documents = _validated_manuscript_documents(
-            None if planned_pdf and not delivery_active else run_dir
+            None if (planned_pdf and not delivery_active) or (explicit_delivery and not planned_pdf) else run_dir
         )
     except ResearchPipelineRunError:
         if not planned_pdf:
@@ -5247,6 +5249,12 @@ def _write_projection(
             }]
         if "references" in failed_deliveries:
             manuscript_documents = [row for row in manuscript_documents if row["name"] != "manuscript_scaffold.bib"]
+    if explicit_delivery:
+        if "article_preview" not in delivery_owners or not delivery_active:
+            manuscript_text, manuscript_provenance, claims = "", {}, []
+        if "references" not in delivery_owners or not delivery_active:
+            manuscript_documents = [row for row in manuscript_documents if row["name"] != "manuscript_scaffold.bib"]
+
     scientific_readiness = build_scientific_readiness_projection(
         run_id=run_id,
         run_dir=run_dir,
@@ -5410,6 +5418,8 @@ def _write_projection(
         "result_tables.json": result_tables,
         "source_run_manifest.json": source_manifest,
     }
+    if explicit_delivery and "article_preview" not in delivery_owners:
+        payloads.pop("manuscript_draft.json")
     from .data_provenance_projection import load_data_provenance_projection
     payloads["data_provenance.json"] = load_data_provenance_projection(run_dir)
     system_figure_gallery = None
@@ -5479,7 +5489,7 @@ def _write_projection(
         _write_json(wrapper_dir / name, payload)
     # A resumed wrapper can still contain exports from its last projection.
     # Purge those without a current validated document or JSON payload.
-    for name in (*_RUN_DOCUMENT_SPECS, "manuscript_provenance.json", "manuscript_pdf_receipt.json"):
+    for name in (*_RUN_DOCUMENT_SPECS, "manuscript_draft.json", "manuscript_provenance.json", "manuscript_pdf_receipt.json"):
         if name not in payloads:
             (wrapper_dir / name).unlink(missing_ok=True)
     document_rows: List[Dict[str, Any]] = []
@@ -5748,9 +5758,8 @@ def pending_review(run_id: Any) -> Optional[Dict[str, Any]]:
         isinstance(source_manifest, Mapping)
         and source_manifest.get("plan_revision_nonconvergent") is True
     )
-    plan_recommendation_complete = _plan_has_complete_reviewable_recommendation(
-        _pending_plan_authority(pending)
-    )
+    reviewed_plan = _pending_plan_authority(pending)
+    plan_recommendation_complete = _plan_has_complete_reviewable_recommendation(reviewed_plan)
     run_dir = Path(pending.run_dir)
     scientific_plan_review = _load_pending_scientific_review(run_dir, pending)
     from easyicu.webserver.pi_copilot.population_acceptance import current_review_study, population_acceptance_proposal
@@ -5770,6 +5779,11 @@ def pending_review(run_id: Any) -> Optional[Dict[str, Any]]:
     return {
         **({"deferred_input_scope": deferred_scope} if deferred_scope is not None else {}),
         "run_id": pending.run_id,
+        "deliverables": reviewed_plan.get("deliverables"),
+        "deliverables_require_article": (
+            (reviewed_plan.get("design_selection") or {}).get("execution_tier") == "first_result"
+            or any(request.payload.get("reason") == "first_result_delivery_requires_article" for request in pending.requests)
+        ),
         "study_id": _clean_text(study.get("id"), 160),
         "scientific_configuration_sha256": (
             study_context_owner.scientific_configuration_sha256(study)
@@ -8425,6 +8439,7 @@ def make_research_pipeline_run_runner(
                 latex_draft_watermark=True,
                 bound_preplan_literature=bound_preplan_literature,
                 bound_plan_revision_contract=(bound_plan_revision_contract or None),
+                bound_plan_deliverables=study.get("plan_deliverables"),
                 bound_population_requirements=(
                     bound_population_requirements.model_dump(mode="json")
                     if bound_population_requirements is not None else None

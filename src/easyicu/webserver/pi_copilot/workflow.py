@@ -793,7 +793,7 @@ def build_research_workflow_snapshot(
             # How the selected database changes the study (db capability review).
             **({"source_adjustments": source_adjustments} if source_adjustments is not None else {}),
         }
-        if raw_scientific_review
+        if raw_scientific_review or isinstance(review_authority.get("deliverables"), Mapping)
         else None
     )
     current_scientific_digest = study_context_owner.scientific_configuration_sha256(
@@ -828,6 +828,13 @@ def build_research_workflow_snapshot(
         and plan_configuration_matches
         and not (planning_running or analysis_running)
     )
+    if plan_review_pending and plan_review_summary is not None:
+        deliverables = review_authority.get("deliverables")
+        if isinstance(deliverables, Mapping):
+            plan_review_summary["deliverables"] = {
+                **deliverables,
+                "article_required": review_authority.get("deliverables_require_article") is True,
+            }
     # Sibling choices may continue across host-receipted edits, but the
     # superseded candidate still cannot be approved or executed.
     choices_pending = bool(

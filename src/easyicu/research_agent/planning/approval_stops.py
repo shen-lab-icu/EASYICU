@@ -22,16 +22,14 @@ from typing import Iterable
 
 from ..contracts.claim_ceiling import first_result
 from ..contracts.product_files import (
-    DeliveryRequest,
     HOST_DELIVERY_CLARIFICATION,
     HOST_DELIVERY_CLARIFICATION_MESSAGE,
     HOST_DELIVERY_KINDS,
-    RUN_DELIVERABLES,
-    delivery_requests,
 )
 from ..schema import AnalysisPlan, ValidationFinding
 from .population_compile import POPULATION_APPROVAL_STOPS
 from .question_requirements import (
+    QUESTION_REQUIREMENT_APPROVAL_STOPS,
     QUESTION_REQUIREMENT_STOP_CODES,
     question_requirements_on_plan_under_review,
 )
@@ -43,47 +41,43 @@ PLAN_APPROVAL_STOPS: tuple[str, ...] = (
     *DELIVERY_APPROVAL_STOPS,
     *POPULATION_APPROVAL_STOPS.values(),
     "population_criterion_decision_unconfirmed",
-    *QUESTION_REQUIREMENT_STOP_CODES,
+    *(code for code in QUESTION_REQUIREMENT_STOP_CODES if code not in DELIVERY_APPROVAL_STOPS),
 )
 
 
-def first_result_delivery_stop(plan: AnalysisPlan, question: str | None = None) -> ValidationFinding | None:
+def first_result_delivery_stop(plan: AnalysisPlan) -> ValidationFinding | None:
     """Keep the desktop analysis profile sealed when the question needs the Writer."""
-    return delivery_approval_stop(plan, question) if first_result(plan) else None
+    return delivery_approval_stop(plan) if first_result(plan) else None
 
 
-def delivery_approval_stop(plan: AnalysisPlan, question: str | None = None) -> ValidationFinding | None:
+def delivery_approval_stop(plan: AnalysisPlan, *, article_allowed: bool = True) -> ValidationFinding | None:
     """Resolve a delivery decision before offering the plan for approval."""
-    requests = delivery_requests(question or plan.research_question)
-    ambiguous = [kind for kind in RUN_DELIVERABLES if requests.get(kind) is DeliveryRequest.AMBIGUOUS]
-    if ambiguous:
-        return ValidationFinding(
-            validator="question_requirements",
-            severity="error",
-            message=HOST_DELIVERY_CLARIFICATION_MESSAGE,
-            detail={
-                "reason": HOST_DELIVERY_CLARIFICATION, "deliverable_kinds": ambiguous,
-                "human_review_required": True, "approval_allowed": False,
-            },
-        )
-    if not first_result(plan):
-        return None
+    selection = plan.deliverables
     existing = {step.host_delivery_kind for step in plan.steps}
-    kinds = [
-        kind for kind in HOST_DELIVERY_KINDS
-        if kind in existing or requests.get(kind) is DeliveryRequest.REQUESTED
-    ]
+    requested = selection.requested if selection is not None else tuple(
+        kind for kind in HOST_DELIVERY_KINDS if kind in existing
+    )
+    if selection is not None and not selection.confirmed:
+        kinds = selection.check
+        reason = HOST_DELIVERY_CLARIFICATION
+        message = HOST_DELIVERY_CLARIFICATION_MESSAGE
+    elif not article_allowed or first_result(plan):
+        kinds = requested
+        reason = FIRST_RESULT_DELIVERY_STOP
+        message = (
+            "Analysis-only first results cannot produce the requested article deliverables. "
+            "Revise the request in the conversation, or start a separate article run."
+        )
+    else:
+        kinds = tuple(kind for kind in requested if kind not in existing)
+        reason = QUESTION_REQUIREMENT_APPROVAL_STOPS["not_covered"]
+        message = "The plan lacks a typed owner for at least one selected deliverable."
     if not kinds:
         return None
     return ValidationFinding(
-        validator="question_requirements",
-        severity="error",
-        message=(
-            "Analysis-only first results cannot produce the requested article deliverables. "
-            "Revise the request in the conversation, or start a separate article run."
-        ),
+        validator="question_requirements", severity="error", message=message,
         detail={
-            "reason": FIRST_RESULT_DELIVERY_STOP, "deliverable_kinds": kinds,
+            "reason": reason, "deliverable_kinds": list(kinds),
             "human_review_required": True, "approval_allowed": False,
         },
     )

@@ -15,6 +15,8 @@ from pathlib import Path
 from types import MappingProxyType
 from typing import Literal, Mapping, Sequence
 
+from pydantic import BaseModel, ConfigDict, model_validator
+
 
 FIGURE_SUFFIXES = frozenset({".png", ".svg", ".pdf", ".tif", ".tiff"})
 KNOWN_FILE_SUFFIXES = frozenset(
@@ -218,79 +220,104 @@ _DELIVERY_PLEASE = r"(?:\bplease\s+|请\s*)"
 _DIRECT_NEGATION = (
     rf"(?:\b(?:do\s+not|don['’]t|never|no|not)\b|无需|不必|不要|不需要|不用|(?:不|别|勿)(?={_DELIVERY_VERB}))"
 )
-_DELIVERY_CLAUSE_BOUNDARY = re.compile(
-    rf"(?:[,，]\s*(?:(?:\band\s+|并\s*))?|\band\s+|并\s*)"
-    rf"(?=(?:{_DELIVERY_PLEASE})?(?:{_DIRECT_NEGATION}|{_DELIVERY_VERB}))", re.IGNORECASE,
-)
-_DELIVERY_COMMAND = re.compile(rf"^(?:{_DELIVERY_PLEASE})?{_DELIVERY_VERB}", re.IGNORECASE)
-_DELIVERY_RESET = re.compile(_DELIVERY_PLEASE, re.IGNORECASE)
 _DELIVERY_EXCLUSION = re.compile(
     rf"^(?:{_DELIVERY_PLEASE})?(?:{_DIRECT_NEGATION}|\bwithout\b)\s*", re.IGNORECASE,
 )
-_DELIVERY_NEGATION = re.compile(rf"{_DIRECT_NEGATION}|\bwithout\b", re.IGNORECASE)
-_CLINICAL_CONTRAST = re.compile(r"\bwith\s+and\s+without\b", re.IGNORECASE)
+_DELIVERY_CLAUSE_BOUNDARY = re.compile(
+    rf"(?:[,，]\s*(?:(?:\b(?:and|but)\s+|并\s*|但(?:是)?\s*|不过\s*))?"
+    rf"|\b(?:and|but)\s+|并\s*|但(?:是)?\s*|不过\s*)"
+    rf"(?=(?:{_DELIVERY_PLEASE})?(?:{_DIRECT_NEGATION}|{_DELIVERY_VERB}))"
+    rf"|(?=\bwithout\s+(?:(?:a|an|the)\s+)?(?:"
+    + "|".join(spec.request_names for spec in RUN_DELIVERABLES.values()) + r")(?![a-z]))",
+    re.IGNORECASE,
+)
+_DELIVERY_COMMAND = re.compile(rf"^(?:{_DELIVERY_PLEASE})?{_DELIVERY_VERB}", re.IGNORECASE)
+_DELIVERY_RESET = re.compile(_DELIVERY_PLEASE, re.IGNORECASE)
 _DELIVERY_ALTERNATIVE = re.compile(r"\bor\b|或者?|二选一", re.IGNORECASE)
 
 HOST_DELIVERY_CLARIFICATION = "host_delivery_request_ambiguous"
-HOST_DELIVERY_CLARIFICATION_MESSAGE = (
-    "Clarify in the conversation which deliverables you want for this run."
-)
+HOST_DELIVERY_CLARIFICATION_MESSAGE = "Choose which deliverables to include on the plan review card."
 
 
 class DeliveryRequest(Enum):
     REQUESTED = "requested"
     NOT_REQUESTED = "not_requested"
-    AMBIGUOUS = "ambiguous"
+    CHECK = "check"
+
+
+class PlanDeliverables(BaseModel):
+    """The editable selection sealed with a reviewed plan."""
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+    requested: tuple[HostDeliveryKind, ...]
+    check: tuple[HostDeliveryKind, ...] = ()
+    confirmed: bool
+    source: Literal["detector_prefill", "user_edit"]
+
+    @model_validator(mode="after")
+    def _consistent(self) -> PlanDeliverables:
+        if self.confirmed == bool(self.check) or (self.check and self.source == "user_edit"):
+            raise ValueError("A confirmed deliverable set cannot have unresolved choices.")
+        kinds = (*self.requested, *self.check)
+        if len(kinds) != len(set(kinds)):
+            raise ValueError("Each deliverable must have one state.")
+        return self
+
+
+def neutral_delivery_kinds(quote: str) -> tuple[DeliverableKind, ...]:
+    """Read only product identities from an entirely delivery-only quote."""
+    kinds: set[DeliverableKind] = set()
+    for sentence in _DELIVERY_SENTENCE_BOUNDARY.split(quote):
+        for fragment in _DELIVERY_CLAUSE_BOUNDARY.split(sentence):
+            clause = fragment.strip()
+            if not _SEPARATORS.sub("", clause):
+                continue
+            exclusion = _DELIVERY_EXCLUSION.match(clause)
+            if exclusion:
+                clause = clause[exclusion.end():]
+            matched = requested_deliverable_kinds(clause)
+            if not matched:
+                return ()
+            kinds.update(matched)
+    return tuple(kind for kind in RUN_DELIVERABLES if kind in kinds)
 
 
 def _delivery_object_kinds(clause: str) -> set[DeliverableKind]:
     """Read a neutral object at the start of a delivery command."""
     kinds = set(requested_deliverable_kinds(clause))
     if not kinds and _DELIVERY_COMMAND.match(clause):
-        # A command can name the export first and then describe its content.
         for kind, pattern in _DELIVERY_NAMES.items():
-            for name in pattern.finditer(clause):
-                if kind in requested_deliverable_kinds(clause[:name.end()]):
-                    kinds.add(kind)
-                    break
+            if any(kind in requested_deliverable_kinds(clause[:name.end()]) for name in pattern.finditer(clause)):
+                kinds.add(kind)
     return kinds
 
 
-def delivery_requests(question: str) -> dict[DeliverableKind, DeliveryRequest]:
-    """Classify stated deliverables using only clear local commands.
-
-    An unlisted kind has no delivery instruction. NOT_REQUESTED records an
-    explicit exclusion. Keep uncertain scope and contradictory instructions
-    for the user, including after a bare verb coordinated with a negation.
-    """
-    decisions: dict[DeliverableKind, DeliveryRequest] = {}
+def delivery_requests(question: str) -> dict[HostDeliveryKind, DeliveryRequest]:
+    """Suggest initial card values from local delivery commands and exclusions."""
+    decisions: dict[HostDeliveryKind, DeliveryRequest] = {}
     for sentence in _DELIVERY_SENTENCE_BOUNDARY.split(question):
-        negation_in_scope = False
+        negated_delivery = False
         for fragment in _DELIVERY_CLAUSE_BOUNDARY.split(sentence):
             clause = fragment.strip()
             exclusion = _DELIVERY_EXCLUSION.match(clause)
-            local_negation = bool(_DELIVERY_NEGATION.search(_CLINICAL_CONTRAST.sub("", clause)))
             if exclusion or _DELIVERY_RESET.match(clause):
-                negation_in_scope = False
+                negated_delivery = False
             object_text = clause[exclusion.end():] if exclusion else clause
             objects = _delivery_object_kinds(object_text)
-            residual_negation = exclusion and _DELIVERY_NEGATION.search(_CLINICAL_CONTRAST.sub("", object_text))
-            mentioned = {kind for kind, pattern in _DELIVERY_NAMES.items() if pattern.search(clause)}
-            for kind in mentioned:
-                if exclusion and kind in objects and not residual_negation:
-                    verdict = DeliveryRequest.NOT_REQUESTED
-                elif local_negation or negation_in_scope or (
-                    kind in objects and len(objects) > 1 and _DELIVERY_ALTERNATIVE.search(clause)
-                ):
-                    verdict = DeliveryRequest.AMBIGUOUS
-                elif kind in objects:
-                    verdict = DeliveryRequest.REQUESTED
-                else:
+            alternative = len(objects) > 1 and _DELIVERY_ALTERNATIVE.search(object_text)
+            for kind in HOST_DELIVERY_KINDS:
+                if not _DELIVERY_NAMES[kind].search(clause):
                     continue
+                if kind not in objects or negated_delivery or (alternative and not exclusion):
+                    verdict = DeliveryRequest.CHECK
+                elif exclusion:
+                    verdict = DeliveryRequest.NOT_REQUESTED
+                else:
+                    verdict = DeliveryRequest.REQUESTED
                 previous = decisions.get(kind, verdict)
-                decisions[kind] = verdict if previous is verdict else DeliveryRequest.AMBIGUOUS
-            negation_in_scope |= local_negation
-    return decisions
+                decisions[kind] = verdict if previous is verdict else DeliveryRequest.CHECK
+            negated_delivery |= bool(exclusion and objects)
+    return {kind: decisions.get(kind, DeliveryRequest.NOT_REQUESTED) for kind in HOST_DELIVERY_KINDS}
 
 
 HOST_DELIVERY_RECEIPT = "host_delivery_receipt.json"
@@ -303,15 +330,29 @@ HOST_DELIVERY_SOURCES: Mapping[HostDeliveryKind, tuple[str, ...]] = MappingProxy
 })
 
 
+def confirmed_host_delivery_kinds(plan: Mapping[str, object]) -> tuple[HostDeliveryKind, ...]:
+    """Read the confirmed selection from an authoritative serialized plan."""
+    selection = plan.get("deliverables")
+    if not isinstance(selection, Mapping) or selection.get("confirmed") is not True:
+        return ()
+    requested = selection.get("requested")
+    if not isinstance(requested, (tuple, list)):
+        return ()
+    return tuple(kind for kind in HOST_DELIVERY_KINDS if kind in requested)
+
+
 def host_delivery_owners(plan: Mapping[str, object]) -> dict[HostDeliveryKind, str]:
     """Read terminal delivery owners from a serialized, authoritative plan."""
     steps = plan.get("steps")
     if not isinstance(steps, list):
         return {}
+    # Historical runs sealed their selected deliveries as typed owner steps.
+    allowed = confirmed_host_delivery_kinds(plan) if "deliverables" in plan else HOST_DELIVERY_KINDS
     return {
         step["host_delivery_kind"]: step["step_id"]
         for step in steps
         if isinstance(step, Mapping) and step.get("host_delivery_kind") in HOST_DELIVERY_KINDS
+        and step["host_delivery_kind"] in allowed
         and isinstance(step.get("step_id"), str) and step["step_id"]
     }
 

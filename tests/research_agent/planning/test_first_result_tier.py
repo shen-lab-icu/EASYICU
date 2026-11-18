@@ -393,9 +393,11 @@ def test_first_result_routes_a_requested_article_delivery_before_approval(tmp_pa
         validator="question_requirements", severity="error", message="The plan lacks a typed delivery owner.",
         detail={"reason": "question_requirement_not_covered", "approval_allowed": False},
     )
-    (review,) = human_review_requests_for_plan(
+    review, *other_stops = human_review_requests_for_plan(
         findings=[uncovered], plan=bound, require_plan_review=True, evidence=EvidenceStore(tmp_path),
     )
+    assert [stop.payload["reason"] for stop in other_stops] == ["question_requirements_unreadable"]
+    assert all(stop.payload["approval_allowed"] is False for stop in other_stops)
     assert review.payload["reason"] == "first_result_delivery_requires_article"
     assert review.payload["approval_allowed"] is False
     assert review.payload["deliverable_kinds"] == [kind]
@@ -437,7 +439,9 @@ def test_first_result_uses_its_own_question_when_the_caller_has_no_question(tmp_
     from easyicu.research_agent.authority.evidence_store import EvidenceStore
     from easyicu.research_agent.orchestration.workflow import human_review_requests_for_plan
 
-    draft = plan().model_copy(update={"research_question": request_text})
+    from easyicu.research_agent.planning.requirement_typing.delivery import bind_requested_host_delivery
+
+    draft = bind_requested_host_delivery(plan().model_copy(update={"research_question": request_text}))
     (review,) = human_review_requests_for_plan(
         findings=[], plan=draft, require_plan_review=True, evidence=EvidenceStore(tmp_path),
         **({} if explicit is None else {"question": explicit}),
@@ -484,14 +488,16 @@ def test_resumed_first_result_routes_existing_delivery_steps_before_host_validat
     "请勿生成网页预览并导出PDF。",
     "Never generate a browser preview and supply a typeset copy.",
 ])
-def test_ambiguous_delivery_keeps_existing_owner_and_asks_before_the_first_result(question):
+def test_unconfirmed_delivery_requires_card_choice_without_granting_a_first_result_owner(question):
     from easyicu.research_agent.planning.approval_stops import first_result_delivery_stop
     from easyicu.research_agent.planning.requirement_typing.delivery import bind_requested_host_delivery
 
     existing = AnalysisStep(step_id="typeset", intent="Typeset the report", host_delivery_kind="manuscript_pdf")
     draft = plan(steps=[existing])
-    assert bind_requested_host_delivery(draft, question=question).steps == [existing]
-    finding = first_result_delivery_stop(draft, question)
+    candidate = bind_requested_host_delivery(draft, question=question)
+    assert candidate.steps == []
+    assert candidate.deliverables.confirmed is False
+    finding = first_result_delivery_stop(candidate)
     assert finding.detail["deliverable_kinds"] == ["manuscript_pdf"]
     assert finding.detail["reason"] == "host_delivery_request_ambiguous"
     assert finding.detail["approval_allowed"] is False

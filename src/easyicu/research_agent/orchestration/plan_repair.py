@@ -10,7 +10,7 @@ from pathlib import Path
 from typing import Any, Callable, Literal, Mapping, NotRequired, Sequence, TypeVar, TypedDict
 
 from ..authority.plan_review import HumanReviewRequest
-from ..contracts.product_files import requested_deliverable_kinds
+from ..contracts.product_files import neutral_delivery_kinds
 from ..planning.approval_stops import DELIVERY_APPROVAL_STOPS
 from ..planning.progressive_contract import ProgressivePlanCompileError
 from ..planning.question_quote import normalize_question_quote
@@ -83,6 +83,10 @@ def _unmatched_requirements(
                 not row.verified or prior.kind != row.kind or prior.deliverable_kinds != row.deliverable_kinds
             ):
                 continue
+            if not prior.verified and (row.kind == "delivery" or row.deliverable_kinds):
+                kinds = set(neutral_delivery_kinds(prior.feedback["quote"]))
+                if not kinds or not kinds.issuperset(row.deliverable_kinds):
+                    continue
             seen.add(position)
             if position not in assigned or match(assigned[position], seen):
                 assigned[position] = index
@@ -201,7 +205,7 @@ def check_plan_requirements_for_repair(run_dir: Path, requests: Sequence[HumanRe
         if kinds is None and row.get("kind") in {"analysis", "delivery"} and not row.get("concepts"):
             # A bad gap can attach a concept to an otherwise delivery-only
             # quote. The check's verdict cannot redefine the requested output.
-            kinds = requested_deliverable_kinds(row["quote"])
+            kinds = neutral_delivery_kinds(row["quote"])
         clauses = tuple(clause["quote"] for clause in row.get("clauses", ()))
         feedback: _RequirementRepair = {
             "requirement_id": row["id"], "quote": row["quote"], "gap": row.get("gap"),

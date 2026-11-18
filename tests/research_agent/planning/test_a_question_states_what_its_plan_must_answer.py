@@ -1752,17 +1752,19 @@ def test_a_delivery_clause_agrees_with_its_judged_plan_owner(question, quote, ki
     ("不要提供在线预览并导出PDF。",
      "导出PDF", (), ("manuscript_pdf",)),
     ("Include the night-ward estimates without changing the study and supply a bibliography.",
-     "supply a bibliography", (), ("references",)),
+     "supply a bibliography", ("references",), ()),
     ("请提供在线预览来比较有无发热的住院记录。",
      "请提供在线预览", ("article_preview",), ()),
     ("不要PDF。请提供参考文献清单。",
      "请提供参考文献清单", ("references",), ()),
 ])
-def test_delivery_scope_is_shared_by_planning_judging_and_approval(tmp_path, question, quote, requested, ambiguous):
+def test_delivery_selection_is_shared_by_planning_judging_and_approval(tmp_path, question, quote, requested, ambiguous):
     from easyicu.research_agent.authority.evidence_store import EvidenceStore
-    from easyicu.research_agent.contracts.product_files import DeliveryRequest, delivery_requests
+    from easyicu.research_agent.contracts.product_files import DeliveryRequest, PlanDeliverables, delivery_requests
     from easyicu.research_agent.orchestration.workflow import human_review_requests_for_plan
-    from easyicu.research_agent.planning.requirement_typing.delivery import bind_requested_host_delivery
+    from easyicu.research_agent.planning.requirement_typing.delivery import (
+        bind_confirmed_host_delivery, bind_requested_host_delivery,
+    )
 
     context = _context(named=False).model_copy(update={"research_question": question})
     claim = {"id": "r1", "kind": "delivery", "quote": quote, "coverage": "plan",
@@ -1770,10 +1772,11 @@ def test_delivery_scope_is_shared_by_planning_judging_and_approval(tmp_path, que
     result = _planned(context, [claim])
     requests = delivery_requests(question)
     assert {kind for kind, decision in requests.items() if decision is DeliveryRequest.REQUESTED} == set(requested)
-    assert {kind for kind, decision in requests.items() if decision is DeliveryRequest.AMBIGUOUS} == set(ambiguous)
+    assert {kind for kind, decision in requests.items() if decision is DeliveryRequest.CHECK} == set(ambiguous)
     plan = bind_requested_host_delivery(result.output, question=question)
     owners = {step.host_delivery_kind: step.step_id for step in plan.steps if step.host_delivery_kind}
-    assert tuple(owners) == requested
+    assert tuple(owners) == (() if ambiguous else requested)
+    assert plan.deliverables.confirmed is not bool(ambiguous)
     findings = question_requirement_outcome(context=context, plan=plan, facts=result.facts, run_dir=tmp_path)
     (review,) = human_review_requests_for_plan(
         findings=findings, plan=plan, require_plan_review=True, evidence=EvidenceStore(tmp_path), question=question,
@@ -1786,6 +1789,23 @@ def test_delivery_scope_is_shared_by_planning_judging_and_approval(tmp_path, que
         assert review.payload["deliverable_kinds"] == list(ambiguous)
         assert row["disposition"] == "needs_clarification"
         assert not record["coverage"]["complete"]
+        selected = bind_confirmed_host_delivery(plan, PlanDeliverables(
+            requested=ambiguous, confirmed=True, source="user_edit",
+        ))
+        (resolved,) = judge_question_requirements(
+            result.facts.question_requirements, plan=selected, family_template=True,
+            relatives=concept_relatives(context), check_gap=_host_check(context), question=question,
+        )
+        assert resolved.disposition == "covered"
+        assert resolved.delivery["owner_step_ids_by_kind"] == {
+            step.host_delivery_kind: [step.step_id] for step in selected.steps if step.host_delivery_kind
+        }
+        (approvable,) = human_review_requests_for_plan(
+            findings=findings, plan=selected, require_plan_review=True,
+            evidence=EvidenceStore(tmp_path), question=question,
+        )
+        assert approvable.payload["reason"] == "operator_plan_approval_required"
+        assert approvable.authority_sha256 != review.authority_sha256
     else:
         assert review.payload["reason"] == "operator_plan_approval_required"
         assert row["disposition"] == "covered"
@@ -1799,9 +1819,11 @@ def test_delivery_scope_is_shared_by_planning_judging_and_approval(tmp_path, que
 def test_a_planner_quote_cannot_recast_an_excluded_export_as_a_request(question, fragment):
     from easyicu.research_agent.contracts.product_files import DeliveryRequest, delivery_requests
 
+    from easyicu.research_agent.planning.requirement_typing.delivery import bind_requested_host_delivery
+
     item = QuestionRequirement(id="r1", kind="delivery", quote=fragment, coverage="plan",
                                deliverable_kinds=["manuscript_pdf"])
-    plan = AnalysisPlan(research_question=question, steps=[])
+    plan = bind_requested_host_delivery(AnalysisPlan(research_question=question, steps=[]))
     (row,) = judge_question_requirements(
         [item], plan=plan, family_template=True, relatives=lambda _: frozenset(),
         check_gap=lambda _: pytest.fail("no gap is claimed"), question=question,
@@ -1809,3 +1831,66 @@ def test_a_planner_quote_cannot_recast_an_excluded_export_as_a_request(question,
     assert delivery_requests(question)["manuscript_pdf"] is DeliveryRequest.NOT_REQUESTED
     assert row.disposition == "not_requested"
     assert row.delivery is None
+
+
+@pytest.mark.parametrize("question, requested, excluded", [
+    ("Exclude patients without baseline lactate, and export a PDF.", "manuscript_pdf", None),
+    ("Please export a PDF comparing patients without sepsis to controls.", "manuscript_pdf", None),
+    ("请提供在线预览来比较不需要机械通气的患者。", "article_preview", None),
+    ("Please export a PDF, without references.", "manuscript_pdf", "references"),
+    ("Please export a PDF, but do not include references.", "manuscript_pdf", "references"),
+    ("Summarize overnight recovery without a PDF.", None, "manuscript_pdf"),
+    ("请导出PDF，但是不要提供参考文献。", "manuscript_pdf", "references"),
+])
+def test_clinical_negation_and_export_exclusions_prefill_independently(question, requested, excluded):
+    from easyicu.research_agent.contracts.product_files import DeliveryRequest, PlanDeliverables, delivery_requests
+    from easyicu.research_agent.planning.requirement_typing.delivery import (
+        bind_confirmed_host_delivery, bind_requested_host_delivery,
+    )
+
+    states = delivery_requests(question)
+    if requested:
+        assert states[requested] is DeliveryRequest.REQUESTED
+    if excluded:
+        assert states[excluded] is DeliveryRequest.NOT_REQUESTED
+    plan = bind_requested_host_delivery(AnalysisPlan(research_question=question, steps=[]))
+    assert plan.deliverables.confirmed
+    assert [step.host_delivery_kind for step in plan.steps] == ([requested] if requested else [])
+    changed = ("manuscript_pdf",) if requested is None else ()
+    edited = bind_confirmed_host_delivery(plan, PlanDeliverables(
+        requested=changed, confirmed=True, source="user_edit",
+    ))
+    assert edited.deliverables.confirmed
+    assert tuple(step.host_delivery_kind for step in edited.steps) == changed
+
+
+def test_an_edited_selection_stays_bound_when_the_detector_changes(monkeypatch):
+    from easyicu.research_agent.contracts.product_files import PlanDeliverables, host_delivery_owners
+    from easyicu.research_agent.orchestration.workflow import human_review_requests_for_plan
+    from easyicu.research_agent.planning.requirement_typing import delivery
+
+    question = "Compare recovery by ward. Export a PDF or provide an online preview."
+    draft = AnalysisPlan(research_question=question, steps=[])
+    prefilled = delivery.bind_requested_host_delivery(draft)
+    assert prefilled.deliverables.check == ("article_preview", "manuscript_pdf")
+    edited = delivery.bind_confirmed_host_delivery(draft, PlanDeliverables(
+        requested=("article_preview",), confirmed=True, source="user_edit",
+    ))
+    (request,) = human_review_requests_for_plan(findings=[], plan=edited, require_plan_review=True)
+    approved = AnalysisPlan.model_validate(request.payload["plan_review_authority"]["plan_payload"])
+
+    def detector_must_not_run(_):
+        pytest.fail("an approved run cannot reinterpret a delivery request")
+
+    monkeypatch.setattr(delivery, "delivery_requests", detector_must_not_run)
+    item = QuestionRequirement(id="r1", kind="delivery", quote="Export a PDF", coverage="plan")
+    (row,) = judge_question_requirements(
+        [item], plan=approved, family_template=True, relatives=lambda _: frozenset(),
+        check_gap=lambda _: pytest.fail("that is a deliverable, not science"), question=question,
+    )
+    assert row.disposition == "not_requested"
+    assert host_delivery_owners(approved.model_dump(mode="json")) == {
+        "article_preview": approved.steps[0].step_id,
+    }
+    (reopened,) = human_review_requests_for_plan(findings=[], plan=approved, require_plan_review=True)
+    assert reopened.authority_sha256 == request.authority_sha256

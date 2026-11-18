@@ -139,18 +139,21 @@ def completion_outcomes(
 def apply_host_delivery_completion(gates: dict[str, Any], *, plan: AnalysisPlan | None, run_dir: Path) -> None:
     """Recheck promised document products before making the run final."""
     from ..canonical_json import canonical_sha256
-    from ..contracts.product_files import host_delivery_failure_code, host_delivery_owners, verified_host_deliveries
+    from ..contracts.product_files import (
+        confirmed_host_delivery_kinds, host_delivery_failure_code, host_delivery_owners, verified_host_deliveries,
+    )
 
     if not host_delivery_checks_apply(gates) or plan is None:
         return
-    if not any(step.host_delivery_kind for step in plan.steps):
-        return
     payload = plan.model_dump(mode="json")
     owners = host_delivery_owners(payload)
+    requested = confirmed_host_delivery_kinds(payload) if "deliverables" in payload else tuple(owners)
+    if not requested:
+        return
     verified = verified_host_deliveries(
         run_dir, run_id=run_dir.name, plan_sha256=canonical_sha256(payload), owners=owners,
     )
-    failures = {kind: host_delivery_failure_code(kind) for kind in owners if kind not in verified}
+    failures = {kind: host_delivery_failure_code(kind) for kind in requested if kind not in verified}
     gates["host_delivery_steps"] = [
         {"step_id": step_id, "kind": kind, "status": "verified" if kind in verified else "unverified",
          "reason_code": failures.get(kind)}

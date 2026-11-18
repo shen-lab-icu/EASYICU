@@ -343,6 +343,7 @@ def human_review_requests_for_plan(
     execution_authority: ReviewExecutionAuthority | Mapping[str, Any] | None = None,
     require_plan_review: bool = False,
     question: str | None = None,
+    article_allowed: bool = True,
 ) -> tuple[HumanReviewRequest, ...]:
     """Derive the review requests a completed plan phase implies.
 
@@ -363,13 +364,14 @@ def human_review_requests_for_plan(
             findings or (), plan=plan, run_dir=Path(root), question=question,
         )
     delivery_stop = (
-        delivery_approval_stop(plan, question)
+        delivery_approval_stop(plan, article_allowed=article_allowed)
         if isinstance(plan, AnalysisPlan) else None
     )
     if delivery_stop is not None:
-        # Delivery changes require a revised request. Preserve the scientific
-        # findings in the run record while this decision is pending.
-        findings = [delivery_stop]
+        delivery_reason = delivery_stop.detail["reason"]
+        if delivery_reason in DELIVERY_APPROVAL_STOPS:
+            findings = [finding for finding in findings if (finding.detail or {}).get("reason") != delivery_reason]
+        findings = [delivery_stop, *findings]
     reviewable: list[tuple[Any, str, str, Mapping[str, Any]]] = []
     for finding in findings or ():
         # Severity is the run's own statement about whether the state blocks.
@@ -442,7 +444,7 @@ def human_review_requests_for_plan(
             "top_journal_candidate": detail.get("top_journal_candidate"),
             "finding_codes": list(detail.get("finding_codes") or ()),
             "review_evidence_id": detail.get("review_evidence_id"),
-            **({"deliverable_kinds": detail["deliverable_kinds"]} if reason in DELIVERY_APPROVAL_STOPS else {}),
+            **({"deliverable_kinds": detail["deliverable_kinds"]} if "deliverable_kinds" in detail else {}),
             "user_authorization_requests": list(
                 detail.get("user_authorization_requests") or ()
             ),
@@ -471,7 +473,7 @@ def human_review_requests_for_plan(
         seen.add(request.review_id)
         requests.append(request)
 
-    if root is not None and delivery_stop is None:
+    if root is not None:
         from .plan_repair import check_plan_requirements_for_repair
 
         check_plan_requirements_for_repair(Path(root), requests)

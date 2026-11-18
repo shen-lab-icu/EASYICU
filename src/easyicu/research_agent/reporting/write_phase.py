@@ -719,11 +719,14 @@ def _persist_manuscript_provenance_artifact(
             )
         )
         return
-    if plan is not None and any(getattr(step, "host_delivery_kind", None) == "article_preview" for step in plan.steps):
+    if plan is not None:
         from ..canonical_json import canonical_sha256
+        from ..contracts.product_files import host_delivery_owners
 
-        payload["delivery_plan_sha256"] = canonical_sha256(plan.model_dump(mode="json"))
-        payload["delivery_run_id"] = run_dir.name
+        plan_payload = plan.model_dump(mode="json")
+        if "article_preview" in host_delivery_owners(plan_payload):
+            payload["delivery_plan_sha256"] = canonical_sha256(plan_payload)
+            payload["delivery_run_id"] = run_dir.name
     path = run_dir / "manuscript_provenance.json"
     path.write_text(
         json.dumps(payload, ensure_ascii=False, indent=2, sort_keys=True),
@@ -3054,7 +3057,9 @@ def _publish_and_audit_manuscript(
     emit_progress: Callable[..., None],
 ) -> None:
     """Render publication artifacts and run post-binding scientific audits."""
-    requested = {kind for step in plan.steps if (kind := getattr(step, "host_delivery_kind", None))}
+    from ..contracts.product_files import host_delivery_owners
+
+    requested = host_delivery_owners(plan.model_dump(mode="json"))
     written: set[str] = set()
     pdf_requested = "manuscript_pdf" in requested
     bib_path = run_dir / "manuscript_scaffold.bib"
@@ -3136,7 +3141,7 @@ def _publish_and_audit_manuscript(
                     producer="pipeline",
                     generation_mode="system",
                 )
-            if pipeline._enable_pdf_render or pdf_requested:
+            if pdf_requested or (plan.deliverables is None and pipeline._enable_pdf_render):
                 bib_full = bib_path if bib_path.name in written else None
                 pdf_result = render_pdf_for_run(
                     tex_path=tex_path,

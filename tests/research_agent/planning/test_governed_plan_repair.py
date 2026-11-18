@@ -8,6 +8,7 @@ from easyicu.research_agent.authority.plan_review import HumanReviewRequest
 from easyicu.research_agent.planning.progressive_contract import ProgressivePlanCompileError
 from easyicu.research_agent.planning.question_requirements import (
     QUESTION_REQUIREMENTS_REVIEW_FILENAME,
+    QUESTION_REQUIREMENTS_FILENAME,
     QuestionRequirement,
     judge_question_requirements,
 )
@@ -982,3 +983,115 @@ def test_a_gap_error_can_be_repaired_by_binding_its_concept(tmp_path, quote, pri
     assert result() == (approved, None)
     assert ('"deliverable_kinds":["article_preview"]' in prompts[1]) == bool(prior_kinds)
     assert notices == [1]
+
+
+@pytest.mark.parametrize("selected", [False, True])
+@pytest.mark.parametrize("question", [
+    "Compare 28-day mortality by lactate, and do not provide a PDF.",
+    "Compare overnight readmission by age group, and do not provide a PDF.",
+])
+def test_a_delivery_exclusion_cannot_answer_bundled_science(tmp_path, question, selected):
+    from types import SimpleNamespace
+
+    from easyicu.research_agent.contracts.product_files import PlanDeliverables
+    from easyicu.research_agent.orchestration.progressive_planning import question_requirement_outcome
+    from easyicu.research_agent.planning.requirement_typing.delivery import bind_confirmed_host_delivery
+    from easyicu.research_agent.schema import CohortDescriptor, ResearchContext
+
+    context = ResearchContext(
+        research_question=question, variables=[],
+        cohort=CohortDescriptor(cohort_name="synthetic", database="synthetic", n_stays=0),
+    )
+    item = QuestionRequirement(
+        id="r1", kind="delivery", quote=question, coverage="plan", deliverable_kinds=["manuscript_pdf"],
+    )
+    plan = bind_confirmed_host_delivery(
+        AnalysisPlan(research_question=question, steps=[]),
+        PlanDeliverables(requested=("manuscript_pdf",) if selected else (), confirmed=True, source="user_edit"),
+    )
+    findings = question_requirement_outcome(
+        context=context, plan=plan,
+        facts=SimpleNamespace(family_template=True, question_requirements=[item]), run_dir=tmp_path,
+    )
+    record = json.loads((tmp_path / QUESTION_REQUIREMENTS_FILENAME).read_text())
+    assert record["coverage"]["complete"] is False
+    assert record["judged"][0]["disposition"] == "not_covered"
+    assert any(finding.detail.get("reason") == NOT_COVERED for finding in findings)
+
+
+@pytest.mark.parametrize("disposition", ["covered", "not_requested"])
+def test_repair_cannot_relabel_an_unverified_scientific_gap_as_delivery(tmp_path, disposition):
+    quote = "Compare spline-adjusted overnight readmission"
+    prior = requirement(quote, kind="analysis", disposition="capability_gap",
+                        verified_by_host=False, gap_verification="unverified")
+    disguised = requirement(quote, kind="delivery", deliverable_kinds=["manuscript_pdf"], disposition=disposition, verified_by_host=True)
+    result, _, notices = run_script(
+        tmp_path, ([prior], NOT_COVERED), ([disguised], "operator_plan_approval_required"),
+    )
+    with pytest.raises(ProgressivePlanCompileError) as error:
+        result()
+    assert error.value.reason_code == "progressive_question_requirement_repair_omitted"
+    assert notices == [1]
+
+
+@pytest.mark.parametrize("delivery_quote, kinds, disposition", [
+    ("Deliver result tables or figures", ["result_tables", "figures"], "not_covered"),
+    ("Export a PDF or include an online preview", ["manuscript_pdf", "article_preview"], "needs_clarification"),
+])
+def test_original_question_survives_plan_paraphrase_and_approval_refuses_clarification(
+    tmp_path, delivery_quote, kinds, disposition,
+):
+    from types import SimpleNamespace
+
+    from easyicu.research_agent.orchestration.progressive_planning import question_requirement_outcome
+    from easyicu.research_agent.orchestration.workflow import human_review_requests_for_plan
+    from easyicu.research_agent.schema import CohortDescriptor, ResearchContext
+
+    from easyicu.research_agent.planning.requirement_typing.delivery import bind_requested_host_delivery
+
+    question = f"Compare morning recovery. {delivery_quote}."
+    context = ResearchContext(
+        research_question=question, variables=[],
+        cohort=CohortDescriptor(cohort_name="synthetic", database="synthetic", n_stays=0),
+    )
+    item = QuestionRequirement(
+        id="r1", kind="delivery", quote=delivery_quote, coverage="plan", deliverable_kinds=kinds,
+    )
+    plan = bind_requested_host_delivery(AnalysisPlan(research_question="Compare morning recovery.", steps=[]), question=question)
+    findings = question_requirement_outcome(
+        context=context, plan=plan,
+        facts=SimpleNamespace(family_template=True, question_requirements=[item]), run_dir=tmp_path,
+    )
+    requests = human_review_requests_for_plan(
+        findings=findings, plan=plan, evidence=SimpleNamespace(root=tmp_path, records=lambda: ()),
+        require_plan_review=True,
+    )
+    assert requests
+    assert all(request.payload["approval_allowed"] is False for request in requests)
+    record_path = tmp_path / QUESTION_REQUIREMENTS_FILENAME
+    assert json.loads(record_path.read_text())["question"] == question
+    reviewed = json.loads((tmp_path / QUESTION_REQUIREMENTS_REVIEW_FILENAME).read_text())
+    assert reviewed["question"] == question
+    assert reviewed["judged"][0]["disposition"] == disposition
+
+    unedited = plan.model_copy(update={"research_question": question})
+    question_requirement_outcome(
+        context=context, plan=unedited,
+        facts=SimpleNamespace(family_template=True, question_requirements=[item]), run_dir=tmp_path,
+    )
+    assert json.loads(record_path.read_text())["question"] == question
+
+
+@pytest.mark.parametrize("kind", ["article_preview", "manuscript_pdf", "references"])
+def test_a_confirmed_selection_without_its_owner_blocks_approval_even_without_a_planner_row(kind):
+    from easyicu.research_agent.contracts.product_files import PlanDeliverables
+    from easyicu.research_agent.orchestration.workflow import human_review_requests_for_plan
+
+    plan = AnalysisPlan(
+        research_question="Summarize the duration of overnight observation.",
+        steps=[], deliverables=PlanDeliverables(requested=(kind,), confirmed=True, source="user_edit"),
+    )
+    (request,) = human_review_requests_for_plan(findings=[], plan=plan, require_plan_review=True)
+    assert request.payload["reason"] == NOT_COVERED
+    assert request.payload["approval_allowed"] is False
+    assert request.payload["deliverable_kinds"] == [kind]

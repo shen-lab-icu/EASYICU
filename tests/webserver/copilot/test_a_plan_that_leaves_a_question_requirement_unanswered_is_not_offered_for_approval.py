@@ -128,7 +128,9 @@ def _workflow(study: Mapping[str, Any], reasons: list[str]):
 
 
 def test_the_registry_holds_the_owners_stops() -> None:
-    assert QUESTION_REQUIREMENT_STOP_CODES == tuple(_STOPS)
+    assert QUESTION_REQUIREMENT_STOP_CODES == (
+        _NOT_COVERED, _GAP, "host_delivery_request_ambiguous", _UNREADABLE,
+    )
     assert set(_STOPS) <= set(PLAN_APPROVAL_STOPS)
     # A fresh candidate plan can be generated from each stop.
     assert set(_STOPS) <= agent_routes._CANDIDATE_PLAN_WORKFLOW_CODES
@@ -522,3 +524,25 @@ def test_a_delivery_stop_survives_web_review_policy(reason):
     assert workflow.next_action_code == reason
     assert workflow.plan_execution_ready is False
     assert "plan_execution" not in offers
+
+
+
+def test_the_deliverable_choice_survives_a_review_without_a_scientific_summary():
+    study = complete_study()
+    digest = study_context_owner.scientific_configuration_sha256(dict(study))
+    reason = "host_delivery_request_ambiguous"
+    run, review = _run_and_review([reason], digest=digest)
+    review.pop("scientific_plan_review")
+    selection = {
+        "requested": ["references"], "check": ["manuscript_pdf"],
+        "confirmed": False, "source": "detector_prefill",
+    }
+    review["deliverables"] = selection
+    review["deliverables_require_article"] = True
+    snapshot = build_research_workflow_snapshot(
+        study=study, active_export_present=True, active_job=None,
+        latest_run=run, plan_review_authority=review,
+    )
+    assert snapshot.next_action_code == reason
+    assert snapshot.plan_review_summary["deliverables"] == {**selection, "article_required": True}
+    assert snapshot.plan_execution_ready is False

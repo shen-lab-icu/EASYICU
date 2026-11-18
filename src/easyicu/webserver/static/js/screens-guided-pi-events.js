@@ -698,6 +698,11 @@
         if (event.target.matches('[data-gpi-skill-search]')) STUDY_WORKSPACE.filterSkills(state.host, event.target.value);
       });
       state.host.addEventListener('change', event => {
+        const deliverables = event.target.closest('[data-gpi-plan-deliverables]');
+        if (deliverables) {
+          window.EasyICU.guidedPi.require('planActions').deliverableSelection(deliverables);
+          return;
+        }
         if (RUN_FILES && RUN_FILES.handleChange(event)) return;
         if (IDEA_SOURCE && IDEA_SOURCE.handleChange(event, {
           host: () => state.host, render, tr,
@@ -740,6 +745,13 @@
       });
       state.host.addEventListener('submit', event => {
         if (MESSAGE_ACTIONS.handleSubmit(event)) return;
+        const deliverables = event.target.closest('[data-gpi-plan-deliverables]');
+        if (deliverables) {
+          event.preventDefault();
+          const requested = window.EasyICU.guidedPi.require('planActions').deliverableSelection(deliverables);
+          if (requested) void confirmPlanDecision({ deliverables: requested });
+          return;
+        }
         const nextCustomForm = event.target.closest('[data-gpi-next-custom-form]');
         if (nextCustomForm) {
           event.preventDefault();

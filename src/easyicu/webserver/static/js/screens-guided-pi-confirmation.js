@@ -558,11 +558,12 @@
       };
       if (code === 'first_result_delivery_requires_article' || code === 'host_delivery_request_ambiguous') return {
         code, grants: [], nonApprovable: true, clarification: true,
+        hideEdit: Boolean(workflow.plan_review_summary?.deliverables),
         editLabel: tr('Revise in the conversation', '在对话里修改'),
         title: code === 'host_delivery_request_ambiguous'
           ? tr('Clarify the requested deliverables', '请明确交付要求')
           : tr('The requested deliverables require an article run', '所请求的交付物需要在论文任务中生成'),
-        note: code === 'host_delivery_request_ambiguous' ? tr(
+        note: workflow.plan_review_summary?.deliverables ? '' : code === 'host_delivery_request_ambiguous' ? tr(
           'This plan cannot be approved until you clarify which deliverables to include. Specify your choices in the conversation.',
           '请在对话中说明需要哪些交付物，以及应省略哪些。明确交付要求后才能继续，这份计划目前不能批准。',
         ) : tr(
@@ -981,6 +982,10 @@
       const adjustmentOwner = window.EasyICU.guidedPi.optional('sourceAdjustments');
       const sourceAdjustments = adjustmentOwner
         ? adjustmentOwner.render(((host.workflow() || {}).plan_review_summary || {}).source_adjustments) : '';
+      const planActions = window.EasyICU.guidedPi.optional('planActions');
+      const deliverables = planActions?.deliverablesField?.(review && review.deliverables, {
+        tr, esc, disabled: host.busy(),
+      }) || '';
       const failureNotice = latestAttemptFailureHtml();
       const decisionActions = firstDecisionCopy && Array.isArray(firstDecisionCopy.options)
         ? firstDecisionCopy.options.map(option => `<button class="gpi-decision-option" type="button" data-gpi-plan-decision-code="${esc(String(firstDecisionItem && firstDecisionItem.code || ''))}" data-gpi-plan-decision-option="${esc(option.optionId)}"${firstDecisionCopy.cardSha256 ? ` data-gpi-plan-decision-card="${esc(firstDecisionCopy.cardSha256)}"` : ''}><strong>${esc(option.label)}</strong><span>${esc(option.effect)}</span>${option.requirement ? `<small>${esc(option.requirement)}</small>` : ''}</button>`).join('')
@@ -991,7 +996,7 @@
       const primaryDisabled = confirmation.approveDisabled || (!retryPlanRevision && deferredScopeRejected);
       return `${planConversation}<section class="gpi-confirmation${confirmation.code === 'plan_scientific_changes_required' ? ' is-science-review' : ''}${confirmation.compactApproval ? ' is-plan-approval' : ''}" aria-label="${tr('Workflow confirmation required', '需要确认科研流程')}">
         <span class="gpi-confirmation-icon" aria-hidden="true">${iconHtml('shield', 17)}</span>
-        <div class="gpi-confirmation-body">${failureNotice}<strong>${esc(displayedTitle)}</strong>${confirmation.reason && !firstDecisionCopy ? `<p class="gpi-confirmation-reason">${esc(confirmation.reason)}</p>` : ''}${displayedNote ? `<small>${esc(displayedNote)}</small>` : ''}${desktopProfile}${reviewedPopulation}${deferredInputScope}${populationPreparation}${populationAcceptance}${sourceAdjustments}${flowSteps}${dataStatus}${pendingPreparation}${repeatedStaysDefault}${icdSourceNotice}${reviewStatus}${studyReadings}${trialBody}${groupNotes}${questionNotes}${reviewMaterials}${compactOtherAction}</div>
+        <div class="gpi-confirmation-body">${failureNotice}<strong>${esc(displayedTitle)}</strong>${confirmation.reason && !firstDecisionCopy ? `<p class="gpi-confirmation-reason">${esc(confirmation.reason)}</p>` : ''}${displayedNote ? `<small>${esc(displayedNote)}</small>` : ''}${desktopProfile}${reviewedPopulation}${deferredInputScope}${populationPreparation}${populationAcceptance}${sourceAdjustments}${deliverables}${flowSteps}${dataStatus}${pendingPreparation}${repeatedStaysDefault}${icdSourceNotice}${reviewStatus}${studyReadings}${trialBody}${groupNotes}${questionNotes}${reviewMaterials}${compactOtherAction}</div>
         <div class="gpi-confirmation-actions${decisionActions ? ' has-decision-options' : ''}">
           ${confirmation.dataStatus && !confirmation.compactApproval ? `<button class="btn sm" type="button" data-gpi-confirm-preview-data>${esc(tr('Preview analysis data', '先预览分析数据'))}</button>` : ''}
           ${decisionActions || (confirmation.hideEdit || (confirmation.code === 'plan_scientific_changes_required' && !decisionCount && !icdSourceFinding) ? '' : `<button class="btn ${confirmation.clarification || confirmation.code === 'plan_scientific_changes_required' ? 'primary ' : ''}sm" type="button" data-gpi-confirm-edit>${confirmation.editLabel ? esc(confirmation.editLabel) : icdSourceFinding && !decisionCount ? tr('Change cohort', '修改人群') : confirmation.code === 'plan_scientific_changes_required' ? tr('Answer this question', '回答这个问题') : confirmation.code === 'provider_ready_to_generate_plan' ? tr('Add research requirements', '我想先补充研究要求') : confirmation.code === 'failed_pipeline_execution_retry_available' ? tr('Generate a fresh research plan', '重新生成研究计划') : confirmation.compactApproval ? tr('Change plan', '修改计划') : tr('Request changes', '提出修改')}</button>`)}

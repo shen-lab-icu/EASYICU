@@ -40,6 +40,7 @@ _ADDITIVE_FIELDS = frozenset(
     {
         "bound_analysis_inputs",
         "bound_baseline_requirements",
+        "bound_plan_deliverables",
         "bound_exposure_groupings",
         "bound_population_requirements",
         "bound_target_trial",
@@ -474,6 +475,7 @@ class PipelineConfig:
     # the host must prove the StudyContext digest has not changed before
     # supplying it. Only plan-owned findings may appear here.
     bound_plan_revision_contract: Optional[str] = None
+    bound_plan_deliverables: Optional[Dict[str, Any]] = None
     # Host-issued content from an accepted metadata-only candidate, separate
     # from the prompt seed. Persisted/hashed so fresh planning and recovery
     # cannot silently forget a baseline requirement.
@@ -738,6 +740,13 @@ class PipelineConfig:
                 self.bound_baseline_requirements
             )
             object.__setattr__(self, "bound_baseline_requirements", parsed.model_dump(mode="json"))
+        if self.bound_plan_deliverables is not None:
+            from ..contracts.product_files import PlanDeliverables
+
+            selection = PlanDeliverables.model_validate(self.bound_plan_deliverables)
+            if selection.source != "user_edit" or not self.require_human_plan_review:
+                raise ValueError("Edited deliverables require a human-reviewed plan.")
+            object.__setattr__(self, "bound_plan_deliverables", selection.model_dump(mode="json"))
         if self.bound_analysis_inputs is not None:
             from ..planning.accepted_analysis_inputs import AcceptedAnalysisInputs
 
