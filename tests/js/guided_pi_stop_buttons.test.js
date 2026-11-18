@@ -266,9 +266,17 @@ async function testSupersededDecisionRefresh() {
   console.log('superseded decision refreshes the session and workflow before unlocking');
 }
 
-if (catalog) {
+async function testStopCatalog() {
   const cases = JSON.parse(fs.readFileSync(0, 'utf8'));
   const failures = [];
+  let codexStatus;
+  const providerControl = modules.require('providerControl').create({
+    state, api: () => ({ loadPiCopilotCodexStatus: async () => codexStatus }),
+  });
+  async function refreshCodex(payload) {
+    codexStatus = payload;
+    await providerControl.loadCodexResearchStatus(false);
+  }
   const outcome = modules.require('runOutcome').create({
     tr, esc: window.EU_HTML.esc, iconHtml: () => '', resourceButton: () => '',
     manuscriptNotPassedText: code => code,
@@ -276,7 +284,8 @@ if (catalog) {
   for (language of ['en', 'zh']) {
     window.EU_LANG = language;
     for (const { code, cause, surface, design, routes, drafts: reviewDrafts, label, run, job, workflow: offer,
-      expect_edit, missing, recovered, superseded_workflow, initial_provider, verified_provider, provider } of cases) {
+      expect_edit, missing, recovered, superseded_workflow,
+      initial_codex_status, verified_codex_status, verified_provider, provider } of cases) {
       const name = [surface, code, cause, language].filter(Boolean).join('/');
       try {
         calls.length = drafts.length = 0;
@@ -300,7 +309,7 @@ if (catalog) {
           state.session.conversation_replay = { updated_at: '2026-01-05T18:00:00Z' };
           if (provider) state.session.research_provider = { provider };
           try {
-            Object.assign(state, initial_provider);
+            if (initial_codex_status) await refreshCodex(initial_codex_status);
             const [choice] = job.next_actions;
             const html = owner.renderJob(state.session);
             assert.match(html, /data-gpi-job-stop/, 'the failed job keeps its recovery card');
@@ -320,13 +329,14 @@ if (catalog) {
             else if (provider) assert.equal(state.showSetup, true);
             else assert.deepEqual(calls.splice(0), ['begin_local_selection']);
             state.showSetup = false;
-            if (initial_provider) {
-              Object.assign(state, verified_provider);
+            if (initial_codex_status) {
+              await refreshCodex(verified_codex_status);
               assert.match(owner.renderJob(state.session), /data-gpi-job-stop/, 'the active auth stop still needs recovery');
-              Object.assign(state, initial_provider);
+              await refreshCodex(initial_codex_status);
             }
             Object.assign(workflow, superseded_workflow);
             if (provider) assert.match(owner.renderJob(state.session), /data-gpi-job-stop/, 'a workflow label does not verify a connection');
+            if (verified_codex_status) await refreshCodex(verified_codex_status);
             Object.assign(state, verified_provider);
             assert.equal(owner.renderJob(state.session), '', 'the archived job was superseded');
             clickJob(workflow.next_action_code);
@@ -508,7 +518,8 @@ if (catalog) {
   console.log(`stop catalog: ${cases.length} cases, ${2 * cases.length} bilingual checks`);
 }
 
-if (!catalog) testSupersededDecisionRefresh().catch(error => {
+const runContract = catalog ? testStopCatalog : testSupersededDecisionRefresh;
+runContract().catch(error => {
   console.error(error);
   process.exitCode = 1;
 });

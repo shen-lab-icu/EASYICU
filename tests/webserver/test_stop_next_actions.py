@@ -672,6 +672,23 @@ def _recovery_contract_cases(monkeypatch):
         }
 
 
+def _verified_codex_status(verified_at):
+    return {"ok": True, "auth": {
+        "schema_version": "easyicu.codex-user-auth-status/1",
+        "provider": "codex",
+        "provider_identity": "codex-app-server",
+        "authentication_mode": "chatgpt_account",
+        "session_present": True,
+        "authentication_verified": True,
+        "account_session_present": True,
+        "account_session_status": "codex_auth_ready",
+        "plan_type": "plus",
+        "account_label": "r***@example.org",
+        "secrets_returned": False,
+        "verified_at": verified_at,
+    }}
+
+
 def _archived_job_supersession_cases():
     newer = "2026-01-05T19:00:00Z"
     for change, updates, created in (
@@ -703,16 +720,14 @@ def _archived_job_supersession_cases():
             "active_job": {"job_id": codex_job["job_id"], "status": "failed"},
             "next_actions": codex_job["next_actions"],
         },
-        "initial_provider": {"codexAuth": {
-            "authentication_verified": True, "verified_at": "2026-01-05T16:00:00Z",
-        }},
+        "initial_codex_status": _verified_codex_status("2026-01-05T16:00:00Z"),
         "superseded_workflow": {"next_action_code": "provider_ready_to_generate_plan"},
-        "verified_provider": {"codexAuth": {"authentication_verified": True, "verified_at": newer}},
+        "verified_codex_status": _verified_codex_status(newer),
     }
     for provider, reason, checked in (
-        ("codex", codex_reason, {"codexAuth": {"authentication_verified": True, "verified_at": newer}}),
+        ("codex", codex_reason, {"verified_codex_status": _verified_codex_status(newer)}),
         ("openai", "research_pipeline_pi_verified_credentials_required",
-         {"runtime": {"configuration": {"verified_at": newer}}}),
+         {"verified_provider": {"runtime": {"configuration": {"verified_at": newer}}}}),
     ):
         job = project_archived_job_stop({
             "job_id": "handover_model_check", "kind": "agent-run", "status": "failed", "error_code": reason,
@@ -722,7 +737,7 @@ def _archived_job_supersession_cases():
             "job": job, "workflow": {"next_action_code": reason, "runs": []}, "provider": provider,
             **({"label": ("Re-login to Codex", "重新登录 Codex")} if provider == "codex" else {}),
             "superseded_workflow": {"next_action_code": "provider_ready_to_generate_plan"},
-            "verified_provider": checked,
+            **checked,
         }
 
 
@@ -745,6 +760,7 @@ def test_every_stop_card_has_a_forward_action_with_an_owner(monkeypatch) -> None
                 "screens-guided-pi-target-trial.js", "screens-guided-pi-run-stop.js",
                 "screens-guided-pi-events.js", "screens-guided-pi-run-outcome.js",
                 "screens-guided-pi-plan-actions.js", "screens-guided-pi-error-text.js",
+                "screens-guided-pi-provider-control.js",
             )),
         ],
         cwd=root, input=json.dumps(cases), capture_output=True, text=True, timeout=30,

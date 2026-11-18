@@ -122,7 +122,7 @@
     const workflowCode = workflow?.next_action_code;
     const codexAuthRestored = isCodexAuthStop(job, session)
       && codexAuth?.authentication_verified === true && newerThan(codexAuth.verified_at, finished)
-      && workflowCode && workflowCode !== CODEX_AUTH_REQUIRED;
+      && workflowCode !== CODEX_AUTH_REQUIRED;
     if (codexAuthRestored || newerThan(session.created_at, started) || newerThan(study?.updated_at, finished)
       || newerThan(workflow?.bound_export_updated_at, finished) || apiCredentialChanged
       || workflow?.runs?.some(run => run.run_id && newerThan(run.updated_at, started))) return null;

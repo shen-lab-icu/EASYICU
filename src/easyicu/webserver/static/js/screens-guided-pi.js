@@ -198,7 +198,7 @@
   });
   const PROVIDER_CONTROL = MODULES.require('providerControl').create({
     state, api, tr, render, runtimeReady, shellReady,
-    connectionConfigured, connectionReady, errorText,
+    connectionConfigured, connectionReady, errorText, loadWorkflow,
   });
   const {
     stopCodexPoll, loadCodexModels, loadCodexResearchStatus,

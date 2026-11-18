@@ -198,7 +198,10 @@
           if (route === 'confirm' && typeof confirmWorkflowAction === 'function') confirmWorkflowAction();
           if (route === 'edit' && typeof editWorkflow === 'function') editWorkflow();
           if (route === 'connect') openConnection();
-          if (route === 'codex-login' && !state.codexBusy) startCodexLogin('browser', openAuthorizationPopup());
+          if (route === 'codex-login' && !state.codexBusy
+            && typeof startCodexLogin === 'function' && typeof openAuthorizationPopup === 'function') {
+            startCodexLogin('browser', openAuthorizationPopup());
+          }
           if (route === 'data' && typeof authorizeDataSource === 'function') authorizeDataSource('begin_local_selection');
           if (route === 'draft') {
             const copy = review?.stopActionCopy(action, tr);
