@@ -735,6 +735,7 @@ def test_a_real_pipeline_projects_the_terminal_repair_and_only_its_checkpoint(tm
     from easyicu.research_agent.orchestration.human_review_checkpoint import checkpoint_path
     from easyicu.research_agent.orchestration.plan_repair import run_plan_with_repairs
     from easyicu.research_agent.orchestration.workflow import HumanReviewPending
+    from easyicu.research_agent.planning.requirement_typing import delivery
     from easyicu.research_agent.providers.mocks import ScriptedMockLLMClient
     from easyicu.webserver.agent_pipeline_runs import _repairable_plan_check, _write_projection
     from easyicu.webserver.agent_runs import read_run_review
@@ -753,6 +754,14 @@ def test_a_real_pipeline_projects_the_terminal_repair_and_only_its_checkpoint(tm
     monkeypatch.setattr(progressive_planning, "run_pipeline_progressive_planner", plan_without_article_requirements)
     quote = "Give me a typeset copy of the results"
     question = f"Describe the distribution of hospital mortality by sex. {quote}."
+    bind_delivery = delivery.bind_requested_host_delivery
+
+    def omit_delivery_owner(plan, **kwargs):
+        bound = bind_delivery(plan, **kwargs)
+        assert [step.host_delivery_kind for step in bound.steps if step.host_delivery_kind] == ["manuscript_pdf"]
+        return bound.model_copy(update={"steps": bound.execution_steps})
+
+    monkeypatch.setattr(delivery, "bind_requested_host_delivery", omit_delivery_owner)
     cohort = tmp_path / "cohort.parquet"
     pd.DataFrame({
         "stay_id": range(1, 13), "sex": [0, 1] * 6, "death": [0, 0, 1, 1] * 3,
@@ -887,7 +896,8 @@ def test_host_delivery_uses_the_users_question_over_a_planner_rephrasing(draft_q
     assert [step.host_delivery_kind for step in bound.steps] == expected
 
 
-def test_a_gap_error_can_be_repaired_by_a_verified_delivery_owner(tmp_path):
+@pytest.mark.parametrize("quote", ["Export an online preview.", "Please provide a browser preview."])
+def test_a_gap_error_can_be_repaired_by_a_verified_delivery_owner(tmp_path, quote):
     from types import SimpleNamespace
 
     from easyicu.research_agent.agents.family_spec_planner import check_question_requirement_gaps
@@ -895,7 +905,6 @@ def test_a_gap_error_can_be_repaired_by_a_verified_delivery_owner(tmp_path):
     from easyicu.research_agent.schema import CohortDescriptor, ResearchContext
     from easyicu.webserver.agent_pipeline_runs import _repairable_plan_check
 
-    quote = "Export an online preview."
     context = ResearchContext(
         research_question=quote, variables=[],
         cohort=CohortDescriptor(cohort_name="synthetic", database="miiv", n_stays=0),
@@ -908,7 +917,7 @@ def test_a_gap_error_can_be_repaired_by_a_verified_delivery_owner(tmp_path):
     with pytest.raises(ProgressivePlanCompileError) as caught:
         check_question_requirement_gaps(SimpleNamespace(question_requirements=[claim]), context=context)
     assert caught.value.reason_code == "progressive_capability_gap_claim_unverified"
-    fixed = QuestionRequirement(id="r2", kind=claim.kind, quote=quote, coverage="plan")
+    fixed = QuestionRequirement(id="r2", kind="delivery", quote=quote, coverage="plan")
     plan = bind_requested_host_delivery(AnalysisPlan(research_question=quote, steps=[]))
     (judged,) = judge_question_requirements(
         [fixed], plan=plan, family_template=True, relatives=lambda _: frozenset(),
@@ -918,7 +927,8 @@ def test_a_gap_error_can_be_repaired_by_a_verified_delivery_owner(tmp_path):
     assert judged.delivery["owner_step_ids_by_kind"] == {"article_preview": [plan.steps[0].step_id]}
     reason = "operator_plan_approval_required"
     result, prompts, notices = run_script(
-        tmp_path, caught.value, ([judged.row()], reason), check_failure=_repairable_plan_check,
+        tmp_path, caught.value, ([judged.row()], reason), ([judged.row()], reason),
+        check_failure=_repairable_plan_check,
     )
     assert result() == (reason, None)
     assert '"deliverable_kinds":["article_preview"]' in prompts[1]
@@ -934,4 +944,41 @@ def test_an_unverified_gap_can_gain_clauses_when_the_repair_covers_them(tmp_path
     ])
     result, _, notices = run_script(tmp_path, ([claim], GAP), ([fixed], "operator_plan_approval_required"))
     assert result() == ("operator_plan_approval_required", None)
+    assert notices == [1]
+
+
+@pytest.mark.parametrize("quote, prior_kinds", [
+    ("Include body temperature in the online preview.", ()),
+    ("Show admission temperature in the browser preview.", ()),
+    ("Please provide the browser preview.", ("article_preview",)),
+    ("请提供网页文章预览。", ("article_preview",)),
+])
+def test_a_gap_error_can_be_repaired_by_binding_its_concept(tmp_path, quote, prior_kinds):
+    from types import SimpleNamespace
+
+    from easyicu.research_agent.agents.family_spec_planner import check_question_requirement_gaps
+    from easyicu.research_agent.schema import CohortDescriptor, ResearchContext
+    from easyicu.webserver.agent_pipeline_runs import _repairable_plan_check
+
+    context = ResearchContext(
+        research_question=quote, variables=[],
+        cohort=CohortDescriptor(cohort_name="synthetic", database="miiv", n_stays=0),
+    )
+    claim = QuestionRequirement(
+        id="r1", kind="analysis", quote=quote, coverage="capability_gap",
+        deliverable_kinds=[],
+        gap={"requirement": "design_element_unsupported", "concept": "temp",
+             "element": "analysis", "detail": "The draft claims body temperature is unavailable."},
+    )
+    with pytest.raises(ProgressivePlanCompileError) as caught:
+        check_question_requirement_gaps(SimpleNamespace(question_requirements=[claim]), context=context)
+    assert caught.value.reason_code == "progressive_capability_gap_claim_unverified"
+    assert caught.value.easyicu_question_requirement_gap["deliverable_kinds"] == prior_kinds
+    fixed = requirement(quote, requirement_id="r2", kind="analysis", concepts=["temp"], disposition="covered")
+    approved = "operator_plan_approval_required"
+    result, prompts, notices = run_script(
+        tmp_path, caught.value, ([fixed], approved), ([fixed], approved), check_failure=_repairable_plan_check,
+    )
+    assert result() == (approved, None)
+    assert ('"deliverable_kinds":["article_preview"]' in prompts[1]) == bool(prior_kinds)
     assert notices == [1]

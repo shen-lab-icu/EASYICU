@@ -25,7 +25,7 @@
   const EVIDENCE_LIMIT = 120;
   const MAX_ROWS = 8;
   // The dispositions that refuse approval (QUESTION_REQUIREMENT_APPROVAL_STOPS).
-  const STOPS = new Set(['not_covered', 'capability_gap']);
+  const STOPS = new Set(['not_covered', 'capability_gap', 'needs_clarification']);
   // A gap the host decided for a family template carries the host's English
   // detail; its Chinese reading is supplied here, by its stable reason code.
   const TEMPLATE_GAPS_ZH = {
@@ -87,12 +87,18 @@
       capability_gap: tr('This plan cannot do it', '这份计划做不到'),
       attested: tr('The plan states it answers it', '计划声明已回答'),
       definition_only: tr('Only defines another element', '只用于定义'),
+      needs_clarification: tr('Clarify the requested deliverables', '请明确交付要求'),
+      not_requested: tr('Explicitly excluded', '已明确排除'),
     };
     return (labels[row.disposition] || clip(row.disposition, 40)) + stop;
   }
 
   // Why, as the planning owner decides each disposition (question_requirements._judge).
   function reasonCell(row, levels) {
+    if (row.disposition === 'needs_clarification') return tr(
+      'Specify which deliverables you want in the conversation.', '请在对话中说明需要哪些交付物。',
+    );
+    if (row.disposition === 'not_requested') return tr('The question excludes this deliverable.', '题面明确排除此交付物。');
     const reading = names(row.reading_step_ids);
     const gap = row.gap && typeof row.gap === 'object' ? row.gap : null;
     if (Array.isArray(row.clauses) && row.clauses.length) {
@@ -176,6 +182,7 @@
   // Who stands behind the disposition: the planning owner says
   // (JudgedRequirement.verified_by_host), and for a gap how it was checked.
   function verificationCell(row) {
+    if (['needs_clarification', 'not_requested'].includes(row.disposition)) return tr('Read from the question', '根据题面判定');
     if (row.verified_by_host === true) return tr('Verified by EasyICU', 'EasyICU 已核实');
     if (row.disposition !== 'capability_gap') return tr('Stated by the plan, not verified by EasyICU', '计划声明，EasyICU 未核实');
     if (row.gap_verification === 'unverifiable') return tr('Stated by planning; EasyICU cannot check it', '规划声明，EasyICU 无法核对');
@@ -197,7 +204,8 @@
 
   function summaryPill(judged, unstated, esc) {
     const stops = judged.filter(row => STOPS.has(row.disposition)).length;
-    const toCheck = judged.filter(row => !STOPS.has(row.disposition) && row.verified_by_host !== true).length + unstated.length;
+    const toCheck = judged.filter(row => !STOPS.has(row.disposition) && row.disposition !== 'not_requested'
+      && row.verified_by_host !== true).length + unstated.length;
     if (stops) return `<span class="pill warn" style="height:22px;">${esc(tr(`${stops} not answered or not possible`, `${stops} 项没有回答或做不到`))}</span>`;
     if (toCheck > 0) return `<span class="pill info" style="height:22px;">${esc(tr(`${toCheck} to check`, `${toCheck} 项待核对`))}</span>`;
     return `<span class="pill ok" style="height:22px;">${esc(tr('Nothing to resolve', '没有待处理的要求'))}</span>`;

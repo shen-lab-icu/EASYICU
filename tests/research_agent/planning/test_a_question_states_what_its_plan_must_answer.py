@@ -94,6 +94,7 @@ from easyicu.research_agent.planning.requirement_coverage import (
     PlanRequirementCoverageRecord,
 )
 from easyicu.research_agent.schema import (
+    AnalysisPlan,
     ConceptDescriptor,
     ResearchContext,
     ValidationFinding,
@@ -1737,3 +1738,74 @@ def test_a_delivery_clause_agrees_with_its_judged_plan_owner(question, quote, ki
         (row,) = judged
         assert row.disposition == "covered"
         assert row.delivery["owner_step_ids_by_kind"] == {kind: [owner] for kind, owner in owners.items()}
+
+
+@pytest.mark.parametrize("question, quote, requested, ambiguous", [
+    ("Compare shift recovery, please export a PDF, and do not include references.",
+     "please export a PDF", ("manuscript_pdf",), ()),
+    ("比较不同班次的康复情况，请导出PDF，不要提供在线预览。",
+     "请导出PDF", ("manuscript_pdf",), ()),
+    ("Please export a PDF comparing patients with and without sepsis.",
+     "Please export a PDF", ("manuscript_pdf",), ()),
+    ("Do not provide an online preview and export a PDF.",
+     "export a PDF", (), ("manuscript_pdf",)),
+    ("不要提供在线预览并导出PDF。",
+     "导出PDF", (), ("manuscript_pdf",)),
+    ("Include the night-ward estimates without changing the study and supply a bibliography.",
+     "supply a bibliography", (), ("references",)),
+    ("请提供在线预览来比较有无发热的住院记录。",
+     "请提供在线预览", ("article_preview",), ()),
+    ("不要PDF。请提供参考文献清单。",
+     "请提供参考文献清单", ("references",), ()),
+])
+def test_delivery_scope_is_shared_by_planning_judging_and_approval(tmp_path, question, quote, requested, ambiguous):
+    from easyicu.research_agent.authority.evidence_store import EvidenceStore
+    from easyicu.research_agent.contracts.product_files import DeliveryRequest, delivery_requests
+    from easyicu.research_agent.orchestration.workflow import human_review_requests_for_plan
+    from easyicu.research_agent.planning.requirement_typing.delivery import bind_requested_host_delivery
+
+    context = _context(named=False).model_copy(update={"research_question": question})
+    claim = {"id": "r1", "kind": "delivery", "quote": quote, "coverage": "plan",
+             "deliverable_kinds": list(requested or ambiguous)}
+    result = _planned(context, [claim])
+    requests = delivery_requests(question)
+    assert {kind for kind, decision in requests.items() if decision is DeliveryRequest.REQUESTED} == set(requested)
+    assert {kind for kind, decision in requests.items() if decision is DeliveryRequest.AMBIGUOUS} == set(ambiguous)
+    plan = bind_requested_host_delivery(result.output, question=question)
+    owners = {step.host_delivery_kind: step.step_id for step in plan.steps if step.host_delivery_kind}
+    assert tuple(owners) == requested
+    findings = question_requirement_outcome(context=context, plan=plan, facts=result.facts, run_dir=tmp_path)
+    (review,) = human_review_requests_for_plan(
+        findings=findings, plan=plan, require_plan_review=True, evidence=EvidenceStore(tmp_path), question=question,
+    )
+    record = json.loads((tmp_path / QUESTION_REQUIREMENTS_FILENAME).read_text())
+    (row,) = record["judged"]
+    if ambiguous:
+        assert review.payload["reason"] == row["reason_code"] == "host_delivery_request_ambiguous"
+        assert review.payload["approval_allowed"] is False
+        assert review.payload["deliverable_kinds"] == list(ambiguous)
+        assert row["disposition"] == "needs_clarification"
+        assert not record["coverage"]["complete"]
+    else:
+        assert review.payload["reason"] == "operator_plan_approval_required"
+        assert row["disposition"] == "covered"
+        assert row["delivery"]["owner_step_ids_by_kind"] == {kind: [owner] for kind, owner in owners.items()}
+
+
+@pytest.mark.parametrize("question, fragment", [
+    ("Compare afternoon recovery, and do not provide a PDF.", "provide a PDF"),
+    ("请描述晨班记录，不要PDF。", "PDF"),
+])
+def test_a_planner_quote_cannot_recast_an_excluded_export_as_a_request(question, fragment):
+    from easyicu.research_agent.contracts.product_files import DeliveryRequest, delivery_requests
+
+    item = QuestionRequirement(id="r1", kind="delivery", quote=fragment, coverage="plan",
+                               deliverable_kinds=["manuscript_pdf"])
+    plan = AnalysisPlan(research_question=question, steps=[])
+    (row,) = judge_question_requirements(
+        [item], plan=plan, family_template=True, relatives=lambda _: frozenset(),
+        check_gap=lambda _: pytest.fail("no gap is claimed"), question=question,
+    )
+    assert delivery_requests(question)["manuscript_pdf"] is DeliveryRequest.NOT_REQUESTED
+    assert row.disposition == "not_requested"
+    assert row.delivery is None

@@ -629,6 +629,7 @@ def question_requirement_outcome(
             measures=measures,
             sealed_owner_concepts=sealed_owner_concepts,
             host_facts=host_facts,
+            question=context.research_question,
         ),
     )
     findings = question_requirement_findings(judged, unstated=unstated, measures=measures)

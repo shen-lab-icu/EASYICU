@@ -23,7 +23,7 @@ from types import SimpleNamespace
 
 import pytest
 
-from easyicu.research_agent.planning.approval_stops import PLAN_APPROVAL_STOPS
+from easyicu.research_agent.planning.approval_stops import DELIVERY_APPROVAL_STOPS, PLAN_APPROVAL_STOPS
 from easyicu.research_agent.planning.question_requirements import (
     QUESTION_REQUIREMENT_APPROVAL_STOPS,
     QUESTION_REQUIREMENT_STOP_CODES,
@@ -94,7 +94,7 @@ def _aside_entry(code: str) -> str:
 
 
 def test_population_stop_aside_is_loaded_with_current_version() -> None:
-    assert "js/screens-guided-pi-aside.js?v=20261102-outcome1" in (STATIC / "index.html").read_text()
+    assert "js/screens-guided-pi-aside.js?v=20261118-e2e1v" in (STATIC / "index.html").read_text()
 
 
 def test_an_analysis_no_step_answers_offers_a_fresh_candidate_plan() -> None:
@@ -209,6 +209,10 @@ def test_every_plan_approval_stop_has_a_card_and_an_aside_line(code: str) -> Non
         assert "数值缺失或无法判定" in card["note"] and "分析尚未开始" in card["note"]
     else:
         assert "不能批准" in card["note"]
+    if code in DELIVERY_APPROVAL_STOPS:
+        assert card["nonApprovable"] is True and card["grants"] == []
+        assert card["execute"] is False
+        assert card["resources"] == ["agent_plan.json"]
     # Which plan "Generate fresh plan" makes is the route's choice for the
     # study, so no card promises one.
     assert "只读元数据" not in card["note"]

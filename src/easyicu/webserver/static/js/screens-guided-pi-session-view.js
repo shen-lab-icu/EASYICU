@@ -368,17 +368,16 @@
       const sourceDecision = DATA_CONSENT?.requiresConfirmation?.(session);
       const workflow = state.workflow || {};
       const planStage = workflow.stages?.find(stage => stage.id === 'plan');
-      const openPlanReview = (planStage?.status === 'review_required' && planStage.reason_code === workflow.next_action_code)
-        || [
+      const pendingPlanStage = planStage?.status === 'review_required' && planStage.reason_code === workflow.next_action_code;
+      const pendingDecision = sourceDecision || pendingPlanStage
+        || (Boolean(workflow.plan_decision || workflow.plan_review_summary?.run_id) && [
           'operator_plan_approval_required', 'plan_execution_upgrade_required', 'plan_scientific_changes_required',
           'question_requirement_not_covered', 'question_requirement_capability_gap', 'question_requirements_unreadable',
           'first_result_delivery_requires_article',
-        ].includes(workflow.next_action_code);
-      const pendingDecision = sourceDecision
-        || (openPlanReview && Boolean(workflow.plan_decision || workflow.plan_review_summary?.run_id))
+        ].includes(workflow.next_action_code))
         || Object.values(workflow.host_decisions || {}).some(Boolean) || [
           'cohort_eligibility_confirmation_required', 'study_primary_outcome_confirmation_required',
-          'target_trial_statement_needed', 'target_trial_review', 'target_trial_plan_ready',
+          'target_trial_statement_needed', 'target_trial_review', 'target_trial_plan_ready', 'host_delivery_request_ambiguous',
         ].includes(workflow.next_action_code);
       // A study decision may arrive before the transcript or during a literature turn.
       const showProjectDecisions = showProjectContinuationCards || (!workspace && !lightweight && pendingDecision);

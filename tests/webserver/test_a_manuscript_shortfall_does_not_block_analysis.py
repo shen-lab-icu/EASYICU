@@ -181,7 +181,7 @@ def test_a_promised_host_deliverable_without_a_current_artifact_fails_closed(tmp
     ("manuscript_pdf", "manuscript_scaffold.pdf", "Export a manuscript PDF."),
     ("references", "manuscript_scaffold.bib", "Include a bibliography."),
 ])
-@pytest.mark.parametrize("change", ["none", "output_name", "missing", "empty", "digest", "run", "plan"])
+@pytest.mark.parametrize("change", ["none", "output_name", "missing", "empty", "digest", "run", "plan", "authority"])
 def test_the_writer_delivers_only_the_current_run_plan_and_artifact(tmp_path, monkeypatch, kind, name, question, change):
     from easyicu.research_agent.authority.evidence_store import EvidenceStore
     from easyicu.research_agent.contracts.product_files import HOST_DELIVERY_RECEIPT, HOST_DELIVERY_SOURCES
@@ -259,6 +259,11 @@ def test_the_writer_delivers_only_the_current_run_plan_and_artifact(tmp_path, mo
             source.write_bytes(b"")
         elif change == "digest":
             source.write_bytes(source.read_bytes() + b" ")
+        elif change == "authority":
+            # A legacy persisted gate can predate per-deliverable status rows.
+            # Its receipt identifies the promise, but cannot replace the lost plan.
+            (run_dir / "analysis_plan.json").unlink()
+            return
         apply_host_delivery_completion(axes, plan=plan, run_dir=run_dir)
         if change not in {"none", "output_name"}:
             assert axes["completion_status"] == "diagnostic_only"

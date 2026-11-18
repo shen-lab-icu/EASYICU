@@ -21,7 +21,14 @@ from pathlib import Path
 from typing import Iterable
 
 from ..contracts.claim_ceiling import first_result
-from ..contracts.product_files import requested_host_delivery_kinds
+from ..contracts.product_files import (
+    DeliveryRequest,
+    HOST_DELIVERY_CLARIFICATION,
+    HOST_DELIVERY_CLARIFICATION_MESSAGE,
+    HOST_DELIVERY_KINDS,
+    RUN_DELIVERABLES,
+    delivery_requests,
+)
 from ..schema import AnalysisPlan, ValidationFinding
 from .population_compile import POPULATION_APPROVAL_STOPS
 from .question_requirements import (
@@ -30,9 +37,10 @@ from .question_requirements import (
 )
 
 FIRST_RESULT_DELIVERY_STOP = "first_result_delivery_requires_article"
+DELIVERY_APPROVAL_STOPS = (HOST_DELIVERY_CLARIFICATION, FIRST_RESULT_DELIVERY_STOP)
 
 PLAN_APPROVAL_STOPS: tuple[str, ...] = (
-    FIRST_RESULT_DELIVERY_STOP,
+    *DELIVERY_APPROVAL_STOPS,
     *POPULATION_APPROVAL_STOPS.values(),
     "population_criterion_decision_unconfirmed",
     *QUESTION_REQUIREMENT_STOP_CODES,
@@ -41,9 +49,30 @@ PLAN_APPROVAL_STOPS: tuple[str, ...] = (
 
 def first_result_delivery_stop(plan: AnalysisPlan, question: str | None = None) -> ValidationFinding | None:
     """Keep the desktop analysis profile sealed when the question needs the Writer."""
+    return delivery_approval_stop(plan, question) if first_result(plan) else None
+
+
+def delivery_approval_stop(plan: AnalysisPlan, question: str | None = None) -> ValidationFinding | None:
+    """Resolve a delivery decision before offering the plan for approval."""
+    requests = delivery_requests(question or plan.research_question)
+    ambiguous = [kind for kind in RUN_DELIVERABLES if requests.get(kind) is DeliveryRequest.AMBIGUOUS]
+    if ambiguous:
+        return ValidationFinding(
+            validator="question_requirements",
+            severity="error",
+            message=HOST_DELIVERY_CLARIFICATION_MESSAGE,
+            detail={
+                "reason": HOST_DELIVERY_CLARIFICATION, "deliverable_kinds": ambiguous,
+                "human_review_required": True, "approval_allowed": False,
+            },
+        )
     if not first_result(plan):
         return None
-    kinds = requested_host_delivery_kinds(plan.research_question if question is None else question)
+    existing = {step.host_delivery_kind for step in plan.steps}
+    kinds = [
+        kind for kind in HOST_DELIVERY_KINDS
+        if kind in existing or requests.get(kind) is DeliveryRequest.REQUESTED
+    ]
     if not kinds:
         return None
     return ValidationFinding(
@@ -54,7 +83,7 @@ def first_result_delivery_stop(plan: AnalysisPlan, question: str | None = None) 
             "Revise the request in the conversation, or start a separate article run."
         ),
         detail={
-            "reason": FIRST_RESULT_DELIVERY_STOP, "deliverable_kinds": list(kinds),
+            "reason": FIRST_RESULT_DELIVERY_STOP, "deliverable_kinds": kinds,
             "human_review_required": True, "approval_allowed": False,
         },
     )
@@ -65,11 +94,12 @@ def judged_on_plan_under_review(
     *,
     plan: AnalysisPlan,
     run_dir: Path,
+    question: str | None = None,
 ) -> list[ValidationFinding]:
     """The plan phase's findings, with each owner's stops judged on the plan offered for review."""
 
     return question_requirements_on_plan_under_review(
-        findings, plan=plan, run_dir=run_dir
+        findings, plan=plan, run_dir=run_dir, question=question,
     )
 
 

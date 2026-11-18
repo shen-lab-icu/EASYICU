@@ -10,6 +10,7 @@ import hashlib
 import json
 import re
 from dataclasses import dataclass
+from enum import Enum
 from pathlib import Path
 from types import MappingProxyType
 from typing import Literal, Mapping, Sequence
@@ -177,13 +178,21 @@ RUN_DELIVERY_ARTIFACT_NAMES = tuple(dict.fromkeys(
 
 # Neutral delivery grammar only. Unknown words (methods, data requests,
 # destinations, formats, etc.) leave a residue and keep ordinary gap handling.
+_DELIVERY_VERB = (
+    r"(?:\b(?:provide|include|deliver|(?:give|send)\s+me|export|generate|supply|share)\b"
+    r"|提供|包含|交付|导出|生成)"
+)
 _DELIVERY_GRAMMAR = re.compile(
-    r"\b(?:please|provide|include|deliver|give\s+me|export|generate|"
+    rf"{_DELIVERY_VERB}|\b(?:please|"
     r"a|an|the|and|or|of|with|downloadable|download|manuscript|article|report|files?|readable)\b"
-    r"|(?:请|提供|包含|交付|导出|生成|以及|并|和|及|与|或|可下载|下载|文件|论文|文章|报告|信息充分|清晰|且|可读|的)",
+    r"|(?:请|以及|并|和|及|与|或|可下载|下载|文件|论文|文章|报告|信息充分|清晰|且|可读|的)",
     re.IGNORECASE,
 )
 _SEPARATORS = re.compile(r"[\s,，、;；。.：:()（）/\-]+")
+_DELIVERY_NAMES = {
+    kind: re.compile(r"(?<![a-z])(?:" + spec.request_names + r")(?![a-z])", re.IGNORECASE)
+    for kind, spec in RUN_DELIVERABLES.items()
+}
 
 
 def requested_deliverable_kinds(quote: str) -> tuple[DeliverableKind, ...]:
@@ -194,8 +203,7 @@ def requested_deliverable_kinds(quote: str) -> tuple[DeliverableKind, ...]:
     """
     remainder = quote
     kinds: list[DeliverableKind] = []
-    for kind, spec in RUN_DELIVERABLES.items():
-        pattern = re.compile(r"(?<![a-z])(?:" + spec.request_names + r")(?![a-z])", re.IGNORECASE)
+    for kind, pattern in _DELIVERY_NAMES.items():
         remainder, count = pattern.subn(" ", remainder)
         if count:
             kinds.append(kind)
@@ -206,26 +214,83 @@ def requested_deliverable_kinds(quote: str) -> tuple[DeliverableKind, ...]:
 HOST_DELIVERY_KINDS: tuple[HostDeliveryKind, ...] = ("article_preview", "manuscript_pdf", "references")
 
 _DELIVERY_SENTENCE_BOUNDARY = re.compile(r"[。？！?!；;\n]+|\.(?!\d)")
-_DELIVERY_REQUEST_BOUNDARY = re.compile(
-    r"(?:,\s*|\band\s+)(?=(?:please\s+)?(?:provide|include|deliver|give\s+me|export|generate)\b)"
-    r"|(?:[，,]\s*(?:并\s*)?|并\s*)(?=请?(?:提供|包含|交付|导出|生成))",
-    re.IGNORECASE,
+_DELIVERY_PLEASE = r"(?:\bplease\s+|请\s*)"
+_DIRECT_NEGATION = (
+    rf"(?:\b(?:do\s+not|don['’]t|never|no|not)\b|无需|不必|不要|不需要|不用|(?:不|别|勿)(?={_DELIVERY_VERB}))"
 )
-_DELIVERY_NEGATION = re.compile(r"\b(?:no|not|never|without|don't)\b|(?:无需|不必|不要|不需要|不用)", re.IGNORECASE)
+_DELIVERY_CLAUSE_BOUNDARY = re.compile(
+    rf"(?:[,，]\s*(?:(?:\band\s+|并\s*))?|\band\s+|并\s*)"
+    rf"(?=(?:{_DELIVERY_PLEASE})?(?:{_DIRECT_NEGATION}|{_DELIVERY_VERB}))", re.IGNORECASE,
+)
+_DELIVERY_COMMAND = re.compile(rf"^(?:{_DELIVERY_PLEASE})?{_DELIVERY_VERB}", re.IGNORECASE)
+_DELIVERY_RESET = re.compile(_DELIVERY_PLEASE, re.IGNORECASE)
+_DELIVERY_EXCLUSION = re.compile(
+    rf"^(?:{_DELIVERY_PLEASE})?(?:{_DIRECT_NEGATION}|\bwithout\b)\s*", re.IGNORECASE,
+)
+_DELIVERY_NEGATION = re.compile(rf"{_DIRECT_NEGATION}|\bwithout\b", re.IGNORECASE)
+_CLINICAL_CONTRAST = re.compile(r"\bwith\s+and\s+without\b", re.IGNORECASE)
 _DELIVERY_ALTERNATIVE = re.compile(r"\bor\b|或者?|二选一", re.IGNORECASE)
 
+HOST_DELIVERY_CLARIFICATION = "host_delivery_request_ambiguous"
+HOST_DELIVERY_CLARIFICATION_MESSAGE = (
+    "Clarify in the conversation which deliverables you want for this run."
+)
 
-def requested_host_delivery_kinds(question: str) -> tuple[HostDeliveryKind, ...]:
-    """Read whole affirmative delivery clauses using the stored-quote grammar."""
-    kinds = set()
+
+class DeliveryRequest(Enum):
+    REQUESTED = "requested"
+    NOT_REQUESTED = "not_requested"
+    AMBIGUOUS = "ambiguous"
+
+
+def _delivery_object_kinds(clause: str) -> set[DeliverableKind]:
+    """Read a neutral object at the start of a delivery command."""
+    kinds = set(requested_deliverable_kinds(clause))
+    if not kinds and _DELIVERY_COMMAND.match(clause):
+        # A command can name the export first and then describe its content.
+        for kind, pattern in _DELIVERY_NAMES.items():
+            for name in pattern.finditer(clause):
+                if kind in requested_deliverable_kinds(clause[:name.end()]):
+                    kinds.add(kind)
+                    break
+    return kinds
+
+
+def delivery_requests(question: str) -> dict[DeliverableKind, DeliveryRequest]:
+    """Classify stated deliverables using only clear local commands.
+
+    An unlisted kind has no delivery instruction. NOT_REQUESTED records an
+    explicit exclusion. Keep uncertain scope and contradictory instructions
+    for the user, including after a bare verb coordinated with a negation.
+    """
+    decisions: dict[DeliverableKind, DeliveryRequest] = {}
     for sentence in _DELIVERY_SENTENCE_BOUNDARY.split(question):
-        for clause in _DELIVERY_REQUEST_BOUNDARY.split(sentence):
-            if _DELIVERY_NEGATION.search(clause):
-                continue
-            stated = requested_deliverable_kinds(clause)
-            if len(stated) <= 1 or not _DELIVERY_ALTERNATIVE.search(clause):
-                kinds.update(stated)
-    return tuple(kind for kind in HOST_DELIVERY_KINDS if kind in kinds)
+        negation_in_scope = False
+        for fragment in _DELIVERY_CLAUSE_BOUNDARY.split(sentence):
+            clause = fragment.strip()
+            exclusion = _DELIVERY_EXCLUSION.match(clause)
+            local_negation = bool(_DELIVERY_NEGATION.search(_CLINICAL_CONTRAST.sub("", clause)))
+            if exclusion or _DELIVERY_RESET.match(clause):
+                negation_in_scope = False
+            object_text = clause[exclusion.end():] if exclusion else clause
+            objects = _delivery_object_kinds(object_text)
+            residual_negation = exclusion and _DELIVERY_NEGATION.search(_CLINICAL_CONTRAST.sub("", object_text))
+            mentioned = {kind for kind, pattern in _DELIVERY_NAMES.items() if pattern.search(clause)}
+            for kind in mentioned:
+                if exclusion and kind in objects and not residual_negation:
+                    verdict = DeliveryRequest.NOT_REQUESTED
+                elif local_negation or negation_in_scope or (
+                    kind in objects and len(objects) > 1 and _DELIVERY_ALTERNATIVE.search(clause)
+                ):
+                    verdict = DeliveryRequest.AMBIGUOUS
+                elif kind in objects:
+                    verdict = DeliveryRequest.REQUESTED
+                else:
+                    continue
+                previous = decisions.get(kind, verdict)
+                decisions[kind] = verdict if previous is verdict else DeliveryRequest.AMBIGUOUS
+            negation_in_scope |= local_negation
+    return decisions
 
 
 HOST_DELIVERY_RECEIPT = "host_delivery_receipt.json"
@@ -269,21 +334,42 @@ def host_delivery_source_digests(sources: Mapping[str, bytes]) -> dict[str, str]
     return {name: hashlib.sha256(raw).hexdigest() for name, raw in sources.items()}
 
 
+def _host_delivery_receipt(run_dir: Path, run_id: str) -> dict:
+    try:
+        receipt = json.loads(read_host_delivery_source(run_dir, HOST_DELIVERY_RECEIPT))
+    except (OSError, ValueError):
+        return {}
+    if (
+        isinstance(receipt, dict) and receipt.get("schema_version") == HOST_DELIVERY_RECEIPT_SCHEMA
+        and receipt.get("run_id") == run_id and isinstance(receipt.get("deliveries"), dict)
+    ):
+        return receipt
+    return {}
+
+
+def recorded_host_delivery_owners(run_dir: Path, *, run_id: str) -> dict[HostDeliveryKind, str]:
+    """Identify obligations to report as unverified when the plan is unavailable."""
+    receipt = _host_delivery_receipt(run_dir, run_id)
+    planned = receipt.get("planned_owners")
+    if not isinstance(planned, dict):
+        planned = {
+            kind: entry.get("step_id") for kind, entry in receipt.get("deliveries", {}).items()
+            if isinstance(entry, dict)
+        }
+    return {
+        kind: step_id for kind in HOST_DELIVERY_KINDS
+        if isinstance(step_id := planned.get(kind), str) and step_id
+    }
+
+
 def verified_host_deliveries(
     run_dir: Path, *, run_id: str, plan_sha256: str, owners: Mapping[HostDeliveryKind, str],
 ) -> dict[HostDeliveryKind, dict[str, bytes]]:
     """Recheck the producer's receipt against the run, plan and current files."""
     if not owners:
         return {}
-    try:
-        receipt = json.loads(read_host_delivery_source(run_dir, HOST_DELIVERY_RECEIPT))
-        if (
-            not isinstance(receipt, dict) or receipt.get("schema_version") != HOST_DELIVERY_RECEIPT_SCHEMA
-            or receipt.get("run_id") != run_id or receipt.get("plan_sha256") != plan_sha256
-            or not isinstance(receipt.get("deliveries"), dict)
-        ):
-            return {}
-    except (OSError, ValueError):
+    receipt = _host_delivery_receipt(run_dir, run_id)
+    if receipt.get("plan_sha256") != plan_sha256:
         return {}
     verified = {}
     for kind, step_id in owners.items():

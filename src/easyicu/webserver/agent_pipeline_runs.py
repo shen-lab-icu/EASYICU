@@ -49,6 +49,7 @@ from easyicu.research_agent.authority.run_input import (
     load_verified_run_input_capsule,
 )
 from easyicu.research_agent.contracts.executor_stop import registered_executor_stop
+from easyicu.research_agent.contracts.product_files import HostDeliveryKind
 from easyicu.research_agent.planning.question_interpretation import (
     QUESTION_SUBSTANCE_FORMS_KEY,
 )
@@ -738,11 +739,11 @@ def _pending_review_reason_code(
 ) -> str:
     """Project one precise current-policy reason for the paused plan."""
 
-    from easyicu.research_agent.planning.approval_stops import FIRST_RESULT_DELIVERY_STOP
+    from easyicu.research_agent.planning.approval_stops import DELIVERY_APPROVAL_STOPS
 
     payload = request.payload if isinstance(request.payload, Mapping) else {}
     explicit_reason = _clean_text(payload.get("reason"), 160)
-    if explicit_reason == FIRST_RESULT_DELIVERY_STOP:
+    if explicit_reason in DELIVERY_APPROVAL_STOPS:
         return explicit_reason
     # A current host policy must remain visible even when the older review
     # cannot be displayed and the plan also has other independent problems.
@@ -4938,6 +4939,7 @@ def _check_host_manuscript_delivery(
     *,
     run_dir: Path,
     plan: Mapping[str, Any],
+    owners: Mapping[HostDeliveryKind, str],
     axes: Mapping[str, Any],
     gate: Dict[str, Any],
     manuscript_text: str,
@@ -4946,21 +4948,15 @@ def _check_host_manuscript_delivery(
     pdf_receipt: Optional[Dict[str, Any]],
 ) -> set[str]:
     from easyicu.research_agent.contracts.product_files import (
-        host_delivery_failure_code, host_delivery_owners, verified_host_deliveries,
+        host_delivery_failure_code, verified_host_deliveries,
     )
     from easyicu.research_agent.reporting.completion import completion_outcomes
 
-    owners = host_delivery_owners(plan)
-    if not owners and not plan:
-        owners = host_delivery_owners({"steps": [
-            {"host_delivery_kind": row.get("kind"), "step_id": row.get("step_id")}
-            for row in (axes.get("host_delivery_steps") or ()) if isinstance(row, Mapping)
-        ]})
     if not owners:
         return set()
     verified = verified_host_deliveries(
         run_dir, run_id=run_dir.name, plan_sha256=canonical_sha256(plan), owners=owners,
-    )
+    ) if plan else {}
     # Treat the public products as part of delivery too. Reuse the existing
     # PDF and article-provenance readers, with the same verified bytes.
     preview = verified.get("article_preview")
@@ -5213,13 +5209,20 @@ def _write_projection(
         _read_json(run_dir / "evidence" / "evidence_index.json", []) if run_dir else []
     )
     evidence_count = len(evidence_index) if isinstance(evidence_index, list) else 0
-    from easyicu.research_agent.contracts.product_files import host_delivery_owners
+    from easyicu.research_agent.contracts.product_files import host_delivery_owners, recorded_host_delivery_owners
     from easyicu.research_agent.reporting.completion import host_delivery_checks_apply
 
     delivery_active = (
         run_dir is not None and pending is None and not blocked_reason and host_delivery_checks_apply(axes)
     )
-    planned_pdf = "manuscript_pdf" in host_delivery_owners(plan)
+    delivery_owners = host_delivery_owners(plan)
+    if delivery_active and not plan:
+        delivery_owners = recorded_host_delivery_owners(run_dir, run_id=run_dir.name)
+        delivery_owners.update(host_delivery_owners({"steps": [
+            {"host_delivery_kind": row.get("kind"), "step_id": row.get("step_id")}
+            for row in (axes.get("host_delivery_steps") or ()) if isinstance(row, Mapping)
+        ]}))
+    planned_pdf = "manuscript_pdf" in delivery_owners
     try:
         pdf_receipt, manuscript_documents = _validated_manuscript_documents(
             None if planned_pdf and not delivery_active else run_dir
@@ -5230,7 +5233,7 @@ def _write_projection(
         pdf_receipt, manuscript_documents = None, []
     if delivery_active:
         failed_deliveries = _check_host_manuscript_delivery(
-            run_dir=run_dir, plan=plan, axes=axes, gate=gate, manuscript_text=manuscript_text,
+            run_dir=run_dir, plan=plan, owners=delivery_owners, axes=axes, gate=gate, manuscript_text=manuscript_text,
             provenance=manuscript_provenance, documents=manuscript_documents, pdf_receipt=pdf_receipt,
         )
         if failed_deliveries:

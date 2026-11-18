@@ -110,8 +110,8 @@ from ..canonical_json import canonical_sha256
 from ..contracts.association_execution import primary_binary_effect_measure
 from ..contracts.model_tokens import BinaryEffectMeasure
 from ..contracts.product_files import (
-    DeliverableKind, HOST_DELIVERY_REASON, RUN_DELIVERABLES,
-    requested_deliverable_kinds,
+    DeliverableKind, DeliveryRequest, HOST_DELIVERY_CLARIFICATION, HOST_DELIVERY_CLARIFICATION_MESSAGE,
+    HOST_DELIVERY_REASON, RUN_DELIVERABLES, delivery_requests, requested_deliverable_kinds,
 )
 from ..schema import AnalysisPlan, ResearchContext, ValidationFinding
 from .progressive_contract import (
@@ -153,7 +153,8 @@ MAX_DENOTED_COLUMNS = 8
 RequirementKind = Literal["benchmark", "subgroup", "estimand", "analysis", "cohort_accounting", "definition", "delivery"]
 CoverageClaim = Literal["plan", "capability_gap", "definition_only", "needs_choice"]
 Disposition = Literal[
-    "covered", "not_covered", "capability_gap", "attested", "definition_only"
+    "covered", "not_covered", "capability_gap", "attested", "definition_only",
+    "not_requested", "needs_clarification",
 ]
 
 #: Actions that compare the study's model with another model or score on the same rows.
@@ -211,7 +212,8 @@ QUESTION_REQUIREMENTS_GUIDE = (
     " Delivery-only requests use kind delivery and deliverable_kinds from the host "
     "delivery contract: " + ", ".join(RUN_DELIVERABLES) + ". "
     "Quote only the requested outputs, keeping scientific requirements "
-    "separate. The host checks that each requested output has a typed owner in this plan. "
+    "separate. The host checks that each requested output has a typed owner in this plan "
+    "and asks the user to clarify uncertain delivery instructions. "
     "For other requirements use deliverable_kinds=[]. Quote generic requests for study design, "
     "methods and reporting separately from named scientific methods or data. The host checks "
     "each generic request against the typed owners actually present in this plan."
@@ -1118,6 +1120,7 @@ def judge_question_requirements(
     """
 
     requirements = tuple(requirements)
+    requested_deliveries = delivery_requests(question or getattr(plan, "research_question", None) or "")
     judged = tuple(
         _judge(
             item,
@@ -1127,6 +1130,7 @@ def judge_question_requirements(
             check_gap=check_gap,
             sealed_owner_concepts=sealed_owner_concepts or {},
             requirements=requirements, host_facts=host_facts, sealed=sealed,
+            requested_deliveries=requested_deliveries,
         )
         for item in requirements
     )
@@ -1149,13 +1153,28 @@ def _judge(
     requirements: Sequence[QuestionRequirement],
     host_facts: Sequence[Mapping[str, Any]],
     sealed: Sequence[str],
+    requested_deliveries: Mapping[DeliverableKind, DeliveryRequest],
 ) -> JudgedRequirement:
     planned = (
         requested_plan_deliverables(item.quote)
         if item.kind in {"analysis", "delivery"} and not item.concepts and not item.analysis_exposures
         and not (item.gap and item.gap.concept) else ()
     )
-    delivery_kinds = requirement_delivery_kinds(item)
+    stated_deliveries = requirement_delivery_kinds(item)
+    if any(requested_deliveries.get(kind) is DeliveryRequest.AMBIGUOUS for kind in stated_deliveries):
+        return JudgedRequirement(
+            item, "needs_clarification", HOST_DELIVERY_CLARIFICATION, host_judged=True,
+            gap=item.gap, verification="unverified" if item.gap else None,
+            fact=HOST_DELIVERY_CLARIFICATION_MESSAGE,
+        )
+    delivery_kinds = tuple(
+        kind for kind in stated_deliveries if requested_deliveries.get(kind) is not DeliveryRequest.NOT_REQUESTED
+    )
+    if stated_deliveries and not delivery_kinds:
+        return JudgedRequirement(
+            item, "not_requested", "question_deliverable_explicitly_excluded", host_judged=True,
+            gap=item.gap, verification="unverified" if item.gap else None,
+        )
     delivery = (
         planned_run_delivery_evidence(delivery_kinds, plan=plan) if delivery_kinds
         else planned_delivery_evidence(planned, plan=plan)
@@ -1585,6 +1604,7 @@ def _coverage(
     status: Mapping[str, RequirementCoverageStatus] = {
         "covered": "covered",
         "not_covered": "missing",
+        "needs_clarification": "missing",
         "capability_gap": "unsupported",
     }
     records: list[PlanRequirementCoverageRecord] = []
@@ -1865,6 +1885,7 @@ def question_requirements_record(
     measures: Sequence[EffectMeasureJudgment] = (),
     sealed_owner_concepts: Mapping[str, Collection[str]] | None = None,
     host_facts: Sequence[Mapping[str, Any]] = (),
+    question: str | None = None,
 ) -> dict[str, Any]:
     """The run's record of what the question asked and how the compiled plan answers it.
 
@@ -1882,6 +1903,7 @@ def question_requirements_record(
         "schema_version": QUESTION_REQUIREMENTS_SCHEMA_VERSION,
         "route": route,
         "compiled_plan_sha256": analysis_plan_sha256(plan),
+        **({"question": question} if question and question != plan.research_question else {}),
         "stated": [item.model_dump(mode="json") for item in requirements],
         "named_concepts": [item.model_dump(mode="json") for item in named],
         "denoted_columns": {
@@ -1925,7 +1947,7 @@ def _gap_key(gap: ProgressiveCapabilityGap) -> str:
 
 
 def judge_recorded_requirements(
-    record: Mapping[str, Any], *, plan: AnalysisPlan
+    record: Mapping[str, Any], *, plan: AnalysisPlan, question: str | None = None,
 ) -> RecordedJudgment:
     """Judge a planning record's requirements on another plan, from the record alone.
 
@@ -1999,6 +2021,9 @@ def judge_recorded_requirements(
         )
         if missing:
             raise ValueError(f"it does not say which columns {missing} denote")
+        recorded_question = record.get("question")
+        if recorded_question is not None and not isinstance(recorded_question, str):
+            raise ValueError("its research question is not text")
         checks: dict[str, tuple[GapVerification, str]] = {}
         for item in requirements:
             if item.gap is None:
@@ -2021,6 +2046,7 @@ def judge_recorded_requirements(
         check_gap=lambda gap: checks[_gap_key(gap)],
         sealed_owner_concepts=sealed_owner_concepts,
         host_facts=host_facts, sealed=sealed,
+        question=question or recorded_question,
     )
     if quote_spans:
         judged = tuple(
@@ -2064,6 +2090,7 @@ def question_requirements_on_plan_under_review(
     *,
     plan: AnalysisPlan,
     run_dir: Path,
+    question: str | None = None,
 ) -> list[ValidationFinding]:
     """The plan phase's findings, with this owner's judged again on the plan offered for review.
 
@@ -2098,7 +2125,7 @@ def question_requirements_on_plan_under_review(
             _unreadable_finding(f"the planning record cannot be read: {exc}"),
         ]
     try:
-        judgment = judge_recorded_requirements(record, plan=plan)
+        judgment = judge_recorded_requirements(record, plan=plan, question=question)
     except QuestionRequirementsError as exc:
         return [*kept, _unreadable_finding(str(exc))]
     _write_record(run_dir, QUESTION_REQUIREMENTS_REVIEW_FILENAME, judgment.record)

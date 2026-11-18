@@ -445,3 +445,33 @@ test('a pending cohort-source decision from the plan stage is inline after a lit
   assert.match(log, /data-gpi-confirm-edit[^>]*>Change cohort<\/button>/);
   assert.doesNotMatch(log, /data-gpi-confirm-action/);
 });
+
+test('a delivery clarification is actionable inside the main conversation even without a plan summary', () => {
+  const code = 'host_delivery_request_ambiguous';
+  for (const messages of [[], researchTurn]) {
+    const previousLanguage = language;
+    language = window.EU_LANG = 'en';
+    try {
+      const html = conversation(pendingSession, messages, null, {
+        next_action_code: code,
+        stages: [{ id: 'plan', status: 'review_required', reason_code: code }],
+      });
+      const log = html.slice(html.indexOf('data-gpi-log'), html.indexOf('data-gpi-input'));
+      assert.match(log, /data-gpi-confirm-edit[^>]*>Revise in the conversation<\/button>/);
+      assert.match(log, /which deliverables/i);
+      assert.doesNotMatch(log, /data-gpi-confirm-action/);
+    } finally {
+      language = window.EU_LANG = previousLanguage;
+    }
+  }
+});
+
+test('a pending plan action is inline when the workflow arrives before the transcript and plan summary', () => {
+  const code = 'operator_plan_approval_required';
+  const html = conversation(pendingSession, [], null, {
+    next_action_code: code,
+    stages: [{ id: 'plan', status: 'review_required', reason_code: code }],
+  });
+  const log = html.slice(html.indexOf('data-gpi-log'), html.indexOf('data-gpi-input'));
+  assert.match(log, /data-gpi-confirm-action disabled[^>]*>批准并开始分析<\/button>/);
+});

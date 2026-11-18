@@ -10,7 +10,8 @@ from ...contracts.model_terms import PreparationRefusal, preparation_for_step
 from ...contracts.primary_cohort import primary_analysis_cohort_producer_uses_universe
 from ...contracts.prediction_subgroup import prediction_subgroup_step_matches
 from ...contracts.product_files import (
-    DeliverableKind, RUN_DELIVERY_SCHEMA_VERSION, host_delivery_coverage, requested_host_delivery_kinds,
+    DeliverableKind, DeliveryRequest, HOST_DELIVERY_KINDS, RUN_DELIVERY_SCHEMA_VERSION,
+    delivery_requests, host_delivery_coverage,
 )
 from ...contracts.product_identity import is_canonical_typed_product_token, typed_product
 from ..question_quote import normalize_question_quote
@@ -138,15 +139,17 @@ def bind_requested_host_delivery(plan: AnalysisPlan, *, question: str | None = N
     """Append the requested terminal steps to the scientific plan."""
     from ...schema import AnalysisStep
 
-    executable = plan.execution_steps
-    if first_result(plan):
-        # The approval gate names the delivery conflict using the user question.
-        kinds = ()
-    else:
-        kinds = requested_host_delivery_kinds(plan.research_question if question is None else question)
-    if not kinds and len(executable) == len(plan.steps):
+    requests = delivery_requests(question or plan.research_question)
+    kept = [
+        step for step in plan.steps
+        if step.host_delivery_kind is None or requests.get(step.host_delivery_kind) is DeliveryRequest.AMBIGUOUS
+    ]
+    kinds = () if first_result(plan) else tuple(
+        kind for kind in HOST_DELIVERY_KINDS if requests.get(kind) is DeliveryRequest.REQUESTED
+    )
+    if not kinds and len(kept) == len(plan.steps):
         return plan
-    used_ids = {step.step_id for step in executable}
+    used_ids = {step.step_id for step in kept}
     intents = {
         "article_preview": "Deliver the evidence-bound article preview",
         "manuscript_pdf": "Deliver the compiled manuscript PDF",
@@ -158,7 +161,7 @@ def bind_requested_host_delivery(plan: AnalysisPlan, *, question: str | None = N
         while step_id in used_ids:
             step_id += "_host"
         added.append(AnalysisStep(step_id=step_id, intent=intents[kind], host_delivery_kind=kind))
-    return plan.model_copy(update={"steps": [*executable, *added]})
+    return plan.model_copy(update={"steps": [*kept, *added]})
 
 
 def planned_run_delivery_evidence(

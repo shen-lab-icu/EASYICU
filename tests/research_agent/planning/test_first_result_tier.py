@@ -384,12 +384,17 @@ def test_first_result_routes_a_requested_article_delivery_before_approval(tmp_pa
     from easyicu.research_agent.authority.evidence_store import EvidenceStore
     from easyicu.research_agent.orchestration.workflow import human_review_requests_for_plan
     from easyicu.research_agent.planning.requirement_typing.delivery import bind_requested_host_delivery
+    from easyicu.research_agent.schema import ValidationFinding
 
     question = f"Summarize the observation window. {request_text}"
     draft = plan().model_copy(update={"research_question": question})
     bound = bind_requested_host_delivery(draft)
+    uncovered = ValidationFinding(
+        validator="question_requirements", severity="error", message="The plan lacks a typed delivery owner.",
+        detail={"reason": "question_requirement_not_covered", "approval_allowed": False},
+    )
     (review,) = human_review_requests_for_plan(
-        findings=[], plan=bound, require_plan_review=True, evidence=EvidenceStore(tmp_path),
+        findings=[uncovered], plan=bound, require_plan_review=True, evidence=EvidenceStore(tmp_path),
     )
     assert review.payload["reason"] == "first_result_delivery_requires_article"
     assert review.payload["approval_allowed"] is False
@@ -422,3 +427,71 @@ def test_first_result_pipeline_checks_the_user_question_before_reviewing_a_legac
     assert review.payload["reason"] == "first_result_delivery_requires_article"
     assert review.payload["deliverable_kinds"] == ["references"]
     assert review.payload["approval_allowed"] is False
+
+
+@pytest.mark.parametrize("request_text, explicit", [
+    ("Compare evening discharge times, please export a PDF, and do not include references.", None),
+    ("请提供可下载的PDF。不需要参考文献。", ""),
+])
+def test_first_result_uses_its_own_question_when_the_caller_has_no_question(tmp_path, request_text, explicit):
+    from easyicu.research_agent.authority.evidence_store import EvidenceStore
+    from easyicu.research_agent.orchestration.workflow import human_review_requests_for_plan
+
+    draft = plan().model_copy(update={"research_question": request_text})
+    (review,) = human_review_requests_for_plan(
+        findings=[], plan=draft, require_plan_review=True, evidence=EvidenceStore(tmp_path),
+        **({} if explicit is None else {"question": explicit}),
+    )
+    assert review.payload["reason"] == "first_result_delivery_requires_article"
+    assert review.payload["deliverable_kinds"] == ["manuscript_pdf"]
+    assert review.payload["approval_allowed"] is False
+
+
+@pytest.mark.parametrize("original_question", [None, "", "Compare the recovery patterns."])
+def test_resumed_first_result_routes_existing_delivery_steps_before_host_validation(tmp_path, original_question):
+    from easyicu.research_agent.orchestration.config import PipelineConfig
+    from easyicu.research_agent.orchestration.workflow import human_review_requests_for_plan
+    from easyicu.research_agent.pipeline import RUN_INPUT_CAPSULE_EVIDENCE_ID, _pipeline_run___human_review_invoker
+
+    legacy = plan(steps=[AnalysisStep(
+        step_id="shift_sources", intent="List references for the shift summary", host_delivery_kind="references",
+    )])
+    capsule = SimpleNamespace(evidence_id=RUN_INPUT_CAPSULE_EVIDENCE_ID, sha256="c" * 64)
+    evidence = SimpleNamespace(root=tmp_path, get=lambda name: capsule if name == capsule.evidence_id else None,
+                               verified_records=lambda: [capsule])
+    draft = SimpleNamespace(
+        context=None if original_question is None else SimpleNamespace(research_question=original_question),
+        plan=legacy, evidence=evidence, findings=[], resume_state={},
+    )
+    pipeline = SimpleNamespace(
+        _config=PipelineConfig(workdir=tmp_path, execution_tier="first_result", require_human_plan_review=True),
+        _submission_profile_name=None, _capability_runtime=SimpleNamespace(activation=None),
+    )
+    reviewed = []
+    (review,) = _pipeline_run___human_review_invoker(draft, reviewed_plan=reviewed, self=pipeline)
+    assert reviewed == [draft]
+    assert review.payload["reason"] == "first_result_delivery_requires_article"
+    assert review.payload["deliverable_kinds"] == ["references"]
+    assert review.payload["approval_allowed"] is False
+    assert human_review_requests_for_plan(
+        findings=[], plan=legacy, require_plan_review=True, evidence=evidence,
+    )[0].payload["reason"] == "first_result_delivery_requires_article"
+
+
+@pytest.mark.parametrize("question", [
+    "Do not provide an online preview and export a PDF.",
+    "不要提供在线预览并导出PDF。",
+    "请勿生成网页预览并导出PDF。",
+    "Never generate a browser preview and supply a typeset copy.",
+])
+def test_ambiguous_delivery_keeps_existing_owner_and_asks_before_the_first_result(question):
+    from easyicu.research_agent.planning.approval_stops import first_result_delivery_stop
+    from easyicu.research_agent.planning.requirement_typing.delivery import bind_requested_host_delivery
+
+    existing = AnalysisStep(step_id="typeset", intent="Typeset the report", host_delivery_kind="manuscript_pdf")
+    draft = plan(steps=[existing])
+    assert bind_requested_host_delivery(draft, question=question).steps == [existing]
+    finding = first_result_delivery_stop(draft, question)
+    assert finding.detail["deliverable_kinds"] == ["manuscript_pdf"]
+    assert finding.detail["reason"] == "host_delivery_request_ambiguous"
+    assert finding.detail["approval_allowed"] is False

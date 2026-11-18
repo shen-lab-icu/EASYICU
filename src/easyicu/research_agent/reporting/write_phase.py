@@ -3028,6 +3028,7 @@ def _record_host_deliveries(
     payload = {
         "schema_version": HOST_DELIVERY_RECEIPT_SCHEMA,
         "run_id": run_dir.name, "plan_sha256": plan_sha256,
+        "planned_owners": owners,
         "deliveries": deliveries,
     }
     _atomic_write_text(run_dir / HOST_DELIVERY_RECEIPT, json.dumps(payload, sort_keys=True), expected_root=run_dir)

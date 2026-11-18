@@ -511,8 +511,8 @@ def test_each_record_opens_in_the_conversation_with_every_field_it_holds(
     assert opened["payload"] == record
 
 
-def test_a_first_result_delivery_stop_survives_web_review_policy():
-    reason = "first_result_delivery_requires_article"
+@pytest.mark.parametrize("reason", ["first_result_delivery_requires_article", "host_delivery_request_ambiguous"])
+def test_a_delivery_stop_survives_web_review_policy(reason):
     request = SimpleNamespace(payload={"reason": reason, "approval_allowed": False})
     projected = agent_pipeline_runs._pending_review_reason_code(
         request=request, plan_recommendation_complete=False, scientific_plan_review={},

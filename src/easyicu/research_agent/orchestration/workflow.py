@@ -55,7 +55,7 @@ from ..contracts.runtime import (
     PlanPhaseResult,
     WritePhaseResult,
 )
-from ..planning.approval_stops import FIRST_RESULT_DELIVERY_STOP, first_result_delivery_stop, judged_on_plan_under_review
+from ..planning.approval_stops import DELIVERY_APPROVAL_STOPS, delivery_approval_stop, judged_on_plan_under_review
 from ..schema import AnalysisPlan, PipelineResult
 
 
@@ -360,14 +360,16 @@ def human_review_requests_for_plan(
         # The requests offer this plan, which the pipeline shaped after the
         # plan phase judged its stops: they are judged again on it.
         findings = judged_on_plan_under_review(
-            findings or (), plan=plan, run_dir=Path(root)
+            findings or (), plan=plan, run_dir=Path(root), question=question,
         )
     delivery_stop = (
-        first_result_delivery_stop(plan, question)
+        delivery_approval_stop(plan, question)
         if isinstance(plan, AnalysisPlan) else None
     )
     if delivery_stop is not None:
-        findings = [delivery_stop, *(findings or ())]
+        # Delivery changes require a revised request. Preserve the scientific
+        # findings in the run record while this decision is pending.
+        findings = [delivery_stop]
     reviewable: list[tuple[Any, str, str, Mapping[str, Any]]] = []
     for finding in findings or ():
         # Severity is the run's own statement about whether the state blocks.
@@ -440,7 +442,7 @@ def human_review_requests_for_plan(
             "top_journal_candidate": detail.get("top_journal_candidate"),
             "finding_codes": list(detail.get("finding_codes") or ()),
             "review_evidence_id": detail.get("review_evidence_id"),
-            **({"deliverable_kinds": detail["deliverable_kinds"]} if reason == FIRST_RESULT_DELIVERY_STOP else {}),
+            **({"deliverable_kinds": detail["deliverable_kinds"]} if reason in DELIVERY_APPROVAL_STOPS else {}),
             "user_authorization_requests": list(
                 detail.get("user_authorization_requests") or ()
             ),

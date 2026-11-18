@@ -7174,10 +7174,13 @@ def _pipeline_run___review_evidence_store(
 
 def _pipeline_run___human_review_invoker(plan_result, *, reviewed_plan: Any, self: Any):
     from .orchestration.workflow import human_review_requests_for_plan
-    from .planning.approval_stops import first_result_delivery_stop
+    from .planning.approval_stops import delivery_approval_stop
 
     question = getattr(getattr(plan_result, "context", None), "research_question", None)
-    delivery_stop = first_result_delivery_stop(plan_result.plan, question)
+    delivery_stop = (
+        delivery_approval_stop(plan_result.plan, question)
+        if isinstance(plan_result.plan, AnalysisPlan) else None
+    )
     if delivery_stop is None:
         require_host_plan_before_review(self, plan_result.plan, run_dir=host_plan_review_root(plan_result))
     reviewed_plan.append(plan_result)

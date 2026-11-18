@@ -333,6 +333,7 @@
         title: tr('The plan and pre-analysis data check are ready', '计划与分析前数据检查已准备好'),
         note: tr('Review the plan, data readiness, and references. Approval then builds the final cohort, preprocesses the data, and runs the analysis.', '请查看计划、数据准备情况和文献依据；批准后才会生成最终分析队列、完成预处理并运行分析。'),
         approve: tr('Approve and start analysis', '批准并开始分析'),
+        approveDisabled: !workflow.plan_review_summary,
         compactApproval: true,
         dataStatus: preparedDataStatus(),
         reject: tr('Reject this plan', '拒绝当前计划'),
@@ -555,14 +556,21 @@
         reviewMaterialsTitle: tr('View the plan and review evidence', '查看计划与审阅依据'),
         reviewResources: questionStopResources,
       };
-      if (code === 'first_result_delivery_requires_article') return {
+      if (code === 'first_result_delivery_requires_article' || code === 'host_delivery_request_ambiguous') return {
         code, grants: [], nonApprovable: true, clarification: true,
         editLabel: tr('Revise in the conversation', '在对话里修改'),
-        title: tr('The requested deliverables require an article run', '所请求的交付物需要在论文任务中生成'),
-        note: tr(
-          'Revise the question to remove the article deliverables from this analysis-only run, or start a separate article run to keep them.',
-          '请修改研究问题，从本次仅分析任务中去掉论文交付要求。如需保留这些要求，请另行启动论文任务。',
+        title: code === 'host_delivery_request_ambiguous'
+          ? tr('Clarify the requested deliverables', '请明确交付要求')
+          : tr('The requested deliverables require an article run', '所请求的交付物需要在论文任务中生成'),
+        note: code === 'host_delivery_request_ambiguous' ? tr(
+          'This plan cannot be approved until you clarify which deliverables to include. Specify your choices in the conversation.',
+          '请在对话中说明需要哪些交付物，以及应省略哪些。明确交付要求后才能继续，这份计划目前不能批准。',
+        ) : tr(
+          'This plan cannot be approved with the requested article deliverables. Revise the question for this analysis-only run, or start a separate article run to keep them.',
+          '本次仅分析任务无法满足论文交付要求，这份计划不能批准。请在对话中修改研究问题。如需保留这些要求，请另行启动论文任务。',
         ),
+        reviewMaterialsTitle: tr('View the plan and review evidence', '查看计划与审阅依据'),
+        reviewResources: planStopResources.slice(0, 1),
       };
       if (code === 'question_requirement_capability_gap') return {
         code, grants: ['provider_run', 'literature'],
@@ -953,7 +961,7 @@
       )
         ? planConversationHtml(planPreview)
         : '';
-      const deliveryConflict = confirmation.code === 'first_result_delivery_requires_article';
+      const deliveryConflict = ['first_result_delivery_requires_article', 'host_delivery_request_ambiguous'].includes(confirmation.code);
       const displayedTitle = !deliveryConflict && review && review.deferred_input_scope
         ? deferredScopeRejected ? tr('The plan’s data-read scope is not verified', '计划的数据读取范围尚未核验')
           : tr('Review the complete plan and data-read scope', '审阅完整计划与数据读取范围')
@@ -1421,6 +1429,9 @@
 
     function planChangeDraft() {
       const workflow = host.workflow() || {};
+      if (['first_result_delivery_requires_article', 'host_delivery_request_ambiguous'].includes(workflow.next_action_code)) return tr(
+        'I want to revise the requested deliverables for this run: ', '我想修改本次任务的交付要求：',
+      );
       const findingCodes = (workflow.plan_review_summary || {}).finding_codes;
       if (workflow.next_action_code === 'plan_icd_source_unverified'
           || (Array.isArray(findingCodes) && findingCodes.includes('HOST_ICD_SOURCE_UNVERIFIED'))) return tr(
@@ -1433,9 +1444,6 @@
       const trial = window.EasyICU.guidedPi.optional('targetTrial');
       const trialDraft = trial ? trial.changeDraft(workflow, tr) : '';
       if (trialDraft) return trialDraft;
-      if (workflow.next_action_code === 'first_result_delivery_requires_article') return tr(
-        'I want to revise the requested deliverables for this run: ', '我想修改本次任务的交付要求：',
-      );
       if (workflow.next_action_code === 'question_requirement_not_covered'
         && asksForExposureChoice(workflow.plan_review_summary)) return tr(
         'For this study, analyse these exposures as follows: ',

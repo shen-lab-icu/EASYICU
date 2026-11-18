@@ -11,6 +11,7 @@ from typing import Any, Callable, Literal, Mapping, NotRequired, Sequence, TypeV
 
 from ..authority.plan_review import HumanReviewRequest
 from ..contracts.product_files import requested_deliverable_kinds
+from ..planning.approval_stops import DELIVERY_APPROVAL_STOPS
 from ..planning.progressive_contract import ProgressivePlanCompileError
 from ..planning.question_quote import normalize_question_quote
 from ..planning.question_requirements import (
@@ -21,7 +22,7 @@ from ..providers.structured_retry import automatic_retry_limit
 
 PLAN_REPAIR_LIMIT = 2
 _T = TypeVar("_T")
-_RequirementKey = tuple[str, str, tuple[str, ...], str]
+_RequirementKey = tuple[str, str]
 
 
 class PlanRepairReceipt(TypedDict):
@@ -45,10 +46,7 @@ class _RequirementRepair(TypedDict):
 
 
 def _requirement_key(row: Mapping[str, Any]) -> _RequirementKey:
-    return (
-        normalize_question_quote(row["quote"]), row.get("kind") or "",
-        tuple(sorted(row.get("deliverable_kinds") or ())), row.get("effect_measure") or "",
-    )
+    return normalize_question_quote(row["quote"]), row.get("effect_measure") or ""
 
 
 @dataclass(frozen=True)
@@ -56,6 +54,18 @@ class _ObservedRequirement:
     feedback: _RequirementRepair
     clauses: frozenset[str]
     verified: bool
+    kind: str
+    deliverable_kinds: tuple[str, ...]
+
+    @classmethod
+    def from_feedback(cls, feedback: _RequirementRepair, *, verified: bool) -> _ObservedRequirement:
+        return cls(
+            feedback=feedback,
+            clauses=frozenset(map(normalize_question_quote, feedback.get("clause_quotes") or ())),
+            verified=verified,
+            kind=feedback.get("kind") or "",
+            deliverable_kinds=tuple(sorted(feedback.get("deliverable_kinds") or ())),
+        )
 
 
 def _unmatched_requirements(
@@ -67,7 +77,11 @@ def _unmatched_requirements(
     def match(index: int, seen: set[int]) -> bool:
         prior = previous[index]
         for position, row in enumerate(current):
-            if position in seen or (prior.verified and not row.verified) or not prior.clauses <= row.clauses:
+            if position in seen or not prior.clauses <= row.clauses:
+                continue
+            if prior.verified and (
+                not row.verified or prior.kind != row.kind or prior.deliverable_kinds != row.deliverable_kinds
+            ):
                 continue
             seen.add(position)
             if position not in assigned or match(assigned[position], seen):
@@ -97,11 +111,12 @@ class _Feedback:
     check: Mapping[str, Any] | None = None
 
     @property
-    def signature(self) -> tuple[str, tuple[tuple[_RequirementKey, str], ...]]:
+    def signature(self) -> tuple[str, tuple[tuple[_RequirementKey, str, tuple[str, ...], str], ...]]:
         # The Planner can reassign IDs. Retain the multiplicity of unmet rows
         # and clauses so that resolving one of several siblings is progress.
         uncovered = sorted(
-            (_requirement_key(row), normalize_question_quote(quote))
+            (_requirement_key(row), row.get("kind") or "",
+             tuple(sorted(row.get("deliverable_kinds") or ())), normalize_question_quote(quote))
             for row in self.requirements
             for quote in (row.get("uncovered_clauses") or (row["quote"] or row.get("reason_code", ""),))
         )
@@ -152,7 +167,8 @@ def planning_repair_prompt() -> str:
         "Host plan repair feedback (JSON data). Fix the failed checks and keep each quoted "
         "requirement verbatim in the requirement record. Preserve the original study question, "
         "source, outcome, estimand and human decisions. A quote is evidence of what the user "
-        "asked. Do not remove, reclassify, or weaken it to bypass a check.\n"
+        "asked. Preserve host-verified classifications. Correct an unverified classification "
+        "without dropping or weakening the quoted requirement.\n"
         + json.dumps([feedback.payload() for feedback in state.history], ensure_ascii=False, separators=(",", ":"))
     )
 
@@ -163,6 +179,8 @@ def check_plan_requirements_for_repair(run_dir: Path, requests: Sequence[HumanRe
     if state is None or not state.planner_started:
         return
     reasons = {request.payload.get("reason") for request in requests}
+    if reasons.intersection(DELIVERY_APPROVAL_STOPS):
+        return
     if not state.observed and not reasons.intersection(QUESTION_REQUIREMENT_APPROVAL_STOPS.values()):
         return
     path = run_dir / QUESTION_REQUIREMENTS_REVIEW_FILENAME
@@ -200,9 +218,7 @@ def check_plan_requirements_for_repair(run_dir: Path, requests: Sequence[HumanRe
         }
         key = _requirement_key(feedback)
         if key[0]:
-            present[key].append(_ObservedRequirement(
-                feedback, frozenset(map(normalize_question_quote, clauses)), host_verified,
-            ))
+            present[key].append(_ObservedRequirement.from_feedback(feedback, verified=host_verified))
         if uncovered or unverified_gap:
             unresolved.append(feedback)
     omitted_by_key: dict[_RequirementKey, list[_RequirementRepair]] = {}
@@ -235,8 +251,7 @@ def _check_feedback(check: Mapping[str, Any], state: _Repair) -> _Feedback:
     if requirement is not None:
         key = _requirement_key(requirement)
         if key[0]:
-            clauses = frozenset(map(normalize_question_quote, requirement.get("clause_quotes") or ()))
-            state.observed.append({key: [_ObservedRequirement(requirement, clauses, False)]})
+            state.observed.append({key: [_ObservedRequirement.from_feedback(requirement, verified=False)]})
         rows = (requirement,)
     return _Feedback(str(check["reason_code"]), requirements=rows, check=receipt)
 
