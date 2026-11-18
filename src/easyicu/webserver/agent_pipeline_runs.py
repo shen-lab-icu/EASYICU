@@ -40,6 +40,7 @@ from easyicu.webserver.execution_failure import (
     track_failure_location,
 )
 
+from easyicu.research_agent.orchestration.plan_repair import plan_repair_receipt
 from easyicu.research_agent.authority.plan_review import PlanReviewAuthority
 from easyicu.research_agent.authority.run_input import (
     RunInputCapsuleV2,
@@ -1503,7 +1504,7 @@ def _write_pipeline_failure_diagnostic(
             if isinstance(rows := getattr(item, "easyicu_compile_retry_metadata", None), list) and rows
         ), attempts),
         "structured_attempts": attempts,
-        **safe_stop_coordinates({"plan_repair": getattr(exc, "easyicu_plan_repair", None)}),
+        **safe_stop_coordinates({"plan_repair": plan_repair_receipt(exc)}),
         "raw_model_output_recorded": False,
         "prompt_recorded": False,
         "patient_rows_recorded": False,
@@ -1743,8 +1744,9 @@ def _record_pipeline_failure(
         reason_code = typed.get("reason_code")
         cause_code = typed.get("cause_code")
         coordinates = {key: value for key, value in safe_stop_coordinates(typed).items() if not (key == "step_id" and value == "unknown")}
-        if repair := getattr(exc, "easyicu_plan_repair", None):
-            coordinates["plan_repair"] = repair
+        repair = safe_stop_coordinates({"plan_repair": plan_repair_receipt(exc)})
+        if repair:
+            coordinates.update(repair)
             # An outline with a verified capability gap never enters repair.
             # The private receipt retains the Planner's rejected gap claim.
             if reason_code == "progressive_capability_gap":

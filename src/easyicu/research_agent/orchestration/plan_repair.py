@@ -19,6 +19,7 @@ from ..providers.structured_retry import automatic_retry_limit
 
 PLAN_REPAIR_LIMIT = 2
 _T = TypeVar("_T")
+_RequirementKey = tuple[str, str]
 
 
 class PlanRepairReceipt(TypedDict):
@@ -38,6 +39,22 @@ class _RequirementRepair(TypedDict):
     uncovered_clauses: NotRequired[tuple[str, ...]]
 
 
+def _requirement_key(row: Mapping[str, Any]) -> _RequirementKey:
+    return normalize_question_quote(row["quote"]), row.get("effect_measure") or ""
+
+
+def plan_repair_receipt(error: BaseException) -> PlanRepairReceipt | None:
+    """Find a repair receipt across a bounded exception chain."""
+    current: BaseException | None = error
+    seen: set[int] = set()
+    while current is not None and id(current) not in seen and len(seen) < 8:
+        if receipt := getattr(current, "easyicu_plan_repair", None):
+            return receipt
+        seen.add(id(current))
+        current = current.__cause__ or current.__context__
+    return None
+
+
 @dataclass(frozen=True)
 class _Feedback:
     code: str
@@ -45,11 +62,11 @@ class _Feedback:
     check: Mapping[str, Any] | None = None
 
     @property
-    def signature(self) -> tuple[str, tuple[tuple[str, str], ...]]:
-        # Requirement IDs can be reassigned by the Planner. The frozen
-        # question's normalized quotes identify the same unmet requirements.
+    def signature(self) -> tuple[str, tuple[tuple[str, str, str], ...]]:
+        # The Planner can reassign IDs. Quotes, measures and uncovered clauses
+        # identify the host's unmet requirements across drafts.
         uncovered = {
-            (normalize_question_quote(row["quote"]), normalize_question_quote(quote))
+            (*_requirement_key(row), normalize_question_quote(quote))
             for row in self.requirements
             for quote in (row.get("uncovered_clauses") or (row["quote"] or row.get("reason_code", ""),))
         }
@@ -69,7 +86,7 @@ class _RetryPlan(Exception):
 class _Repair:
     limit: int
     history: list[_Feedback] = field(default_factory=list)
-    required: dict[str, _RequirementRepair] = field(default_factory=dict)
+    required: dict[_RequirementKey, _RequirementRepair] = field(default_factory=dict)
     receipt: PlanRepairReceipt | None = None
     planner_started: bool = False
 
@@ -115,16 +132,16 @@ def check_plan_requirements_for_repair(run_dir: Path, requests: Sequence[HumanRe
         return
     path = run_dir / QUESTION_REQUIREMENTS_REVIEW_FILENAME
     record = json.loads(path.read_text(encoding="utf-8")) if path.is_file() else {}
-    rows = {normalize_question_quote(row["quote"]): row for row in record.get("judged", ())}
-    unresolved: dict[str, _RequirementRepair] = {}
-    for quote, row in rows.items():
+    rows = record.get("judged", ())
+    unresolved: list[_RequirementRepair] = []
+    for row in rows:
         if row.get("exposure_choice"):
             continue  # This changes the estimand and requires a human choice.
         verdict = row.get("gap_verification")
         uncovered = row["disposition"] == "not_covered" and row.get("verified_by_host") is True
         unverified_gap = row["disposition"] == "capability_gap" and verdict != "verified"
         if uncovered or unverified_gap:
-            unresolved[quote] = {
+            unresolved.append({
                 "requirement_id": row["id"], "quote": row["quote"], "gap": row.get("gap"),
                 "host_verdict": verdict or "not_covered", "host_fact": row.get("gap_fact"),
                 **({"reason_code": row["reason_code"]} if row.get("reason_code") else {}),
@@ -133,15 +150,17 @@ def check_plan_requirements_for_repair(run_dir: Path, requests: Sequence[HumanRe
                     clause["quote"] for clause in row.get("clauses", ())
                     if clause["disposition"] == "not_covered"
                 ),
-            }
-    omitted = {
-        quote: prior for quote, prior in state.required.items()
-        if quote not in unresolved and rows.get(quote, {}).get("verified_by_host") is not True
-    }
+            })
+    present = {_requirement_key(row) for row in rows if row.get("verified_by_host") is True}
+    unresolved_by_key = {_requirement_key(row): row for row in unresolved}
+    omitted = [
+        prior for key, prior in state.required.items()
+        if key not in present and key not in unresolved_by_key
+    ]
     # Some host checks report an extra effect measure that the user never
     # requested. Feed it back but let the next plan remove it.
-    state.required.update({quote: row for quote, row in unresolved.items() if quote})
-    pending = tuple({**unresolved, **omitted}.values())
+    state.required.update({key: row for key, row in unresolved_by_key.items() if key[0]})
+    pending = (*unresolved, *omitted)
     if not pending:
         return
     feedback = _Feedback(QUESTION_REQUIREMENT_APPROVAL_STOPS["not_covered"], pending)
@@ -157,12 +176,12 @@ def check_plan_requirements_for_repair(run_dir: Path, requests: Sequence[HumanRe
         raise error
 
 
-def _check_feedback(check: Mapping[str, Any], required: dict[str, _RequirementRepair]) -> _Feedback:
+def _check_feedback(check: Mapping[str, Any], required: dict[_RequirementKey, _RequirementRepair]) -> _Feedback:
     receipt = dict(check)
     requirement = receipt.pop("requirement", None)
     rows = ()
     if requirement is not None:
-        required[normalize_question_quote(requirement["quote"])] = requirement
+        required[_requirement_key(requirement)] = requirement
         rows = (requirement,)
     return _Feedback(str(check["reason_code"]), requirements=rows, check=receipt)
 
@@ -188,8 +207,10 @@ def run_plan_with_repairs(
             except _RetryPlan:
                 pass
             except Exception as error:
-                check = check_failure(error) if state.planner_started else {}
-                if not check or getattr(error, "easyicu_plan_repair", None):
+                if not state.planner_started or plan_repair_receipt(error):
+                    raise
+                check = check_failure(error)
+                if not check:
                     raise
                 if not state.retry(_check_feedback(check, state.required)):
                     error.easyicu_plan_repair = state.receipt

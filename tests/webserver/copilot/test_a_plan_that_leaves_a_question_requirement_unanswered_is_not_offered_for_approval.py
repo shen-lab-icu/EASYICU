@@ -135,10 +135,11 @@ def test_the_registry_holds_the_owners_stops() -> None:
 
 
 @pytest.mark.parametrize("quote, allowed", [
-    ("web article preview and downloadable PDF", True),
+    ("Include the result tables", True),
+    ("web article preview and downloadable PDF", False),
     ("fit an unsupported joint model and provide a PDF", False),
 ])
-def test_host_delivery_is_approvable_but_a_scientific_gap_still_blocks(quote, allowed) -> None:
+def test_approval_checks_the_delivery_owner_and_the_scientific_gap(quote, allowed) -> None:
     plan = AnalysisPlan(research_question=quote, steps=[AnalysisStep(
         step_id="primary", intent="Describe the synthetic cohort", method="descriptive",
         inputs=[], expected_outputs=["table:summary"],

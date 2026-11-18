@@ -614,14 +614,16 @@ def test_only_a_verified_gap_can_stop_the_plan_as_a_capability_gap(
     assert uncovered.message.endswith(row["gap_fact"] + ".")
 
 
-@pytest.mark.parametrize("quote", [
-    "web article preview and downloadable PDF",
-    "网页文章预览、可下载的 PDF",
-    "result tables, figures and reference list",
-    "结果表、图表、正文、引用",
+@pytest.mark.parametrize("quote, covered", [
+    ("web article preview and downloadable PDF", False),
+    ("网页文章预览、可下载的 PDF", False),
+    ("result tables, figures and reference list", False),
+    ("结果表、图表、正文、引用", False),
+    ("Include the result tables", True),
+    ("请提供结果表", True),
 ])
 @pytest.mark.parametrize("kind", ["analysis", "delivery"])
-def test_host_delivery_overrides_a_planner_gap_and_records_why(tmp_path, quote, kind) -> None:
+def test_host_delivery_checks_the_plan_owner_and_records_why(tmp_path, quote, covered, kind) -> None:
     context = _context(named=False).model_copy(update={"research_question": _QUESTION + " " + quote})
     claim = {**_UNCHECKABLE, "kind": kind, "quote": quote}
     result = _planned(context, [claim])
@@ -631,21 +633,28 @@ def test_host_delivery_overrides_a_planner_gap_and_records_why(tmp_path, quote, 
     record = json.loads((tmp_path / QUESTION_REQUIREMENTS_FILENAME).read_text())
     assert record["stated"][0] == claim  # Keep the original claim for audit.
     (row,) = record["judged"]
-    assert row["disposition"] == "covered"
+    assert row["disposition"] == ("covered" if covered else "not_covered")
     assert row["claimed_coverage"] == "capability_gap"
     assert row["host_judged"] is row["verified_by_host"] is True
-    assert row["reason_code"] == "question_requirement_covered_by_host_delivery"
-    assert row["delivery"]["source"] == "host_verified"
-    assert row["delivery"]["contract"] == "easyicu.run_delivery/1"
-    assert row["delivery"]["deliverable_kinds"]
-    assert row["gap"] == claim["gap"]  # An overridden claim is never erased.
-    assert _question_stops(findings) == []
-    assert record["coverage"]["complete"] is True
-    assert all(r["delivery_kind"] == r["concept_identity"] and not r["owner_step_ids"]
-               for r in record["coverage"]["records"])
+    assert row["gap"] == claim["gap"]
+    assert record["coverage"]["complete"] is covered
+    if covered:
+        assert row["reason_code"] == "question_requirement_covered_by_host_delivery"
+        assert row["delivery"]["source"] == "host_verified"
+        assert row["delivery"]["contract"] == "easyicu.run_delivery/1"
+        assert row["delivery"]["deliverable_kinds"] == ["result_tables"]
+        owners = row["delivery"]["owner_step_ids_by_kind"]["result_tables"]
+        assert owners
+        (coverage,) = record["coverage"]["records"]
+        assert coverage["delivery_kind"] == coverage["concept_identity"] == "result_tables"
+        assert coverage["owner_step_ids"] == owners
+    else:
+        assert "delivery" not in row
+    stops = [] if covered else ["question_requirement_not_covered"]
+    assert _question_stops(findings) == stops
     reviewed = judge_recorded_requirements(record, plan=result.output)
     assert reviewed.record["judged"] == record["judged"]
-    assert _question_stops(reviewed.findings()) == []
+    assert _question_stops(reviewed.findings()) == stops
 
 
 @pytest.mark.parametrize("quote", [
@@ -671,7 +680,7 @@ def test_delivery_words_cannot_hide_a_method_or_unavailable_delivery_gap(quote, 
     ]
 
 
-def test_typed_delivery_uses_the_host_contract_independently_of_wording(monkeypatch) -> None:
+def test_typed_delivery_requires_an_owner_even_without_neutral_wording(monkeypatch) -> None:
     quote = "give me a typeset copy of the article"
     context = _context(named=False).model_copy(update={"research_question": _QUESTION + " " + quote})
     claim = {**_UNCHECKABLE, "kind": "delivery", "quote": quote,
@@ -690,7 +699,7 @@ def test_typed_delivery_uses_the_host_contract_independently_of_wording(monkeypa
         result.facts.question_requirements, plan=result.output, family_template=True,
         relatives=concept_relatives(context), check_gap=_host_check(context),
     )
-    assert judged.disposition == "covered"
+    assert judged.disposition == "not_covered"
     with pytest.raises(ValidationError, match="only a delivery requirement"):
         QuestionRequirement.model_validate({**claim, "kind": "analysis", "quote": "fit an unsupported joint model"})
     with pytest.raises(ValidationError, match="not scientific concepts"):

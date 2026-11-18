@@ -134,6 +134,51 @@ def test_repeat_ignores_row_order_and_planner_id_changes(tmp_path):
     assert len(prompts) == 2 and len(notices) == 1
 
 
+@pytest.mark.parametrize("other", [
+    {"kind": "estimand", "effect_measure": "odds_ratio", "disposition": "covered"},
+    {"kind": "definition", "disposition": "definition_only"},
+])
+def test_an_uncovered_row_survives_a_shared_quote(tmp_path, other):
+    quote = "Report the measures of association for the laboratory marker"
+    measure = {"effect_measure": "risk_ratio"} if other["kind"] == "estimand" else {}
+    missing = requirement(quote, **measure)
+    sibling = requirement(quote.upper(), requirement_id="r2", **other)
+    result, prompts, notices = run_script(
+        tmp_path, ([missing, sibling], NOT_COVERED),
+        ([{**missing, "disposition": "covered"}, sibling], "operator_plan_approval_required"),
+    )
+    assert result() == ("operator_plan_approval_required", None)
+    assert notices == [1]
+    assert '"requirement_id":"r1"' in prompts[1]
+
+
+def test_a_verified_row_satisfies_prior_feedback_in_any_row_order(tmp_path):
+    quote = "Report the change in recovery probability"
+    definition = requirement(quote, disposition="definition_only", requirement_id="r1", kind="definition")
+    missing = requirement(quote, requirement_id="r2", kind="analysis")
+    result, _, notices = run_script(
+        tmp_path, ([definition, missing], NOT_COVERED),
+        ([{**missing, "disposition": "covered"}, definition], "operator_plan_approval_required"),
+    )
+    assert result() == ("operator_plan_approval_required", None)
+    assert notices == [1]
+
+
+def test_removing_one_unrequested_effect_measure_is_progress(tmp_path):
+    quote = "Summarize recovery for the study population"
+    reason = "question_effect_measure_unrequested"
+    extra_odds = requirement("", reason_code=reason, effect_measure="odds_ratio")
+    extra_risk = requirement("", reason_code=reason, effect_measure="risk_ratio", requirement_id="r2")
+    covered = requirement(quote, disposition="covered", requirement_id="r3")
+    result, prompts, notices = run_script(
+        tmp_path, ([covered, extra_odds, extra_risk], NOT_COVERED),
+        ([covered, extra_risk], NOT_COVERED), ([covered], "operator_plan_approval_required"),
+    )
+    assert result() == ("operator_plan_approval_required", None)
+    assert notices == [1, 2]
+    assert all(f'"effect_measure":"{row["effect_measure"]}"' in prompts[1] for row in (extra_odds, extra_risk))
+
+
 def test_distinct_checks_exhaust_budget_and_mark_the_terminal_receipt(tmp_path):
     checks = [host_check(f"progressive_fixture_check_{number}") for number in range(3)]
     result, prompts, notices = run_script(tmp_path, *checks)
@@ -155,6 +200,53 @@ def test_dropping_an_unanswered_requirement_cannot_unlock_approval(tmp_path):
     assert error.value.reason_code == "progressive_question_requirement_repair_omitted"
     assert error.value.easyicu_plan_repair["outcome"] == "repeated_failure"
     assert len(prompts) == 2 and len(notices) == 1
+
+
+@pytest.mark.parametrize("family_template", [True, False])
+@pytest.mark.parametrize("include_figure", [False, True])
+def test_delivery_requires_a_figure_owner_in_the_reviewed_plan(include_figure, family_template, tmp_path):
+    from types import SimpleNamespace
+
+    from easyicu.research_agent.orchestration.progressive_planning import question_requirement_outcome
+    from easyicu.research_agent.orchestration.workflow import human_review_requests_for_plan
+    from easyicu.research_agent.schema import CohortDescriptor, ResearchContext
+
+    quote = "Render a plot of the study estimates."
+    item = QuestionRequirement(
+        id="r1", kind="delivery", quote=quote, coverage="plan", deliverable_kinds=["figures"],
+    )
+    table = AnalysisStep(step_id="estimates", intent="Estimate the effect", expected_outputs=["table:estimates"])
+    figure = AnalysisStep(
+        step_id="plot", intent="Plot estimates", method="visualization",
+        expected_outputs=["figure:estimates"], inputs=["table:estimates"],
+        figure_panels=[{
+            "panel_id": "estimates", "figure_output": "figure:estimates", "article_role": "primary_estimand",
+            "chart_type": "forest", "source_products": ["table:estimates"],
+        }],
+    )
+    draft = AnalysisPlan(research_question=quote, steps=[table, figure])
+    reviewed = draft if include_figure else draft.model_copy(update={"steps": [table]})
+    (judged,) = judge_question_requirements(
+        (item,), plan=reviewed, family_template=family_template, relatives=lambda _: frozenset(),
+        check_gap=lambda _: pytest.fail("No gap was declared"),
+    )
+    assert judged.disposition == ("covered" if include_figure else "not_covered")
+    if include_figure:
+        assert judged.delivery["owner_step_ids_by_kind"] == {"figures": [figure.step_id]}
+
+    context = ResearchContext(
+        research_question=quote, variables=[],
+        cohort=CohortDescriptor(cohort_name="synthetic", database="synthetic", n_stays=0),
+    )
+    findings = question_requirement_outcome(
+        context=context, plan=draft, run_dir=tmp_path,
+        facts=SimpleNamespace(family_template=family_template, question_requirements=[item]),
+    )
+    (request,) = human_review_requests_for_plan(
+        findings=findings, plan=reviewed, require_plan_review=True,
+        evidence=SimpleNamespace(root=tmp_path, records=lambda: ()),
+    )
+    assert request.payload["reason"] == ("operator_plan_approval_required" if include_figure else NOT_COVERED)
 
 
 @pytest.mark.parametrize("quote", ["Include a sensitivity analysis", "请提供敏感性分析"])
@@ -399,7 +491,31 @@ def test_real_progressive_request_contains_typed_feedback(tmp_path):
     assert "steps[1].inputs" in str(llm.calls[1])
 
 
-def test_terminal_repair_diagnostic_projects_only_safe_receipt_fields(tmp_path):
+def test_a_wrapped_terminal_receipt_stops_the_repair_loop(tmp_path):
+    omitted = host_check("progressive_question_requirement_repair_omitted")
+    omitted.easyicu_plan_repair = {"repairs": 1, "limit": 2, "outcome": "repeated_failure"}
+    wrapped = RuntimeError("Could not review the synthetic recovery plan")
+    wrapped.__cause__ = omitted
+
+    from easyicu.research_agent.orchestration.plan_repair import planning_repair_prompt, run_plan_with_repairs
+    from easyicu.webserver.agent_pipeline_runs import _repairable_plan_check
+
+    calls, notices = [], []
+
+    def run():
+        calls.append(planning_repair_prompt())
+        raise wrapped
+
+    with pytest.raises(RuntimeError) as error:
+        run_plan_with_repairs(run, check_failure=_repairable_plan_check, notify=notices.append)
+    assert error.value is wrapped
+    assert calls == [""]
+    assert notices == []
+    assert not hasattr(wrapped, "easyicu_plan_repair")
+
+
+@pytest.mark.parametrize("chain_link", [None, "__cause__", "__context__"])
+def test_terminal_repair_diagnostic_projects_only_safe_receipt_fields(tmp_path, chain_link):
     from easyicu.webserver.agent_pipeline_runs import (
         _pipeline_failure_code,
         _record_pipeline_failure,
@@ -408,7 +524,12 @@ def test_terminal_repair_diagnostic_projects_only_safe_receipt_fields(tmp_path):
     from easyicu.webserver.pi_copilot.projections import gate_detail_projection
 
     error = host_check("progressive_unknown_variable")
-    error.easyicu_plan_repair = {"repairs": 1, "limit": 2, "outcome": "repeated_failure"}
+    receipt = {"repairs": 1, "limit": 2, "outcome": "repeated_failure"}
+    error.easyicu_plan_repair = {**receipt, "untrusted": "synthetic provider text"}
+    if chain_link:
+        wrapped = RuntimeError("Could not compile the synthetic study plan")
+        setattr(wrapped, chain_link, error)
+        error = wrapped
     check = _repairable_plan_check(error)
     assert check["path"] == "steps[1].inputs"
     assert "message" not in check
@@ -419,7 +540,9 @@ def test_terminal_repair_diagnostic_projects_only_safe_receipt_fields(tmp_path):
     gate = json.loads((tmp_path / "quality_gate.json").read_text())["gate"]
     public = gate_detail_projection(gate["detail"])
     assert public["gate_detail_code"] == "progressive_unknown_variable"
-    assert public["plan_repair"] == error.easyicu_plan_repair
+    assert gate["detail"]["plan_repair"] == receipt
+    assert json.loads((tmp_path / diagnostic).read_text())["plan_repair"] == receipt
+    assert public["plan_repair"] == receipt
     assert [action["label_key"] for action in gate["next_actions"]] == ["stop_next_actions.edit_plan"]
     assert "synthetic validator detail" not in (tmp_path / diagnostic).read_text()
 
@@ -547,3 +670,118 @@ def test_one_web_child_retries_with_the_same_source_and_provider_task(tmp_path, 
     assert len(projections) == 1
     assert projections[0]["pending"].requests[0].payload["reason"] == "operator_plan_approval_required"
     assert [event["current"] for event in job_events if event.get("retry_phase") == "rejected"] == [1]
+
+
+def test_a_real_pipeline_projects_the_terminal_repair_and_only_its_checkpoint(tmp_path, monkeypatch):
+    from pathlib import Path
+
+    import pandas as pd
+
+    from easyicu.research_agent import PipelineConfig, PipelineServices, ResearchAgentPipeline
+    from easyicu.research_agent.agents import family_spec_planner
+    from easyicu.research_agent.orchestration.human_review_checkpoint import checkpoint_path
+    from easyicu.research_agent.orchestration.plan_repair import run_plan_with_repairs
+    from easyicu.research_agent.orchestration.workflow import HumanReviewPending
+    from easyicu.research_agent.providers.mocks import ScriptedMockLLMClient
+    from easyicu.webserver.agent_pipeline_runs import _repairable_plan_check, _write_projection
+    from easyicu.webserver.agent_runs import read_run_review
+    from easyicu.webserver.pi_copilot.projections import project_run_outcome
+    from tests.support.pipeline_contracts import disable_article_contract
+
+    from easyicu.research_agent.orchestration import progressive_planning
+
+    disable_article_contract(monkeypatch)
+    plan_progressively = progressive_planning.run_pipeline_progressive_planner
+
+    def plan_without_article_requirements(**kwargs):
+        kwargs["planner_kwargs"]["enforce_article_contract"] = False
+        return plan_progressively(**kwargs)
+
+    monkeypatch.setattr(progressive_planning, "run_pipeline_progressive_planner", plan_without_article_requirements)
+    quote = "Give me a typeset copy of the results"
+    question = f"Describe the distribution of hospital mortality by sex. {quote}."
+    cohort = tmp_path / "cohort.parquet"
+    pd.DataFrame({
+        "stay_id": range(1, 13), "sex": [0, 1] * 6, "death": [0, 0, 1, 1] * 3,
+    }).to_parquet(cohort, index=False)
+    client = ScriptedMockLLMClient([])
+    build_request = family_spec_planner.build_family_spec_request
+    labels = {
+        "sex": "Sex documented at admission",
+        "sex=0": "Recorded sex category zero",
+        "sex=1": "Recorded sex category one",
+        "death": "Observed hospital mortality",
+    }
+
+    def script_response(*args, **kwargs):
+        request = build_request(*args, **kwargs)
+        client.responses.append(json.dumps({
+            "schema_version": "easyicu.family_plan_spec/1",
+            "family_id": request.family_id,
+            "request_sha256": request.request_sha256,
+            "adjustment_set": [],
+            "baseline_variables": [],
+            "distribution_missing_policies": {
+                "denominator_policy": "all_declared_rows",
+                "missing_exposure_policy": "exclude_from_denominator",
+                "missing_outcome_policy": "fail_closed",
+            },
+            "reader_display_labels": [
+                {"key": key, "value": labels[key]}
+                for key in (*request.required_reader_label_keys, *request.level_label_keys)
+            ],
+            "comparator_applications": [],
+            "roster_decision_note": "Describe documented outcomes for the two source levels.",
+            "question_requirements": [{
+                "id": "r1", "kind": "delivery", "quote": quote, "coverage": "plan",
+                "deliverable_kinds": ["manuscript_pdf"],
+            }],
+        }))
+        return request
+
+    monkeypatch.setattr(family_spec_planner, "build_family_spec_request", script_response)
+    workdir = tmp_path / "pipelines"
+    config = PipelineConfig(
+        workdir=workdir, planner_strategy="family_spec_v1", planner_only=True,
+        require_human_plan_review=True, enable_literature=False, enable_memory=False,
+    )
+    services = PipelineServices(llm=client)
+    notices = []
+
+    def run():
+        return ResearchAgentPipeline.from_config(config, services=services).run(
+            question=question, cohort=cohort, database="miiv",
+            target_outcome="death", primary_exposure="sex",
+            user_preferences={
+                "inferred_analysis_family": "descriptive_epidemiology",
+                "covariate_selection": "planner_selectable",
+            },
+        )
+
+    pending, receipt = run_plan_with_repairs(run, check_failure=_repairable_plan_check, notify=notices.append)
+    assert isinstance(pending, HumanReviewPending)
+    assert notices == [1]
+    assert len(client.calls) == 2
+    assert quote in str(client.calls[-1]) and NOT_COVERED in str(client.calls[-1])
+
+    run_dir = Path(pending.run_dir)
+    discarded, = set(run_dir.parent.glob("*/" + QUESTION_REQUIREMENTS_REVIEW_FILENAME)) - {
+        run_dir / QUESTION_REQUIREMENTS_REVIEW_FILENAME,
+    }
+    assert not checkpoint_path(discarded.parent).exists()
+    assert checkpoint_path(run_dir).is_file()
+    assert NOT_COVERED in {request.payload["reason"] for request in pending.requests}
+    assert all(request.payload["approval_allowed"] is False for request in pending.requests)
+
+    wrapper = tmp_path / "web-run"
+    result = _write_projection(
+        wrapper_dir=wrapper, study={"id": "study-synthetic", "question": question},
+        provider={"provider": "mock"}, acquisition=None,
+        run_dir=run_dir, pending=pending, plan_repair=receipt,
+    )
+    assert result["human_review_pending"]
+    assert result["gate"]["detail"]["plan_repair"] == receipt
+    projected = project_run_outcome(read_run_review(str(wrapper)))
+    assert projected["run_id"] == pending.run_id
+    assert projected["plan_repair"] == {"repairs": 1, "limit": 2, "outcome": "repeated_failure"}
+    assert "source_run_manifest.json" in {row["artifact"] for row in projected["artifact_refs"]}

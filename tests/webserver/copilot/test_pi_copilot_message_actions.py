@@ -410,7 +410,7 @@ def test_copilot_message_owner_wires_only_latest_next_step_to_send_or_focus() ->
     assert "'advance_after_data_source_confirmation'" in continuation
     assert "false," in continuation
     assert "regenerateMessage(" not in continuation
-    assert owner.index("showProjectContinuationCards ? dataConsentHtml") > owner.index(
+    assert owner.index("showProjectDecisions ? dataConsentHtml") > owner.index(
         "data-gpi-log"
     )
     assert "if (await continueAfterDataSourceConfirmation()) return true;" in data_binding_owner

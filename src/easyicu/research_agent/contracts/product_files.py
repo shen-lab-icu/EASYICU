@@ -199,19 +199,19 @@ def requested_deliverable_kinds(quote: str) -> tuple[DeliverableKind, ...]:
     return tuple(kinds) if kinds and not _SEPARATORS.sub("", remainder) else ()
 
 
-def host_delivery_coverage(kinds: Sequence[DeliverableKind]) -> dict[str, object] | None:
-    """Resolve typed kinds against the export contract, never feasibility prose."""
-    if not kinds or any(kind not in RUN_DELIVERABLES for kind in kinds):
+def host_delivery_coverage(owners: Mapping[DeliverableKind, Sequence[str]]) -> dict[str, object] | None:
+    """Describe host delivery backed by a plan's typed product owners."""
+    if not owners or not all(steps and kind in RUN_DELIVERABLES for kind, steps in owners.items()):
         return None
-    read = tuple(dict.fromkeys(kinds))
     return {
         "source": "host_verified",
         "contract": RUN_DELIVERY_SCHEMA_VERSION,
-        "deliverable_kinds": list(read),
+        "deliverable_kinds": list(owners),
         "artifact_names": list(dict.fromkeys(
-            name for kind in read for name in RUN_DELIVERABLES[kind].artifact_names
+            name for kind in owners for name in RUN_DELIVERABLES[kind].artifact_names
         )),
-        "reason": "The host delivery contract covers these outputs independently of analysis steps.",
+        "owner_step_ids_by_kind": {kind: list(steps) for kind, steps in owners.items()},
+        "reason": "The host verified a typed owner for each requested deliverable in this plan.",
     }
 
 

@@ -655,7 +655,7 @@ def test_a_record_with_only_verified_answers_adds_nothing_to_the_card() -> None:
     assert _notes_html(None) == ""
 
 
-def _card_html(notes: Mapping[str, Any], code: str, *, repair=None, language="zh") -> str:
+def _card_html(notes: Mapping[str, Any], code: str, *, repair=None, language="zh", scenario="") -> str:
     script = r"""
 global.window = { EU_LANG: process.argv[7] };
 require(process.argv[1]);
@@ -666,23 +666,37 @@ require(process.argv[2]);
 require(path.join(ownerDir, 'screens-guided-pi-confirmation-data.js'));
 require(process.argv[3]);
 require(path.join(ownerDir, 'screens-guided-pi-run-stop.js'));
+require(path.join(ownerDir, 'screens-guided-pi-resources.js'));
 const summary = { run_id: 'run-requirements', question_requirements: JSON.parse(process.argv[4]) };
 const repair = JSON.parse(process.argv[6]);
 const failure = process.argv[5] === 'failed_pipeline_requires_fresh_plan';
 const run = { run_id: summary.run_id, authoritative: true, run_ref: 'r-one', plan_repair: repair,
   run_status: failure ? 'failed' : 'human_review_pending',
+  artifact_names: failure && process.argv[8] !== 'no_receipt' ? ['source_run_manifest.json'] : [],
   gate_reason_code: failure ? 'research_pipeline_progressive_compile_failed' : 'human_review_required',
 };
-const workflow = () => ({ next_action_code: process.argv[5], plan_review_summary: summary, runs: [run] });
+const scenario = process.argv[8];
+const prior = {
+  ...run, run_id: 'run-prior-recovery', run_ref: 'r-prior', run_status: 'human_review_pending',
+  gate_reason_code: 'human_review_required',
+};
+const runs = !scenario || scenario === 'no_receipt' ? [run] : [prior, { ...run, plan_repair: null }];
+if (scenario === 'provider_failure') runs.pop();
+const session = {
+  binding: { run_id: summary.run_id },
+  archived_child_jobs: scenario === 'provider_failure'
+    ? [{ kind: 'agent-run', status: 'failed', error_code: 'research_pipeline_provider_timeout' }] : [],
+};
+const workflow = () => ({ next_action_code: process.argv[5], plan_review_summary: summary, runs });
 const tr = (en, zh) => window.EU_LANG === 'en' ? en : zh || en;
 const owner = window.EasyICU.guidedPi.require('confirmation').create({
   tr,
   esc: window.EU_HTML.esc,
   iconHtml: () => '',
-  resourceButton: resource => `<a data-resource="${resource.artifact}"></a>`,
+  resourceButton: window.EasyICU.guidedPi.require('resources').create({ esc: window.EU_HTML.esc }).button,
   sessionIsStale: () => false,
   busy: () => false,
-  session: () => ({ binding: { run_id: 'run-requirements' } }),
+  session: () => session,
   workflow,
   runFailureText: () => 'typed-host-check',
 });
@@ -690,7 +704,7 @@ const stop = window.EasyICU.guidedPi.require('runStop').create({
   tr, workflow, runFailureText: () => 'typed-host-check', canAct: () => true,
   hasRecovery: () => Boolean(owner.workflowConfirmation()),
 });
-process.stdout.write(stop.render({ savedRuns: [run] }) + owner.workflowConfirmationHtml());
+process.stdout.write(stop.render({ savedRuns: runs }) + owner.workflowConfirmationHtml());
 """
     result = run_node(
         _node(),
@@ -702,6 +716,7 @@ process.stdout.write(stop.render({ savedRuns: [run] }) + owner.workflowConfirmat
         code,
         json.dumps(repair),
         language,
+        scenario,
         check=False,
     )
     assert result.returncode == 0, result.stderr or result.stdout
@@ -717,7 +732,7 @@ def test_a_stop_card_shows_the_block_and_links_the_record_once(code: str) -> Non
     assert 'class="gpi-question-requirements"' in html
     assert "这份计划没有回答：「the r6 analysis」" in html
     # The stop card links the judgment already, so the block adds no second link.
-    assert html.count(f'data-resource="{REVIEW}"') == 1
+    assert html.count(f'data-gpi-resource-artifact="{REVIEW}"') == 1
 
 
 def test_the_approval_card_shows_the_block_with_its_own_link() -> None:
@@ -725,7 +740,7 @@ def test_the_approval_card_shows_the_block_with_its_own_link() -> None:
 
     assert 'class="gpi-question-requirements"' in html
     assert "计划中写明：the r3 analysis。尚需核对。" in html
-    assert html.count(f'data-resource="{REVIEW}"') == 1
+    assert html.count(f'data-gpi-resource-artifact="{REVIEW}"') == 1
 
 
 def test_a_stop_card_reading_the_planning_record_links_it_beside_the_judgment() -> None:
@@ -735,7 +750,7 @@ def test_a_stop_card_reading_the_planning_record_links_it_beside_the_judgment() 
 
     html = _card_html(notes, "question_requirement_not_covered")
 
-    assert html.count(f'data-resource="{PLANNING}"') == 1
+    assert html.count(f'data-gpi-resource-artifact="{PLANNING}"') == 1
     assert "这些判定针对改动前的计划，对当前计划可能已不成立" in html
 
 
@@ -772,6 +787,46 @@ def test_plan_repair_stop_is_one_inline_card_with_a_primary_action(language, cod
     assert f"{repairs}/2" in html
     if code == "failed_pipeline_requires_fresh_plan":
         assert html.count("typed-host-check") == 1
+        label = "Open failure receipt" if language == "en" else "打开失败回执"
+        (receipt_button,) = re.findall(
+            r'<button[^>]*data-gpi-resource-run="run-requirements"[^>]*'
+            r'data-gpi-resource-artifact="source_run_manifest.json"[^>]*>[^<]*</button>', html,
+        )
+        assert receipt_button.endswith(f">{label}</button>")
         assert ("Generate a fresh plan" if language == "en" else "重新生成新计划") in html
     else:
         assert ("Generate fresh plan" if language == "en" else "重新生成计划") in html
+
+
+@pytest.mark.parametrize(
+    "scenario, code", [
+        ("provider_failure", "failed_pipeline_requires_fresh_plan"),
+        ("new_failed_run", "failed_pipeline_requires_fresh_plan"),
+        ("new_reviewed_run", "question_requirement_not_covered"),
+        ("new_reviewed_run", "question_requirement_capability_gap"),
+    ],
+)
+def test_an_older_candidate_does_not_supply_a_new_stops_receipt(scenario, code):
+    # A previous candidate stopped on "Describe recovery by collection shift".
+    html = _card_html(
+        _notes(), code, scenario=scenario, language="en",
+        repair={"repairs": 1, "limit": 2, "outcome": "repeated_failure"},
+    )
+    assert "1/2" not in html
+    assert "Review the failure receipt" not in html
+    assert 'data-gpi-resource-artifact="source_run_manifest.json"' not in html
+    assert html.count("typed-host-check") == int(code == "failed_pipeline_requires_fresh_plan")
+    if scenario == "provider_failure":
+        assert "Transient timeouts are retried once automatically" in html
+
+
+def test_the_repair_card_without_a_recorded_receipt_still_offers_a_fresh_plan():
+    html = _card_html(
+        {"status": "shown", "items": [{"quote": "Describe recovery by collection shift"}]},
+        "failed_pipeline_requires_fresh_plan", scenario="no_receipt", language="en",
+        repair={"repairs": 1, "limit": 2, "outcome": "repeated_failure"},
+    )
+    assert "1/2" in html
+    assert "Review the failure receipt" not in html
+    assert 'data-gpi-resource-artifact="source_run_manifest.json"' not in html
+    assert 'data-gpi-confirm-action>Generate a fresh plan</button>' in html

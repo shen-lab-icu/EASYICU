@@ -365,8 +365,18 @@
       const ideaExplorationTurn = !workspace
         && TRANSCRIPT.latestTurnCompletedIdeaExploration(state.messages);
       const showProjectContinuationCards = !workspace && !lightweight && !freshTask && !ideaExplorationTurn;
-      const dataConsentRequired = showProjectContinuationCards
-        && DATA_CONSENT && DATA_CONSENT.requiresConfirmation(session);
+      const sourceDecision = DATA_CONSENT?.requiresConfirmation?.(session);
+      const workflow = state.workflow || {};
+      const pendingDecision = sourceDecision || Boolean(workflow.plan_decision || workflow.plan_review_summary?.run_id)
+        || Object.values(workflow.host_decisions || {}).some(Boolean) || [
+          'cohort_eligibility_confirmation_required', 'study_primary_outcome_confirmation_required',
+          'target_trial_statement_needed', 'target_trial_review', 'target_trial_plan_ready',
+        ].includes(workflow.next_action_code);
+      // An idea or literature turn can finish with a study decision still open.
+      const showProjectDecisions = showProjectContinuationCards
+        || (!workspace && !lightweight && pendingDecision
+          && (!freshTask || sourceDecision || Boolean(session.binding?.study_context_id)));
+      const dataConsentRequired = showProjectDecisions && sourceDecision;
       const fullTimeline = freshTask ? [] : withQuickAnswers(withDecisionRecords(RUN_FILES.timeline(state.messages.concat(state.workflowReceipts))));
       const timeline = state.regenerating && REGENERATION
         ? REGENERATION.visibleRows(fullTimeline, state.regeneration)
@@ -466,7 +476,7 @@
       const resultsView = Boolean(outcome) && !dataConsentRequired;
       // Workflow completion may arrive before the separate run-file catalog.
       // Use its authoritative stop until that run has a stop in the timeline.
-      const pendingStop = showProjectContinuationCards && RUN_STOP
+      const pendingStop = showProjectDecisions && RUN_STOP
         ? (state.workflow && Array.isArray(state.workflow.runs) ? state.workflow.runs : []).find(run => (
           run.authoritative && RUN_STOP.stopped(run)
           && !timeline.some(row => (row.savedRuns || []).some(saved => (
@@ -569,8 +579,8 @@
                 ? `<div class="gpi-empty"><strong>${tr('Build something in this project', '在当前项目中创建产物')}</strong><span>${tr('EasyICU Copilot can read, write, edit, check, and preview files in this project’s isolated workspace, while retaining EasyICU research tools.', 'EasyICU 研究助手可以在当前项目的隔离工作区中读取、写入、编辑、检查并预览文件，同时保留 EasyICU 研究工具。')}</span></div>`
                 : emptyResearchHtml)}
             ${outcome}
-            ${showProjectContinuationCards ? dataConsentHtml : ''}
-            ${showProjectContinuationCards && !dataConsentRequired ? continuationCardsHtml() : ''}
+            ${showProjectDecisions ? dataConsentHtml : ''}
+            ${showProjectDecisions && !dataConsentRequired ? continuationCardsHtml() : ''}
           </div>
           ${state.error ? `<div class="gpi-error" role="alert"><span>${esc(state.error)}</span><button type="button" class="gpi-error-close" data-gpi-dismiss-error aria-label="${tr('Dismiss', '关闭提示')}">×</button></div>${MODULES.optional('skillAttach')?.defaultRecoveryControl?.(projectId()) || ''}` : ''}
           ${emptyResearch ? '' : `${activeChild ? serverNoteHtml : ''}<div class="gpi-compose">${actionAskHtml}${composerCardHtml}</div>`}

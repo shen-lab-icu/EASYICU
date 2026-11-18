@@ -58,11 +58,11 @@ class PlanRequirementCoverageRecord(BaseModel):
             raise ValueError("requirement coverage owner step ids must be unique")
         if self.delivery_kind is not None and (
             self.kind != "question" or self.question_kind not in {"analysis", "delivery"}
-            or self.status != "covered" or self.owner_step_ids
+            or self.status != "covered"
             or self.reason_code != HOST_DELIVERY_REASON
             or self.concept_identity != self.delivery_kind
         ):
-            raise ValueError("host delivery covers only its typed output, independently of steps")
+            raise ValueError("host delivery covers only its typed output")
         if self.statement_ref is not None and (
             self.kind != "question" or self.question_kind != "analysis"
             or self.status != "covered" or self.owner_step_ids or self.delivery_kind

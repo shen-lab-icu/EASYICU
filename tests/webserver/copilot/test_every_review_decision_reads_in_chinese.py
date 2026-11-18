@@ -78,11 +78,12 @@ def test_the_review_owners_decisions_are_found() -> None:
     # follows that condition.
     assert {
         "REQUESTED_DOSE_RESPONSE_NOT_ESTIMABLE",
-        "REPEATED_STAY_METHOD_NOT_DECLARED",
         "PRIMARY_EXPOSURE_TIME_ANCHOR_MISMATCH",
         "PRIMARY_EXPOSURE_TIME_ANCHOR_UNVERIFIED",
         "POPULATION_SCOPE_AMENDMENT_DECLARED",
     } <= set(DECISIONS)
+    # Repeated-stay implementation is resolved by the plan or runtime owner.
+    assert "REPEATED_STAY_METHOD_NOT_DECLARED" not in DECISIONS
     assert "PLAN_POPULATION_REQUIREMENT_DRIFT" not in DECISIONS
 
 

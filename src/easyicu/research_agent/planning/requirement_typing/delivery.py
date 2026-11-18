@@ -8,8 +8,8 @@ from ...contracts.descriptive_execution import exposure_outcome_distribution_exe
 from ...contracts.model_terms import PreparationRefusal, preparation_for_step
 from ...contracts.primary_cohort import primary_analysis_cohort_producer_uses_universe
 from ...contracts.prediction_subgroup import prediction_subgroup_step_matches
-from ...contracts.product_files import RUN_DELIVERY_SCHEMA_VERSION
-from ...contracts.product_identity import typed_product
+from ...contracts.product_files import DeliverableKind, RUN_DELIVERY_SCHEMA_VERSION, host_delivery_coverage
+from ...contracts.product_identity import is_canonical_typed_product_token, typed_product
 from ..question_quote import normalize_question_quote
 from ..scientific_action_catalog import scientific_action_for_id
 
@@ -129,6 +129,27 @@ def _owns(kind: PlanDeliverableKind, step: AnalysisStep, plan: AnalysisPlan) -> 
     return step.robustness_replay_spec is not None or (
         step.planned_analysis_role == "sensitivity" and _registered_analysis(step, plan)
     )
+
+
+def planned_run_delivery_evidence(
+    kinds: Sequence[DeliverableKind], *, plan: AnalysisPlan,
+) -> dict[str, object] | None:
+    """Bind each run deliverable to the plan that this judgment will review."""
+    product_kinds: dict[DeliverableKind, str] = {"figures": "figure", "result_tables": "table"}
+    # Manuscript preview, PDF and bibliography have no typed plan-step
+    # owner. A downstream file format alone grants no plan coverage.
+    if not all(kind in product_kinds for kind in kinds):
+        return None
+    return host_delivery_coverage({
+        kind: [
+            step.step_id for step in plan.steps
+            if any(
+                is_canonical_typed_product_token(output) and output.partition(":")[0] == product_kinds[kind]
+                for output in step.expected_outputs
+            )
+        ]
+        for kind in kinds
+    })
 
 
 def planned_delivery_evidence(

@@ -17,9 +17,9 @@ What the host can verify, it verifies:
   statements and defaults with provenance; a missing clause alone is reported;
 * a question-named exposure needs an analysis owner, rather than a definition.
   A single-exposure family leaves an explicit choice for the plan review;
-* typed delivery requirements are covered by the same product-file contract
-  the browser downloads read, independently of statistical plan steps. Old
-  untyped records use a conservative reader for complete delivery clauses;
+* typed delivery requirements use the browser's product-file contract and
+  require matching typed owners in the plan. Old untyped records use a
+  conservative reader for complete delivery clauses;
 * the quote matches a contiguous span of the question (``planning.question_quote``);
 * every concept is one the run offers;
 * a benchmark is answered only by a step whose action compares models on the
@@ -111,7 +111,7 @@ from ..contracts.association_execution import primary_binary_effect_measure
 from ..contracts.model_tokens import BinaryEffectMeasure
 from ..contracts.product_files import (
     DeliverableKind, HOST_DELIVERY_REASON, RUN_DELIVERABLES,
-    host_delivery_coverage, requested_deliverable_kinds,
+    requested_deliverable_kinds,
 )
 from ..schema import AnalysisPlan, ResearchContext, ValidationFinding
 from .progressive_contract import (
@@ -133,7 +133,9 @@ from .requirement_coverage import (
     RequirementCoverageStatus,
     concept_relatives,
 )
-from .requirement_typing.delivery import planned_delivery_evidence, requested_plan_deliverables
+from .requirement_typing.delivery import (
+    planned_delivery_evidence, planned_run_delivery_evidence, requested_plan_deliverables,
+)
 
 QUESTION_REQUIREMENTS_SCHEMA_VERSION = "easyicu.question_requirements/1"
 QUESTION_REQUIREMENTS_FILENAME = "question_requirements.json"
@@ -209,8 +211,7 @@ QUESTION_REQUIREMENTS_GUIDE = (
     " Delivery-only requests use kind delivery and deliverable_kinds from the host "
     "delivery contract: " + ", ".join(RUN_DELIVERABLES) + ". "
     "Quote only the requested outputs, keeping scientific requirements "
-    "separate. The host covers these outputs independently of analysis steps; never "
-    "declare them infeasible because the statistical plan does not generate files. "
+    "separate. The host checks that each requested output has a typed owner in this plan. "
     "For other requirements use deliverable_kinds=[]. Quote generic requests for study design, "
     "methods and reporting separately from named scientific methods or data. The host checks "
     "each generic request against the typed owners actually present in this plan."
@@ -1152,14 +1153,22 @@ def _judge(
         if item.kind in {"analysis", "delivery"} and not item.concepts and not item.analysis_exposures
         and not (item.gap and item.gap.concept) else ()
     )
-    delivery = requirement_delivery_coverage(item)
-    if planned and delivery is None:
-        delivery = planned_delivery_evidence(planned, plan=plan)
+    delivery_kinds = requirement_delivery_kinds(item)
+    delivery = (
+        planned_run_delivery_evidence(delivery_kinds, plan=plan) if delivery_kinds
+        else planned_delivery_evidence(planned, plan=plan)
+    )
     if delivery is not None:
         return JudgedRequirement(
             item, "covered", HOST_DELIVERY_REASON, host_judged=True,
             gap=item.gap, verification="unverified" if item.gap else None,
             fact=str(delivery["reason"]), delivery=delivery,
+        )
+    if delivery_kinds:
+        return JudgedRequirement(
+            item, "not_covered", QUESTION_REQUIREMENT_APPROVAL_STOPS["not_covered"], host_judged=True,
+            gap=item.gap, verification="unverified" if item.gap else None,
+            fact="The plan lacks a typed owner for at least one requested deliverable.",
         )
     exposures = question_analysis_exposures(item, requirements, sealed=sealed)
     if exposures:
@@ -1304,16 +1313,14 @@ def _declared_gap_verdict(
     )
 
 
-def requirement_delivery_coverage(item: QuestionRequirement) -> dict[str, object] | None:
-    """Host-owned outputs bypass scientific gap checks, on every planning boundary."""
-    if item.gap is not None and item.gap.concept is not None:
-        return None
+def requirement_delivery_kinds(item: QuestionRequirement) -> Sequence[DeliverableKind]:
+    """Identify a delivery-only claim so the current plan can be checked."""
+    if item.concepts or item.analysis_exposures or (item.gap is not None and item.gap.concept is not None):
+        return ()
     # Stored untyped requirements need a conservative compatibility reader.
-    # New requirements resolve the typed kind, independently of wording.
-    kinds = item.deliverable_kinds or (
+    return item.deliverable_kinds or (
         requested_deliverable_kinds(item.quote) if item.kind in {"analysis", "delivery"} else ()
     )
-    return host_delivery_coverage(kinds)
 
 
 def _judge_effect_measure(
@@ -1592,8 +1599,8 @@ def _coverage(
                     reason_code="question_method_clause_stated" if evidence else QUESTION_REQUIREMENT_APPROVAL_STOPS["not_covered"],
                 ))
             continue
-        delivery_kinds = entry.delivery["deliverable_kinds"] if entry.delivery else ()
-        for concept in delivery_kinds or item.concepts or [item.id]:
+        delivery_owners = entry.delivery["owner_step_ids_by_kind"] if entry.delivery else {}
+        for concept in delivery_owners or item.concepts or [item.id]:
             records.append(
                 PlanRequirementCoverageRecord(
                     requirement_id=f"question:{item.id}:{concept}",
@@ -1602,11 +1609,11 @@ def _coverage(
                     concept_identity=concept,
                     source_ref="research_context.json.research_question",
                     status=status[entry.disposition],
-                    owner_step_ids=entry.owner_step_ids
+                    owner_step_ids=tuple(delivery_owners.get(concept, entry.owner_step_ids))
                     if entry.disposition == "covered"
                     else (),
                     reason_code=entry.reason_code,
-                    **({"delivery_kind": concept} if delivery_kinds else {}),
+                    **({"delivery_kind": concept} if delivery_owners else {}),
                 )
             )
     for measure in measures:
@@ -2306,7 +2313,7 @@ __all__ = [
     "question_requirements_record",
     "question_requirements_schema",
     "question_requirements_shape",
-    "requirement_delivery_coverage",
+    "requirement_delivery_kinds",
     "unaccounted_named_concepts",
     "write_question_requirements",
 ]
