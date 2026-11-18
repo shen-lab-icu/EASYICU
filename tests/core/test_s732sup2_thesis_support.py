@@ -48,7 +48,9 @@ def _peep_source(root, database):
         })
     elif database == "hirid":
         _stays(root, database, admissiontime=_ADMISSION)
-        _write(root, "observations", {
+        observations = root / "observations"
+        observations.mkdir()
+        _write(observations, "part", {
             "patientid": members, "datetime": timestamps, "value": vals,
             "variableid": [2600, 2600, 2600, 2600, 2600, 2610, 2010, 2600, 2600, 2600],
         })
