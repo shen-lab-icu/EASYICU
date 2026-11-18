@@ -189,8 +189,10 @@ class QuickAnswerService:
             try:
                 self._submit_quick_answer(context, repair[0], message_job_id=message_job_id)
             except PiCopilotError:
-                # The handoff is optional and cannot outlive its authority.
-                return
+                # Source confirmation already has its host acknowledgement.
+                # A direct question needs the typed stop from the message job.
+                if not context.quick_question_offered:
+                    raise
 
     def _quick_row(self, record, quick_answer_id):
         study = self._quick_study(record)

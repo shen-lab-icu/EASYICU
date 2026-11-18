@@ -42,7 +42,10 @@ test('an exhausted quick-answer decision remains failed, including its usage', a
 test('transport exceptions and missing terminal events cannot become a successful decline', async () => {
   const thrown = new Error('503: synthetic unavailable');
   await assert.rejects(settleQuickAnswerOffer(model, () => { throw thrown; }, ack), error => error === thrown);
-  await assert.rejects(settleQuickAnswerOffer(model, () => stream([]), ack));
+  const incomplete = { ...stream([{ type: 'done', message: undefined }]), result: async () => undefined };
+  await assert.rejects(settleQuickAnswerOffer(model, () => incomplete, 'The synthetic export is selected.'), {
+    name: 'Error', message: 'Quick-answer decision ended without a terminal message',
+  });
 });
 
 test('a failed partial tool call is never replayed', async () => {

@@ -734,6 +734,26 @@ for (const user of [direct, transition]) {
   });
 }
 
+for (const user of [direct, transition]) {
+  for (const [validator, details] of [
+    ['Pi SDK', undefined],
+    ['quick-question owner', { status: 'blocked', code: 'quick_reading_invalid', details: {} }],
+  ]) {
+    test(`a re-read rejected by ${validator} leaves ${user === direct ? 'the direct turn' : 'the host acknowledgement'} to the handoff`, async () => {
+      const first = await harness([decided([initial], 'toolUse')], {
+        context: { messages: [user], tools: user === transition ? [quickTools[0]] : quickTools },
+      });
+      const malformed = { ...corrected, arguments: { reading: { question: reviewQuestion, measure: { statistic: 'typical' } } } };
+      const rejection = toolResult(malformed, details, true);
+      const history = [user, first.result, readingIssue, message([malformed], 'toolUse'), rejection];
+      const finished = await harness([success(1)], { context: { messages: history, tools: quickTools } });
+      assert.equal(finished.calls.length, 0);
+      assert.equal(finished.result.stopReason, 'stop');
+      assert.equal(finished.result.content.map(part => part.text || '').join(''), '');
+    });
+  }
+}
+
 test('a direct assistant turn submits only its first quick reading even with other tools', async () => {
   const calls = [catalogCall, initial, { ...corrected, id: 'same-turn' }];
   const events = [

@@ -22,7 +22,6 @@ from __future__ import annotations
 
 import json
 import shutil
-import time
 from pathlib import Path
 from typing import Any, Optional
 
@@ -40,6 +39,7 @@ from easyicu.webserver.pi_copilot.service import PiCopilotService
 from easyicu.webserver.pi_copilot.tools import execute_tool
 from tests.support.native_outcome_export import typed_native_export
 from tests.support.node import run_node
+from tests.support.wait import wait_until
 from tests.webserver.copilot.pi_copilot_contract_fixtures import FakeGateway
 
 APP_DIR = Path(__file__).resolve().parents[3] / "src" / "easyicu" / "webserver" / "pi_copilot" / "node_app"
@@ -132,16 +132,15 @@ def typed_turn(service, record, text: str, *, job_id: str = "job-question", orig
                                      job_id=job_id, status="done", assistant_reply="研究问题已保存。")
 
 
-def wait_for_message(submitted) -> str:
-    deadline = time.monotonic() + 30
-    job = None
-    while time.monotonic() < deadline:
-        job = service_module.jobs.MANAGER.get(submitted["job_id"])
-        if job and job.status != "running" and job.status != "queued":
-            break
-        time.sleep(0.02)
-    assert job is not None and job.status == "done", job and (job.status, getattr(job, "error", None))
-    return submitted["job_id"]
+def wait_for_message(submitted, *, error_code: str | None = None) -> str:
+    job_id = submitted["job_id"]
+    job = service_module.jobs.MANAGER.get(job_id)
+    assert job is not None
+    wait_until(lambda: job.status not in {"running", "queued"}, timeout=30)
+    assert job.status == ("failed" if error_code else "done"), (job.status, job.error)
+    if error_code:
+        assert job.error.partition(":")[0] == error_code
+    return job_id
 
 
 def confirm_source_and_continue(service, record) -> str:
@@ -243,18 +242,28 @@ def test_unregistered_concepts_get_one_re_read(conversation, field, value, repla
         assert handoff["expand"]["reading"]["question"] == question
 
 
-@pytest.mark.parametrize("repair_fields", [None, {"measure": {"statistic": "not-a-statistic"}}], ids=["declined", "invalid"])
-def test_a_re_read_without_a_valid_submission_leaves_a_handoff(conversation, repair_fields):
+@pytest.mark.parametrize("offered", [True, False], ids=["source-confirmation", "direct"])
+@pytest.mark.parametrize("repair_fields", [None, {"measure": {"statistic": "typical"}}], ids=["declined", "invalid"])
+def test_a_re_read_without_a_valid_submission_leaves_a_handoff(conversation, offered, repair_fields):
     service, record, gateway = conversation
-    gateway.initial_fields = {"measure": {"concept": "quartz_metric_zz", "statistic": "median"}}
+    configure_reading_repair(service, record, gateway, offered=offered)
     gateway.repair_fields = repair_fields
-    typed_turn(service, record, QUESTION)
-    confirm_source_and_continue(service, record)
-    assert len(gateway.submitted) == (1 if repair_fields is None else 2)
+    if offered:
+        job_id = confirm_source_and_continue(service, record)
+    else:
+        job_id = wait_for_message(service.send_message(
+            record.session_id, project_id=record.project_id, message=REVIEW_QUESTION, message_origin="typed",
+        ))
+    codes = ["quick_reading_concept_unregistered"]
+    if repair_fields is not None:
+        codes.append("quick_reading_invalid")
+    assert [result["code"] for result in gateway.submitted] == codes
     [card] = service.get_session(record.session_id, project_id=record.project_id)["session"]["quick_answers"]
+    assert card["message_job_id"] == job_id
     proposal = card["proposal"]
     assert (proposal["status"], proposal["reason"]) == ("full_study", "quick_reading_concept_unregistered")
     assert proposal["expand"]["action"] == "expand_into_full_study"
+    assert proposal["expand"]["reading"]["question"] == REVIEW_QUESTION
 
 
 def configure_reading_repair(service, record, gateway, *, offered):
@@ -300,27 +309,94 @@ def test_a_re_read_that_stops_does_not_write_the_original_handoff(conversation, 
     assert attempts == ["quartz_metric_zz", "lact"]
 
 
-@pytest.mark.parametrize("change", ["study", "authority", "source"])
-def test_a_stale_re_read_leaves_no_handoff_and_the_message_finishes(conversation, change):
+def invalidate_repair(context, change):
+    if change == "study":
+        study_contexts.upsert_context({
+            "id": context.session.binding.study_context_id, "question": "What was the first recorded lactate?",
+        })
+    elif change == "authority":
+        context.invalidate_authority("authority_changed_in_test")
+    elif change == "source":
+        sources.load_registry()["sources"][0]["id"] = "src_replaced"
+
+
+@pytest.mark.parametrize("change", ["study", "authority", "source", "saved-binding"])
+@pytest.mark.parametrize("model_submits", [True, False], ids=["resubmitted", "replayed"])
+def test_a_stale_re_read_leaves_no_handoff_and_the_message_finishes(conversation, monkeypatch, change, model_submits):
     service, record, gateway = conversation
     configure_reading_repair(service, record, gateway, offered=True)
+    submit = service._submit_quick_answer
+    attempts = []
 
-    def invalidate(context):
-        if change == "study":
-            study_contexts.upsert_context({"id": record.binding.study_context_id, "question": "A revised study question."})
-        elif change == "authority":
-            context.invalidate_authority("authority_changed_in_test")
-        else:
-            sources.load_registry()["sources"][0]["id"] = "src_replaced"
+    def track_repair(context, reading, *, message_job_id):
+        try:
+            return submit(context, reading, message_job_id=message_job_id)
+        except PiCopilotError as exc:
+            attempts.append((reading.measure.concept, exc.code))
+            raise
 
-    gateway.after_initial_reading = invalidate
-    if change == "source":
+    def after_initial_reading(context):
+        if change != "saved-binding":
+            invalidate_repair(context, change)
+            return
+
+        scoped_record = service._scoped_record
+
+        def rebind_then_load(session_id, *, project_id):
+            # Change the saved binding between the turn's freshness check and
+            # the owner's scoped read. The new binding itself is current.
+            monkeypatch.setattr(service, "_scoped_record", scoped_record)
+            study = study_contexts.upsert_context({
+                "id": context.session.binding.study_context_id,
+                "question": "What was the last recorded lactate?",
+            })
+            latest = scoped_record(session_id, project_id=project_id)
+            latest.binding = service._binding_for_context(study)
+            service._save_record(latest)
+            refreshed = scoped_record(session_id, project_id=project_id)
+            assert refreshed.binding != context.session.binding
+            assert not service._stale_details(refreshed)["stale"]
+            monkeypatch.setattr(service, "_quick_study", lambda _record: pytest.fail("accepted a changed binding"))
+            return refreshed
+
+        monkeypatch.setattr(service, "_scoped_record", rebind_then_load)
+
+    monkeypatch.setattr(service, "_submit_quick_answer", track_repair)
+    gateway.after_initial_reading = after_initial_reading
+    if not model_submits:
         gateway.repair_fields = None
     confirm_source_and_continue(service, record)
-    assert gateway.submitted[0]["code"] == "quick_reading_concept_unregistered"
-    if change != "source":
-        assert gateway.submitted[1]["code"] == "pi_session_authority_stale"
+
+    code = "quick_source_changed" if change == "source" else "pi_session_authority_stale"
+    expected_tool_codes = ["quick_reading_concept_unregistered"]
+    if model_submits:
+        expected_tool_codes.append(code)
+    assert [result["code"] for result in gateway.submitted] == expected_tool_codes
+    # A stale StudyContext or invalidated turn stops in the tool dispatcher;
+    # replacement sources and saved bindings reach the owner on submission.
+    owner_received_reread = model_submits and change in {"source", "saved-binding"}
+    assert attempts == [("lact" if owner_received_reread else "quartz_metric_zz", code)]
+    assert not list(service._quick_store().directory(record.session_id).glob("qa_*/record.json"))
     assert service.get_session(record.session_id, project_id=record.project_id)["session"]["quick_answers"] == []
+
+
+@pytest.mark.parametrize("change,code", [
+    ("source", "quick_source_changed"),
+    ("study", "pi_session_authority_stale"),
+    ("authority", "pi_session_authority_stale"),
+])
+def test_a_declined_direct_re_read_with_stale_authority_reports_the_stop(conversation, change, code):
+    service, record, gateway = conversation
+    configure_reading_repair(service, record, gateway, offered=False)
+    gateway.repair_fields = None
+    gateway.after_initial_reading = lambda context: invalidate_repair(context, change)
+    wait_for_message(service.send_message(
+        record.session_id, project_id=record.project_id, message=REVIEW_QUESTION, message_origin="typed",
+    ), error_code=code)
+
+    assert [result["code"] for result in gateway.submitted] == ["quick_reading_concept_unregistered"]
+    assert service._get_record(record.session_id).last_turn_status == "failed"
+    assert not list(service._quick_store().directory(record.session_id).glob("qa_*/record.json"))
 
 
 def test_a_registered_but_unassessed_concept_does_not_get_a_re_read(conversation, monkeypatch):

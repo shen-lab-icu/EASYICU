@@ -700,12 +700,15 @@ export function hostPostToolFinalization(model, context, language) {
     return completedStream(finalizedMessage(model, ""));
   }
   const offered = latest?.role === "toolResult" && quickAnswerOffered(context);
-  if ((result?.isError === true || result?.details?.status === "blocked") && (!offered || afterRepair)) {
+  const code = result?.details?.code;
+  // SDK and host schema rejections leave the repair open for the owner's handoff.
+  const repairSchemaRejected = afterRepair && (!code || code === "quick_reading_invalid");
+  if (!repairSchemaRejected && (result?.isError === true || result?.details?.status === "blocked")
+      && (!offered || afterRepair)) {
     return completedStream(finalizedMessage(model, quickAnswerRefusalText(result, language)));
   }
   if (afterRepair || offered) {
-    // The offer's acknowledgement is already written. A
-    // call the host refused leaves the transition as it is without an offer.
+    // The owner settles an open repair. For an offer, the acknowledgement is already written.
     return completedStream(finalizedMessage(model, ""));
   }
   const zeroDirection = zeroDirectionEntryText(context, language);
