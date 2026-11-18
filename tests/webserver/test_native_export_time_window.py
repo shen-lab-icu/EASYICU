@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import os
 from contextlib import nullcontext
 from pathlib import Path
 from types import SimpleNamespace
@@ -18,6 +19,117 @@ from tests.support.typed_export import typed_export
 class ExportJob:
     def emit(self, payload):
         pass
+
+
+@pytest.mark.skipif(not hasattr(os, "fork"), reason="needs a forked worker to inject an exit")
+@pytest.mark.parametrize("worker_exit", [0, 9], ids=["clean", "exit-9"])
+def test_hosted_web_export_requires_complete_nested_los_batches(tmp_path, monkeypatch, worker_exit):
+    import psutil
+
+    from easyicu import api
+    from easyicu.api import extraction
+    from easyicu.concept.errors import ConceptExtractionUnavailable
+    from easyicu.runtime import memory_manager
+    from easyicu.webserver.jobs import JobManager
+    from tests.support.bucket_storage import b6_source
+
+    source = tmp_path / "input"
+    b6_source(source, "miiv")
+    stays_path = source / "icustays.parquet"
+    stays = pd.read_parquet(stays_path)
+    stays["los"] = [1.0, 1.5, 2.0]
+    stays["outtime"] = stays["intime"] + pd.to_timedelta(stays["los"], unit="D")
+    stays.to_parquet(stays_path, index=False)
+    home = tmp_path / "instance"
+    home.mkdir()
+    out = home / "export"
+    monkeypatch.setenv("EASYICU_HOSTED", "1")
+    monkeypatch.setenv("EASYICU_DATA_ROOTS", str(source))
+    monkeypatch.setenv("EASYICU_HOME", str(home))
+    # An explicit empty value disables the runner's legacy in-process
+    # override and lets the API choose isolation for the planned batches.
+    monkeypatch.setenv("EASYICU_FORCE_INPROCESS_BATCH", "")
+    monkeypatch.delenv("EASYICU_FORCE_SUBPROCESS_BATCH", raising=False)
+    total_ram = 8 * 1024**3
+    memory = psutil.virtual_memory()._replace(total=total_ram, available=total_ram)
+    monkeypatch.setattr(psutil, "virtual_memory", lambda: memory)
+    plan_resources = api.plan_extraction_resources
+    monkeypatch.setattr(
+        api, "plan_extraction_resources",
+        lambda database, modules, size: plan_resources(database, modules, size, requested_batch_size=2),
+    )
+
+    bounds = extraction._native_export_stay_time_upper_bounds
+    expected = bounds(api.load_concepts(
+        ["los_icu"], database="miiv", data_path=str(source),
+        patient_ids={"stay_id": [1, 2, 3]}, batch_size=3, verbose=False,
+    ))
+    assert expected == {1: 48.0, 2: 60.0, 3: 72.0}
+    bound_calls = []
+
+    def observe_bounds(frame):
+        result = bounds(frame)
+        bound_calls.append(result)
+        return result
+
+    run_batch = memory_manager._run_batch_process
+    load_worker = memory_manager._subprocess_load_worker
+    attempts = []
+
+    def worker(args):
+        if worker_exit and args["concepts"] == ["los_icu"] and args["patient_ids"] == {"stay_id": [3]}:
+            raise SystemExit(worker_exit)
+        load_worker(args)
+
+    def observe_batch(args, attempt_dir, batch_num, mode):
+        exitcode = run_batch(args, attempt_dir, batch_num, mode)
+        if args["concepts"] == ["los_icu"]:
+            attempts.append((args["patient_ids"]["stay_id"], exitcode))
+        return exitcode
+
+    monkeypatch.setattr(extraction, "_native_export_stay_time_upper_bounds", observe_bounds)
+    monkeypatch.setattr(memory_manager, "_subprocess_load_worker", worker)
+    monkeypatch.setattr(memory_manager, "_run_batch_process", observe_batch)
+    runner = dataio.make_export_runner(
+        data_path=str(source), database="miiv", modules=["vitals"],
+        concepts={"vitals": ["hr"]}, export_format="parquet", out_dir=str(out),
+        include_feature_definitions=False,
+    )
+    failures = []
+
+    def run_export(job):
+        try:
+            return runner(job)
+        except dataio.ExportCohortError as exc:
+            failures.append(exc)
+            raise
+
+    manager = JobManager()
+    job = manager.reserve("extract")
+    manager.run_reserved(job.id, run_export)
+    if worker_exit:
+        assert job.status == "failed"
+        assert job.error == "stay_time_upper_bounds_unavailable"
+        assert job.result is None
+        failure, = failures
+        assert failure.detail == {
+            "error": "stay_time_upper_bounds_unavailable", "module": "vitals",
+            "stage": "subprocess_batch_load", "reason": "batch 2: worker exited with code 9",
+        }
+        assert isinstance(failure.__cause__, ConceptExtractionUnavailable)
+        assert attempts == [([1, 2], 0), ([3], 9), ([3], 9)]
+        assert bound_calls == []
+        assert not (out / "_manifest.json").exists()
+        assert not list(out.glob("*.parquet"))
+    else:
+        assert job.status == "done", job.error
+        assert attempts == [([1, 2], 0), ([3], 0)]
+        assert bound_calls == [expected]
+        assert job.result["module_resource_plans"]["vitals"]["batch_size"] == 2
+        manifest = json.loads((out / "_manifest.json").read_text(encoding="utf-8"))
+        assert manifest["time_window_authority"] == {
+            "required": True, "source": "outcome.los_icu", "bounded_stays": 3,
+        }
 
 
 @pytest.fixture

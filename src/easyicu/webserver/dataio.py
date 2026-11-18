@@ -37,6 +37,7 @@ from easyicu.concept.export_metadata import (
     missing_primary_metadata_concepts,
 )
 from easyicu.concept.availability_signal import ConceptAvailabilityRecord
+from easyicu.concept.errors import ConceptExtractionUnavailable
 from easyicu.concept.minute_resolution import (
     SUBHOUR_MODULE_INTERVALS,
     resolution_summary,
@@ -3028,13 +3029,19 @@ def make_export_runner(
                     if mod not in {"demographics", "outcome"} and stay_time_upper_bounds is None:
                         # Load the authority independently of selected outputs:
                         # outcome may be omitted or projected without los_icu.
-                        stay_time_upper_bounds = extraction._native_export_stay_time_upper_bounds(
-                            api.load_concepts(
-                                ["los_icu"], patient_ids=patient_ids, database=database,
-                                data_path=str(data_path), merge=True, verbose=False,
-                                batch_size=int(module_resource_plan["batch_size"]),
+                        try:
+                            stay_time_upper_bounds = extraction._native_export_stay_time_upper_bounds(
+                                api.load_concepts(
+                                    ["los_icu"], patient_ids=patient_ids, database=database,
+                                    data_path=str(data_path), merge=True, verbose=False,
+                                    batch_size=int(module_resource_plan["batch_size"]),
+                                )
                             )
-                        )
+                        except ConceptExtractionUnavailable as exc:
+                            raise ExportCohortError(
+                                "stay_time_upper_bounds_unavailable",
+                                {"module": mod, "stage": exc.stage, "reason": exc.detail},
+                            ) from exc
                         extraction._native_export_time_window_authority(
                             modules=sel, stay_time_upper_bounds=stay_time_upper_bounds,
                             required=True,
