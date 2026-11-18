@@ -1503,6 +1503,7 @@ def _write_pipeline_failure_diagnostic(
             if isinstance(rows := getattr(item, "easyicu_compile_retry_metadata", None), list) and rows
         ), attempts),
         "structured_attempts": attempts,
+        **safe_stop_coordinates({"plan_repair": getattr(exc, "easyicu_plan_repair", None)}),
         "raw_model_output_recorded": False,
         "prompt_recorded": False,
         "patient_rows_recorded": False,
@@ -1530,6 +1531,39 @@ def _write_pipeline_failure_diagnostic(
     except OSError:
         return None
     return relative
+
+
+def _repairable_plan_check(exc: Exception) -> Mapping[str, Any]:
+    """Feed back only checks owned by the plan compiler or host plan validator."""
+    from easyicu.research_agent.planning.capability_gap import CapabilityGapDiagnostic
+
+    code = _pipeline_failure_code(exc)
+    if code not in {
+        "research_pipeline_progressive_compile_failed", "research_pipeline_plan_step_needs_sandbox",
+        "research_pipeline_plan_contract_exhausted",
+    }:
+        return {}
+    check = _safe_pipeline_typed_failure(exc)
+    if check.get("owner") not in {
+        "easyicu.planning.progressive_compiler_v1", "easyicu.execution.host_plan_v1",
+    }:
+        return {}
+    if (check.get("metrics") or {}).get("planner_provider_calls") == 0:
+        return {}
+    if check.get("reason_code") == "progressive_family_result_contract_unwritable":
+        return {}  # This is owned by the study's explicit design decision.
+    for error in _pipeline_exception_chain(exc):
+        gap = getattr(error, "easyicu_rejected_planning_capability_gap", None) or getattr(
+            error, "easyicu_planning_capability_gap", None,
+        )
+        if isinstance(gap, CapabilityGapDiagnostic):
+            if gap.verification == "verified":
+                return {}
+            return {**check, "capability_gap": gap.model_dump(mode="json", exclude={"rationale"})}
+        requirement = getattr(error, "easyicu_question_requirement_gap", None)
+        if isinstance(requirement, dict):
+            return {**check, "requirement": requirement}
+    return check
 
 
 def _failure_gate_detail(
@@ -1709,6 +1743,13 @@ def _record_pipeline_failure(
         reason_code = typed.get("reason_code")
         cause_code = typed.get("cause_code")
         coordinates = {key: value for key, value in safe_stop_coordinates(typed).items() if not (key == "step_id" and value == "unknown")}
+        if repair := getattr(exc, "easyicu_plan_repair", None):
+            coordinates["plan_repair"] = repair
+            # An outline with a verified capability gap never enters repair.
+            # The private receipt retains the Planner's rejected gap claim.
+            if reason_code == "progressive_capability_gap":
+                reason_code = "progressive_capability_gap_claim_unverified"
+            reason_code = reason_code or code
         if code == "research_pipeline_provider_timeout":
             coordinates.update(provider_timeout_coordinates(_safe_pipeline_attempt_metadata(exc)))
             reason_code = reason_code or code
@@ -4903,6 +4944,7 @@ def _write_projection(
     pending: Optional[Any] = None,
     blocked_reason: Optional[str] = None,
     plan_revision_source_run_id: str = "",
+    plan_repair: Mapping[str, Any] | None = None,
 ) -> Dict[str, Any]:
     wrapper_dir.mkdir(parents=True, exist_ok=True)
     run_id = str(
@@ -5147,6 +5189,9 @@ def _write_projection(
             }
             for request in pending.requests
         ]
+    repair_detail = safe_stop_coordinates({"plan_repair": plan_repair})
+    if repair_detail:
+        gate["detail"] = {**(gate.get("detail") or {}), "reason_code": gate["reason"], **repair_detail}
     source = study.get("data_source")
     gate["next_actions"] = project_stop_next_actions(
         gate, pending_reason_codes=[item["reason_code"] for item in pending_requests],
@@ -8381,7 +8426,8 @@ def make_research_pipeline_run_runner(
                 consume_approved_first_observed_input, publish_approved_source_flow,
             )
 
-            pipeline = ResearchAgentPipeline.from_config(
+            create_pipeline = partial(
+                ResearchAgentPipeline.from_config,
                 config,
                 services=PipelineServices(
                     llm=planning_client,
@@ -8544,8 +8590,28 @@ def make_research_pipeline_run_runner(
             # population compilation; no request-supplied proof is trusted.
             from easyicu.webserver.first_observed_run_guard import host_first_observed_review_scope
 
+            from easyicu.research_agent.orchestration.plan_repair import PLAN_REPAIR_LIMIT, run_plan_with_repairs
+
+            def invoke_candidate():
+                attempted_pipeline = create_pipeline()
+                result = call_with_failure_location(attempted_pipeline.run, runner_kind=execution.runner_kind, **run_arguments)
+                return attempted_pipeline, result
+
             with host_first_observed_review_scope(study_context_id=str(study["id"])):
-                outcome = call_with_failure_location(pipeline.run, runner_kind=execution.runner_kind, **run_arguments)
+                (pipeline, outcome), plan_repair = run_plan_with_repairs(
+                    invoke_candidate,
+                    check_failure=_repairable_plan_check,
+                    notify=lambda attempt: _progress(
+                        job, step="planning", label="Revising the candidate plan after an EasyICU check.",
+                        current=attempt, total=PLAN_REPAIR_LIMIT, actor="system",
+                        planning_unit="plan", retry_phase="rejected",
+                    ),
+                    enabled=(
+                        config.require_human_plan_review and not config.no_automatic_retries
+                        and execution_resume_target is None and development_resume_binding is None
+                        and grouped_continuation is None and not analysis_only_execution
+                    ),
+                )
             if execution_resume_target is not None and isinstance(
                 outcome, HumanReviewPending
             ):
@@ -8588,6 +8654,7 @@ def make_research_pipeline_run_runner(
                     run_dir=run_dir,
                     pending=outcome,
                     plan_revision_source_run_id=source_run_id,
+                    **({"plan_repair": plan_repair} if plan_repair is not None else {}),
                 )
             projection = _write_terminal_projection(
                 job=job,

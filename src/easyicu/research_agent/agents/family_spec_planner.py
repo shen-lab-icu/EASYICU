@@ -1083,7 +1083,7 @@ def check_question_requirement_gaps(
             planning_contract_context=planning_contract_context,
         )
         if check.verification == "unverified":
-            raise ProgressivePlanCompileError(
+            error = ProgressivePlanCompileError(
                 "progressive_capability_gap_claim_unverified",
                 f"question requirement {item.id} declares a capability gap the study "
                 f"contradicts: {check.fact}; state what the plan answers, or a gap the "
@@ -1091,6 +1091,12 @@ def check_question_requirement_gaps(
                 path=f"question_requirements[{index}].gap",
                 cause_code=item.gap.requirement,
             )
+            error.easyicu_question_requirement_gap = {
+                "requirement_id": item.id, "quote": item.quote,
+                "gap": item.gap.model_dump(mode="json"),
+                "host_verdict": check.verification, "host_fact": check.fact,
+            }
+            raise error
 
 
 def family_spec_response_shape(request: FamilySpecRequest) -> str:

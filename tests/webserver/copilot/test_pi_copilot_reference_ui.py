@@ -166,7 +166,7 @@ def test_planning_progress_and_run_failures_read_as_progress_and_reasons() -> No
     ):
         assert f"{code}: tr(" in error_text
     # A stopped run says its cause once (run-stop block); a job-only failure on the card.
-    assert "reason: failedRun ? '' : failureReason" in confirmation
+    assert "reason: failedRun && !repairStop ? '' : failureReason" in confirmation
     assert 'class="gpi-confirmation-reason"' in confirmation
     assert ".gpi-confirmation-reason{" in pi_css
 

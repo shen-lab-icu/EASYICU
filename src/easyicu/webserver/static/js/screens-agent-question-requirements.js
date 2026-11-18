@@ -114,12 +114,21 @@
     }
     if (row.disposition === 'covered') {
       if (row.delivery && row.delivery.source === 'host_verified') {
+        const byKind = row.delivery.owner_step_ids_by_kind;
+        if (byKind && typeof byKind === 'object') {
+          const owners = names([...new Set(Object.values(byKind).filter(Array.isArray).flat())]);
+          return tr(`Covered by the plan’s typed steps ${owners}`, `由本计划的类型化步骤 ${owners} 覆盖`);
+        }
         return tr('Covered by EasyICU’s article and download delivery', '由 EasyICU 的文章与下载交付覆盖');
       }
       const owners = names(row.owner_step_ids);
       return owners ? tr(`Answered by step ${owners}`, `由步骤 ${owners} 回答`) : '';
     }
     if (row.disposition === 'not_covered') {
+      if (gap && row.gap_verification !== 'verified') return tr(
+        'EasyICU could not verify the capability gap claimed by the draft',
+        'EasyICU 未能核实草案所称的能力缺口',
+      );
       const concepts = conceptNames(row.concepts, levels);
       // A named effect measure is judged by what the primary model reports.
       if (row.reason_code === 'question_effect_measure_unrequested') {

@@ -592,7 +592,7 @@ def test_a_declared_gap_the_study_contradicts_goes_back_to_the_planner() -> None
     assert [item.id for item in result.facts.question_requirements] == ["r1"]
 
 
-def test_a_gap_the_host_cannot_check_stops_the_plan_as_unverified(
+def test_only_a_verified_gap_can_stop_the_plan_as_a_capability_gap(
     tmp_path: Path,
 ) -> None:
     context = _context()
@@ -602,21 +602,16 @@ def test_a_gap_the_host_cannot_check_stops_the_plan_as_unverified(
         context=context, plan=result.output, facts=result.facts, run_dir=tmp_path
     )
 
-    (stop,) = [item for item in findings if item.severity == "error"]
-    rows = {row["id"]: row for row in stop.detail["requirements"]}
-    assert (rows["r2"]["disposition"], rows["r2"]["host_judged"]) == (
-        "capability_gap",
-        False,
-    )
-    assert (rows["r2"]["gap_verification"], rows["r2"]["verified_by_host"]) == (
-        "unverifiable",
-        False,
-    )
-    # Each requirement's line ends with one full stop, its gap's own.
-    assert stop.message.endswith(
-        f"r2 {_UNCHECKABLE['quote']!r} (estimand): {_UNCHECKABLE['gap']['detail']}"
-    )
-    assert ".. r2" not in stop.message
+    stops = {item.detail["reason"]: item for item in findings if item.severity == "error"}
+    (verified,) = stops["question_requirement_capability_gap"].detail["requirements"]
+    assert verified["gap_verification"] == "verified"
+    uncovered = stops["question_requirement_not_covered"]
+    (row,) = uncovered.detail["requirements"]
+    assert row["quote"] == _UNCHECKABLE["quote"]
+    assert row["disposition"] == "not_covered"
+    assert row["host_judged"] is row["verified_by_host"] is True
+    assert row["gap_verification"] == "unverifiable"
+    assert uncovered.message.endswith(row["gap_fact"] + ".")
 
 
 @pytest.mark.parametrize("quote", [
@@ -669,10 +664,10 @@ def test_delivery_words_cannot_hide_a_method_or_unavailable_delivery_gap(quote, 
         [item], plan=plan, family_template=True,
         relatives=concept_relatives(context), check_gap=_host_check(context),
     )
-    assert judged.disposition == "capability_gap"
-    assert judged.verified_by_host is False
+    assert judged.disposition == "not_covered"
+    assert judged.verification == "unverifiable"
     assert _question_stops(question_requirement_findings([judged])) == [
-        "question_requirement_capability_gap",
+        "question_requirement_not_covered",
     ]
 
 
@@ -1324,10 +1319,10 @@ def test_judging_the_compiled_plan_again_reproduces_the_planning_record(
     ]
     assert {row["disposition"] for row in planning["judged"]} == {
         "covered",
-        "capability_gap",
         "not_covered",
         "attested",
         "definition_only",
+        *({"capability_gap"} if family_template else ()),
     }
     assert [row["concepts"] for row in planning["unstated"]] == (
         [] if family_template else [["score_pred_mort", "severity_score"]]

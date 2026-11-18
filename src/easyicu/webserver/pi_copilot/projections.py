@@ -1098,6 +1098,7 @@ def project_run_outcome(
                 "gate_detail_step_title",
                 "gate_detail_runner_kind",
                 "gate_transport_retries",
+                "plan_repair",
                 "gate_missing_concepts",
                 "next_actions",
                 "execution_complete",
@@ -1784,6 +1785,8 @@ def gate_detail_projection(detail: Any) -> Dict[str, Any]:
         projected["gate_detail_mismatch_fields"] = counts["mismatch_fields"]
     if "transport_retries" in counts:
         projected["gate_transport_retries"] = counts["transport_retries"]
+    if "plan_repair" in counts:
+        projected["plan_repair"] = counts["plan_repair"]
     cause = stable_code(detail.get("cause_code"))
     if cause:
         projected["gate_detail_cause_code"] = cause

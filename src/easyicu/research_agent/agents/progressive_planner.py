@@ -4460,14 +4460,7 @@ class ProgressivePlannerAgent:
                 if parsed.capability_gap is not None:
                     gap = capability_gap_check(parsed)
                     if gap.verification == "unverified":
-                        raise ProgressivePlanCompileError(
-                            "progressive_capability_gap_claim_unverified",
-                            f"the declared capability gap does not hold: {gap.fact}; "
-                            "draft the steps the offered families can express, or "
-                            "declare a gap the study shows",
-                            path="capability_gap",
-                            cause_code=parsed.capability_gap,
-                        )
+                        raise capability_gap_stop(parsed, gap)
                     gap_confirmation.check(parsed, gap)
                     # A verified gap, or an unverifiable gap after its one
                     # confirmation (if budget remained), stops below.

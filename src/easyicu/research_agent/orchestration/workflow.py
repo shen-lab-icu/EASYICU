@@ -460,6 +460,11 @@ def human_review_requests_for_plan(
             continue
         seen.add(request.review_id)
         requests.append(request)
+
+    if root is not None:
+        from .plan_repair import check_plan_requirements_for_repair
+
+        check_plan_requirements_for_repair(Path(root), requests)
     return tuple(requests)
 
 

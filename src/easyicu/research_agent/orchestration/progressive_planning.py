@@ -58,6 +58,7 @@ from ..planning.question_requirements import (
     write_question_requirements,
 )
 from ..planning.preplan_know_how import PlannerKnowHowBinding
+from ..planning.prompt_projection import planner_repair_feedback_scope
 from ..planning.requirement_typing import shadow as requirement_shadow
 from ..planning.exposure_group_reader_names import exposure_group_label_findings
 from ..planning.question_interpretation import (
@@ -70,6 +71,7 @@ from ..planning.question_interpretation import (
 from ..planning.progressive_compiler import stated_population
 from ..planning import literature_design_authority as _literature_design
 from ..schema import AnalysisPlan, ResearchContext, ValidationFinding
+from .plan_repair import planning_repair_prompt
 from .workflow import PlannerDesignCanaryComplete
 
 
@@ -183,28 +185,29 @@ def run_pipeline_progressive_planner(
     kwargs["required_primary_cohort_selection_mode"] = (
         required_primary_cohort_selection_mode
     )
-    return run_progressive_planner(
-        planner=planner,
-        context=context,
-        run_dir=run_dir,
-        evidence=evidence,
-        prompt_pack_version=prompt_pack_version,
-        resume_checkpoint_path=resume_checkpoint_path,
-        resume_checkpoint_sha256=resume_checkpoint_sha256,
-        cohort_path=cohort_path,
-        llm_signature=llm_signature,
-        planner_kwargs=kwargs,
-        know_how_binding=know_how_binding,
-        planning_contract_context=planning_contract_context,
-        finding_sink=finding_sink,
-        stop_after_outline=stop_after_outline,
-        metadata_outline_journal_task=metadata_outline_journal_task,
-        metadata_outline_guard_verifier=metadata_outline_guard_verifier,
-        metadata_outline_literature_sha256=(
-            canonical_sha256(preplan_literature.model_dump(mode="json") if preplan_literature is not None else None)
-            if metadata_outline_journal_task is not None else None
-        ),
-    )
+    with planner_repair_feedback_scope(planning_repair_prompt()):
+        return run_progressive_planner(
+            planner=planner,
+            context=context,
+            run_dir=run_dir,
+            evidence=evidence,
+            prompt_pack_version=prompt_pack_version,
+            resume_checkpoint_path=resume_checkpoint_path,
+            resume_checkpoint_sha256=resume_checkpoint_sha256,
+            cohort_path=cohort_path,
+            llm_signature=llm_signature,
+            planner_kwargs=kwargs,
+            know_how_binding=know_how_binding,
+            planning_contract_context=planning_contract_context,
+            finding_sink=finding_sink,
+            stop_after_outline=stop_after_outline,
+            metadata_outline_journal_task=metadata_outline_journal_task,
+            metadata_outline_guard_verifier=metadata_outline_guard_verifier,
+            metadata_outline_literature_sha256=(
+                canonical_sha256(preplan_literature.model_dump(mode="json") if preplan_literature is not None else None)
+                if metadata_outline_journal_task is not None else None
+            ),
+        )
 
 
 def _resume_finding(

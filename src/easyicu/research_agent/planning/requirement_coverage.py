@@ -24,6 +24,7 @@ from ..methods.descriptive_inputs import REQUESTED_CONCEPT_NO_DATA, context_colu
 from .adjustment_authority import concept_relatives
 from ..contracts.analysis_design import PlanShapeRemediation as PlanShapeRemediation
 from ..contracts.product_files import DeliverableKind, HOST_DELIVERY_REASON
+from .requirement_typing.delivery import PlanDeliverableKind
 
 if TYPE_CHECKING:
     from ..schema import AnalysisPlan, ResearchContext
@@ -45,7 +46,7 @@ class PlanRequirementCoverageRecord(BaseModel):
     source_ref: str = Field(min_length=3, max_length=512)
     status: RequirementCoverageStatus
     owner_step_ids: tuple[str, ...] = ()
-    delivery_kind: Optional[DeliverableKind] = Field(default=None, exclude_if=lambda value: value is None)
+    delivery_kind: Optional[DeliverableKind | PlanDeliverableKind] = Field(default=None, exclude_if=lambda value: value is None)
     statement_ref: Optional[str] = Field(
         default=None, min_length=3, max_length=512, exclude_if=lambda value: value is None,
     )

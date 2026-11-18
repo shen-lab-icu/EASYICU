@@ -406,6 +406,33 @@ const runFilesApi = {
     gate_detail_cause_code: 'executor_runtime_failure', gate_detail_step_id: '02_baseline',
     gate_detail_step_title: 'Describe score by arm' };
   const question = { id: 'q', role: 'user', text: '问题', complete: true };
+  const stopOwnerDir = path.dirname(path.resolve(files.find(file => file.endsWith('screens-guided-pi-run-stop.js'))));
+  require(path.join(stopOwnerDir, 'screens-guided-pi-confirmation-data.js'));
+  require(path.join(stopOwnerDir, 'screens-guided-pi-confirmation.js'));
+  for (language of ['zh', 'en']) {
+    window.EU_LANG = language;
+    for (const nextAction of ['question_requirement_not_covered', 'failed_pipeline_requires_fresh_plan']) {
+      const failed = nextAction === 'failed_pipeline_requires_fresh_plan';
+      const run = { ...workflowFailure, gate_reason_code: failed
+        ? 'research_pipeline_progressive_compile_failed' : 'human_plan_review_required',
+        run_status: failed ? 'failed' : 'human_review_pending',
+        gate_detail_code: 'progressive_unknown_variable',
+        plan_repair: { repairs: 2, limit: 2, outcome: 'budget_exhausted' } };
+      const workflow = { next_action_code: nextAction, runs: [run], plan_review_summary: { run_id: run.run_id } };
+      const owner = modules.require('confirmation').create({ tr, esc, iconHtml, runFailureText, workflow: () => workflow,
+        resourceButton: () => '', session: () => ({ binding: {} }), sessionIsStale: () => false, busy: () => false });
+      const panel = conversation([question, { role: 'saved_run', savedRuns: [run] }], {
+        workflow, workflowConfirmation: owner.workflowConfirmation, workflowConfirmationHtml: owner.workflowConfirmationHtml,
+      });
+      const body = panel.split('data-gpi-log>')[1];
+      assert.equal(count(body, 'data-gpi-confirm-action'), 1);
+      assert.equal(count(body, '<section class="gpi-confirmation'), 1);
+      assert.doesNotMatch(body, /data-gpi-run-stop=|data-gpi-aside-pending/);
+      assert.match(visible(body), /2\/2/);
+    }
+  }
+  language = 'zh';
+  window.EU_LANG = language;
   for (const catalogLoaded of [false, true]) {
     const messages = catalogLoaded ? [question, { role: 'saved_run', savedRuns: [workflowFailure] }] : [question];
     const panel = conversation(messages, { workflow: { runs: [workflowFailure] } });

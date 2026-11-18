@@ -256,9 +256,9 @@ def test_each_requirement_reads_with_its_disposition_reason_and_source(
         ],
         [
             "r5 · 指定估计量或指标：「its net benefit」",
-            "这份计划做不到 · 不能批准",
-            "规划的说明：This plan cannot estimate net benefit at named thresholds.",
-            "规划声明，EasyICU 无法核对",
+            "没有回答 · 不能批准",
+            "EasyICU 未能核实草案所称的能力缺口",
+            "EasyICU 已核实",
         ],
         [
             "r6 · 定义：「septic shock」",
@@ -332,7 +332,7 @@ def test_only_the_judgment_of_the_plan_under_review_says_approval_stops(
         "已回答",
         "计划声明已回答",
         "没有回答",
-        "这份计划做不到",
+        "没有回答",
         "只用于定义",
     ]
 

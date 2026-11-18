@@ -172,7 +172,7 @@ def test_host_delivery_is_approvable_but_a_scientific_gap_still_blocks(quote, al
     )
     offers = host_decision_offers(snapshot, study=study, latest_run=run, plan_review_authority=review)
     assert (offers.plan_review is not None) is allowed
-    assert snapshot.next_action_code == ("operator_plan_approval_required" if allowed else _GAP)
+    assert snapshot.next_action_code == ("operator_plan_approval_required" if allowed else _NOT_COVERED)
 
 
 @pytest.mark.parametrize("reason", _STOPS)
@@ -457,7 +457,8 @@ def test_each_record_opens_in_the_conversation_with_every_field_it_holds(
     run_dir.mkdir()
     record = _written_records(run_dir)[name]
     # What a reader needs to see why the plan stopped is in the record.
-    (gap,) = [row for row in record["judged"] if row["disposition"] == "capability_gap"]
+    (gap,) = [row for row in record["judged"] if row["claimed_coverage"] == "capability_gap"]
+    assert (gap["disposition"], gap["gap_verification"]) == ("not_covered", "unverifiable")
     assert (gap["quote"], gap["gap"]["detail"]) == (
         _ASKED[1]["quote"],
         _ASKED[1]["gap"]["detail"],

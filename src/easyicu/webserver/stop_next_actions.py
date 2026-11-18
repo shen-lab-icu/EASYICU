@@ -442,6 +442,14 @@ def safe_stop_coordinates(payload: Any) -> dict[str, Any]:
         result["step_id"] = step
     if type(payload.get("question_required")) is bool:
         result["question_required"] = payload["question_required"]
+    if isinstance(repair := payload.get("plan_repair"), Mapping):
+        from easyicu.research_agent.orchestration.plan_repair import PLAN_REPAIR_LIMIT
+
+        used, limit, outcome = (repair.get(key) for key in ("repairs", "limit", "outcome"))
+        if (type(used) is int and type(limit) is int and 0 < used <= limit <= PLAN_REPAIR_LIMIT
+                and outcome in ("repeated_failure", "budget_exhausted")
+                and (outcome != "budget_exhausted" or used == limit)):
+            result["plan_repair"] = {"repairs": used, "limit": limit, "outcome": outcome}
     retries = payload.get("transport_retries")
     if type(retries) is int and 0 <= retries <= 32:
         result["transport_retries"] = retries

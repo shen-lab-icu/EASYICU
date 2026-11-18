@@ -655,9 +655,9 @@ def test_a_record_with_only_verified_answers_adds_nothing_to_the_card() -> None:
     assert _notes_html(None) == ""
 
 
-def _card_html(notes: Mapping[str, Any], code: str) -> str:
+def _card_html(notes: Mapping[str, Any], code: str, *, repair=None, language="zh") -> str:
     script = r"""
-global.window = { EU_LANG: 'zh' };
+global.window = { EU_LANG: process.argv[7] };
 require(process.argv[1]);
 const path = require('node:path');
 const ownerDir = path.dirname(process.argv[3]);
@@ -665,18 +665,32 @@ require(path.join(ownerDir, 'screens-guided-pi-modules.js'));
 require(process.argv[2]);
 require(path.join(ownerDir, 'screens-guided-pi-confirmation-data.js'));
 require(process.argv[3]);
+require(path.join(ownerDir, 'screens-guided-pi-run-stop.js'));
 const summary = { run_id: 'run-requirements', question_requirements: JSON.parse(process.argv[4]) };
+const repair = JSON.parse(process.argv[6]);
+const failure = process.argv[5] === 'failed_pipeline_requires_fresh_plan';
+const run = { run_id: summary.run_id, authoritative: true, run_ref: 'r-one', plan_repair: repair,
+  run_status: failure ? 'failed' : 'human_review_pending',
+  gate_reason_code: failure ? 'research_pipeline_progressive_compile_failed' : 'human_review_required',
+};
+const workflow = () => ({ next_action_code: process.argv[5], plan_review_summary: summary, runs: [run] });
+const tr = (en, zh) => window.EU_LANG === 'en' ? en : zh || en;
 const owner = window.EasyICU.guidedPi.require('confirmation').create({
-  tr: (en, zh) => zh || en,
+  tr,
   esc: window.EU_HTML.esc,
   iconHtml: () => '',
   resourceButton: resource => `<a data-resource="${resource.artifact}"></a>`,
   sessionIsStale: () => false,
   busy: () => false,
   session: () => ({ binding: { run_id: 'run-requirements' } }),
-  workflow: () => ({ next_action_code: process.argv[5], plan_review_summary: summary }),
+  workflow,
+  runFailureText: () => 'typed-host-check',
 });
-process.stdout.write(owner.workflowConfirmationHtml());
+const stop = window.EasyICU.guidedPi.require('runStop').create({
+  tr, workflow, runFailureText: () => 'typed-host-check', canAct: () => true,
+  hasRecovery: () => Boolean(owner.workflowConfirmation()),
+});
+process.stdout.write(stop.render({ savedRuns: [run] }) + owner.workflowConfirmationHtml());
 """
     result = run_node(
         _node(),
@@ -686,6 +700,8 @@ process.stdout.write(owner.workflowConfirmationHtml());
         str((STATIC / "js" / "screens-guided-pi-confirmation.js").resolve()),
         json.dumps(notes),
         code,
+        json.dumps(repair),
+        language,
         check=False,
     )
     assert result.returncode == 0, result.stderr or result.stdout
@@ -735,3 +751,27 @@ def test_the_blocks_record_link_is_a_full_size_control() -> None:
     )
 
     assert rule is not None and int(rule.group(1)) >= 24
+
+
+@pytest.mark.parametrize("language", ["en", "zh"])
+@pytest.mark.parametrize(
+    ("code", "repairs", "outcome"),
+    [
+        ("question_requirement_not_covered", 1, "repeated_failure"),
+        ("failed_pipeline_requires_fresh_plan", 2, "budget_exhausted"),
+    ],
+)
+def test_plan_repair_stop_is_one_inline_card_with_a_primary_action(language, code, repairs, outcome):
+    html = _card_html(
+        _notes(), code, repair={"repairs": repairs, "limit": 2, "outcome": outcome}, language=language,
+    )
+    assert html.count('<section class="gpi-confirmation') == 1
+    assert 'data-gpi-run-stop=' not in html
+    assert html.count('data-gpi-confirm-action') == 1
+    assert 'class="btn primary sm" type="button" data-gpi-confirm-action>' in html
+    assert f"{repairs}/2" in html
+    if code == "failed_pipeline_requires_fresh_plan":
+        assert html.count("typed-host-check") == 1
+        assert ("Generate a fresh plan" if language == "en" else "重新生成新计划") in html
+    else:
+        assert ("Generate fresh plan" if language == "en" else "重新生成计划") in html

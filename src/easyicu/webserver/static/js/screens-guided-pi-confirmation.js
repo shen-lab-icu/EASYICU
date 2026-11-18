@@ -261,16 +261,22 @@
           approve: tr('Generate a fresh research plan', '重新生成研究计划'),
         };
       }
+      const repairStop = window.EasyICU.guidedPi.optional('runStop')?.repairStopText?.(
+        (workflow.runs || []).find(run => run && run.authoritative)?.plan_repair, tr,
+      );
       if (code === 'failed_pipeline_requires_fresh_plan') return {
         code, grants: ['provider_run', 'literature'], hideEdit: true,
         message: tr(
           'Keep the failed planning attempt and the previous candidate plan as history. Start a fresh Research Agent planning run from the current study configuration, and pause for my review before analysis.',
           '保留失败的规划尝试和上一版候选计划作为历史。请按当前研究配置启动一次新的 Research Agent 规划，并在分析前停下让我审核。',
         ),
-        title: providerFailure ? tr('Plan generation paused because the model service did not respond', '模型服务暂时未响应，计划生成已暂停') : planContractExhausted
+        title: providerFailure ? tr('Plan generation paused because the model service did not respond', '模型服务暂时未响应，计划生成已暂停') : repairStop || planContractExhausted
           ? tr('Plan generation did not finish', '计划生成未完成')
           : tr('The previous research task did not complete', '上次科研任务未完成'),
-        note: providerFailure ? tr(
+        note: repairStop ? `${repairStop} ${tr(
+          'Review the failure receipt or generate a fresh plan for review.',
+          '请查看失败回执，或重新生成计划后审阅。',
+        )}` : providerFailure ? tr(
           'Transient timeouts are retried once automatically. If the service remains unavailable, use the action below to generate a new plan later. Analysis has not started.',
           '短暂超时会自动重试一次。服务仍未恢复时，请稍后使用下方操作重新生成计划。分析尚未开始。',
         ) : planContractExhausted
@@ -283,9 +289,11 @@
         // A stopped run's cause is said once, by its run-stop block in the
         // conversation right above this card; a job that failed before any
         // run existed has no such block, so the card says it.
-        reason: failedRun ? '' : failureReason,
+        reason: failedRun && !repairStop ? '' : failureReason,
         reviewMaterialsTitle: tr('Read-only outputs from the failed-closed run', '失败关闭运行的只读产物'),
-        reviewResources: historicalRunId ? [
+        reviewResources: repairStop && failedRun ? [
+          { kind: 'research_artifact', run_id: failedRun.run_id, artifact: 'source_run_manifest.json', label: window.EU_PRODUCT_LABELS?.stopAction('receipt', tr), media_type: 'application/json' },
+        ] : historicalRunId ? [
           { kind: 'research_report', run_id: historicalRunId, artifact: 'full_analysis_report.json', label: tr('Preview complete analysis report', '预览完整分析报告'), media_type: 'application/json' },
           { kind: 'research_report', run_id: historicalRunId, artifact: 'article_report.json', label: tr('Preview article report with figures', '预览含图文章报告'), media_type: 'application/json' },
           { kind: 'research_report', run_id: historicalRunId, artifact: 'technical_report.json', label: tr('Preview technical analysis report', '预览技术分析报告'), media_type: 'application/json' },
@@ -525,10 +533,10 @@
           '保留当前候选计划作为审阅记录。请按当前研究配置重新生成候选计划，并在分析前再次停下让我审核。',
         ),
         title: tr('This plan does not answer an analysis the question asks for', '题面要求的一项分析，这份计划没有回答'),
-        note: tr(
+        note: [repairStop, tr(
           'This plan cannot be approved, and no analysis has started. Generate the plan again. To change what the question asks, say so in the conversation first.',
           '这份计划不能批准，分析尚未开始。请重新生成计划。如果要改题面的要求，请先在对话中说明。',
-        ),
+        )].filter(Boolean).join(' '),
         approve: tr('Generate fresh plan', '重新生成计划'),
         reviewMaterialsTitle: tr('View the plan and review evidence', '查看计划与审阅依据'),
         reviewResources: questionStopResources,
@@ -540,10 +548,10 @@
           '保留当前候选计划作为审阅记录。请按当前研究配置重新生成候选计划，并在分析前再次停下让我审核。',
         ),
         title: tr('Planning found an analysis the question asks for that this plan cannot do', '规划发现：题面要求的一项分析，这份计划做不到'),
-        note: tr(
+        note: [repairStop, tr(
           'This plan cannot be approved, and no analysis has started. Revise or drop that requirement in the conversation, or generate the plan again; unless the question changes, a new plan may stop here again.',
           '这份计划不能批准，分析尚未开始。可以在对话中修改或去掉这项要求，或重新生成计划；题面不改的话，新计划可能还会停在这里。',
-        ),
+        )].filter(Boolean).join(' '),
         approve: tr('Generate fresh plan', '重新生成计划'),
         reviewMaterialsTitle: tr('View the plan and review evidence', '查看计划与审阅依据'),
         reviewResources: questionStopResources,

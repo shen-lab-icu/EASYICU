@@ -59,6 +59,21 @@
       : Array.isArray(run && run.next_actions) ? run.next_actions : [];
   }
 
+  function repairStopText(receipt, tr) {
+    if (!receipt || !Number.isInteger(receipt.repairs) || !Number.isInteger(receipt.limit)
+      || receipt.repairs < 1 || receipt.repairs > receipt.limit) return '';
+    const count = `${receipt.repairs}/${receipt.limit}`;
+    if (receipt.outcome === 'repeated_failure') return tr(
+      `EasyICU tried automatic plan repair (${count}). The same check failed again.`,
+      `EasyICU 已尝试自动修订计划（${count} 次），同一项检查仍未通过。`,
+    );
+    if (receipt.outcome === 'budget_exhausted') return tr(
+      `EasyICU tried all allowed automatic plan repairs (${count}). The plan still did not pass its checks.`,
+      `EasyICU 已用完自动修订次数（${count} 次），计划仍未通过检查。`,
+    );
+    return '';
+  }
+
   function create(deps) {
     const tr = deps.tr;
     const runFailureText = typeof deps.runFailureText === 'function' ? deps.runFailureText : () => '';
@@ -129,12 +144,19 @@
     }
 
     function render(row) {
-      const runs = (Array.isArray(row && row.savedRuns) ? row.savedRuns : []).filter(stopped);
-      return runs.map(run => `<div class="gpi-run-stop" role="note" data-gpi-run-stop="${esc(run.run_ref || '')}"><p>${esc(cause(run))}</p>${actions(run)}</div>`).join('');
+      const workflow = typeof deps.workflow === 'function' ? deps.workflow() : {};
+      const latest = typeof deps.latestRun === 'function' ? deps.latestRun() : null;
+      const runs = (Array.isArray(row && row.savedRuns) ? row.savedRuns : []).filter(run => stopped(run)
+        && !(run.plan_repair && workflow.next_action_code === 'failed_pipeline_requires_fresh_plan'
+          && currentRun(run, workflow, latest) && deps.canAct?.() && deps.hasRecovery?.()));
+      return runs.map(run => {
+        const message = [repairStopText(run.plan_repair, tr), cause(run)].filter(Boolean).join(' ');
+        return `<div class="gpi-run-stop" role="note" data-gpi-run-stop="${esc(run.run_ref || '')}"><p>${esc(message)}</p>${actions(run)}</div>`;
+      }).join('');
     }
 
     return Object.freeze({ render, stopped });
   }
 
-  window.EasyICU.guidedPi.declare('runStop', { create, stopped, actionRoute, currentRun, offeredActions });
+  window.EasyICU.guidedPi.declare('runStop', { create, stopped, actionRoute, currentRun, offeredActions, repairStopText });
 })();

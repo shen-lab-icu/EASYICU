@@ -133,6 +133,7 @@ from .requirement_coverage import (
     RequirementCoverageStatus,
     concept_relatives,
 )
+from .requirement_typing.delivery import planned_delivery_evidence, requested_plan_deliverables
 
 QUESTION_REQUIREMENTS_SCHEMA_VERSION = "easyicu.question_requirements/1"
 QUESTION_REQUIREMENTS_FILENAME = "question_requirements.json"
@@ -210,7 +211,9 @@ QUESTION_REQUIREMENTS_GUIDE = (
     "Quote only the requested outputs, keeping scientific requirements "
     "separate. The host covers these outputs independently of analysis steps; never "
     "declare them infeasible because the statistical plan does not generate files. "
-    "For other requirements use deliverable_kinds=[]."
+    "For other requirements use deliverable_kinds=[]. Quote generic requests for study design, "
+    "methods and reporting separately from named scientific methods or data. The host checks "
+    "each generic request against the typed owners actually present in this plan."
     " Split compound analysis requirements into clauses, each quoting a distinct part of "
     "the requirement's quote; use clauses=[] for an atomic requirement. "
     "Only kind=analysis may carry non-empty clauses; all other kinds use clauses=[]. "
@@ -959,6 +962,14 @@ def _judge_clauses(
     rows = []
     digest = analysis_plan_sha256(plan) if host_facts else ""
     for index, clause in enumerate(clauses):
+        planned = requested_plan_deliverables(clause) if not item.concepts else ()
+        if planned:
+            delivery = planned_delivery_evidence(planned, plan=plan)
+            rows.append({
+                "quote": clause, "disposition": "covered" if delivery else "not_covered",
+                "evidence": {**delivery, "source_ref": "analysis_plan.json"} if delivery else None,
+            })
+            continue
         # A bare "units" inherits the previous window's subject; another
         # variable's unit statement must not accidentally answer this clause.
         sources = [
@@ -1136,7 +1147,14 @@ def _judge(
     host_facts: Sequence[Mapping[str, Any]],
     sealed: Sequence[str],
 ) -> JudgedRequirement:
+    planned = (
+        requested_plan_deliverables(item.quote)
+        if item.kind in {"analysis", "delivery"} and not item.concepts and not item.analysis_exposures
+        and not (item.gap and item.gap.concept) else ()
+    )
     delivery = requirement_delivery_coverage(item)
+    if planned and delivery is None:
+        delivery = planned_delivery_evidence(planned, plan=plan)
     if delivery is not None:
         return JudgedRequirement(
             item, "covered", HOST_DELIVERY_REASON, host_judged=True,
@@ -1153,6 +1171,10 @@ def _judge(
             item, "covered" if complete else "not_covered",
             "question_methods_clauses_covered" if complete else QUESTION_REQUIREMENT_APPROVAL_STOPS["not_covered"],
             host_judged=True, clauses=clauses,
+        )
+    if planned and item.gap is None:
+        return JudgedRequirement(
+            item, "not_covered", QUESTION_REQUIREMENT_APPROVAL_STOPS["not_covered"], host_judged=True,
         )
     denoted = [relatives(concept) for concept in item.concepts]
     analysing = [
@@ -1252,17 +1274,8 @@ def _judge(
                 reading_step_ids=reading,
             )
     if item.gap is not None:
-        verification, fact = check_gap(item.gap)
-        return JudgedRequirement(
-            item,
-            "capability_gap",
-            "question_requirement_capability_gap_declared",
-            gap=item.gap,
-            verification=verification,
-            fact=fact,
-            reading_step_ids=reading,
-        )
-    if actions is None and all(
+        return _declared_gap_verdict(item, check_gap=check_gap, reading=reading)
+    if item.kind != "delivery" and actions is None and all(
         any(columns & reads(step) for step in analysing) for columns in denoted
     ):
         # Reading its concepts is not doing the analysis the question names.
@@ -1274,6 +1287,20 @@ def _judge(
         "not_covered",
         QUESTION_REQUIREMENT_APPROVAL_STOPS["not_covered"],
         reading_step_ids=reading,
+    )
+
+
+def _declared_gap_verdict(
+    item: QuestionRequirement, *, check_gap: GapCheck, reading: tuple[str, ...],
+) -> JudgedRequirement:
+    assert item.gap is not None
+    verification, fact = check_gap(item.gap)
+    verified = verification == "verified"
+    return JudgedRequirement(
+        item,
+        "capability_gap" if verified else "not_covered",
+        "question_requirement_capability_gap_declared" if verified else QUESTION_REQUIREMENT_APPROVAL_STOPS["not_covered"],
+        host_judged=True, gap=item.gap, verification=verification, fact=fact, reading_step_ids=reading,
     )
 
 
@@ -1338,16 +1365,7 @@ def _judge_effect_measure(
                 ),
                 reading_step_ids=reading,
             )
-        verification, fact = check_gap(item.gap)
-        return JudgedRequirement(
-            item,
-            "capability_gap",
-            "question_requirement_capability_gap_declared",
-            gap=item.gap,
-            verification=verification,
-            fact=fact,
-            reading_step_ids=reading,
-        )
+        return _declared_gap_verdict(item, check_gap=check_gap, reading=reading)
     return JudgedRequirement(
         item,
         "not_covered",
@@ -1781,7 +1799,9 @@ def _stated(entry: JudgedRequirement) -> str:
                 f"Primary: {choice['primary_exposure']}; additional: "
                 + ", ".join(choice["additional_exposures"]) + ".")
     why = (
-        entry.gap.detail
+        (entry.fact or "the host did not verify the declared capability gap")
+        if entry.gap is not None and entry.verification != "verified"
+        else entry.gap.detail
         if entry.gap is not None and entry.gap.detail
         else f"no primary step reports a {item.effect_measure.replace('_', ' ')}"
         if item.effect_measure is not None
@@ -1898,9 +1918,9 @@ def judge_recorded_requirements(
 
     The same rules judge it, reading nothing of the study but what the record
     carries, so the judgment cannot drift with later changes to the study.  A
-    scientific gap keeps the verdict it was given: it is a check of the study,
-    not of the plan. Host delivery is resolved against the current export
-    contract, including for older records that declared it infeasible.
+    scientific gap keeps the host's recorded verdict. The judgment also reads
+    the current plan's own delivery owners and the export contract, including
+    for older records that declared delivery infeasible.
     A record that cannot be read is refused with
     :data:`UNREADABLE_REASON`.
     """
