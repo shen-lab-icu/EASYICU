@@ -555,6 +555,15 @@
         reviewMaterialsTitle: tr('View the plan and review evidence', '查看计划与审阅依据'),
         reviewResources: questionStopResources,
       };
+      if (code === 'first_result_delivery_requires_article') return {
+        code, grants: [], nonApprovable: true, clarification: true,
+        editLabel: tr('Revise in the conversation', '在对话里修改'),
+        title: tr('The requested deliverables require an article run', '所请求的交付物需要在论文任务中生成'),
+        note: tr(
+          'Revise the question to remove the article deliverables from this analysis-only run, or start a separate article run to keep them.',
+          '请修改研究问题，从本次仅分析任务中去掉论文交付要求。如需保留这些要求，请另行启动论文任务。',
+        ),
+      };
       if (code === 'question_requirement_capability_gap') return {
         code, grants: ['provider_run', 'literature'],
         message: tr(
@@ -944,11 +953,12 @@
       )
         ? planConversationHtml(planPreview)
         : '';
-      const displayedTitle = review && review.deferred_input_scope
+      const deliveryConflict = confirmation.code === 'first_result_delivery_requires_article';
+      const displayedTitle = !deliveryConflict && review && review.deferred_input_scope
         ? deferredScopeRejected ? tr('The plan’s data-read scope is not verified', '计划的数据读取范围尚未核验')
           : tr('Review the complete plan and data-read scope', '审阅完整计划与数据读取范围')
         : firstDecisionCopy ? firstDecisionCopy.cardTitle : confirmation.title;
-      const displayedNote = review && review.deferred_input_scope ? ''
+      const displayedNote = !deliveryConflict && review && review.deferred_input_scope ? ''
         : firstDecisionCopy ? firstDecisionCopy.context : confirmation.note;
       const profileName = String(review && review.submission_profile_ref || '').split('/')[0];
       const desktopProfile = ['desktop_first_result_dev', 'desktop_first_result_live_pubmed_dev'].includes(profileName)
@@ -1423,6 +1433,9 @@
       const trial = window.EasyICU.guidedPi.optional('targetTrial');
       const trialDraft = trial ? trial.changeDraft(workflow, tr) : '';
       if (trialDraft) return trialDraft;
+      if (workflow.next_action_code === 'first_result_delivery_requires_article') return tr(
+        'I want to revise the requested deliverables for this run: ', '我想修改本次任务的交付要求：',
+      );
       if (workflow.next_action_code === 'question_requirement_not_covered'
         && asksForExposureChoice(workflow.plan_review_summary)) return tr(
         'For this study, analyse these exposures as follows: ',

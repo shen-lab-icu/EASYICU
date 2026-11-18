@@ -413,3 +413,35 @@ assert.match(typed, /gpi-past-decision/);
   console.error(error);
   process.exitCode = 1;
 });
+
+test('a first-result delivery conflict prompts for a revision inside the main log', () => {
+  const html = pendingDecisionHtml({
+    next_action_code: 'first_result_delivery_requires_article',
+    plan_review_summary: { run_id: 'shift-recovery-plan', deferred_input_scope: { verified: false } },
+  });
+  const log = html.slice(html.indexOf('data-gpi-log'), html.indexOf('data-gpi-input'));
+  assert.match(log, /data-gpi-confirm-edit[^>]*>Revise in the conversation<\/button>/);
+  assert.match(log, /separate article run/);
+  assert.doesNotMatch(log, /data-gpi-confirm-action/);
+});
+
+test('a current plan whose requirement record is unreadable can be regenerated from the main log', () => {
+  const html = pendingDecisionHtml({
+    next_action_code: 'question_requirements_unreadable',
+    plan_review_summary: { run_id: 'interrupted-shift-plan' },
+  });
+  const log = html.slice(html.indexOf('data-gpi-log'), html.indexOf('data-gpi-input'));
+  assert.match(log, /data-gpi-confirm-action[^>]*>Generate fresh plan<\/button>/);
+});
+
+test('a pending cohort-source decision from the plan stage is inline after a literature turn', () => {
+  const code = 'plan_icd_source_unverified';
+  const html = pendingDecisionHtml({
+    next_action_code: code,
+    stages: [{ id: 'plan', status: 'review_required', reason_code: code }],
+    plan_review_summary: { run_id: 'cohort-source-plan', finding_codes: ['HOST_ICD_SOURCE_UNVERIFIED'] },
+  });
+  const log = html.slice(html.indexOf('data-gpi-log'), html.indexOf('data-gpi-input'));
+  assert.match(log, /data-gpi-confirm-edit[^>]*>Change cohort<\/button>/);
+  assert.doesNotMatch(log, /data-gpi-confirm-action/);
+});

@@ -738,8 +738,12 @@ def _pending_review_reason_code(
 ) -> str:
     """Project one precise current-policy reason for the paused plan."""
 
+    from easyicu.research_agent.planning.approval_stops import FIRST_RESULT_DELIVERY_STOP
+
     payload = request.payload if isinstance(request.payload, Mapping) else {}
     explicit_reason = _clean_text(payload.get("reason"), 160)
+    if explicit_reason == FIRST_RESULT_DELIVERY_STOP:
+        return explicit_reason
     # A current host policy must remain visible even when the older review
     # cannot be displayed and the plan also has other independent problems.
     if host_icd_source_required and not scientific_plan_review:
@@ -4369,10 +4373,10 @@ def _failed_closed_detail(axes: Mapping[str, Any]) -> Optional[Dict[str, Any]]:
 
 
 def _gate_from_axes(axes: Mapping[str, Any], *, pending: bool) -> Dict[str, Any]:
-    from easyicu.research_agent.reporting.completion import completion_outcomes
+    from easyicu.research_agent.reporting.completion import completion_outcomes, host_delivery_checks_apply
 
     outcomes = completion_outcomes(axes, pending=pending)
-    delivery_failure = axes.get("host_delivery_failure") if not pending else None
+    delivery_failure = axes.get("host_delivery_failure") if not pending and host_delivery_checks_apply(axes) else None
     analysis_complete = outcomes["analysis_outcome"]["status"] == "completed"
     status = "analysis_only" if analysis_complete and not delivery_failure else "blocked"
     reason = delivery_failure or (
@@ -5210,12 +5214,18 @@ def _write_projection(
     )
     evidence_count = len(evidence_index) if isinstance(evidence_index, list) else 0
     from easyicu.research_agent.contracts.product_files import host_delivery_owners
+    from easyicu.research_agent.reporting.completion import host_delivery_checks_apply
 
-    delivery_active = run_dir is not None and pending is None and not blocked_reason
+    delivery_active = (
+        run_dir is not None and pending is None and not blocked_reason and host_delivery_checks_apply(axes)
+    )
+    planned_pdf = "manuscript_pdf" in host_delivery_owners(plan)
     try:
-        pdf_receipt, manuscript_documents = _validated_manuscript_documents(run_dir)
+        pdf_receipt, manuscript_documents = _validated_manuscript_documents(
+            None if planned_pdf and not delivery_active else run_dir
+        )
     except ResearchPipelineRunError:
-        if not delivery_active or "manuscript_pdf" not in host_delivery_owners(plan):
+        if not planned_pdf:
             raise
         pdf_receipt, manuscript_documents = None, []
     if delivery_active:

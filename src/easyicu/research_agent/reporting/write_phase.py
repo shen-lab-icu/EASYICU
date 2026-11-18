@@ -2978,9 +2978,9 @@ def _append_deferred_source_flow(
 
 
 def _record_host_deliveries(
-    *, plan: AnalysisPlan, run_dir: Path, run_id: str, bound: str, published: set[str],
+    *, plan: AnalysisPlan, run_dir: Path, bound: str, published: set[str],
 ) -> None:
-    """Record the outputs of this invocation of the manuscript producer."""
+    """Record this producer's outputs under the persisted run directory's identity."""
     from ..authority.evidence_store import _atomic_write_text
     from ..canonical_json import canonical_sha256
     from ..contracts.product_files import (
@@ -3006,7 +3006,7 @@ def _record_host_deliveries(
                 if not (
                     isinstance(provenance, dict) and provenance.get("schema_version") == "easyicu.manuscript-provenance/1"
                     and provenance.get("manuscript_sha256") == digests["manuscript_scaffold_bound.md"]
-                    and provenance.get("delivery_run_id") == run_id
+                    and provenance.get("delivery_run_id") == run_dir.name
                     and provenance.get("delivery_plan_sha256") == plan_sha256
                 ):
                     continue
@@ -3027,7 +3027,7 @@ def _record_host_deliveries(
         deliveries[kind] = {"step_id": step_id, "sha256_by_artifact": digests}
     payload = {
         "schema_version": HOST_DELIVERY_RECEIPT_SCHEMA,
-        "run_id": run_id, "plan_sha256": plan_sha256,
+        "run_id": run_dir.name, "plan_sha256": plan_sha256,
         "deliveries": deliveries,
     }
     _atomic_write_text(run_dir / HOST_DELIVERY_RECEIPT, json.dumps(payload, sort_keys=True), expected_root=run_dir)
@@ -3491,7 +3491,7 @@ def _publish_and_audit_manuscript(
             repro_envelope=repro_envelope, run_dir=run_dir, context=context,
         )
     if requested:
-        _record_host_deliveries(plan=plan, run_dir=run_dir, run_id=run_id, bound=bound, published=written)
+        _record_host_deliveries(plan=plan, run_dir=run_dir, bound=bound, published=written)
 
 
 def _run_drafting_reviewer_round(

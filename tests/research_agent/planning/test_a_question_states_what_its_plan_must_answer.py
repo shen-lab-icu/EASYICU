@@ -1707,3 +1707,33 @@ def test_m1_grouping_a_methods_list_into_one_clause_does_not_hide_a_missing_memb
     row = _clause_judgment([stated, item])[-1]
     assert row.disposition == "not_covered"
     assert [clause["quote"] for clause in row.clauses if clause["disposition"] == "not_covered"] == ["units"]
+
+
+@pytest.mark.parametrize("question, quote, kinds", [
+    ("Compare recovery with and without chronic lung disease, and please export a PDF.",
+     "please export a PDF", ("manuscript_pdf",)),
+    ("比较不同班次的康复情况，请提供在线预览、PDF和参考文献清单。",
+     "请提供在线预览、PDF和参考文献清单", ("article_preview", "manuscript_pdf", "references")),
+    ("Describe afternoon recovery, and do not provide a PDF.", None, ()),
+    ("比较不同班次的康复情况，不要提供PDF。", None, ()),
+])
+def test_a_delivery_clause_agrees_with_its_judged_plan_owner(question, quote, kinds):
+    from easyicu.research_agent.planning.requirement_typing.delivery import bind_requested_host_delivery
+
+    context = _context(named=False).model_copy(update={"research_question": question})
+    claims = [] if quote is None else [{"id": "r1", "kind": "delivery", "quote": quote, "coverage": "plan"}]
+    result = _planned(context, claims)
+    # The final planning boundary also rebinds from the original user question.
+    plan = bind_requested_host_delivery(result.output, question=question)
+    owners = {step.host_delivery_kind: step.step_id for step in plan.steps if step.host_delivery_kind}
+    assert tuple(owners) == kinds
+    judged = judge_question_requirements(
+        result.facts.question_requirements, plan=plan, family_template=True,
+        relatives=concept_relatives(context), check_gap=_host_check(context), question=question,
+    )
+    if quote is None:
+        assert judged == ()
+    else:
+        (row,) = judged
+        assert row.disposition == "covered"
+        assert row.delivery["owner_step_ids_by_kind"] == {kind: [owner] for kind, owner in owners.items()}

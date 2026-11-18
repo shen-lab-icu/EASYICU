@@ -28,7 +28,7 @@ def requirement(quote, *, disposition="not_covered", requirement_id="r1", **extr
     }
 
 
-def run_script(tmp_path, *script):
+def run_script(tmp_path, *script, check_failure=None):
     from easyicu.research_agent.orchestration.plan_repair import (
         check_plan_requirements_for_repair,
         planning_repair_prompt,
@@ -60,7 +60,7 @@ def run_script(tmp_path, *script):
         return {}
 
     def result():
-        return run_plan_with_repairs(run, check_failure=classify, notify=notices.append)
+        return run_plan_with_repairs(run, check_failure=check_failure or classify, notify=notices.append)
 
     return result, prompts, notices
 
@@ -885,3 +885,53 @@ def test_host_delivery_uses_the_users_question_over_a_planner_rephrasing(draft_q
     plan = AnalysisPlan(research_question=draft_question, steps=[])
     bound = bind_requested_host_delivery(plan, question=user_question)
     assert [step.host_delivery_kind for step in bound.steps] == expected
+
+
+def test_a_gap_error_can_be_repaired_by_a_verified_delivery_owner(tmp_path):
+    from types import SimpleNamespace
+
+    from easyicu.research_agent.agents.family_spec_planner import check_question_requirement_gaps
+    from easyicu.research_agent.planning.requirement_typing.delivery import bind_requested_host_delivery
+    from easyicu.research_agent.schema import CohortDescriptor, ResearchContext
+    from easyicu.webserver.agent_pipeline_runs import _repairable_plan_check
+
+    quote = "Export an online preview."
+    context = ResearchContext(
+        research_question=quote, variables=[],
+        cohort=CohortDescriptor(cohort_name="synthetic", database="miiv", n_stays=0),
+    )
+    claim = QuestionRequirement(
+        id="r1", kind="analysis", quote=quote, coverage="capability_gap",
+        gap={"requirement": "design_element_unsupported", "concept": "temp",
+             "element": "analysis", "detail": "The draft claims body temperature is unavailable."},
+    )
+    with pytest.raises(ProgressivePlanCompileError) as caught:
+        check_question_requirement_gaps(SimpleNamespace(question_requirements=[claim]), context=context)
+    assert caught.value.reason_code == "progressive_capability_gap_claim_unverified"
+    fixed = QuestionRequirement(id="r2", kind=claim.kind, quote=quote, coverage="plan")
+    plan = bind_requested_host_delivery(AnalysisPlan(research_question=quote, steps=[]))
+    (judged,) = judge_question_requirements(
+        [fixed], plan=plan, family_template=True, relatives=lambda _: frozenset(),
+        check_gap=lambda _: pytest.fail("the repaired delivery does not assert a gap"),
+    )
+    assert judged.disposition == "covered"
+    assert judged.delivery["owner_step_ids_by_kind"] == {"article_preview": [plan.steps[0].step_id]}
+    reason = "operator_plan_approval_required"
+    result, prompts, notices = run_script(
+        tmp_path, caught.value, ([judged.row()], reason), check_failure=_repairable_plan_check,
+    )
+    assert result() == (reason, None)
+    assert '"deliverable_kinds":["article_preview"]' in prompts[1]
+    assert notices == [1]
+
+
+def test_an_unverified_gap_can_gain_clauses_when_the_repair_covers_them(tmp_path):
+    quote = "State the sampling interval and the measurement units"
+    claim = requirement(quote, kind="analysis", disposition="capability_gap", gap_verification="unverified")
+    fixed = requirement(quote, kind="analysis", disposition="covered", clauses=[
+        {"quote": "the sampling interval", "disposition": "covered"},
+        {"quote": "the measurement units", "disposition": "covered"},
+    ])
+    result, _, notices = run_script(tmp_path, ([claim], GAP), ([fixed], "operator_plan_approval_required"))
+    assert result() == ("operator_plan_approval_required", None)
+    assert notices == [1]

@@ -1315,9 +1315,13 @@ def _declared_gap_verdict(
     )
 
 
-def requirement_delivery_kinds(item: QuestionRequirement) -> Sequence[DeliverableKind]:
+def requirement_delivery_kinds(
+    item: QuestionRequirement, *, ignore_gap_concept: bool = False,
+) -> Sequence[DeliverableKind]:
     """Identify a delivery-only claim so the current plan can be checked."""
-    if item.concepts or item.analysis_exposures or (item.gap is not None and item.gap.concept is not None):
+    if item.concepts or item.analysis_exposures:
+        return ()
+    if not ignore_gap_concept and item.gap is not None and item.gap.concept is not None:
         return ()
     # Stored untyped requirements need a conservative compatibility reader.
     return item.deliverable_kinds or (

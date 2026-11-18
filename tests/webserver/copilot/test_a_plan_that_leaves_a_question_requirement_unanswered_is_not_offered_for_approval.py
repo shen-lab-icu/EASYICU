@@ -509,3 +509,16 @@ def test_each_record_opens_in_the_conversation_with_every_field_it_holds(
     # The run file projection withholds no field and the browser projection
     # drops none: the conversation shows the record as written.
     assert opened["payload"] == record
+
+
+def test_a_first_result_delivery_stop_survives_web_review_policy():
+    reason = "first_result_delivery_requires_article"
+    request = SimpleNamespace(payload={"reason": reason, "approval_allowed": False})
+    projected = agent_pipeline_runs._pending_review_reason_code(
+        request=request, plan_recommendation_complete=False, scientific_plan_review={},
+    )
+    assert projected == reason
+    workflow, offers = _workflow(complete_study(), ["plan_scientific_changes_required", projected])
+    assert workflow.next_action_code == reason
+    assert workflow.plan_execution_ready is False
+    assert "plan_execution" not in offers

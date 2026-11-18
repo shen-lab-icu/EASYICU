@@ -55,7 +55,7 @@ from ..contracts.runtime import (
     PlanPhaseResult,
     WritePhaseResult,
 )
-from ..planning.approval_stops import judged_on_plan_under_review
+from ..planning.approval_stops import FIRST_RESULT_DELIVERY_STOP, first_result_delivery_stop, judged_on_plan_under_review
 from ..schema import AnalysisPlan, PipelineResult
 
 
@@ -342,6 +342,7 @@ def human_review_requests_for_plan(
     evidence: Any = None,
     execution_authority: ReviewExecutionAuthority | Mapping[str, Any] | None = None,
     require_plan_review: bool = False,
+    question: str | None = None,
 ) -> tuple[HumanReviewRequest, ...]:
     """Derive the review requests a completed plan phase implies.
 
@@ -361,6 +362,12 @@ def human_review_requests_for_plan(
         findings = judged_on_plan_under_review(
             findings or (), plan=plan, run_dir=Path(root)
         )
+    delivery_stop = (
+        first_result_delivery_stop(plan, question)
+        if isinstance(plan, AnalysisPlan) else None
+    )
+    if delivery_stop is not None:
+        findings = [delivery_stop, *(findings or ())]
     reviewable: list[tuple[Any, str, str, Mapping[str, Any]]] = []
     for finding in findings or ():
         # Severity is the run's own statement about whether the state blocks.
@@ -433,6 +440,7 @@ def human_review_requests_for_plan(
             "top_journal_candidate": detail.get("top_journal_candidate"),
             "finding_codes": list(detail.get("finding_codes") or ()),
             "review_evidence_id": detail.get("review_evidence_id"),
+            **({"deliverable_kinds": detail["deliverable_kinds"]} if reason == FIRST_RESULT_DELIVERY_STOP else {}),
             "user_authorization_requests": list(
                 detail.get("user_authorization_requests") or ()
             ),
@@ -461,7 +469,7 @@ def human_review_requests_for_plan(
         seen.add(request.review_id)
         requests.append(request)
 
-    if root is not None:
+    if root is not None and delivery_stop is None:
         from .plan_repair import check_plan_requirements_for_repair
 
         check_plan_requirements_for_repair(Path(root), requests)

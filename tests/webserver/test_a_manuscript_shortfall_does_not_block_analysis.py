@@ -181,7 +181,7 @@ def test_a_promised_host_deliverable_without_a_current_artifact_fails_closed(tmp
     ("manuscript_pdf", "manuscript_scaffold.pdf", "Export a manuscript PDF."),
     ("references", "manuscript_scaffold.bib", "Include a bibliography."),
 ])
-@pytest.mark.parametrize("change", ["none", "empty", "digest", "run", "plan"])
+@pytest.mark.parametrize("change", ["none", "output_name", "missing", "empty", "digest", "run", "plan"])
 def test_the_writer_delivers_only_the_current_run_plan_and_artifact(tmp_path, monkeypatch, kind, name, question, change):
     from easyicu.research_agent.authority.evidence_store import EvidenceStore
     from easyicu.research_agent.contracts.product_files import HOST_DELIVERY_RECEIPT, HOST_DELIVERY_SOURCES
@@ -235,30 +235,39 @@ def test_the_writer_delivers_only_the_current_run_plan_and_artifact(tmp_path, mo
             pipeline, bound=bound, bound_path=bound_path, context=SimpleNamespace(research_question=question),
             plan=plan, current_verified_evidence_records=[], evidence=evidence, findings=[], literature=literature,
             manuscript_authors=None, manuscript_title=None, per_step_records=[], repro_envelope=None,
-            run_dir=run_dir, run_id=run_dir.name,
+            run_dir=run_dir, run_id="run-shift-recovery" if change == "output_name" else run_dir.name,
             emit_progress=lambda *args, **kwargs: None,
         )
         receipt = run_dir / HOST_DELIVERY_RECEIPT
-        assert json.loads(receipt.read_text())["deliveries"][kind]["step_id"] == step.step_id
+        recorded = json.loads(receipt.read_text())
+        assert recorded["run_id"] == run_dir.name
+        assert recorded["deliveries"][kind]["step_id"] == step.step_id
         if change in {"run", "plan"}:
             altered = json.loads(receipt.read_text())
             field = "run_id" if change == "run" else "plan_sha256"
             altered[field] = "different-run" if change == "run" else "f" * 64
             receipt.write_text(json.dumps(altered))
         source = run_dir / HOST_DELIVERY_SOURCES[kind][-1]
-        if change == "empty":
+        if change == "missing":
+            primary_source = {
+                "article_preview": "manuscript_scaffold_bound.md",
+                "manuscript_pdf": "manuscript_scaffold.pdf",
+                "references": "manuscript_scaffold.bib",
+            }[kind]
+            (run_dir / primary_source).unlink()
+        elif change == "empty":
             source.write_bytes(b"")
         elif change == "digest":
             source.write_bytes(source.read_bytes() + b" ")
         apply_host_delivery_completion(axes, plan=plan, run_dir=run_dir)
-        if change != "none":
+        if change not in {"none", "output_name"}:
             assert axes["completion_status"] == "diagnostic_only"
             assert axes["host_delivery_failure"] == f"research_pipeline_{kind}_delivery_unverified"
 
     result = _project(tmp_path, plan=plan, prepare=prepare, manuscript_ready=True, evidence_complete=True)
     gate = result["gate"]
     wrapper = tmp_path / "wrapper"
-    if change != "none":
+    if change not in {"none", "output_name"}:
         assert gate["status"] == "blocked"
         assert gate["reason"] == f"research_pipeline_{kind}_delivery_unverified"
         if kind == "article_preview":
@@ -273,3 +282,35 @@ def test_the_writer_delivers_only_the_current_run_plan_and_artifact(tmp_path, mo
         loaded = read_run_artifact_bytes(str(wrapper), name)
         assert loaded["ok"], loaded
         assert any(row["name"] == name and row["bytes"] for row in result["artifacts"])
+
+
+@pytest.mark.parametrize("change, status, manuscript", [
+    ({"execution_complete": False, "failed_steps": [{"step_id": "summary", "status": "failed"}]}, "blocked",
+     {"status": "not_passed", "reason_code": "execution_complete_not_satisfied"}),
+    ({"execution_complete": False, "missing_steps": ["summary"]}, "blocked",
+     {"status": "not_passed", "reason_code": "execution_complete_not_satisfied"}),
+    ({"analysis_validated": False}, "blocked",
+     {"status": "not_passed", "reason_code": "analysis_validated_not_satisfied"}),
+    ({"manuscript_requested": False}, "analysis_only", {"status": "not_requested", "reason_code": None}),
+])
+def test_delivery_checks_follow_execution_analysis_and_writer_policy(tmp_path, change, status, manuscript):
+    plan = AnalysisPlan(research_question="Export a PDF of the shift summary.", steps=[
+        AnalysisStep(step_id="summary", intent="Summarize recovery by ward"),
+        AnalysisStep(step_id="pdf", intent="Typeset the summary", host_delivery_kind="manuscript_pdf"),
+    ])
+
+    def prepare(run_dir, axes):
+        axes["completion_status"] = status
+        apply_host_delivery_completion(axes, plan=plan, run_dir=run_dir)
+        assert axes["completion_status"] == status
+        assert "host_delivery_failure" not in axes
+        assert "host_delivery_steps" not in axes
+        # Older persisted gates may already have a stale delivery failure.
+        axes["host_delivery_failure"] = "research_pipeline_manuscript_pdf_delivery_unverified"
+        assert completion_outcomes(axes)["manuscript_outcome"] == manuscript
+
+    gate = _project(tmp_path, plan=plan, prepare=prepare, **change)["gate"]
+    assert gate["status"] == status
+    assert gate["manuscript_outcome"] == manuscript
+    assert gate["reason"] != "research_pipeline_manuscript_pdf_delivery_unverified"
+    assert "host_delivery_steps" not in gate

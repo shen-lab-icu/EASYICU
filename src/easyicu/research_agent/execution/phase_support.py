@@ -1742,7 +1742,7 @@ def _step_maybe_replan(
     )
     normalized_candidate = normalize_replan_candidate(
         current_plan=scientific_plan,
-        candidate_plan=revised,
+        candidate_plan=revised.model_copy(update={"steps": revised.execution_steps}),
         completed_records=completed_records or [],
         context=context,
         max_total_steps=pipeline._max_total_steps,

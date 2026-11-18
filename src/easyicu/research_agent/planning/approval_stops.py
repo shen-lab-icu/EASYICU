@@ -20,6 +20,8 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Iterable
 
+from ..contracts.claim_ceiling import first_result
+from ..contracts.product_files import requested_host_delivery_kinds
 from ..schema import AnalysisPlan, ValidationFinding
 from .population_compile import POPULATION_APPROVAL_STOPS
 from .question_requirements import (
@@ -27,11 +29,35 @@ from .question_requirements import (
     question_requirements_on_plan_under_review,
 )
 
+FIRST_RESULT_DELIVERY_STOP = "first_result_delivery_requires_article"
+
 PLAN_APPROVAL_STOPS: tuple[str, ...] = (
+    FIRST_RESULT_DELIVERY_STOP,
     *POPULATION_APPROVAL_STOPS.values(),
     "population_criterion_decision_unconfirmed",
     *QUESTION_REQUIREMENT_STOP_CODES,
 )
+
+
+def first_result_delivery_stop(plan: AnalysisPlan, question: str | None = None) -> ValidationFinding | None:
+    """Keep the desktop analysis profile sealed when the question needs the Writer."""
+    if not first_result(plan):
+        return None
+    kinds = requested_host_delivery_kinds(plan.research_question if question is None else question)
+    if not kinds:
+        return None
+    return ValidationFinding(
+        validator="question_requirements",
+        severity="error",
+        message=(
+            "Analysis-only first results cannot produce the requested article deliverables. "
+            "Revise the request in the conversation, or start a separate article run."
+        ),
+        detail={
+            "reason": FIRST_RESULT_DELIVERY_STOP, "deliverable_kinds": list(kinds),
+            "human_review_required": True, "approval_allowed": False,
+        },
+    )
 
 
 def judged_on_plan_under_review(

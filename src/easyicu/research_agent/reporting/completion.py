@@ -71,6 +71,16 @@ def invalid_plan_execution_status(plan: AnalysisPlan | None) -> dict[str, Any] |
     return None
 
 
+def host_delivery_checks_apply(axes: Mapping[str, Any]) -> bool:
+    """Reach delivery only after validated analysis, including on legacy gates."""
+    return (
+        axes.get("execution_complete") is True
+        and axes.get("analysis_validated") is True
+        and axes.get("plan_truncated") is not True
+        and axes.get("manuscript_requested") is not False
+    )
+
+
 def completion_outcomes(
     axes: Mapping[str, Any], *, pending: bool = False,
 ) -> dict[str, Any]:
@@ -95,10 +105,10 @@ def completion_outcomes(
     )
     if pending:
         manuscript = ManuscriptOutcome(status="pending")
-    elif reason := axes.get("host_delivery_failure"):
-        manuscript = ManuscriptOutcome(status="not_passed", reason_code=reason)
     elif axes.get("manuscript_requested") is False:
         manuscript = ManuscriptOutcome(status="not_requested")
+    elif host_delivery_checks_apply(axes) and (reason := axes.get("host_delivery_failure")):
+        manuscript = ManuscriptOutcome(status="not_passed", reason_code=reason)
     elif (
         analysis.status == "completed" and axes.get("manuscript_ready") is True
         and axes.get("evidence_complete") is True and axes.get("numeric_verified") is True
@@ -131,7 +141,9 @@ def apply_host_delivery_completion(gates: dict[str, Any], *, plan: AnalysisPlan 
     from ..canonical_json import canonical_sha256
     from ..contracts.product_files import host_delivery_failure_code, host_delivery_owners, verified_host_deliveries
 
-    if plan is None or not any(getattr(step, "host_delivery_kind", None) for step in plan.steps):
+    if not host_delivery_checks_apply(gates) or plan is None:
+        return
+    if not any(step.host_delivery_kind for step in plan.steps):
         return
     payload = plan.model_dump(mode="json")
     owners = host_delivery_owners(payload)

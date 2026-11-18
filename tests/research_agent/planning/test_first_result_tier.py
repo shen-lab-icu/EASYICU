@@ -373,3 +373,52 @@ def test_first_result_landmark_compiles_with_stated_requirements():
     assert attempt.output.design_selection.execution_tier == "first_result"
     assert {"measurement_audit", "ordinal_trend", "robustness_replay"} <= {step.step_id for step in attempt.output.steps}
     assert not any(step.step_id.endswith("_functional_form") for step in attempt.output.steps)
+
+
+@pytest.mark.parametrize("request_text, kind", [
+    ("Please export a typeset copy.", "manuscript_pdf"),
+    ("Please include a browser preview.", "article_preview"),
+    ("请提供参考文献清单。", "references"),
+])
+def test_first_result_routes_a_requested_article_delivery_before_approval(tmp_path, request_text, kind):
+    from easyicu.research_agent.authority.evidence_store import EvidenceStore
+    from easyicu.research_agent.orchestration.workflow import human_review_requests_for_plan
+    from easyicu.research_agent.planning.requirement_typing.delivery import bind_requested_host_delivery
+
+    question = f"Summarize the observation window. {request_text}"
+    draft = plan().model_copy(update={"research_question": question})
+    bound = bind_requested_host_delivery(draft)
+    (review,) = human_review_requests_for_plan(
+        findings=[], plan=bound, require_plan_review=True, evidence=EvidenceStore(tmp_path),
+    )
+    assert review.payload["reason"] == "first_result_delivery_requires_article"
+    assert review.payload["approval_allowed"] is False
+    assert review.payload["deliverable_kinds"] == [kind]
+    assert not any(step.host_delivery_kind for step in bound.steps)
+
+
+def test_first_result_pipeline_checks_the_user_question_before_reviewing_a_legacy_delivery_step(tmp_path):
+    from easyicu.research_agent.orchestration.config import PipelineConfig
+    from easyicu.research_agent.pipeline import RUN_INPUT_CAPSULE_EVIDENCE_ID, _pipeline_run___human_review_invoker
+
+    user_question = "Compare night-shift recovery, and include a bibliography."
+    legacy = plan(steps=[AnalysisStep(
+        step_id="bibliography", intent="Deliver the source list", host_delivery_kind="references",
+    )])
+    capsule = SimpleNamespace(evidence_id=RUN_INPUT_CAPSULE_EVIDENCE_ID, sha256="c" * 64)
+    evidence = SimpleNamespace(root=tmp_path, get=lambda name: capsule if name == capsule.evidence_id else None,
+                               verified_records=lambda: [capsule])
+    draft = SimpleNamespace(
+        context=context().model_copy(update={"research_question": user_question}),
+        plan=legacy, evidence=evidence, findings=[], resume_state={},
+    )
+    pipeline = SimpleNamespace(
+        _config=PipelineConfig(workdir=tmp_path, execution_tier="first_result", require_human_plan_review=True),
+        _submission_profile_name=None, _capability_runtime=SimpleNamespace(activation=None),
+    )
+    reviewed = []
+    (review,) = _pipeline_run___human_review_invoker(draft, reviewed_plan=reviewed, self=pipeline)
+    assert reviewed == [draft]
+    assert review.payload["reason"] == "first_result_delivery_requires_article"
+    assert review.payload["deliverable_kinds"] == ["references"]
+    assert review.payload["approval_allowed"] is False

@@ -2249,6 +2249,7 @@ def _compute_readiness_gates(
         ),
         **scientific_maturity_gates,
         "manuscript_generated": manuscript_generated,
+        "manuscript_requested": not (stop_after_analysis or writer_probe_mode),
         **manuscript_text_gate,
         "writer_probe_mode": bool(writer_probe_mode),
         **publication_provenance,

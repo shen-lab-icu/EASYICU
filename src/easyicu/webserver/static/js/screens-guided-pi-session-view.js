@@ -367,10 +367,13 @@
       const showProjectContinuationCards = !workspace && !lightweight && !freshTask && !ideaExplorationTurn;
       const sourceDecision = DATA_CONSENT?.requiresConfirmation?.(session);
       const workflow = state.workflow || {};
-      const openPlanReview = [
-        'operator_plan_approval_required', 'plan_execution_upgrade_required', 'plan_scientific_changes_required',
-        'question_requirement_not_covered', 'question_requirement_capability_gap',
-      ].includes(workflow.next_action_code);
+      const planStage = workflow.stages?.find(stage => stage.id === 'plan');
+      const openPlanReview = (planStage?.status === 'review_required' && planStage.reason_code === workflow.next_action_code)
+        || [
+          'operator_plan_approval_required', 'plan_execution_upgrade_required', 'plan_scientific_changes_required',
+          'question_requirement_not_covered', 'question_requirement_capability_gap', 'question_requirements_unreadable',
+          'first_result_delivery_requires_article',
+        ].includes(workflow.next_action_code);
       const pendingDecision = sourceDecision
         || (openPlanReview && Boolean(workflow.plan_decision || workflow.plan_review_summary?.run_id))
         || Object.values(workflow.host_decisions || {}).some(Boolean) || [

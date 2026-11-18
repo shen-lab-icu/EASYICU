@@ -7174,8 +7174,12 @@ def _pipeline_run___review_evidence_store(
 
 def _pipeline_run___human_review_invoker(plan_result, *, reviewed_plan: Any, self: Any):
     from .orchestration.workflow import human_review_requests_for_plan
+    from .planning.approval_stops import first_result_delivery_stop
 
-    require_host_plan_before_review(self, plan_result.plan, run_dir=host_plan_review_root(plan_result))
+    question = getattr(getattr(plan_result, "context", None), "research_question", None)
+    delivery_stop = first_result_delivery_stop(plan_result.plan, question)
+    if delivery_stop is None:
+        require_host_plan_before_review(self, plan_result.plan, run_dir=host_plan_review_root(plan_result))
     reviewed_plan.append(plan_result)
     plan_evidence = getattr(plan_result, "evidence", None)
     capsule_record = (
@@ -7184,7 +7188,8 @@ def _pipeline_run___human_review_invoker(plan_result, *, reviewed_plan: Any, sel
         else None
     )
     if (
-        getattr(plan_result, "resume_state", None) is not None
+        delivery_stop is None
+        and getattr(plan_result, "resume_state", None) is not None
         and capsule_record is not None
     ):
         evidence_root = getattr(plan_evidence, "root", None)
@@ -7222,6 +7227,7 @@ def _pipeline_run___human_review_invoker(plan_result, *, reviewed_plan: Any, sel
             plan=plan_result.plan,
             evidence=plan_evidence,
             require_plan_review=self._config.require_human_plan_review,
+            question=question,
         )
         if not requests_without_execution:
             return requests_without_execution
@@ -7250,6 +7256,7 @@ def _pipeline_run___human_review_invoker(plan_result, *, reviewed_plan: Any, sel
         evidence=plan_evidence,
         execution_authority=execution_authority,
         require_plan_review=self._config.require_human_plan_review,
+        question=question,
     )
     return requests
 

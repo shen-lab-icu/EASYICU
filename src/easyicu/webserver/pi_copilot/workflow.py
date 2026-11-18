@@ -14,7 +14,7 @@ from typing import Any, Dict, List, Literal, Mapping, Optional, Sequence
 
 from pydantic import BaseModel, ConfigDict, Field, ValidationError
 
-from easyicu.research_agent.planning.approval_stops import PLAN_APPROVAL_STOPS
+from easyicu.research_agent.planning.approval_stops import FIRST_RESULT_DELIVERY_STOP, PLAN_APPROVAL_STOPS
 from easyicu.webserver import agent_pipeline_runs, agent_runs, jobs, sources
 from easyicu.webserver import host_action_starting
 from easyicu.webserver.host_action_contracts import (
@@ -846,7 +846,9 @@ def build_research_workflow_snapshot(
         != "planner_canary"
     )
     live_plan_reason = (
-        "plan_icd_source_unverified"
+        FIRST_RESULT_DELIVERY_STOP
+        if FIRST_RESULT_DELIVERY_STOP in active_plan_review_codes
+        else "plan_icd_source_unverified"
         if "plan_icd_source_unverified" in active_plan_review_codes
         else "agent_plan_revision_nonconvergent"
         if "agent_plan_revision_nonconvergent" in active_plan_review_codes
@@ -869,7 +871,7 @@ def build_research_workflow_snapshot(
     )
     plan_review_reason_code = (
         "plan_scientific_changes_required"
-        if choices_pending
+        if choices_pending and live_plan_reason != FIRST_RESULT_DELIVERY_STOP
         else live_plan_reason
         if plan_review_pending
         else "plan_configuration_superseded"

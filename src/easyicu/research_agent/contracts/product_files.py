@@ -208,7 +208,7 @@ HOST_DELIVERY_KINDS: tuple[HostDeliveryKind, ...] = ("article_preview", "manuscr
 _DELIVERY_SENTENCE_BOUNDARY = re.compile(r"[。？！?!；;\n]+|\.(?!\d)")
 _DELIVERY_REQUEST_BOUNDARY = re.compile(
     r"(?:,\s*|\band\s+)(?=(?:please\s+)?(?:provide|include|deliver|give\s+me|export|generate)\b)"
-    r"|并(?=请?(?:提供|包含|交付|导出|生成))",
+    r"|(?:[，,]\s*(?:并\s*)?|并\s*)(?=请?(?:提供|包含|交付|导出|生成))",
     re.IGNORECASE,
 )
 _DELIVERY_NEGATION = re.compile(r"\b(?:no|not|never|without|don't)\b|(?:无需|不必|不要|不需要|不用)", re.IGNORECASE)
@@ -219,9 +219,9 @@ def requested_host_delivery_kinds(question: str) -> tuple[HostDeliveryKind, ...]
     """Read whole affirmative delivery clauses using the stored-quote grammar."""
     kinds = set()
     for sentence in _DELIVERY_SENTENCE_BOUNDARY.split(question):
-        if _DELIVERY_NEGATION.search(sentence):
-            continue
         for clause in _DELIVERY_REQUEST_BOUNDARY.split(sentence):
+            if _DELIVERY_NEGATION.search(clause):
+                continue
             stated = requested_deliverable_kinds(clause)
             if len(stated) <= 1 or not _DELIVERY_ALTERNATIVE.search(clause):
                 kinds.update(stated)

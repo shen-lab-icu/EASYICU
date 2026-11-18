@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING, Literal, Sequence
 
+from ...contracts.claim_ceiling import first_result
 from ...contracts.descriptive_execution import exposure_outcome_distribution_execution_verdict
 from ...contracts.model_terms import PreparationRefusal, preparation_for_step
 from ...contracts.primary_cohort import primary_analysis_cohort_producer_uses_universe
@@ -137,8 +138,12 @@ def bind_requested_host_delivery(plan: AnalysisPlan, *, question: str | None = N
     """Append the requested terminal steps to the scientific plan."""
     from ...schema import AnalysisStep
 
-    kinds = requested_host_delivery_kinds(plan.research_question if question is None else question)
     executable = plan.execution_steps
+    if first_result(plan):
+        # The approval gate names the delivery conflict using the user question.
+        kinds = ()
+    else:
+        kinds = requested_host_delivery_kinds(plan.research_question if question is None else question)
     if not kinds and len(executable) == len(plan.steps):
         return plan
     used_ids = {step.step_id for step in executable}

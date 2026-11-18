@@ -3,13 +3,14 @@
 from __future__ import annotations
 
 import json
-from collections import Counter, defaultdict
+from collections import defaultdict
 from contextvars import ContextVar
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Callable, Literal, Mapping, NotRequired, Sequence, TypeVar, TypedDict
 
 from ..authority.plan_review import HumanReviewRequest
+from ..contracts.product_files import requested_deliverable_kinds
 from ..planning.progressive_contract import ProgressivePlanCompileError
 from ..planning.question_quote import normalize_question_quote
 from ..planning.question_requirements import (
@@ -20,7 +21,7 @@ from ..providers.structured_retry import automatic_retry_limit
 
 PLAN_REPAIR_LIMIT = 2
 _T = TypeVar("_T")
-_RequirementKey = tuple[str, str, tuple[str, ...], str, tuple[str, ...]]
+_RequirementKey = tuple[str, str, tuple[str, ...], str]
 
 
 class PlanRepairReceipt(TypedDict):
@@ -44,12 +45,37 @@ class _RequirementRepair(TypedDict):
 
 
 def _requirement_key(row: Mapping[str, Any]) -> _RequirementKey:
-    clauses = row.get("clause_quotes") or [clause["quote"] for clause in row.get("clauses", ())]
     return (
         normalize_question_quote(row["quote"]), row.get("kind") or "",
         tuple(sorted(row.get("deliverable_kinds") or ())), row.get("effect_measure") or "",
-        tuple(sorted(map(normalize_question_quote, clauses))),
     )
+
+
+@dataclass(frozen=True)
+class _ObservedRequirement:
+    feedback: _RequirementRepair
+    clauses: frozenset[str]
+    verified: bool
+
+
+def _unmatched_requirements(
+    previous: Sequence[_ObservedRequirement], current: Sequence[_ObservedRequirement],
+) -> list[_RequirementRepair]:
+    """Match distinct siblings, allowing a later judgment to add clauses."""
+    assigned: dict[int, int] = {}
+
+    def match(index: int, seen: set[int]) -> bool:
+        prior = previous[index]
+        for position, row in enumerate(current):
+            if position in seen or (prior.verified and not row.verified) or not prior.clauses <= row.clauses:
+                continue
+            seen.add(position)
+            if position not in assigned or match(assigned[position], seen):
+                assigned[position] = index
+                return True
+        return False
+
+    return [row.feedback for index, row in enumerate(previous) if not match(index, set())]
 
 
 def plan_repair_receipt(error: BaseException) -> PlanRepairReceipt | None:
@@ -95,9 +121,7 @@ class _RetryPlan(Exception):
 class _Repair:
     limit: int
     history: list[_Feedback] = field(default_factory=list)
-    required: dict[_RequirementKey, list[_RequirementRepair]] = field(default_factory=dict)
-    row_counts: Counter[_RequirementKey] = field(default_factory=Counter)
-    verified_counts: Counter[_RequirementKey] = field(default_factory=Counter)
+    observed: list[dict[_RequirementKey, list[_ObservedRequirement]]] = field(default_factory=list)
     receipt: PlanRepairReceipt | None = None
     planner_started: bool = False
 
@@ -139,14 +163,13 @@ def check_plan_requirements_for_repair(run_dir: Path, requests: Sequence[HumanRe
     if state is None or not state.planner_started:
         return
     reasons = {request.payload.get("reason") for request in requests}
-    if not state.required and not reasons.intersection(QUESTION_REQUIREMENT_APPROVAL_STOPS.values()):
+    if not state.observed and not reasons.intersection(QUESTION_REQUIREMENT_APPROVAL_STOPS.values()):
         return
     path = run_dir / QUESTION_REQUIREMENTS_REVIEW_FILENAME
     record = json.loads(path.read_text(encoding="utf-8")) if path.is_file() else {}
     rows = record.get("judged", ())
-    present: Counter[_RequirementKey] = Counter()
-    verified: Counter[_RequirementKey] = Counter()
-    unresolved: dict[_RequirementKey, list[_RequirementRepair]] = defaultdict(list)
+    present: dict[_RequirementKey, list[_ObservedRequirement]] = defaultdict(list)
+    unresolved: list[_RequirementRepair] = []
     for row in rows:
         if row.get("exposure_choice"):
             continue  # This changes the estimand and requires a human choice.
@@ -154,42 +177,46 @@ def check_plan_requirements_for_repair(run_dir: Path, requests: Sequence[HumanRe
         host_verified = row.get("verified_by_host") is True
         uncovered = row["disposition"] == "not_covered" and host_verified
         unverified_gap = row["disposition"] == "capability_gap" and verdict != "verified"
-        key = _requirement_key(row)
-        if host_verified:
-            verified[key] += 1
-        if host_verified or unverified_gap:
-            present[key] += 1
+        if not (host_verified or unverified_gap):
+            continue
+        kinds = row.get("deliverable_kinds")
+        if kinds is None and row.get("kind") in {"analysis", "delivery"} and not row.get("concepts"):
+            # A bad gap can attach a concept to an otherwise delivery-only
+            # quote. The check's verdict cannot redefine the requested output.
+            kinds = requested_deliverable_kinds(row["quote"])
+        clauses = tuple(clause["quote"] for clause in row.get("clauses", ()))
+        feedback: _RequirementRepair = {
+            "requirement_id": row["id"], "quote": row["quote"], "gap": row.get("gap"),
+            "host_verdict": verdict or row["disposition"], "host_fact": row.get("gap_fact"),
+            **({"reason_code": row["reason_code"]} if row.get("reason_code") else {}),
+            **({"kind": row["kind"]} if row.get("kind") else {}),
+            **({"deliverable_kinds": kinds} if kinds else {}),
+            **({"effect_measure": row["effect_measure"]} if row.get("effect_measure") else {}),
+            "clause_quotes": clauses,
+            "uncovered_clauses": tuple(
+                clause["quote"] for clause in row.get("clauses", ())
+                if clause["disposition"] == "not_covered"
+            ),
+        }
+        key = _requirement_key(feedback)
+        if key[0]:
+            present[key].append(_ObservedRequirement(
+                feedback, frozenset(map(normalize_question_quote, clauses)), host_verified,
+            ))
         if uncovered or unverified_gap:
-            unresolved[key].append({
-                "requirement_id": row["id"], "quote": row["quote"], "gap": row.get("gap"),
-                "host_verdict": verdict or "not_covered", "host_fact": row.get("gap_fact"),
-                **({"reason_code": row["reason_code"]} if row.get("reason_code") else {}),
-                **({"kind": row["kind"]} if row.get("kind") else {}),
-                **({"deliverable_kinds": row["deliverable_kinds"]} if row.get("deliverable_kinds") else {}),
-                **({"effect_measure": row["effect_measure"]} if row.get("effect_measure") else {}),
-                "clause_quotes": tuple(clause["quote"] for clause in row.get("clauses", ())),
-                "uncovered_clauses": tuple(
-                    clause["quote"] for clause in row.get("clauses", ())
-                    if clause["disposition"] == "not_covered"
-                ),
-            })
-    omitted = []
-    for key, prior in state.required.items():
-        missing_count = max(
-            state.row_counts[key] - present[key],
-            state.verified_counts[key] - verified[key],
-        )
-        omitted.extend(prior[min(index, len(prior) - 1)] for index in range(missing_count))
-    state.row_counts |= present
-    state.verified_counts |= verified
-    # An extra effect measure with no quote can be removed when the host
-    # confirms the user never requested it.
-    state.required.update({key: items for key, items in unresolved.items() if key[0]})
-    pending = (*(item for items in unresolved.values() for item in items), *omitted)
-    if not pending:
+            unresolved.append(feedback)
+    omitted_by_key: dict[_RequirementKey, list[_RequirementRepair]] = {}
+    for snapshot in state.observed:
+        for key, previous in snapshot.items():
+            missing = _unmatched_requirements(previous, present.get(key, ()))
+            if len(missing) > len(omitted_by_key.get(key, ())):
+                omitted_by_key[key] = missing
+    omitted = [item for missing in omitted_by_key.values() for item in missing]
+    if not unresolved and not omitted:
         return
-    feedback = _Feedback(QUESTION_REQUIREMENT_APPROVAL_STOPS["not_covered"], pending)
+    feedback = _Feedback(QUESTION_REQUIREMENT_APPROVAL_STOPS["not_covered"], (*unresolved, *omitted))
     if state.retry(feedback):
+        state.observed.append(present)
         raise _RetryPlan()
     if omitted:
         error = ProgressivePlanCompileError(
@@ -208,8 +235,8 @@ def _check_feedback(check: Mapping[str, Any], state: _Repair) -> _Feedback:
     if requirement is not None:
         key = _requirement_key(requirement)
         if key[0]:
-            state.required.setdefault(key, [requirement])
-            state.row_counts[key] = max(state.row_counts[key], 1)
+            clauses = frozenset(map(normalize_question_quote, requirement.get("clause_quotes") or ()))
+            state.observed.append({key: [_ObservedRequirement(requirement, clauses, False)]})
         rows = (requirement,)
     return _Feedback(str(check["reason_code"]), requirements=rows, check=receipt)
 
