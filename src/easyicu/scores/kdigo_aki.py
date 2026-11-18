@@ -165,11 +165,10 @@ def kdigo_component_sources_for_path(
 
     if data_path is None or not Path(data_path).is_dir():
         return None
-    from easyicu.datasource import ICUDataSource
-    from easyicu.resources import load_data_sources
+    from easyicu.datasource import ICUDataSource, registered_source_config
 
     try:
-        config = load_data_sources().get(database)
+        config = registered_source_config(database)
     except KeyError:
         return None
     return kdigo_component_sources(ICUDataSource(config, base_path=data_path))

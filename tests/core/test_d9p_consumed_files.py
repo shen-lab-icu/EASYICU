@@ -28,7 +28,7 @@ import pandas as pd
 import pytest
 
 from easyicu.config import DataSourceRegistry
-from easyicu.datasource import FilterOp, FilterSpec, ICUDataSource, _sic_cases_relation_sql
+from easyicu.datasource import ICUDataSource, _sic_cases_relation_sql
 from easyicu.storage_binding import (
     StorageSourceChanged,
     binding_unit,
@@ -42,49 +42,17 @@ from easyicu.storage_layout import (
     declared_view_chain,
     read_consumed_log,
 )
-
-_SERVICES = pd.DataFrame({
-    "ROW_ID": [1, 2], "SUBJECT_ID": [10, 11], "HADM_ID": [100, 101],
-    "TRANSFERTIME": ["2100-01-01 00:00:00", "2100-01-02 00:00:00"],
-    "CURR_SERVICE": ["MED", "SURG"],
-})
-_ICUSTAYS = pd.DataFrame({
-    "subject_id": [10, 11], "hadm_id": [100, 101], "icustay_id": [1000, 1001],
-    "intime": pd.to_datetime(["2100-01-01", "2100-01-02"]),
-    "outtime": pd.to_datetime(["2100-01-03", "2100-01-04"]),
-})
-
+from tests.support.mimic_storage import (
+    ICUSTAYS as _ICUSTAYS,
+    SERVICES as _SERVICES,
+    conversion_manifest as _manifest,
+    converted_mimic as _converted_mimic,
+    load_services as _services,
+)
 
 def _config(name: str):
     path = Path(__file__).resolve().parents[2] / "src/easyicu/data/data-sources.json"
     return DataSourceRegistry.from_json(path).get(name)
-
-
-def _manifest(root: Path, tables: dict[str, int], **extra) -> Path:
-    entries = [
-        {"table": t, "row_count": rows,
-         "outputs": [{"relative_path": f"{t}.parquet",
-                      "size_bytes": (root / f"{t}.parquet").stat().st_size}]}
-        for t, rows in tables.items()
-    ]
-    path = root / "conversion_manifest.json"
-    path.write_text(json.dumps({"schema_version": "easyicu.conversion_manifest/1",
-                                "tables": entries, **extra}))
-    return path
-
-
-def _converted_mimic(root: Path, csv_target: Path | None = None) -> Path:
-    """A converted MIMIC-III install: services as Parquet and as CSV beside it."""
-    root.mkdir(parents=True)
-    _SERVICES.to_parquet(root / "services.parquet", index=False)
-    _ICUSTAYS.to_parquet(root / "icustays.parquet", index=False)
-    if csv_target is None:
-        _SERVICES.to_csv(root / "SERVICES.csv.gz", index=False)
-    else:
-        _SERVICES.to_csv(csv_target, index=False)
-        (root / "SERVICES.csv.gz").symlink_to(csv_target)
-    _manifest(root, {"services": 2, "icustays": 2})
-    return root
 
 
 def _explicit_csv_source(root, *, enable_cache=True):
@@ -94,13 +62,6 @@ def _explicit_csv_source(root, *, enable_cache=True):
         root / "SERVICES.csv.gz", None, table_name="services", disk_loader=True,
     ))
     return source
-
-
-def _services(source):
-    return source.load_table(
-        "services", columns=["hadm_id", "curr_service"],
-        filters=[FilterSpec(column="hadm_id", op=FilterOp.IN, value=[100])],
-    ).data
 
 
 def _touch(path: Path) -> None:

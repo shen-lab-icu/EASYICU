@@ -10,7 +10,6 @@ import httpx
 import pytest
 
 from easyicu.hosted_gateway import proxy as proxy_module
-from tests.webserver.hosted_gateway.test_proxy import instances  # noqa: F401  (fixture)
 
 
 def _flaky_send(monkeypatch, *, failures, error=httpx.RemoteProtocolError):

@@ -19,9 +19,13 @@ from pathlib import Path
 import pandas as pd
 import pytest
 
-from tests.core.test_r13_formal_isolated_retry_origin import HOOK as RETRY_HOOK
-from tests.core.test_r13_formal_tool_identity import _git, _stage, receipt
-from tests.core.test_r13_formal_input_snapshot import _manifest as input_manifest
+from tests.support.formal_tools import (
+    RETRY_HOOK,
+    git as _git,
+    input_manifest,
+    stage_formal_tools as _stage,
+    tool_identity_receipt as receipt,
+)
 
 REPO = Path(__file__).resolve().parents[2]
 BASE = "162d847d8c73f08c51cf303222e2b060172be110"
@@ -230,7 +234,7 @@ def test_no_overlay_is_null_and_exports_match_base(main_runs):
 def test_no_overlay_rest_of_receipt_is_byte_identical_to_base(tmp_path, monkeypatch):
     # Same fixed synthetic input/output records, same code/tool identity and origins.
     # Comparing full real runs would also compare intentionally different seals and timings.
-    from tests.core.test_r13_formal_run_receipt import CODE, _prepared, _run_root
+    from tests.support.formal_run_receipts import CODE, _prepared, _run_root
 
     original = tmp_path / "base_receipt.py"
     original.write_bytes(_blob("tools/formal_run_receipt.py"))

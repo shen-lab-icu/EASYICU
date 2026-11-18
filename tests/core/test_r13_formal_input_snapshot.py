@@ -18,23 +18,7 @@ import pytest
 
 from easyicu import formal_inputs
 from tests.support.bucket_storage import TABLE_CONFIGS, b6_source, install_layout
-
-
-def _manifest(root: Path) -> None:
-    """A conversion manifest listing every flat parquet output under ``root``."""
-    tables: dict = {}
-    for path in sorted(root.rglob("*.parquet")):
-        relative = path.relative_to(root)
-        if relative.parts[0].endswith("_bucket"):
-            continue
-        table = relative.parts[0] if len(relative.parts) > 1 else path.stem
-        tables.setdefault(table, []).append(
-            {"relative_path": relative.as_posix(), "size_bytes": path.stat().st_size}
-        )
-    (root / "conversion_manifest.json").write_text(json.dumps({
-        "schema_version": 1,
-        "tables": [{"table": t, "status": "completed", "outputs": o} for t, o in tables.items()],
-    }))
+from tests.support.formal_tools import input_manifest as _manifest
 
 
 def _installation(tmp_path: Path) -> Path:

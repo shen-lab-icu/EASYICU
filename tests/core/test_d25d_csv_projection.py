@@ -18,17 +18,7 @@ from easyicu import storage_binding
 from easyicu.config import load_src_cfg
 from easyicu.datasource import ICUDataSource
 from easyicu.storage_layout import TableScanError
-
-HEADER = (
-    "ROW_ID,SUBJECT_ID,HADM_ID,ICUSTAY_ID,ITEMID,CHARTTIME,STORETIME,CGID,VALUE,"
-    "VALUENUM,VALUEUOM,WARNING,ERROR,RESULTSTATUS,STOPPED"
-)
-
-
-def _row(i, *, valuenum=None, charttime="2140-01-02 01:00:00", cgid="17"):
-    valuenum = str(60 + i % 5) if valuenum is None else valuenum
-    return f"{i},1,11,101,220045,{charttime},2140-01-02 01:05:00,{cgid},{60 + i % 5},{valuenum},bpm,0,0,,"
-
+from tests.support.mimic_storage import HEADER, chart_row as _row
 
 def _csv(root, bad: str | None = None):
     lines = [HEADER] + [_row(i) for i in range(1, 6)]

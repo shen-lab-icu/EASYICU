@@ -21,13 +21,16 @@ SRC = ROOT / "src"
 
 _REGISTRY_SAME = (
     "database-identity entry without a source object; the modern loader binds the "
-    "same active-registry configuration by name (base._init_datasource) and passes "
+    "same active-registry configuration by name (base.BaseICULoader.__init__) and passes "
     "that object on, so the lookup returns the configuration the data was read with"
 )
 
 ALLOWED_SITES = {
     # Source owners: they select or build the source.
-    "easyicu/datasource.py::storage_source": "the storage owner's database + root source",
+    "easyicu/datasource.py::registered_source_config": (
+        "the storage owner resolves database identities for source construction and for "
+        "publication checks that must precede source construction"
+    ),
     "easyicu/table/__init__.py::load_table": "load_table's own source selection",
     "easyicu/table/__init__.py::select_table_source": "load_table's own source selection",
     "easyicu/table/__init__.py::load_id_tbl": "public by-name API; its caller names the database",

@@ -6,6 +6,8 @@ import json
 import io
 import logging
 import os
+import subprocess
+import sys
 from contextlib import nullcontext
 from http.client import IncompleteRead
 from pathlib import Path
@@ -48,7 +50,7 @@ def test_windows_workflow_uses_the_desktop_build_and_only_publishes_aggregates()
     assert "--model-cassette" in commands
     assert "${{ inputs.model_cassette }}" not in commands
     assert "$env:MODEL_CASSETTE_PATH" in commands
-    assert "-I tools/windows_laptop_acceptance.py" in commands
+    assert "-I -X utf8 tools/windows_laptop_acceptance.py --cache-key" in commands
     assert "Start-Process" in commands and "/S /D=$installDir" in commands
     assert "uninstall.exe" in commands
     assert 'secrets.' not in json.dumps(workflow)
@@ -64,6 +66,34 @@ def test_windows_workflow_uses_the_desktop_build_and_only_publishes_aggregates()
         "acceptance-results/acceptance.json",
         "acceptance-results/summary.md",
     ]
+
+
+def test_driver_start_replaces_setup_receipt_when_cassette_is_refused(tmp_path):
+    checkout = tmp_path / "EasyICU 数据"
+    checkout.mkdir()
+    output = tmp_path / "acceptance-results"
+    acceptance.write_reports({
+        "status": "failed",
+        "failures": [{"reason_code": "acceptance_driver_not_started", "exception_type": "WorkflowStepFailed"}],
+    }, output)
+
+    completed = subprocess.run(
+        [sys.executable, "-I", "-X", "utf8", "-B", str(ROOT / "tools/windows_laptop_acceptance.py"),
+         "--memory-pressure-gb", "0", "--output-dir", str(output),
+         "--desktop-first-result", "--model-cassette", str(tmp_path / "outside.json")],
+        cwd=checkout, capture_output=True, text=True, encoding="utf-8", timeout=30,
+    )
+
+    assert completed.returncode == 1
+    assert completed.stdout.splitlines() == ["Laptop acceptance driver started", "Laptop acceptance: failed"]
+    assert completed.stderr == ""
+    report = json.loads((output / "acceptance.json").read_text(encoding="utf-8"))
+    assert report["schema_version"] == "easyicu_laptop_acceptance_v1"
+    assert report["status"] == "failed"
+    assert report["failures"] == [{
+        "reason_code": "model_replay_cassette_path_forbidden", "exception_type": "AcceptanceFailure",
+    }]
+    assert "outside.json" not in (output / "summary.md").read_text(encoding="utf-8")
 
 
 @pytest.mark.parametrize("docker_reason", ["docker_executable_missing", "docker_daemon_unreachable"])

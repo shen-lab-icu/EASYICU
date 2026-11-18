@@ -31,6 +31,8 @@ from typing import TYPE_CHECKING, Any, Mapping, Optional, Sequence
 import pandas as pd
 import pyarrow.parquet as pq
 
+from easyicu.io.identity import resolve_identity_columns
+from easyicu.storage_layout import TableScanError
 from easyicu.research_agent.acquisition.hospital_mortality_followup import (
     HospitalMortalityFollowup,
     derive_eicu_hospital_mortality_followup,
@@ -364,7 +366,7 @@ def _regular_descendant(root: Path, relative: str, *, label: str) -> Path:
 def _table_schema_and_digest(
     path: Path, *, table: str, expected_digest: Optional[str] = None,
     database: Optional[str] = None,
-) -> tuple[set[str], str]:
+) -> tuple[list[str], str]:
     """Bind the Parquet schema and SHA-256 to one stable open file.
 
     This does not authorize later reads: the materializer must re-check the
@@ -386,7 +388,7 @@ def _table_schema_and_digest(
                         details={"object": table, "database": database},
                     )
                 handle.seek(0)
-                columns = set(pq.read_schema(handle).names)
+                columns = pq.read_schema(handle).names
                 after = os.fstat(handle.fileno())
                 named = directory.stat(path.name)
                 coordinates = lambda value: (  # noqa: E731
@@ -435,24 +437,17 @@ def _table_read_columns(table: str, available: set[str]) -> list[str]:
 
 
 def _physical_column(
-    available: Sequence[str] | set[str], name: str, *, table: str
+    available: Sequence[str], name: str, *, table: str
 ) -> Optional[str]:
-    """The table's own name for one declared identity column, if it has one.
-
-    An exact match wins.  Otherwise exactly one column may match ignoring
-    case; two such columns could each be the identity, so they fail closed.
-    """
-
-    if name in available:
-        return name
-    folded = sorted(column for column in available if column.casefold() == name.casefold())
-    if len(folded) > 1:
+    """Bind a declared identity column using the raw authority's error code."""
+    try:
+        return resolve_identity_columns(available, [name], table=table).get(name)
+    except TableScanError as exc:
         raise RawSourceAuthorityError(
             "raw_source_authority_identity_column_ambiguous",
             "The raw table carries more than one column for a declared identity column.",
             details={"object": table, "column": name},
-        )
-    return folded[0] if folded else None
+        ) from exc
 
 
 def _identity_profiles(family: str) -> tuple[Mapping[str, Any], ...]:
@@ -466,7 +461,7 @@ def _identity_profiles(family: str) -> tuple[Mapping[str, Any], ...]:
     )
 
 
-def _identity_read_columns(family: str, table: str, available: set[str]) -> set[str]:
+def _identity_read_columns(family: str, table: str, available: Sequence[str]) -> set[str]:
     """The physical identity columns one bound table carries for its family.
 
     The stay column is the table's key and must exist; a missing patient or
@@ -1076,8 +1071,8 @@ def resolve_manifest_raw_source_binding(
         path = _regular_descendant(source_root, f"{table}.parquet", label=f"{table} table")
         available, digest = _table_schema_and_digest(path, table=table)
         if table in hospital_tables:
-            _require_table_schema(available, table=table)
-            read = set(_table_read_columns(table, available))
+            schema = _require_table_schema(set(available), table=table)
+            read = set(_table_read_columns(table, schema))
         else:
             read = set()
         read |= _identity_read_columns(selected_database, table, available)
@@ -1260,7 +1255,7 @@ def resolve_raw_mimic_iv_source_binding(
         available, _ = _table_schema_and_digest(
             path, table=name, expected_digest=expected, database=selected_database,
         )
-        columns[name] = frozenset(_require_table_schema(available, table=name))
+        columns[name] = frozenset(_require_table_schema(set(available), table=name))
         paths[name] = path
         digests[name] = expected
 

@@ -49,6 +49,7 @@ from easyicu.concept_output_sources import (
     compile_concept_load_plan,
 )
 from easyicu.databases import normalize_database_key
+from easyicu.io.identity import read_identity_csv_header, resolve_identity_columns
 from easyicu.export_publication import (
     REASON_IN_PROGRESS,
     UNPUBLISHED_CODE,
@@ -1733,28 +1734,41 @@ def _find_table_file(root: Path, table_names: List[str]) -> Optional[Path]:
     return None
 
 
-def _read_table_columns(path: Path, columns: List[str]) -> Any:
+def _read_table_columns(
+    path: Path, columns: List[str], *, mimic3_table: Optional[str] = None,
+    preserve_icd_codes: bool = False,
+) -> Any:
     import pandas as pd
 
-    present = set(_read_columns(path))
-    wanted = list(dict.fromkeys(c for c in columns if c in present))
-    if path.suffix == ".parquet":
-        return pd.read_parquet(path, columns=wanted or None)
-    if wanted:
-        return pd.read_csv(path, usecols=wanted)
-    return pd.read_csv(path)
+    parquet = path.suffix == ".parquet"
+    if mimic3_table is not None:
+        present = _read_columns(path) if parquet else read_identity_csv_header(path)
+        physical = resolve_identity_columns(present, columns, table=mimic3_table)
+    else:
+        present = set(_read_columns(path))
+        physical = {name: name for name in columns if name in present}
+    wanted = list(physical.values()) or None
+    if parquet:
+        frame = pd.read_parquet(path, columns=wanted)
+    else:
+        code_columns = {
+            physical[name]: "string"
+            for name in ("icd9code", "icd_code", "icd9_code")
+            if preserve_icd_codes and name in physical
+        }
+        frame = pd.read_csv(path, usecols=wanted, dtype=code_columns or None)
+    if mimic3_table is not None:
+        frame = frame.rename(columns={name: logical for logical, name in physical.items()})
+    return frame
 
 
-def _read_icd_columns(path: Path, columns: List[str]) -> Any:
+def _read_icd_columns(
+    path: Path, columns: List[str], *, mimic3_table: Optional[str] = None,
+) -> Any:
     """Keep source code text intact, including leading zeroes in CSV files."""
-    import pandas as pd
-
-    if path.suffix == ".parquet":
-        return _read_table_columns(path, columns)
-    present = set(_read_columns(path))
-    wanted = list(dict.fromkeys(column for column in columns if column in present))
-    code_columns = {name: "string" for name in ("icd9code", "icd_code", "icd9_code") if name in present}
-    return pd.read_csv(path, usecols=wanted or None, dtype=code_columns)
+    return _read_table_columns(
+        path, columns, mimic3_table=mimic3_table, preserve_icd_codes=True,
+    )
 
 
 def _normal_text_series(series: Any) -> Any:
@@ -1794,11 +1808,14 @@ def _match_mimic_icd_ids(
             "icd_tables_missing", {"required_tables": ["icustays", "diagnoses_icd"]}
         )
 
+    is_mimic3 = stay_id_col == "icustay_id"
     stays = _read_table_columns(
-        stays_path, [stay_id_col, "stay_id", "icustay_id", "hadm_id"]
+        stays_path, [stay_id_col, "stay_id", "icustay_id", "hadm_id"],
+        mimic3_table="icustays" if is_mimic3 else None,
     )
     diag = _read_icd_columns(
-        diag_path, ["hadm_id", "icd_code", "icd9_code", "diagnosis"]
+        diag_path, ["hadm_id", "icd_code", "icd9_code", "diagnosis"],
+        mimic3_table="diagnoses_icd" if is_mimic3 else None,
     )
     id_col = (
         stay_id_col

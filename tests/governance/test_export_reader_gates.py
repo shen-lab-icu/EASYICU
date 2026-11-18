@@ -42,6 +42,8 @@ READER_CONTRACTS: dict[str, tuple[str, str]] = {
         "raw-source", "d_labitems / d_items source catalogs under --db"),
     "tools/duckdb_raw_parity_census.py": (
         "raw-source", "source tables under --data-path and its own census outputs"),
+    "tools/formal_run_receipt.py": (
+        "raw-source", "prepared SICdb cases and the conversion reproduced from its raw CSV"),
     "tools/import_canonical9_to_agent_projects.py": (
         "not-export", "benchmark run manifests and evidence files"),
     "tools/render_e2_presentation_figures.py": (
@@ -53,6 +55,12 @@ READER_CONTRACTS: dict[str, tuple[str, str]] = {
         "not-export", "a prepared wide cohort file built by the gated cohort builders"),
     "tools/run_research_agent_bench.py": (
         "not-export", "benchmark run step summaries and the run's own cohort file"),
+    "tools/seal_buckets/bucket_compare.py": (
+        "raw-source", "parts of the two source bucket installations being compared"),
+    "tools/seal_buckets/footer_scan.py": (
+        "raw-source", "Parquet footers under the source installation being sealed"),
+    "tools/seal_buckets/seal_rebuild.py": (
+        "raw-source", "source stays and chart-event bucket parts during seal validation"),
     "tools/verify_figure_presentation.py": ("not-export", "figure source CSVs"),
     "tools/windows_laptop_acceptance.py": (
         "raw-source", "the prepared raw demo folder inventory"),
