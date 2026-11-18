@@ -34,7 +34,9 @@ from ..concept.catalog import (
     OPT_IN_MODULE_CONCEPTS,
     PAO2_ARTERIAL_HOURLY_MIN,
     STAY_LEVEL_SUPPORT_MODULES,
-    STAY_LEVEL_SUPPORT_UNITS,
+    SUPPORT_MODULE_FIELDS,
+    SUPPORT_MODULE_UNITS,
+    THESIS_SUPPORT_MODULES,
 )
 from ..concept.minute_resolution import (
     SUBHOUR_MODULE_INTERVALS,
@@ -2771,6 +2773,17 @@ def _load_module_concepts(load_concepts_fn, *, module_name: str, load_kwargs: Di
     """
     kwargs = dict(load_kwargs)
     concepts = list(kwargs["concepts"])
+    if module_name in THESIS_SUPPORT_MODULES:
+        from ..concept.thesis_support import load_thesis_support
+
+        frame = load_thesis_support(
+            module=module_name, database=kwargs["database"], data_path=kwargs["data_path"],
+            patient_ids=kwargs.get("patient_ids"),
+        )
+        fields = frame.attrs["available_fields"]
+        if not fields:
+            return None
+        return frame.drop(columns=THESIS_SUPPORT_MODULES[module_name].keys() - set(fields))
     if module_name in STAY_LEVEL_SUPPORT_MODULES:
         from ..concept.support_exports import load_imv_first_episode, load_stay_identity
 
@@ -3793,6 +3806,8 @@ def _stream_module_batches_to_parquet(
                         batch_bounds = bounds_totals(bounds_records)
                     batch_absence = batch_absence_sink.codes() if batch_absence_sink is not None else {}
                     frame, export_counts = _normalise_counted(batch, concepts, reorder=False)
+                    if frame is None and module_name in THESIS_SUPPORT_MODULES:
+                        frame = batch
                     with source_bounds_accounting(f"stream_batch_commit[{module_name}:{index}]"):
                         batch_bounds = merge_bounds_drops(batch_bounds, export_counts)
                     batch_loader_concepts = (
@@ -4156,9 +4171,10 @@ def _run_module_extraction(
     # load_concepts 内部按 filter_bounds 预聚合强制（与 web 端同一套）。
     if streamed:
         pass
-    elif isinstance(result, pd.DataFrame) and len(result) > 0:
+    elif isinstance(result, pd.DataFrame) and (len(result) > 0 or module_name in THESIS_SUPPORT_MODULES):
         try:
-            result, module_export_counts = _normalise_counted(result, concepts, reorder=False)
+            if not result.empty:
+                result, module_export_counts = _normalise_counted(result, concepts, reorder=False)
             _cols = [c for c in concepts if c in result.columns]
             path = os.path.join(output_dir, f"{module_name}.parquet")
             import pyarrow as pa
@@ -5759,7 +5775,7 @@ def _native_export_storage_kind(concept_id: str, dictionary) -> str:
         class_names = set()
     else:
         class_names = {str(raw_class_name).strip()}
-    catalog_unit = STAY_LEVEL_SUPPORT_UNITS.get(
+    catalog_unit = SUPPORT_MODULE_UNITS.get(
         concept_id, CONCEPT_DICTIONARY.get(concept_id, ("", "", ""))[2]
     )
     if "lgl_cncpt" in class_names or str(catalog_unit).strip().lower() == "boolean":
@@ -7592,7 +7608,7 @@ def _native_export_time_window_authority(
     static_modules = {"demographics", "outcome", "sic_case_landmark", "c565_renal_history"}
     longitudinal = [
         m for m in modules
-        if m not in static_modules and m not in STAY_LEVEL_SUPPORT_MODULES
+        if m not in static_modules and m not in SUPPORT_MODULE_FIELDS
     ]
     if required and longitudinal and not stay_time_upper_bounds:
         raise ValueError(
@@ -7637,6 +7653,10 @@ def _enforce_native_export_time_axis(
     }
     if "charttime" not in frame.columns:
         audit["policy"] = "not_applicable_stay_level_module"
+        return frame, audit
+
+    if module in THESIS_SUPPORT_MODULES:
+        audit["policy"] = "frozen_source_icu_hours"
         return frame, audit
 
     if module == "outcome":
@@ -8568,6 +8588,13 @@ def _publish_native_export_v2(
                 "column_metadata_columns": list(binding.columns),
             }
         )
+        if module in THESIS_SUPPORT_MODULES:
+            from ..concept.thesis_support import thesis_support_manifest
+
+            files[-1]["thesis_support"] = thesis_support_manifest(
+                module, normalized_database,
+                produced_concepts if produced_concepts is not None else concept_plan[module],
+            )
         if module in SUBHOUR_MODULE_INTERVALS:
             # Resolution evidence for a sub-hour gate: per-signal gaps in
             # minutes, aggregates only (owner: concept/minute_resolution.py).
@@ -9014,6 +9041,9 @@ def extract_database(
     )
 
     t_start = time.time()
+    if (database.removesuffix("_demo") == "miiv" and patient_ids is None
+            and THESIS_SUPPORT_MODULES.keys() & set(modules or ())):
+        raise ValueError("MIIV thesis support requires an explicit allowed stay cohort")
     # The primary gate precedes cohort discovery, workers and ledger acceptance.
     if data_path is None:
         data_path = _get_default_db_path(database)
@@ -9088,7 +9118,7 @@ def extract_database(
                 f"无法获取 {database} 的患者ID，请检查 data_path: {data_path}"
             )
         patient_ids_filter = {id_col: all_ids}
-    elif PAO2_ARTERIAL_HOURLY_MIN in modules or STAY_LEVEL_SUPPORT_MODULES.keys() & set(modules):
+    elif PAO2_ARTERIAL_HOURLY_MIN in modules or SUPPORT_MODULE_FIELDS.keys() & set(modules):
         from ..concept.support_exports import select_support_cohort
         from ..storage_binding import binding_unit, child_binding
 

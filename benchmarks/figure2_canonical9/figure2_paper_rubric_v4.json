@@ -159,6 +159,7 @@
     "src/easyicu/concept/source_duration.py",
     "src/easyicu/concept/stay_tables.py",
     "src/easyicu/concept/support_exports.py",
+    "src/easyicu/concept/thesis_support.py",
     "src/easyicu/concept/utils.py",
     "src/easyicu/concept/value_kind.py",
     "src/easyicu/concept/weight_strict.py",

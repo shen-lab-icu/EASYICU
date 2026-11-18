@@ -41,7 +41,7 @@ def metadata_definition_for_concept(concept_id: str, module: str, dictionary: An
         CONCEPT_DESCRIPTIONS,
         CONCEPT_DICTIONARY,
         CONCEPT_GROUPS_INTERNAL,
-        STAY_LEVEL_SUPPORT_MODULES,
+        SUPPORT_MODULE_FIELDS,
     )
     from easyicu.concept.schema import ConceptDefinition
 
@@ -49,7 +49,7 @@ def metadata_definition_for_concept(concept_id: str, module: str, dictionary: An
         concept_id, (concept_id, concept_id, "")
     )
     description, _description_zh = CONCEPT_DESCRIPTIONS.get(concept_id, ("", ""))
-    support_field = STAY_LEVEL_SUPPORT_MODULES.get(module, {}).get(concept_id)
+    support_field = SUPPORT_MODULE_FIELDS.get(module, {}).get(concept_id)
     if support_field:
         description, unit = support_field
     if not module:
@@ -454,7 +454,15 @@ def build_export_file_metadata_binding(
                 binding_specs[concept] = (
                     concept, ConceptColumnRole.NUMERIC_AGGREGATE, None, "aggregate:min", "min",
                 )
-            elif module == "imv_first_episode" and concept in {"imv_start_hours", "imv_end_hours"}:
+            elif module == "observed_peep_set" and concept == "observed_peep_set":
+                binding_specs[concept] = (
+                    concept, ConceptColumnRole.NUMERIC_AGGREGATE, None, "aggregate:median", "median",
+                )
+            elif (module, concept) in {
+                ("imv_first_episode", "imv_start_hours"),
+                ("imv_first_episode", "imv_end_hours"),
+                ("imv_recorded_compat", "imv_recorded_end_hour"),
+            }:
                 binding_specs[concept] = (
                     concept, ConceptColumnRole.EVENT_TIME, None, None, None,
                 )
@@ -573,9 +581,9 @@ def missing_primary_metadata_concepts(
                 if binding.metadata.source_concept == concept
                 and (
                     binding.metadata.role in primary_roles
-                    or (column == concept and module == PAO2_ARTERIAL_HOURLY_MIN
+                    or (column == concept and module in {PAO2_ARTERIAL_HOURLY_MIN, "observed_peep_set"}
                         and binding.metadata.role == ConceptColumnRole.NUMERIC_AGGREGATE)
-                    or (column == concept and module == "imv_first_episode"
+                    or (column == concept and module in {"imv_first_episode", "imv_recorded_compat"}
                         and binding.metadata.role == ConceptColumnRole.EVENT_TIME)
                 )
             ]

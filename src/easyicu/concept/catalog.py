@@ -1361,6 +1361,24 @@ STAY_LEVEL_SUPPORT_MODULES = {
 STAY_LEVEL_SUPPORT_UNITS = {
     name: unit for fields in STAY_LEVEL_SUPPORT_MODULES.values() for name, (_, unit) in fields.items()
 }
+# HiRID's IMV row uses the first recorded hour as the coordinate for its span.
+THESIS_SUPPORT_MODULES = {
+    'imv_recorded_compat': {
+        'imv': ('Frozen Hourly Invasive Ventilation Flag', 'boolean'),
+        'imv_recorded_end_hour': ('Last Recorded Invasive Ventilation ICU Hour', 'h'),
+    },
+    'observed_peep_set': {
+        'observed_peep_set': ('Observed Set PEEP Source-Hour Median', 'cmH2O'),
+    },
+    'rrt_time': {
+        'rrt_active': ('Frozen Active Renal Replacement Therapy Hour', 'boolean'),
+    },
+}
+SUPPORT_MODULE_FIELDS = {**STAY_LEVEL_SUPPORT_MODULES, **THESIS_SUPPORT_MODULES}
+SUPPORT_MODULE_UNITS = {
+    **STAY_LEVEL_SUPPORT_UNITS,
+    **{name: unit for fields in THESIS_SUPPORT_MODULES.values() for name, (_, unit) in fields.items()},
+}
 PAO2_ARTERIAL_HOURLY_MIN = 'pao2_arterial_hourly_min'
 
 # Explicitly selected export modules -> their scalar concepts (owner of the
@@ -1388,7 +1406,7 @@ OPT_IN_MODULE_CONCEPTS = {
     'vent_mechanics': VENT_MECHANICS_CONCEPTS,
     'haemo_advanced': HAEMO_ADVANCED_CONCEPTS,
     'rrt_detail': RRT_DETAIL_CONCEPTS,
-    **{module: tuple(fields) for module, fields in STAY_LEVEL_SUPPORT_MODULES.items()},
+    **{module: tuple(fields) for module, fields in SUPPORT_MODULE_FIELDS.items()},
     PAO2_ARTERIAL_HOURLY_MIN: ('po2',),
 }
 
