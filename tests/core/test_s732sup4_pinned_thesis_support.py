@@ -4,7 +4,9 @@ from dataclasses import replace
 from hashlib import sha256
 from io import BufferedReader
 import json
+from math import inf, nextafter
 from pathlib import Path
+from sys import float_info
 from types import SimpleNamespace
 
 import numpy as np
@@ -585,19 +587,22 @@ def test_cli_uses_requested_gap_version_and_catches_planted_episode_end(tmp_path
     ("-inf", 3 / 24, "pinned_vent_hour_invalid"),
     (1.75, float("inf"), "pinned_icu_los_invalid"),
     (1.75, float("-inf"), "pinned_icu_los_invalid"),
+    (1.75, 1e308, "pinned_icu_los_invalid"),
+    (1.75, nextafter(float_info.max / 24.0, inf), "pinned_icu_los_invalid"),
 ], ids=["positive-float-hour", "negative-float-hour", "positive-text-hour", "negative-text-hour",
-        "positive-infinite-los", "negative-infinite-los"])
+        "positive-infinite-los", "negative-infinite-los", "overnight-los-overflow", "los-just-over-hour-limit"])
 @pytest.mark.parametrize("entry", ["producer", "harness", "reference"])
 def test_overnight_imv_rejects_infinite_clock_inputs(tmp_path, monkeypatch, capsys, bad_hour, los, reason, entry):
     database = "sic"
     stays = [7301, 7302]
     parameter = _episode_parameter(tmp_path)
     good_hour = "0.25" if isinstance(bad_hour, str) else 0.25
+    second_mode = "invasive" if reason == "pinned_icu_los_invalid" else "standby at handover"
     inputs = (
         _pin(tmp_path, database, "outcome", stay_id=stays, los_icu=[3 / 24, los]),
         _pin(
             tmp_path, database, "respiratory", stay_id=stays,
-            charttime=[good_hour, bad_hour], mech_vent=["InVaSiVe", "standby at handover"],
+            charttime=[good_hour, bad_hour], mech_vent=["InVaSiVe", second_mode],
         ),
     )
     if entry == "producer":
@@ -634,6 +639,51 @@ def test_overnight_imv_rejects_infinite_clock_inputs(tmp_path, monkeypatch, caps
     assert json.loads(captured.out) == {"status": "comparison_failed", "reason": reason}
     assert status == 2
     assert not captured.err
+
+
+def test_direct_pinned_stay_ids_requires_explicit_miiv_demo_cohort():
+    with pytest.raises(ValueError, match="MIIV thesis support requires an explicit allowed stay cohort"):
+        support.pinned_stay_ids("miiv_demo", None)
+
+
+def test_direct_pinned_stay_ids_accepts_aumc_demo_mapping():
+    assert support.pinned_stay_ids("aumc_demo", {"admissionid": [8462]}) == {8462}
+
+
+def test_direct_pinned_stay_ids_accepts_database_keyword():
+    assert support.pinned_stay_ids(database="miiv_demo", patient_ids={"stay_id": [8462]}) == {8462}
+
+
+@pytest.mark.parametrize("keyword", [False, True], ids=["positional", "database-keyword"])
+def test_direct_pin_validation_accepts_single_demo_alias(tmp_path, keyword):
+    inputs = _episode_inputs(tmp_path / "relief-team", "miiv")
+    if keyword:
+        support.validate_pinned_inputs(module=_IMV, database="miiv_demo", inputs=inputs)
+    else:
+        support.validate_pinned_inputs(_IMV, "miiv_demo", inputs)
+
+
+@pytest.mark.parametrize("keyword", [False, True], ids=["positional", "database-keyword"])
+def test_direct_release_validation_accepts_single_demo_alias(tmp_path, keyword):
+    parameter = _episode_parameter(tmp_path)
+    if keyword:
+        support.validate_frozen_release_parameter(module=_IMV, database="miiv_demo", parameter=parameter)
+    else:
+        support.validate_frozen_release_parameter(_IMV, "miiv_demo", parameter)
+
+
+@pytest.mark.parametrize("database", ["miiv_overnight", "miiv_demo_demo"])
+@pytest.mark.parametrize("helper", ["cohort", "pins", "release"])
+def test_direct_pinned_helpers_reject_unknown_databases(tmp_path, database, helper):
+    parameter = support.FrozenReleaseParameter(tmp_path / "relief-team.json", "0" * 64)
+    with pytest.raises(support.PinnedInputError) as error:
+        if helper == "cohort":
+            support.pinned_stay_ids(database, [8462])
+        elif helper == "pins":
+            support.validate_pinned_inputs(_IMV, database, ())
+        else:
+            support.validate_frozen_release_parameter(_IMV, database, parameter)
+    assert error.value.reason_code == "pinned_database_not_allowed"
 
 
 @pytest.mark.parametrize("database", ["miiv_demo_demo", "aumc_demo_demo", "miiv_overnight"])

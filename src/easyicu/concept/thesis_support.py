@@ -240,8 +240,9 @@ def _empty(module: str, stay: str) -> pd.DataFrame:
     })
 
 
-def validate_pinned_inputs(module, family, inputs):
+def validate_pinned_inputs(module, database, inputs):
     """Refuse forbidden declarations without resolving or opening any path."""
+    family = normalize_pinned_database(database)
     allowed = _PINNED_COLUMNS.get((module, family), {})
     seen = set()
     for entry in inputs:
@@ -263,8 +264,9 @@ def validate_pinned_inputs(module, family, inputs):
             raise PinnedInputError("pinned_sha256_invalid", name)
 
 
-def validate_frozen_release_parameter(module, family, parameter):
+def validate_frozen_release_parameter(module, database, parameter):
     """Reject unrelated parameters and manifest scopes before accessing files."""
+    family = normalize_pinned_database(database)
     if module != "imv_recorded_compat" or family not in _HOURLY_IMV_DATABASES:
         raise PinnedInputError("frozen_release_parameter_not_allowed")
     _frozen_release_parameter_path(parameter)
@@ -368,8 +370,9 @@ def read_pinned_columns(opened, *, stays=None):
     return pq.read_table(handle, columns=list(entry.allowed_columns), filters=filters).to_pandas()
 
 
-def pinned_stay_ids(family, patient_ids):
+def pinned_stay_ids(database, patient_ids):
     """Resolve explicit stay keys directly, without consulting a raw identity table."""
+    family = normalize_pinned_database(database)
     if patient_ids is None:
         if family == "miiv":
             raise ValueError("MIIV thesis support requires an explicit allowed stay cohort")
@@ -459,9 +462,11 @@ def _valid_los_hours(outcome, clock, *, reject_infinite=False):
         raise PinnedInputError("frozen_hourly_clock_unsupported")
     require_unique_keys(outcome, ["stay_id"], table="outcome")
     los = pd.to_numeric(outcome.set_index("stay_id")["los_icu"], errors="coerce")
-    if reject_infinite and np.isinf(los).any():
+    with np.errstate(over="ignore"):
+        hours = los.astype("float64") * 24.0
+    if reject_infinite and np.isinf(hours).any():
         raise PinnedInputError("pinned_icu_los_invalid", "outcome")
-    return los[los.notna() & np.isfinite(los) & los.gt(0)].astype("float64") * 24.0
+    return hours[hours.notna() & np.isfinite(hours) & hours.gt(0)]
 
 
 def _rrt_hours(source, los_hours, contract):

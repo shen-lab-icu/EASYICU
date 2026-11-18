@@ -399,7 +399,9 @@ def _pinned_reference(module, database, pinned_inputs, stay_ids, empty, frozen_r
         outcome = read_pinned_columns(opened["outcome"], stays=stay_ids)
         if parameter is not None:
             los = pd.to_numeric(outcome["los_icu"], errors="coerce")
-            if np.isinf(los).any():
+            with np.errstate(over="ignore"):
+                hours = los.astype("float64") * 24.0
+            if np.isinf(hours).any():
                 raise PinnedInputError("pinned_icu_los_invalid", "outcome")
         spine, _ = hourly.build_hourly_spine(outcome, stay_ids=stay_ids)
         if module == "rrt_time":
