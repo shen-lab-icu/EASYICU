@@ -719,7 +719,7 @@ def _persist_manuscript_provenance_artifact(
             )
         )
         return
-    if plan is not None:
+    if isinstance(plan, AnalysisPlan):
         from ..canonical_json import canonical_sha256
         from ..contracts.product_files import host_delivery_owners
 
@@ -3059,7 +3059,7 @@ def _publish_and_audit_manuscript(
     """Render publication artifacts and run post-binding scientific audits."""
     from ..contracts.product_files import host_delivery_owners
 
-    requested = host_delivery_owners(plan.model_dump(mode="json"))
+    requested = host_delivery_owners(plan.model_dump(mode="json")) if isinstance(plan, AnalysisPlan) else {}
     written: set[str] = set()
     pdf_requested = "manuscript_pdf" in requested
     bib_path = run_dir / "manuscript_scaffold.bib"
@@ -3141,7 +3141,7 @@ def _publish_and_audit_manuscript(
                     producer="pipeline",
                     generation_mode="system",
                 )
-            if pdf_requested or (plan.deliverables is None and pipeline._enable_pdf_render):
+            if pdf_requested or (getattr(plan, "deliverables", None) is None and pipeline._enable_pdf_render):
                 bib_full = bib_path if bib_path.name in written else None
                 pdf_result = render_pdf_for_run(
                     tex_path=tex_path,
