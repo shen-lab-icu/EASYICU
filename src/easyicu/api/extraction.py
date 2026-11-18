@@ -31,8 +31,10 @@ from ..source_bounds import (
 from ..concept.availability_signal import TypedAbsenceSink
 from ..concept.catalog import (
     CONCEPT_GROUPS_INTERNAL,
+    FIRST_IN_HOSP_FROZEN,
     OPT_IN_MODULE_CONCEPTS,
     PAO2_ARTERIAL_HOURLY_MIN,
+    STAY_GRAIN_SUPPORT_MODULES,
     STAY_LEVEL_SUPPORT_MODULES,
     SUPPORT_MODULE_FIELDS,
     SUPPORT_MODULE_UNITS,
@@ -1356,9 +1358,10 @@ def plan_extraction_resources(
     """
 
     total = int(num_patients)
-    if total <= 0:
-        raise ValueError("num_patients must be positive")
     selected_modules = tuple(dict.fromkeys(str(module) for module in modules))
+    empty_frozen_cohort = total == 0 and selected_modules == (FIRST_IN_HOSP_FROZEN,)
+    if total <= 0 and not empty_frozen_cohort:
+        raise ValueError("num_patients must be positive")
     if not selected_modules:
         raise ValueError("modules must not be empty")
     available = (
@@ -1366,6 +1369,16 @@ def plan_extraction_resources(
         if available_memory_mb is None
         else max(0.0, float(available_memory_mb))
     )
+    if empty_frozen_cohort:
+        return ExtractionResourcePlan(
+            mode="one_shot",
+            reason_code="empty_cohort",
+            batch_size=0,
+            available_memory_mb=available,
+            required_available_memory_mb=None,
+            measured_peak_rss_mb=None,
+            modules=selected_modules,
+        )
     batch_size = _resolve_stream_batch_size(
         database,
         total,
@@ -2375,6 +2388,18 @@ def _module_arrow_table(
 ):
     """Create a stable module table, adding structural nulls only in Arrow."""
     table = pyarrow_module.Table.from_pandas(frame, preserve_index=False)
+    if module == FIRST_IN_HOSP_FROZEN:
+        import json
+
+        from ..concept.thesis_support import FIRST_IN_HOSP_SOURCE_KEY
+
+        lineage = json.dumps(frame.attrs["thesis_support"], sort_keys=True).encode()
+        if schema is not None and (schema.metadata or {}).get(FIRST_IN_HOSP_SOURCE_KEY) != lineage:
+            raise ValueError(f"{module}: source receipt changed across batches")
+        table = table.replace_schema_metadata({
+            **(table.schema.metadata or {}),
+            FIRST_IN_HOSP_SOURCE_KEY: lineage,
+        })
     if (
         module == "sofa1_score"
         and frame.attrs.get(_SOFA1_TIME_BASIS_KEY.decode()) == _SOFA1_TIME_BASIS.decode()
@@ -2409,7 +2434,7 @@ def _module_arrow_table(
     # and their real timestamps were silently discarded.  Establish the time
     # field before the first writer schema is frozen and keep it float64 in all
     # batches, including an all-null first batch.
-    if module != "demographics" and module not in STAY_LEVEL_SUPPORT_MODULES:
+    if module != "demographics" and module not in STAY_GRAIN_SUPPORT_MODULES:
         if "charttime" not in table.column_names:
             identity_positions = [
                 table.column_names.index(column)
@@ -2781,7 +2806,7 @@ def _load_module_concepts(load_concepts_fn, *, module_name: str, load_kwargs: Di
             patient_ids=kwargs.get("patient_ids"),
         )
         fields = frame.attrs["available_fields"]
-        if not fields:
+        if not fields and module_name != FIRST_IN_HOSP_FROZEN:
             return None
         return frame.drop(columns=THESIS_SUPPORT_MODULES[module_name].keys() - set(fields))
     if module_name in STAY_LEVEL_SUPPORT_MODULES:
@@ -4071,7 +4096,9 @@ def _run_module_extraction(
     module_fill_scope = merge_fill_scope()
     module_fills = module_fill_scope.__enter__()
     try:
-        if stream_output_batches:
+        if stream_output_batches and (
+            module_name != FIRST_IN_HOSP_FROZEN or any((patient_ids_filter or {}).values())
+        ):
             if not patient_ids_filter or not batch_size:
                 raise ValueError(
                     "streamed module export requires patient_ids and batch_size"
@@ -5457,6 +5484,7 @@ def _extract_module_group_worker(
     """
     import os
     import traceback
+    from contextlib import nullcontext
 
     if resolver_pool_config is not None:
         from easyicu.resolver_pool import adopt_resolver_pool_config
@@ -5469,9 +5497,9 @@ def _extract_module_group_worker(
     from easyicu.api import keep_cache as _keep_cache
     from easyicu.storage_binding import binding_unit
 
-    with binding_unit(stay_binding), _keep_cache(
-        database=database, data_path=data_path, use_sofa2=use_sofa2
-    ) as _loader:
+    needs_loader = special_modules or any(name != FIRST_IN_HOSP_FROZEN for name, _ in module_specs)
+    cache = _keep_cache(database=database, data_path=data_path, use_sofa2=use_sofa2) if needs_loader else nullcontext()
+    with binding_unit(stay_binding), cache as _loader:
         for module_name, concepts in module_specs:
             out_dir = os.path.join(output_root, module_name)
             os.makedirs(out_dir, exist_ok=True)
@@ -5799,12 +5827,10 @@ def _canonicalise_native_export_frame(
 ):
     """Project one native package file onto the cross-database physical schema.
 
-    The extraction engine keeps source-native identifiers internally. Native-v2
-    is the portable downstream contract, so it always exposes ``stay_id``,
-    relative ``charttime`` (except the stay-level demographics module), and
-    every requested concept in catalog order. Structurally unavailable concepts
-    remain typed all-null placeholders and are separately marked unavailable in
-    the manifest.
+    Native-v2 normally exposes ``stay_id`` and relative ``charttime``.
+    Stay-grain support omits the time coordinate. The frozen first-in-hospital
+    predicate retains its source-native key. Requested concepts follow catalog
+    order, with typed placeholders for structurally unavailable concepts.
     """
     import numpy as np
     import pandas as pd
@@ -5825,12 +5851,18 @@ def _canonicalise_native_export_frame(
         raise ValueError(
             f"native export identity '{identity}' contains missing or non-numeric values"
         )
-    identity_float = identity_values.astype("float64")
-    if bool((identity_float != np.floor(identity_float)).any()):
-        raise ValueError(f"native export identity '{identity}' is not integer-valued")
-    canonical["stay_id"] = identity_float.astype("int64")
+    if module == FIRST_IN_HOSP_FROZEN:
+        native_key = DATABASE_ID_CONFIG[database]["id_col"]
+        if not pd.api.types.is_integer_dtype(identity_values):
+            raise ValueError(f"{module}: stay identifiers must be integers")
+        canonical[native_key] = identity_values.astype("int64")
+    else:
+        identity_float = identity_values.astype("float64")
+        if bool((identity_float != np.floor(identity_float)).any()):
+            raise ValueError(f"native export identity '{identity}' is not integer-valued")
+        canonical["stay_id"] = identity_float.astype("int64")
 
-    if module != "demographics" and module not in STAY_LEVEL_SUPPORT_MODULES:
+    if module != "demographics" and module not in STAY_GRAIN_SUPPORT_MODULES:
         if "charttime" in frame:
             charttime = pd.to_numeric(frame["charttime"], errors="coerce")
             invalid = frame["charttime"].notna() & charttime.isna()
@@ -6228,13 +6260,14 @@ def _consolidate_native_export_row_grain(
     ):
         working = working.reset_index(drop=True)
 
-    if module in STAY_LEVEL_SUPPORT_MODULES:
+    if module in STAY_GRAIN_SUPPORT_MODULES:
         from ..io.identity import require_unique_keys
 
-        require_unique_keys(working, ["stay_id"], table=module)
+        key = DATABASE_ID_CONFIG[database]["id_col"] if module == FIRST_IN_HOSP_FROZEN else "stay_id"
+        require_unique_keys(working, [key], table=module)
         return working, {
             "row_grain": "one_row_per_icu_stay",
-            "primary_key": ["stay_id"],
+            "primary_key": [key],
             "null_key_equality": "not_applicable",
             "source_rows": len(working),
             "published_rows": len(working),
@@ -7362,7 +7395,7 @@ def _try_publish_native_export_arrow_fast_path(
     import pyarrow as pa
     import pyarrow.parquet as pq
 
-    if module == "demographics" or module in STAY_LEVEL_SUPPORT_MODULES:
+    if module == "demographics" or module in STAY_GRAIN_SUPPORT_MODULES:
         return None
     source_file = pq.ParquetFile(source_parquet)
     if source_file.metadata.num_rows == 0:
@@ -8240,7 +8273,7 @@ def _publish_native_export_v2(
             if isinstance(saved, dict):
                 produced_concepts = set()
                 for saved_name, record in saved.items():
-                    if isinstance(saved_name, str):
+                    if isinstance(saved_name, str) and module != FIRST_IN_HOSP_FROZEN:
                         produced_concepts.add(saved_name)
                     if isinstance(record, dict):
                         produced_concepts.update(
@@ -8345,7 +8378,7 @@ def _publish_native_export_v2(
                 if physical_output_missing:
                     frame = pd.DataFrame({"stay_id": pd.Series([], dtype="int64")})
                 else:
-                    if module == "demographics" or module in STAY_LEVEL_SUPPORT_MODULES:
+                    if module == "demographics" or module in STAY_GRAIN_SUPPORT_MODULES:
                         fallback_size = _native_export_pandas_fallback_size(
                             source_parquet
                         )
@@ -8435,6 +8468,17 @@ def _publish_native_export_v2(
                 import pyarrow.parquet as pq
 
                 table = pa.Table.from_pandas(frame, preserve_index=False)
+                if module == FIRST_IN_HOSP_FROZEN and not physical_output_missing:
+                    from ..concept.thesis_support import FIRST_IN_HOSP_SOURCE_KEY
+
+                    lineage = (source_file.schema_arrow.metadata or {}).get(FIRST_IN_HOSP_SOURCE_KEY)
+                    if lineage is None:
+                        raise ValueError(f"{module}: missing producer source receipt")
+                    frame.attrs["thesis_support"] = json.loads(lineage)
+                    table = table.replace_schema_metadata({
+                        **(table.schema.metadata or {}),
+                        FIRST_IN_HOSP_SOURCE_KEY: lineage,
+                    })
                 if module == "sofa1_score" and source_rows:
                     # The Arrow preflight above verified the producer's basis
                     # before choosing this bounded duplicate-key fallback.
@@ -8591,7 +8635,7 @@ def _publish_native_export_v2(
         if module in THESIS_SUPPORT_MODULES:
             from ..concept.thesis_support import thesis_support_manifest
 
-            files[-1]["thesis_support"] = thesis_support_manifest(
+            files[-1]["thesis_support"] = metadata_frame.attrs.get("thesis_support") or thesis_support_manifest(
                 module, normalized_database,
                 produced_concepts if produced_concepts is not None else concept_plan[module],
             )
@@ -8712,8 +8756,8 @@ def _publish_native_export_v2(
                     "primary_key": ["stay_id", "charttime"],
                     "null_key_equality": "nulls_equal",
                 },
-                **{module: {"row_grain": "one_row_per_icu_stay", "primary_key": ["stay_id"]}
-                   for module in modules if module in STAY_LEVEL_SUPPORT_MODULES},
+                **{entry["module"]: {"row_grain": entry["row_grain"], "primary_key": entry["primary_key"]}
+                   for entry in files if entry["module"] in STAY_GRAIN_SUPPORT_MODULES},
                 **{module: {"row_grain": NATIVE_EVENT_MODULES[module].row_grain,
                             "primary_key": list(NATIVE_EVENT_MODULES[module].primary_key)}
                    for module in modules if module in NATIVE_EVENT_MODULES},
@@ -9042,19 +9086,26 @@ def extract_database(
 
     t_start = time.time()
     if (database.removesuffix("_demo") == "miiv" and patient_ids is None
-            and THESIS_SUPPORT_MODULES.keys() & set(modules or ())):
+            and (THESIS_SUPPORT_MODULES.keys() - {FIRST_IN_HOSP_FROZEN}) & set(modules or ())):
         raise ValueError("MIIV thesis support requires an explicit allowed stay cohort")
+    absence_only = False
+    if modules and set(modules) == {FIRST_IN_HOSP_FROZEN}:
+        from ..concept.thesis_support import has_frozen_first_in_hosp
+
+        absence_only = not has_frozen_first_in_hosp(database)
     # The primary gate precedes cohort discovery, workers and ledger acceptance.
-    if data_path is None:
-        data_path = _get_default_db_path(database)
-        if data_path is None:
-            data_path = get_default_data_path(database)
     from ..datasource import storage_source
 
-    publication_closure = storage_source(
-        database, data_path,
-        publication_excluded_paths=_extraction_output_paths(output_dir),
-    ).seal_publication_closure
+    publication_closure = None
+    if not absence_only:
+        if data_path is None:
+            data_path = _get_default_db_path(database)
+            if data_path is None:
+                data_path = get_default_data_path(database)
+        publication_closure = storage_source(
+            database, data_path,
+            publication_excluded_paths=_extraction_output_paths(output_dir),
+        ).seal_publication_closure
     # Storage fallbacks (a corrupt bucket cache bypassed for its flat source,
     # an unmanifested or CSV read) from this process and its workers become
     # receipt facts: result["storage_fallbacks"] and the publication record.
@@ -9107,11 +9158,15 @@ def extract_database(
             raise ValueError(
                 f"module_batch_sizes[{module!r}] must be a positive integer"
             )
-    data_path = str(data_path)
+    data_path = str(data_path or "") if absence_only else str(data_path)
 
     # Resolve support-export selectors before the planner splits a single stay-key cohort.
     support_stay_binding = None
-    if patient_ids is None:
+    if absence_only:
+        id_col = DATABASE_ID_CONFIG[database]["id_col"]
+        all_ids = []
+        patient_ids_filter = {id_col: all_ids}
+    elif patient_ids is None:
         all_ids, id_col = _get_all_patient_ids(data_path, database, max_patients)
         if not all_ids:
             raise ValueError(
@@ -9303,7 +9358,7 @@ def extract_database(
     from ..datasource import storage_source
 
     run_stay_binding = support_stay_binding or (
-        child_binding(storage_source(database, data_path)) if data_path else None
+        child_binding(storage_source(database, data_path)) if data_path and not absence_only else None
     )
     if (automatic_batch or normalized_module_batch_sizes) and not group_flag:
         # The legacy ungrouped shape kept both Sepsis-3 modules in one worker.
@@ -9469,6 +9524,12 @@ def extract_database(
             if not pq_path or not os.path.exists(pq_path):
                 continue
             module_rows = info.get("rows", 0)
+            if mod_name == FIRST_IN_HOSP_FROZEN:
+                import pyarrow.parquet as pq
+                from ..concept.thesis_support import FIRST_IN_HOSP_SOURCE_KEY
+
+                lineage = pq.read_schema(pq_path).metadata[FIRST_IN_HOSP_SOURCE_KEY]
+                mod_result["thesis_support"] = output_manifest["thesis_support"] = json.loads(lineage)
             mod_result["rows"] += module_rows
             concept_meta = info.get("concept_meta", {}) or {}
             concept_names = info.get("concepts") or list(concept_meta.keys())

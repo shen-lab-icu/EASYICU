@@ -26,7 +26,7 @@ from uuid import uuid4
 import numpy as np
 import pandas as pd
 
-from easyicu.concept.catalog import THESIS_SUPPORT_MODULES
+from easyicu.concept.catalog import FIRST_IN_HOSP_FROZEN, THESIS_SUPPORT_MODULES
 from easyicu.concept.support_exports import select_support_cohort
 from easyicu.concept.thesis_support import load_thesis_support, support_input_files, thesis_support_manifest
 from easyicu.config import DATABASE_ID_CONFIG
@@ -175,6 +175,26 @@ def _reference(source, family, stay, ids, frozen_dir, tables, *, empty):
             return _peep_reference(_FrozenSQL(con), rel, frozen, family, relations)
 
 
+def _first_in_hosp_reference(source, family, stay, ids, table):
+    # The predicate text below is copied from build_c565v6.py:99-107.
+    expression = {
+        "aumc": "admissioncount = 1",
+        "sic": "COALESCE(OffsetAfterFirstAdmission, 0) = 0",
+    }[family]
+    files = support_input_files(source, table, stay, None)
+    relation = parquet_relation(files, ordered=False)
+    with duckdb_spill.connection() as con:
+        con.execute(f"""
+            CREATE TEMP TABLE ordk AS
+            SELECT {stay} stay_id, {expression} first_in_hosp
+            FROM {relation}
+        """)
+        if ids is not None:
+            con.register("hc", pd.DataFrame({"stay_id": pd.Series(ids, dtype="int64")}))
+            con.execute("DELETE FROM ordk WHERE stay_id NOT IN (SELECT stay_id FROM hc)")
+        return con.execute("SELECT stay_id, first_in_hosp AS first_in_hosp_frozen FROM ordk").df()
+
+
 def _rounded(count):
     return None if count < 10 else 10 * ((count + 5) // 10)
 
@@ -235,18 +255,26 @@ def run_equivalence(*, database, db_root, stay_ids=None, module, frozen_src_dir=
     family = database.removesuffix("_demo")
     with binding_unit():
         actual = load_thesis_support(module=module, database=database, data_path=db_root, patient_ids=stay_ids)
-        receipt = thesis_support_manifest(module, database, actual.attrs["available_fields"])
+        receipt = actual.attrs.get("thesis_support") or thesis_support_manifest(
+            module, database, actual.attrs["available_fields"],
+        )
         if receipt["status"] != "projected":
             return {"status": receipt["status"]}
         selection = select_support_cohort(database, db_root, stay_ids)
         ids = None if selection is None else selection[stay]
         actual = actual.rename(columns={stay: "stay_id"})
-        expected = _reference(
-            storage_source(database, db_root), family, stay, ids, frozen_src_dir, receipt["input_tables"],
-            empty=actual.iloc[:0],
-        )
+        source = storage_source(database, db_root)
+        keys = ["stay_id"]
+        if module == FIRST_IN_HOSP_FROZEN:
+            expected = _first_in_hosp_reference(source, family, stay, ids, receipt["source_table"])
+        else:
+            keys.append("charttime")
+            expected = _reference(
+                source, family, stay, ids, frozen_src_dir, receipt["input_tables"],
+                empty=actual.iloc[:0],
+            )
     expected = expected.astype(actual.dtypes)
-    return compare_rows(actual, expected, key_columns=["stay_id", "charttime"])
+    return compare_rows(actual, expected, key_columns=keys)
 
 
 class _DiscardOutput(TextIOBase):
@@ -294,7 +322,10 @@ def main(argv=None):
     parser.add_argument("--frozen-src-dir", type=Path, default=_FROZEN_SOURCE_DIR,
                         help="directory containing SHA-256-pinned frozen sources.py and new_sources.py")
     args = parser.parse_args(argv)
-    if args.database == "miiv" and args.stay_ids is None and args.stay_ids_file is None:
+    if args.module == FIRST_IN_HOSP_FROZEN and args.stay_ids is not None:
+        parser.error("first_in_hosp_frozen requires --stay-ids-file for explicit cohorts")
+    if (args.database == "miiv" and args.module != FIRST_IN_HOSP_FROZEN
+            and args.stay_ids is None and args.stay_ids_file is None):
         parser.error("MIIV requires an explicit stay cohort")
     # A backend exception can contain a raw SQL value or path. Keep its
     # diagnostic private and emit a fixed status code at this boundary.

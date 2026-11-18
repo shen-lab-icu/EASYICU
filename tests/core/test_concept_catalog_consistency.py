@@ -299,6 +299,7 @@ def test_extract_database_modules_use_the_shared_catalog() -> None:
        "imv_recorded_compat": ["imv", "imv_recorded_end_hour"],
        "observed_peep_set": ["observed_peep_set"],
        "rrt_time": ["rrt_active"],
+       "first_in_hosp_frozen": ["first_in_hosp_frozen"],
        "pao2_arterial_hourly_min": ["po2"]}
     # The SIC case module is explicitly selected, not part of the six-source
     # default extraction order.
@@ -314,6 +315,7 @@ def test_extract_database_modules_use_the_shared_catalog() -> None:
     assert "vent_native" not in EXTRACT_MODULE_ORDER
     assert "haemo_native" not in EXTRACT_MODULE_ORDER
     assert "fluid_events" not in EXTRACT_MODULE_ORDER
+    assert "first_in_hosp_frozen" not in EXTRACT_MODULE_ORDER
 
 
 def test_web_catalog_aligns_with_merged_extraction_dictionary() -> None:

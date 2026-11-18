@@ -396,6 +396,7 @@ def build_export_file_metadata_binding(
         ColumnMetadataBinding,
         ColumnMetadataFileBinding,
     )
+    from .catalog import FIRST_IN_HOSP_FROZEN
 
     raw_columns = list(frame.columns)
     if any(not isinstance(value, str) or not value for value in raw_columns):
@@ -547,6 +548,10 @@ def build_export_file_metadata_binding(
             source_database=database,
             source_database_class_prefixes=database_class_prefixes,
         )
+        if module == FIRST_IN_HOSP_FROZEN and concept == FIRST_IN_HOSP_FROZEN:
+            from .thesis_support import first_in_hosp_column_metadata
+
+            metadata = first_in_hosp_column_metadata(metadata, frame.attrs["thesis_support"])
         bindings[column] = ColumnMetadataBinding(
             metadata=metadata,
             derivation_window=window,

@@ -6,12 +6,15 @@ import os
 from pathlib import Path
 
 import pandas as pd
+import pyarrow.parquet as pq
 import pytest
 
+from easyicu import datasource
 from easyicu.api.extraction import (
     EXTRACT_MODULE_ORDER, EXTRACT_MODULES, _load_module_concepts, extract_database,
 )
 from easyicu.concept import thesis_support
+from easyicu.concept.catalog import CONCEPT_GROUPS_INTERNAL, FIRST_IN_HOSP_FROZEN
 from easyicu.concept.thesis_support import load_thesis_support, thesis_support_manifest
 from easyicu.config import DATABASE_ID_CONFIG
 from tools.thesis_support import frozen_equivalence
@@ -423,3 +426,179 @@ def test_aggregate_comparison_counts_larger_differences_per_column():
     assert result["mismatching_rows"] == 10
     assert result["mismatching_cells"] == {"stay_id": None, "charttime": None, "observed_peep_set": 10}
     assert result["module"]["stays"] == result["frozen"]["stays"] == 10
+
+
+_FIRST_IN_HOSP_FIXTURES = {
+    "aumc": ("admissioncount", [None, 0, 1, 2, -1], [None, False, True, False, False],
+             "admissions.admissioncount = 1"),
+    "sic": ("OffsetAfterFirstAdmission", [None, 0, 3, -3], [True, True, False, False],
+            "COALESCE(cases.OffsetAfterFirstAdmission, 0) = 0"),
+}
+
+
+def _first_in_hosp_source(root, database):
+    config = DATABASE_ID_CONFIG[database]
+    field, values, expected, expression = _FIRST_IN_HOSP_FIXTURES[database]
+    ids = list(range(_STAY, _STAY + len(values)))
+    root.mkdir()
+    raw = root / "raw"
+    raw.mkdir()
+    table = config["table"]
+    _write(raw, table, {config["id_col"]: ids, field: pd.array(values, dtype="Int64")})
+    path = raw / f"{table}.parquet"
+    (root / path.name).symlink_to(path)
+    rows = pd.DataFrame({
+        config["id_col"]: ids,
+        FIRST_IN_HOSP_FROZEN: pd.array(expected, dtype="boolean"),
+    })
+    return rows, path, field, expression
+
+
+@pytest.mark.parametrize("database", ["aumc", "sic"])
+def test_first_in_hosp_duckdb_predicates_and_selected_stays(tmp_path, database):
+    source = tmp_path / "source"
+    expected, _, _, _ = _first_in_hosp_source(source, database)
+    stay = expected.columns[0]
+    for ids, wanted in [
+        (None, expected),
+        ({stay: [expected[stay].iloc[2], _STAY, _STAY, _OTHER]}, expected.iloc[[0, 2]]),
+        ([_OTHER], expected.iloc[:0]),
+    ]:
+        rows = load_thesis_support(
+            module=FIRST_IN_HOSP_FROZEN, database=database, data_path=source, patient_ids=ids,
+        )
+        pd.testing.assert_frame_equal(rows, wanted.reset_index(drop=True))
+        assert rows.attrs["thesis_support"]["status"] == "projected"
+        assert frozen_equivalence.run_equivalence(
+            database=database, db_root=source, stay_ids=ids, module=FIRST_IN_HOSP_FROZEN,
+            frozen_src_dir=tmp_path / "unused_reference",
+        )["status"] == "agree"
+
+
+@pytest.mark.parametrize("database", ["eicu", "hirid", "miiv", "mimic"])
+def test_first_in_hosp_absence_before_storage(tmp_path, monkeypatch, database):
+    def unexpected_source(*args, **kwargs):
+        pytest.fail("out-of-scope first-in-hospital request opened storage")
+
+    monkeypatch.setattr(thesis_support, "storage_source", unexpected_source)
+    monkeypatch.setattr(frozen_equivalence, "storage_source", unexpected_source)
+    monkeypatch.setattr(datasource, "storage_source", unexpected_source)
+    stay = DATABASE_ID_CONFIG[database]["id_col"]
+    rows = load_thesis_support(
+        module=FIRST_IN_HOSP_FROZEN, database=database, data_path=tmp_path,
+    )
+    assert rows.empty
+    assert rows.dtypes.astype(str).to_dict() == {stay: "int64", FIRST_IN_HOSP_FROZEN: "boolean"}
+    receipt = rows.attrs["thesis_support"]
+    assert receipt["status"] == "UNAVAILABLE_IN_SCOPE"
+    assert receipt["reason"] == "no_frozen_predicate_in_scope"
+    assert frozen_equivalence.run_equivalence(
+        database=database, db_root=tmp_path, module=FIRST_IN_HOSP_FROZEN,
+    ) == {"status": "UNAVAILABLE_IN_SCOPE"}
+    output = tmp_path / "export"
+    result = extract_database(
+        database, data_path=tmp_path, output_dir=output, modules=[FIRST_IN_HOSP_FROZEN], max_workers=1,
+    )
+    assert result["storage_consumed"] == []
+    manifest = json.loads((output / "_manifest.json").read_text())
+    entry, = manifest["files"]
+    assert entry["thesis_support"] == receipt
+    assert entry["availability"] == "structurally_unavailable"
+    assert entry["primary_key"] == [stay]
+    pd.testing.assert_frame_equal(pd.read_parquet(output / entry["file"]), rows)
+
+
+@pytest.mark.parametrize("database", ["aumc", "sic"])
+@pytest.mark.parametrize("stream", [False, True])
+def test_native_first_in_hosp_export_has_producer_lineage(tmp_path, database, stream):
+    source = tmp_path / "source"
+    expected, realpath, field, expression = _first_in_hosp_source(source, database)
+    stay = expected.columns[0]
+    output = tmp_path / "export"
+    extract_database(
+        database, data_path=source, output_dir=output, modules=[FIRST_IN_HOSP_FROZEN],
+        patient_ids=expected[stay].iloc[::-1].tolist(), stream_output_batches=stream, batch_size=1,
+        native_export_v2=True, max_workers=1,
+    )
+    manifest = json.loads((output / "_manifest.json").read_text())
+    entry, = manifest["files"]
+    assert entry["primary_key"] == [stay]
+    assert entry["row_grain"] == "one_row_per_icu_stay"
+    assert entry["availability"] == "available"
+    assert pq.read_schema(output / entry["file"]).field(FIRST_IN_HOSP_FROZEN).nullable
+    pd.testing.assert_frame_equal(pd.read_parquet(output / entry["file"]), expected)
+    if stream:
+        assert len(manifest["stream_batches"][FIRST_IN_HOSP_FROZEN]) == len(expected)
+    receipt = entry["thesis_support"]
+    table = DATABASE_ID_CONFIG[database]["table"]
+    assert receipt["status"] == "projected"
+    assert receipt["source_table"] == table
+    assert receipt["source_field"] == field
+    assert receipt["availability_basis"] == "frozen_raw_predicate"
+    parameters = {
+        "expression": expression,
+        "frozen_reference": "build_c565v6.py:99-107",
+        "source_realpath": str(realpath),
+        "source_sha256": hashlib.sha256(realpath.read_bytes()).hexdigest(),
+    }
+    assert {key: receipt[key] for key in parameters} == parameters
+    producer = json.loads((output / f"{FIRST_IN_HOSP_FROZEN}.manifest.json").read_text())
+    assert producer["thesis_support"] == receipt
+    sidecar = json.loads((output / manifest["column_metadata"]["file"]).read_text())
+    metadata = sidecar["files"][0]["columns"][FIRST_IN_HOSP_FROZEN]["metadata"]
+    assert metadata["availability_basis"] == receipt["availability_basis"]
+    lineage, = metadata["source_lineage"]
+    assert lineage["table"] == table
+    assert lineage["value_variable"] == field
+    assert lineage["semantic_parameters"] == parameters
+
+
+def test_first_in_hosp_remains_opt_in():
+    assert EXTRACT_MODULES[FIRST_IN_HOSP_FROZEN] == [FIRST_IN_HOSP_FROZEN]
+    assert set(EXTRACT_MODULE_ORDER) == set(CONCEPT_GROUPS_INTERNAL)
+    assert FIRST_IN_HOSP_FROZEN not in EXTRACT_MODULE_ORDER
+    assert all(FIRST_IN_HOSP_FROZEN not in EXTRACT_MODULES[module] for module in EXTRACT_MODULE_ORDER)
+
+
+def test_first_in_hosp_exports_an_empty_selected_cohort(tmp_path):
+    source = tmp_path / "source"
+    expected, _, _, _ = _first_in_hosp_source(source, "sic")
+    output = tmp_path / "export"
+    result = extract_database(
+        "sic", data_path=source, output_dir=output, modules=[FIRST_IN_HOSP_FROZEN],
+        patient_ids=[_OTHER], stream_output_batches=True, max_workers=1,
+    )
+    assert result["num_patients"] == 0
+    entry, = json.loads((output / "_manifest.json").read_text())["files"]
+    assert entry["availability"] == "available"
+    assert entry["thesis_support"]["status"] == "projected"
+    pd.testing.assert_frame_equal(pd.read_parquet(output / entry["file"]), expected.iloc[:0])
+
+
+def test_first_in_hosp_cli_compares_by_file_and_reports_only_aggregates(tmp_path, monkeypatch, capsys):
+    source = tmp_path / "source"
+    expected, _, _, _ = _first_in_hosp_source(source, "aumc")
+    cohort = tmp_path / "cohort.parquet"
+    expected[[expected.columns[0]]].to_parquet(cohort)
+    args = [
+        "--database", "aumc", "--db-root", str(source), "--module", FIRST_IN_HOSP_FROZEN,
+        "--stay-ids-file", str(cohort),
+    ]
+    assert frozen_equivalence.main(args) == 0
+    agreeing = capsys.readouterr()
+    assert json.loads(agreeing.out)["status"] == "agree"
+
+    def fill_nulls(**kwargs):
+        rows = load_thesis_support(**kwargs)
+        rows[FIRST_IN_HOSP_FROZEN] = rows[FIRST_IN_HOSP_FROZEN].fillna(False)
+        return rows
+
+    monkeypatch.setattr(frozen_equivalence, "load_thesis_support", fill_nulls)
+    assert frozen_equivalence.main(args) == 1
+    mismatching = capsys.readouterr()
+    report = json.loads(mismatching.out)
+    assert report["status"] == "different"
+    assert report["mismatching_cells"] == {"stay_id": None, FIRST_IN_HOSP_FROZEN: None}
+    for output in (agreeing, mismatching):
+        assert not output.err
+        assert all(str(value) not in output.out for value in expected.iloc[:, 0])

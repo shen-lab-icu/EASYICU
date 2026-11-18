@@ -1362,6 +1362,7 @@ STAY_LEVEL_SUPPORT_UNITS = {
     name: unit for fields in STAY_LEVEL_SUPPORT_MODULES.values() for name, (_, unit) in fields.items()
 }
 # HiRID's IMV row uses the first recorded hour as the coordinate for its span.
+FIRST_IN_HOSP_FROZEN = 'first_in_hosp_frozen'
 THESIS_SUPPORT_MODULES = {
     'imv_recorded_compat': {
         'imv': ('Frozen Hourly Invasive Ventilation Flag', 'boolean'),
@@ -1373,7 +1374,11 @@ THESIS_SUPPORT_MODULES = {
     'rrt_time': {
         'rrt_active': ('Frozen Active Renal Replacement Therapy Hour', 'boolean'),
     },
+    FIRST_IN_HOSP_FROZEN: {
+        FIRST_IN_HOSP_FROZEN: ('Frozen First In-Hospital ICU Stay Predicate', 'boolean'),
+    },
 }
+STAY_GRAIN_SUPPORT_MODULES = frozenset({*STAY_LEVEL_SUPPORT_MODULES, FIRST_IN_HOSP_FROZEN})
 SUPPORT_MODULE_FIELDS = {**STAY_LEVEL_SUPPORT_MODULES, **THESIS_SUPPORT_MODULES}
 SUPPORT_MODULE_UNITS = {
     **STAY_LEVEL_SUPPORT_UNITS,
