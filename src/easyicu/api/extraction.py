@@ -78,7 +78,7 @@ from .concepts import (
 )
 
 if TYPE_CHECKING:
-    from ..concept.thesis_support import PinnedModuleInput
+    from ..concept.thesis_support import FrozenReleaseParameter, PinnedModuleInput
 
 
 def _get_all_patient_ids(
@@ -8387,7 +8387,8 @@ def _publish_native_export_v2(
                 # exact fallback. No large table may enter it merely because
                 # the Arrow path found keys that need consolidation.
                 if physical_output_missing:
-                    frame = pd.DataFrame({"stay_id": pd.Series([], dtype="int64")})
+                    key = DATABASE_ID_CONFIG[normalized_database]["id_col"] if module == FIRST_IN_HOSP_FROZEN else "stay_id"
+                    frame = pd.DataFrame({key: pd.Series([], dtype="int64")})
                 else:
                     if module == "demographics" or module in STAY_GRAIN_SUPPORT_MODULES:
                         fallback_size = _native_export_pandas_fallback_size(
@@ -8984,13 +8985,14 @@ def _keeps_storage_evidence(function):
     return wrapper
 
 def _extract_pinned_thesis_support(
-    database, modules, pinned_inputs, patient_ids, output_dir, native_export_v2,
+    database, modules, pinned_inputs, patient_ids, output_dir, native_export_v2, frozen_release_parameter,
 ):
     """Produce the pinned support modules without raw-table discovery or workers."""
     import json
 
     from ..concept.thesis_support import (
-        PINNED_SUPPORT_MODULES, PinnedInputError, load_thesis_support, pinned_stay_ids, validate_pinned_inputs,
+        PINNED_SUPPORT_MODULES, PinnedInputError, load_thesis_support, pinned_stay_ids,
+        validate_frozen_release_parameter, validate_pinned_inputs, validate_shared_pinned_inputs,
     )
 
     selected = list(dict.fromkeys(pinned_inputs if modules is None else modules))
@@ -9000,18 +9002,28 @@ def _extract_pinned_thesis_support(
     declarations = {module: tuple(pinned_inputs.get(module, ())) for module in selected}
     for module, entries in declarations.items():
         validate_pinned_inputs(module, database, entries)
+    imv_module = "imv_recorded_compat"
+    if frozen_release_parameter is not None:
+        if imv_module not in declarations:
+            raise PinnedInputError("frozen_release_parameter_not_allowed")
+        validate_frozen_release_parameter(imv_module, database, frozen_release_parameter)
+    validate_shared_pinned_inputs(declarations)
     cohort = pinned_stay_ids(database, patient_ids)
     if native_export_v2 and output_dir is None:
         raise ValueError("native_export_v2 requires output_dir")
 
     frames = {
-        module: load_thesis_support(module=module, database=database, patient_ids=cohort, pinned_inputs=entries)
+        module: load_thesis_support(
+            module=module, database=database, patient_ids=cohort, pinned_inputs=entries,
+            frozen_release_parameter=frozen_release_parameter if module == imv_module else None,
+        )
         for module, entries in declarations.items()
     }
-    bounded_stays = max(frame.attrs.get("pinned_cohort_size", 0) for frame in frames.values())
+    sizes = [frame.attrs["pinned_cohort_size"] for frame in frames.values() if "pinned_cohort_size" in frame.attrs]
+    bounded_stays = sizes[0] if sizes else None
     result = {
         "database": database,
-        "num_patients": len(cohort) if cohort is not None else bounded_stays,
+        "num_patients": len(cohort) if cohort is not None else (bounded_stays or 0),
         "pinned_outcome_stays": bounded_stays,
         "modules": {},
         "output_dir": str(output_dir) if output_dir is not None else None,
@@ -9025,7 +9037,10 @@ def _extract_pinned_thesis_support(
         return result
 
     root = Path(output_dir)
+    if root.exists() and any(root.iterdir()):
+        raise ValueError("pinned thesis support requires an empty output directory")
     marker = begin_native_export(root)
+    # A writer can finish between the empty-directory check and our claim.
     if any(entry != marker for entry in root.iterdir()):
         marker.unlink()
         raise ValueError("pinned thesis support requires an empty output directory")
@@ -9078,6 +9093,7 @@ def extract_database(
     subhour_concepts: Optional[Mapping[str, Sequence[str]]] = None,
     *,
     pinned_inputs: Mapping[str, Sequence[PinnedModuleInput]] | None = None,
+    frozen_release_parameter: FrozenReleaseParameter | None = None,
 ) -> Dict:
     """按 20 个模块分组、子进程隔离地提取整个数据库的全部特征。
 
@@ -9168,11 +9184,13 @@ def extract_database(
     from ..concept.thesis_support import PINNED_SUPPORT_MODULES
 
     pinned_only = bool(modules) and set(modules) <= PINNED_SUPPORT_MODULES
-    if pinned_inputs is not None or pinned_only:
-        if pinned_inputs is not None and (data_path is not None or max_patients is not None):
+    if pinned_inputs is not None or pinned_only or frozen_release_parameter is not None:
+        if (pinned_inputs is not None or frozen_release_parameter is not None) and (
+            data_path is not None or max_patients is not None
+        ):
             raise ValueError("pinned thesis support uses pinned inputs and explicit stay IDs")
         return _extract_pinned_thesis_support(
-            database, modules, pinned_inputs or {}, patient_ids, output_dir, native_export_v2,
+            database, modules, pinned_inputs or {}, patient_ids, output_dir, native_export_v2, frozen_release_parameter,
         )
 
     import multiprocessing as mp
@@ -9202,7 +9220,12 @@ def extract_database(
     from ..datasource import storage_source
 
     publication_closure = None
-    if not absence_only:
+    if absence_only:
+        if data_path is not None and output_dir is not None:
+            source_root, output_root = Path(data_path).resolve(), Path(output_dir).resolve()
+            if source_root.is_relative_to(output_root) or output_root.is_relative_to(source_root):
+                raise ValueError("first_in_hosp_frozen: input and output directories overlap")
+    else:
         if data_path is None:
             data_path = _get_default_db_path(database)
             if data_path is None:
@@ -9667,6 +9690,12 @@ def extract_database(
             else:
                 # 无输出目录：读回宽表 DataFrame 到内存（键=模块名）
                 mod_result["concepts"][mod_name] = pd.read_parquet(pq_path)
+        if mod_name == FIRST_IN_HOSP_FROZEN and "thesis_support" not in output_manifest:
+            from ..concept.thesis_support import thesis_support_manifest
+
+            mod_result["thesis_support"] = output_manifest["thesis_support"] = thesis_support_manifest(
+                mod_name, database, [],
+            )
         if output_dir is not None:
             with open(os.path.join(output_dir, f"{mod_name}.manifest.json"), "w") as f:
                 json.dump(output_manifest, f)

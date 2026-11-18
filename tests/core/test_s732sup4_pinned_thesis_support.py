@@ -9,12 +9,16 @@ import pandas as pd
 import pytest
 
 from easyicu import datasource, extract_database
+from easyicu.api import extraction
 from easyicu.concept import thesis_support as support
 from easyicu.config import DATABASE_ID_CONFIG
+from easyicu.export_publication import IN_PROGRESS_MARKER
 from tools.thesis_support import frozen_equivalence
 
 _IMV = "imv_recorded_compat"
 _RRT = "rrt_time"
+_EPISODE_GAP = "episode_gap_tolerance_h"
+_S1345 = "S1345 narrow config read, 6 files, sha-pinned"
 
 
 def _pin(root, database, module, **columns):
@@ -37,9 +41,11 @@ def _rrt_inputs(root, db):
     )
 
 
-def _span_inputs(root):
+def _span_inputs(root, *, outcome=None):
     return (
-        _pin(root, "hirid", "outcome", stay_id=[101, 102, 103, 104], los_icu=[1 / 24, 4 / 24, 1 / 24, 1 / 24]),
+        outcome if outcome is not None else _pin(
+            root, "hirid", "outcome", stay_id=[101, 102, 103, 104], los_icu=[1 / 24, 4 / 24, 1 / 24, 1 / 24],
+        ),
         _pin(
             root, "hirid", "respiratory",
             stay_id=[101, 101, 101, 101, 102, 103, 104, 105],
@@ -47,6 +53,34 @@ def _span_inputs(root):
             mech_vent=["INVASIVE", "noninvasive", "invasive", "invasive", "invasive", "invasive", None, "invasive"],
         ),
     )
+
+
+def _episode_inputs(root, database):
+    return (
+        _pin(
+            root, database, "outcome", stay_id=[101, 102, 103, 104, 105],
+            los_icu=[9.5 / 24, 6 / 24, 2 / 24, 8 / 24, 0],
+        ),
+        _pin(
+            root, database, "respiratory",
+            stay_id=[101] * 6 + [102, 102, 103, 103, 104, 105],
+            charttime=[-0.5, 0.2, 3.1, 3.8, 7.4, 10., 1., 5., 2., None, 2., 0.],
+            mech_vent=[
+                "invasive", "invasive", "noninvasive", "invasive", "invasive", "invasive",
+                "invasive", "invasive", "invasive", None, "invasive", "invasive",
+            ],
+        ),
+    )
+
+
+def _episode_parameter(root, *, resolved=None, **options):
+    path = root / "signed-episode-parameters.json"
+    path.write_text(json.dumps({
+        "rule": _S1345,
+        "defined_at": ["config/common_v0.yaml:10"],
+        "resolved": {"v0.2": {_EPISODE_GAP: 2}, "v0.4": {_EPISODE_GAP: 0}} if resolved is None else resolved,
+    }), encoding="utf-8")
+    return support.FrozenReleaseParameter(path, sha256(path.read_bytes()).hexdigest(), **options)
 
 
 @pytest.fixture(autouse=True)
@@ -221,7 +255,8 @@ def test_cli_detects_a_planted_mismatch_and_suppresses_small_counts(tmp_path, mo
 
 
 def test_native_export_consumes_only_pinned_modules_and_seals_both_receipts(tmp_path):
-    pins = {_RRT: _rrt_inputs(tmp_path / "rrt", "hirid"), _IMV: _span_inputs(tmp_path / "imv")}
+    outcome, renal = _rrt_inputs(tmp_path / "rrt", "hirid")
+    pins = {_RRT: (outcome, renal), _IMV: _span_inputs(tmp_path / "imv", outcome=outcome)}
     output = tmp_path / "output"
     result = extract_database(
         "hirid", pinned_inputs=pins, patient_ids=[101, 102], output_dir=output, native_export_v2=True,
@@ -258,3 +293,153 @@ def test_support_only_export_without_pins_never_discovers_raw_stays(tmp_path):
     assert result["modules"][_RRT]["thesis_support"]["missing_inputs"] == [
         "eicu/renal.parquet:rrt", "eicu/outcome.parquet:los_icu",
     ]
+
+
+@pytest.mark.parametrize("existing_marker", [False, True], ids=["unowned_file", "unfinished_writer"])
+def test_pinned_export_checks_destination_before_starting_publication(tmp_path, monkeypatch, existing_marker):
+    output = tmp_path / "busy"
+    output.mkdir()
+    existing = output / (IN_PROGRESS_MARKER if existing_marker else "unpublished.parquet")
+    existing.write_bytes(b"existing writer evidence")
+    entered = []
+    begin = extraction.begin_native_export
+
+    def track_begin(root):
+        entered.append(root)
+        return begin(root)
+
+    monkeypatch.setattr(extraction, "begin_native_export", track_begin)
+    with pytest.raises(ValueError):
+        extract_database("sic", modules=[_RRT], output_dir=output)
+    assert entered == [], "a nonempty destination must be rejected before creating a publication marker"
+    assert list(output.iterdir()) == [existing]
+    assert existing.read_bytes() == b"existing writer evidence"
+
+
+@pytest.mark.parametrize("empty_selection", [False, True], ids=["typed_absence", "empty_explicit_cohort"])
+def test_pinned_export_never_claims_unread_outcome(tmp_path, empty_selection):
+    pins = {_RRT: _rrt_inputs(tmp_path, "sic")} if empty_selection else None
+    output = tmp_path / "output"
+    result = extract_database(
+        "sic", modules=[_RRT], pinned_inputs=pins,
+        patient_ids=[] if empty_selection else None, output_dir=output,
+    )
+    assert result["num_patients"] == 0
+    assert result["pinned_outcome_stays"] is None
+    manifest = json.loads((output / "_manifest.json").read_text())
+    assert manifest["time_window_authority"] == {
+        "required": False, "source": "fallback_only", "bounded_stays": 0,
+    }
+    assert "pinned outcome.los_icu" not in manifest["canonical_physical_schema"]["time_window_policy"]
+
+
+def test_pinned_export_rejects_conflicting_shared_outcome(tmp_path):
+    pins = {_RRT: _rrt_inputs(tmp_path / "rrt", "hirid"), _IMV: _span_inputs(tmp_path / "imv")}
+    output = tmp_path / "output"
+    with pytest.raises(support.PinnedInputError, match="pinned_shared_input_conflict: outcome"):
+        extract_database("hirid", pinned_inputs=pins, patient_ids=[101, 102, 103], output_dir=output)
+    assert not output.exists()
+
+
+def test_pinned_path_resolution_error_is_sanitized(tmp_path):
+    outcome, renal = _rrt_inputs(tmp_path, "sic")
+    renal.path.unlink()
+    renal.path.symlink_to(renal.path.name)
+    with pytest.raises(support.PinnedInputError) as error:
+        support.load_thesis_support(database="sic", module=_RRT, pinned_inputs=[outcome, renal])
+    assert error.value.reason_code == "pinned_file_unreadable"
+    assert str(tmp_path) not in str(error.value)
+    assert error.value.__suppress_context__
+
+
+@pytest.mark.parametrize("database", ["aumc", "miiv", "sic"])
+def test_first_hourly_imv_episode_obeys_frozen_gap_and_stay_membership(tmp_path, monkeypatch, database):
+    parameter = _episode_parameter(tmp_path)
+    inputs = _episode_inputs(tmp_path, database)
+    read = support.pq.read_table
+
+    def checked_projection(handle, *, columns, filters):
+        assert isinstance(handle, BufferedReader)
+        assert set(columns) in [{"stay_id", "los_icu"}, {"stay_id", "charttime", "mech_vent"}]
+        assert set(filters[0][2]) <= {101, 102, 103, 105}
+        return read(handle, columns=columns, filters=filters)
+
+    monkeypatch.setattr(support.pq, "read_table", checked_projection)
+    ids = [101, 102, 103, 105]
+    args = dict(database=database, module=_IMV, pinned_inputs=inputs, frozen_release_parameter=parameter)
+    rows = support.load_thesis_support(**args, patient_ids=ids)
+    assert rows.values.tolist() == [[101, 0., True, 3.], [102, 1., True, 1.]]
+    assert rows.attrs["pinned_cohort_size"] == 3
+    assert rows.attrs["thesis_support"]["frozen_release_parameter"] == {
+        "key_path": ["cohort", _EPISODE_GAP],
+        "common_version": "v0.2",
+        "value": 2,
+        "receipt_sha256": parameter.expected_sha256,
+        "defined_at": ["config/common_v0.yaml:10"],
+        "rule": _S1345,
+    }
+    assert frozen_equivalence.run_equivalence(**args, stay_ids=ids)["status"] == "agree"
+
+    out = tmp_path / "export"
+    extract_database(
+        database, pinned_inputs={_IMV: inputs}, frozen_release_parameter=parameter,
+        patient_ids=ids, output_dir=out,
+    )
+    receipt = rows.attrs["thesis_support"]
+    manifest = json.loads((out / "_manifest.json").read_text())
+    assert manifest["time_window_authority"]["bounded_stays"] == 3
+    assert manifest["files"][0]["thesis_support"] == receipt
+    assert json.loads((out / f"{_IMV}.manifest.json").read_text())["pinned_thesis_support"] == receipt
+    pd.testing.assert_frame_equal(
+        support.pq.ParquetFile(out / f"{_IMV}.parquet").read().to_pandas(),
+        rows.rename(columns={rows.columns[0]: "stay_id"}),
+    )
+
+
+@pytest.mark.parametrize(("failure", "reason"), [
+    ("sha256", "frozen_release_parameter_sha256_mismatch"),
+    ("version", "frozen_release_parameter_version_missing"),
+    ("key", "frozen_release_parameter_key_missing"),
+])
+def test_bad_frozen_release_parameter_fails_closed_before_parquet(tmp_path, monkeypatch, failure, reason):
+    if failure == "key":
+        parameter = _episode_parameter(tmp_path, resolved={"v0.2": {}})
+    else:
+        parameter = _episode_parameter(tmp_path)
+        parameter = (
+            replace(parameter, expected_sha256="f" * 64) if failure == "sha256"
+            else replace(parameter, common_version="v9.4")
+        )
+    pins = _episode_inputs(tmp_path, "sic")
+    monkeypatch.setattr(support, "open_pinned_modules", lambda *a: pytest.fail("opened data before resolving the gap"))
+    with pytest.raises(support.PinnedInputError) as error:
+        support.load_thesis_support(database="sic", module=_IMV, pinned_inputs=pins, frozen_release_parameter=parameter)
+    assert error.value.reason_code == reason
+    assert str(tmp_path) not in str(error.value)
+
+
+def test_cli_uses_requested_gap_version_and_catches_planted_episode_end(tmp_path, monkeypatch, capsys):
+    parameter = _episode_parameter(tmp_path, common_version="v0.4")
+    pins = _episode_inputs(tmp_path, "miiv")
+    args = [
+        "--database", "miiv", "--module", _IMV, "--stay-ids", "101",
+        "--frozen-release-parameter", str(parameter.path), parameter.expected_sha256,
+        "--common-version", parameter.common_version,
+    ]
+    for pin in pins:
+        args.extend(["--pinned-input", pin.module, str(pin.path), pin.expected_sha256, ",".join(pin.allowed_columns)])
+    assert frozen_equivalence.main(args) == 0
+    assert json.loads(capsys.readouterr().out)["status"] == "agree"
+    original = frozen_equivalence.load_thesis_support
+
+    def planted(**kwargs):
+        rows = original(**kwargs)
+        assert rows.imv_recorded_end_hour.tolist() == [0.]
+        rows.loc[0, "imv_recorded_end_hour"] = 3.
+        return rows
+
+    monkeypatch.setattr(frozen_equivalence, "load_thesis_support", planted)
+    assert frozen_equivalence.main(args) == 1
+    captured = capsys.readouterr()
+    assert json.loads(captured.out)["status"] == "different"
+    assert not captured.err and str(tmp_path) not in captured.out and "101" not in captured.out

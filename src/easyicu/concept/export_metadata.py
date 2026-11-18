@@ -551,7 +551,7 @@ def build_export_file_metadata_binding(
         if module == FIRST_IN_HOSP_FROZEN and concept == FIRST_IN_HOSP_FROZEN:
             from .thesis_support import first_in_hosp_column_metadata
 
-            metadata = first_in_hosp_column_metadata(metadata, frame.attrs["thesis_support"])
+            metadata = first_in_hosp_column_metadata(metadata, frame.attrs.get("thesis_support"))
         bindings[column] = ColumnMetadataBinding(
             metadata=metadata,
             derivation_window=window,

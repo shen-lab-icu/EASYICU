@@ -17,7 +17,7 @@ D0 projections take the explicit `pinned_inputs` argument described below.
 | `observed_peep_set` | SIC | `cases.ICUOffset` and `data_float_h` with DataID 2278 and Val in [0, 40] |
 | `observed_peep_set`, `imv_recorded_compat` | eICU, MIMIC-III | Typed absence by spec |
 | `imv_recorded_compat` | HiRID | Pinned `respiratory.mech_vent` and `outcome.los_icu`. One row per eligible stay, with the floored first and last invasive hours. |
-| `imv_recorded_compat` | AUMC, MIIV, SIC | `UNAVAILABLE_IN_SCOPE` with `no_raw_producer`. The authorized hourly contract lacks `release.params.cohort.episode_gap_tolerance_h`. |
+| `imv_recorded_compat` | AUMC, MIIV, SIC | Pinned `respiratory.mech_vent`, `outcome.los_icu`, and the S1345 release-parameter receipt. Publishes the start and last invasive hour of the first frozen episode per eligible stay. |
 | `rrt_time` | AUMC, eICU, HiRID, SIC | Pinned `renal.rrt` and `outcome.los_icu`. One row per active RRT hour on the frozen LOS spine. |
 | `rrt_time` | MIIV | `UNAVAILABLE_IN_SCOPE` with `no_exact_producer`. D0 does not carry the corrected actual-end interval authority. |
 | `rrt_time` | MIMIC-III | Typed absence by spec |
@@ -60,9 +60,20 @@ Use an empty output directory for publication. For in-memory access to
 one module, call `load_thesis_support` with that module's tuple of
 `PinnedModuleInput` objects. The pinned mode resolves stay filters
 directly against the D0 key. MIIV requires explicit allowed members.
+When two projections use the same D0 module, pass the same resolved file
+and digest to both.
 For the HiRID IMV span, use `respiratory` with `stay_id,charttime,mech_vent`
 in place of `renal`. Missing files and SHA-256 mismatches raise
 `PinnedInputError` with reason codes before any Parquet decode.
+
+For AUMC, MIIV and SIC IMV, bind that respiratory projection and pass
+`frozen_release_parameter=FrozenReleaseParameter(Path(receipt_path), receipt_sha256)`
+to `extract_database` or `load_thesis_support`. Import `FrozenReleaseParameter`
+from `easyicu.concept.thesis_support`. The default common version is `v0.2`
+and the key path is `("cohort", "episode_gap_tolerance_h")`. The module
+receipt records the selected version, value, full receipt SHA-256, and
+defining source location under `frozen_release_parameter`, with the rule
+“S1345 narrow config read, 6 files, sha-pinned”.
 
 ## Equivalence check
 
@@ -89,6 +100,13 @@ PYTHONPATH=src python tools/thesis_support/frozen_equivalence.py \
   --pinned-input renal "$RENAL_PATH" "$RENAL_SHA256" stay_id,charttime,rrt \
   --pinned-input outcome "$OUTCOME_PATH" "$OUTCOME_SHA256" stay_id,los_icu
 ```
+
+For AUMC, MIIV and SIC first-episode IMV equivalence, use
+`--module imv_recorded_compat`, replace the renal binding with
+`--pinned-input respiratory "$RESPIRATORY_PATH" "$RESPIRATORY_SHA256" stay_id,charttime,mech_vent`,
+and add `--frozen-release-parameter "$RECEIPT_PATH" "$RECEIPT_SHA256"`.
+Use `--common-version` to select a different version from the receipt.
+The harness executes the frozen first-episode SQL with the resolved gap.
 
 Keep real stay IDs in an approved file in the private layer. Parquet
 cohorts use a non-null integer column named for the database's native

@@ -10,11 +10,13 @@ import pyarrow.parquet as pq
 import pytest
 
 from easyicu import datasource
+from easyicu.api import extraction
 from easyicu.api.extraction import (
-    EXTRACT_MODULE_ORDER, EXTRACT_MODULES, _load_module_concepts, extract_database,
+    EXTRACT_MODULE_ORDER, EXTRACT_MODULES, _load_module_concepts, extract_database, publication_dictionary,
 )
 from easyicu.concept import thesis_support
 from easyicu.concept.catalog import CONCEPT_GROUPS_INTERNAL, FIRST_IN_HOSP_FROZEN
+from easyicu.concept.export_metadata import build_export_file_metadata_binding
 from easyicu.concept.thesis_support import load_thesis_support, thesis_support_manifest
 from easyicu.config import DATABASE_ID_CONFIG
 from tools.thesis_support import frozen_equivalence
@@ -435,9 +437,11 @@ _FIRST_IN_HOSP_FIXTURES = {
 }
 
 
-def _first_in_hosp_source(root, database):
+def _first_in_hosp_source(root, database, *, extra_nulls=0):
     config = DATABASE_ID_CONFIG[database]
     field, values, expected, expression = _FIRST_IN_HOSP_FIXTURES[database]
+    values = values + [None] * extra_nulls
+    expected = expected + [None] * extra_nulls
     ids = list(range(_STAY, _STAY + len(values)))
     root.mkdir()
     raw = root / "raw"
@@ -494,9 +498,11 @@ def test_first_in_hosp_absence_before_storage(tmp_path, monkeypatch, database):
     assert frozen_equivalence.run_equivalence(
         database=database, db_root=tmp_path, module=FIRST_IN_HOSP_FROZEN,
     ) == {"status": "UNAVAILABLE_IN_SCOPE"}
+    source = tmp_path / "source"
+    source.mkdir()
     output = tmp_path / "export"
     result = extract_database(
-        database, data_path=tmp_path, output_dir=output, modules=[FIRST_IN_HOSP_FROZEN], max_workers=1,
+        database, data_path=source, output_dir=output, modules=[FIRST_IN_HOSP_FROZEN], max_workers=1,
     )
     assert result["storage_consumed"] == []
     manifest = json.loads((output / "_manifest.json").read_text())
@@ -509,14 +515,16 @@ def test_first_in_hosp_absence_before_storage(tmp_path, monkeypatch, database):
 
 @pytest.mark.parametrize("database", ["aumc", "sic"])
 @pytest.mark.parametrize("stream", [False, True])
-def test_native_first_in_hosp_export_has_producer_lineage(tmp_path, database, stream):
+@pytest.mark.parametrize("explicit_cohort", [False, True], ids=["implicit_stays", "explicit_stays"])
+def test_native_first_in_hosp_export_has_producer_lineage(tmp_path, database, stream, explicit_cohort):
     source = tmp_path / "source"
     expected, realpath, field, expression = _first_in_hosp_source(source, database)
     stay = expected.columns[0]
     output = tmp_path / "export"
     extract_database(
         database, data_path=source, output_dir=output, modules=[FIRST_IN_HOSP_FROZEN],
-        patient_ids=expected[stay].iloc[::-1].tolist(), stream_output_batches=stream, batch_size=1,
+        patient_ids=expected[stay].iloc[::-1].tolist() if explicit_cohort else None,
+        stream_output_batches=stream, batch_size=1,
         native_export_v2=True, max_workers=1,
     )
     manifest = json.loads((output / "_manifest.json").read_text())
@@ -576,7 +584,7 @@ def test_first_in_hosp_exports_an_empty_selected_cohort(tmp_path):
 
 def test_first_in_hosp_cli_compares_by_file_and_reports_only_aggregates(tmp_path, monkeypatch, capsys):
     source = tmp_path / "source"
-    expected, _, _, _ = _first_in_hosp_source(source, "aumc")
+    expected, _, _, _ = _first_in_hosp_source(source, "aumc", extra_nulls=9)
     cohort = tmp_path / "cohort.parquet"
     expected[[expected.columns[0]]].to_parquet(cohort)
     args = [
@@ -597,7 +605,111 @@ def test_first_in_hosp_cli_compares_by_file_and_reports_only_aggregates(tmp_path
     mismatching = capsys.readouterr()
     report = json.loads(mismatching.out)
     assert report["status"] == "different"
-    assert report["mismatching_cells"] == {"stay_id": None, FIRST_IN_HOSP_FROZEN: None}
+    assert report["mismatching_rows"] == 10
+    assert report["mismatching_cells"] == {"stay_id": None, FIRST_IN_HOSP_FROZEN: 10}
     for output in (agreeing, mismatching):
         assert not output.err
         assert all(str(value) not in output.out for value in expected.iloc[:, 0])
+
+
+@pytest.mark.parametrize("database", ["eicu", "hirid"])
+@pytest.mark.parametrize("missing_file", [False, True], ids=["typed_worker_file", "no_worker_file"])
+def test_streaming_unavailable_first_in_hosp_seals_native_key_and_receipt(tmp_path, monkeypatch, database, missing_file):
+    source = tmp_path / "source"
+    source.mkdir()
+    if database == "hirid":
+        _peep_source(source, database)
+    else:
+        _stays(source, database)
+    if missing_file:
+        exists = extraction.os.path.exists
+
+        def no_worker_file(path):
+            return False if Path(path).parts[-2:] == (
+                FIRST_IN_HOSP_FROZEN, f"{FIRST_IN_HOSP_FROZEN}.parquet",
+            ) else exists(path)
+
+        monkeypatch.setattr(extraction.os.path, "exists", no_worker_file)
+    output = tmp_path / "export"
+    extract_database(
+        database, data_path=source, output_dir=output,
+        modules=["observed_peep_set", FIRST_IN_HOSP_FROZEN], patient_ids=[_STAY],
+        stream_output_batches=True, batch_size=10, native_export_v2=True, max_workers=1,
+    )
+    manifest = json.loads((output / "_manifest.json").read_text())
+    entry = next(item for item in manifest["files"] if item["module"] == FIRST_IN_HOSP_FROZEN)
+    stay = DATABASE_ID_CONFIG[database]["id_col"]
+    assert entry["primary_key"] == [stay]
+    assert entry["availability"] == "structurally_unavailable"
+    backend = "pandas_structural_placeholder" if missing_file else "pandas_bounded_row_grain_fallback"
+    assert entry["row_grain_audit"]["publication_backend"] == backend
+    rows = pd.read_parquet(output / entry["file"])
+    assert rows.empty
+    assert rows.dtypes.astype(str).to_dict() == {stay: "int64", FIRST_IN_HOSP_FROZEN: "boolean"}
+    producer = json.loads((output / f"{FIRST_IN_HOSP_FROZEN}.manifest.json").read_text())
+    assert producer["thesis_support"] == entry["thesis_support"]
+    assert producer["thesis_support"]["status"] == "UNAVAILABLE_IN_SCOPE"
+
+
+@pytest.mark.parametrize("kind", ["reloaded", "absent", "missing_authority"])
+def test_first_in_hosp_metadata_accepts_frames_without_projected_lineage(tmp_path, kind):
+    database = "eicu" if kind == "absent" else "aumc"
+    if kind == "reloaded":
+        source = tmp_path / "source"
+        _first_in_hosp_source(source, database)
+        output = tmp_path / "export"
+        extract_database(database, data_path=source, output_dir=output, modules=[FIRST_IN_HOSP_FROZEN])
+        rows = pd.read_parquet(output / f"{FIRST_IN_HOSP_FROZEN}.parquet")
+        assert "thesis_support" not in rows.attrs
+    else:
+        rows = load_thesis_support(module=FIRST_IN_HOSP_FROZEN, database=database, data_path=tmp_path)
+    binding = build_export_file_metadata_binding(
+        relative_path=f"{FIRST_IN_HOSP_FROZEN}.parquet", module=FIRST_IN_HOSP_FROZEN,
+        frame=rows, concept_ids=[FIRST_IN_HOSP_FROZEN], database=database,
+        database_class_prefixes=(), dictionary=publication_dictionary(database),
+    )
+    metadata = binding.columns[FIRST_IN_HOSP_FROZEN].metadata
+    assert metadata.available_databases == ("aumc", "sic")
+    assert metadata.source_declared_for_database == (database == "aumc")
+    assert metadata.source_lineage == ()
+    if kind != "reloaded":
+        assert metadata.availability_basis == rows.attrs["thesis_support"]["availability_basis"]
+
+
+@pytest.mark.parametrize("relation", ["same", "below", "above", "symlink"])
+def test_absence_only_export_rejects_overlapping_source_and_output(tmp_path, relation):
+    source = tmp_path / "source"
+    source.mkdir()
+    output = {"same": source, "below": source / "export", "above": tmp_path, "symlink": tmp_path / "alias"}[relation]
+    if relation == "symlink":
+        output.symlink_to(source, target_is_directory=True)
+    with pytest.raises(ValueError, match="overlap"):
+        extract_database("miiv", data_path=source, output_dir=output, modules=[FIRST_IN_HOSP_FROZEN])
+    assert list(source.iterdir()) == []
+    assert not (output / "_manifest.json").exists()
+
+
+@pytest.mark.parametrize("change", ["contents", "symlink"])
+def test_first_in_hosp_cli_rejects_reference_source_changed_after_production(tmp_path, monkeypatch, capsys, change):
+    source = tmp_path / "source"
+    expected, original, field, _ = _first_in_hosp_source(source, "aumc")
+    replacement = original if change == "contents" else original.with_name("replacement.parquet")
+    resolve = frozen_equivalence.support_input_files
+
+    def changed_source(*args):
+        files = resolve(*args)
+        expected.iloc[:, :1].assign(**{field: 1}).to_parquet(replacement, index=False)
+        if change == "symlink":
+            link = source / original.name
+            link.unlink()
+            link.symlink_to(replacement)
+            return (link,)
+        return files
+
+    monkeypatch.setattr(frozen_equivalence, "support_input_files", changed_source)
+    assert frozen_equivalence.main([
+        "--database", "aumc", "--db-root", str(source), "--module", FIRST_IN_HOSP_FROZEN,
+    ]) == 2
+    out = capsys.readouterr()
+    assert json.loads(out.out) == {"status": "comparison_failed", "error_type": "StorageSourceChanged"}
+    assert not out.err
