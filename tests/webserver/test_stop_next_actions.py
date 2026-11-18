@@ -83,13 +83,32 @@ def test_a_provider_stop_offers_retry_in_the_run_and_conversation(tmp_path) -> N
     assert outcome["next_actions"] == gate["next_actions"]
 
 
-@pytest.mark.parametrize("reason", ["research_pipeline_execution_failed", "research_agent_pipeline_failed_closed"])
+@pytest.mark.parametrize("reason", [
+    "research_pipeline_execution_failed",
+    "research_agent_pipeline_failed_closed",
+    "research_pipeline_execution_retry_recovery_seed_missing",
+    "research_pipeline_execution_retry_unexpected_plan_review",
+])
 def test_only_the_workflow_retry_owner_can_offer_retry_of_failed_execution(reason):
+    from easyicu.webserver import study_contexts
+    from tests.webserver.copilot.research_workflow_fixtures import complete_study
+
     gate = {"status": "blocked", "reason": reason}
     assert [row["kind"] for row in owner.project_stop_next_actions(gate)] == ["edit_plan"]
-    assert [row["kind"] for row in owner.project_stop_next_actions(
-        gate, execution_retry_available=True,
-    )] == ["retry", "edit_plan"]
+    study = {**complete_study(), "question": "How does the admission lactate vary by season?"}
+    snapshot = build_research_workflow_snapshot(
+        study=study, active_export_present=True, active_job=None,
+        latest_run={
+            "run_id": "seasonal_lactate", "run_type": "full", "run_status": "failed",
+            "engine": "easyicu.research_agent.pipeline", "gate_status": "blocked",
+            "gate_reason": reason,
+            "scientific_configuration_sha256": study_contexts.scientific_configuration_sha256(study),
+            "artifact_names": ["agent_plan.json", "evidence_ledger.json", "source_run_manifest.json"],
+        },
+    )
+    assert snapshot.next_action_code == "failed_pipeline_execution_retry_available"
+    assert [action.kind for action in snapshot.next_actions] == ["retry", "edit_plan"]
+    assert snapshot.next_actions[0].params.stage == "execution"
     assert [row["kind"] for row in owner.project_stop_next_actions(
         {**gate, "reason": "data_foundation_blocked"}, execution_retry_available=True,
     )] == ["edit_plan"]
@@ -290,6 +309,27 @@ _DESIGN_STOPS = frozenset({
 })
 
 
+def _wrapped_stop_routes(reason, cause):
+    codes = {reason, cause}
+    policies = {owner.STOP_POLICIES.get(code) for code in codes}
+    if codes & _DESIGN_STOPS:
+        return []
+    if "data_extraction" in policies or "export_time_window_unbounded" in codes:
+        return ["data"]
+    if "model_connection" in policies:
+        return ["connect"]
+    if policies & {"scope", "study_edit", "data"} or codes & {
+        *WINDOWED_SUMMARY_STOP_MESSAGES,
+        "question_named_level_undistinguished",
+        "question_treatment_use_unrecorded",
+        "question_mean_survival_unplanned",
+        "study_stated_variable_unrecorded",
+        "research_pipeline_hospital_first_stay_restriction_unverified",
+    }:
+        return ["draft"]
+    return ["confirm"]
+
+
 def _stop_card_cases():
     from easyicu.databases.research_approval import CAPABILITY_APPROVAL_CODES
     from easyicu.research_agent.contracts.execution_result import STANDARD_EXECUTOR_FAILURE_REASONS
@@ -323,14 +363,15 @@ def _stop_card_cases():
         assert actions == job["next_actions"], code
         assert bool(actions) == (code not in _DESIGN_STOPS), code
         workflow_code = "failed_pipeline_requires_fresh_plan" if policy == "retry" else code
-        if actions:
-            cases.append({
-                "code": code, "surface": "job",
-                "job": {**job, "job_id": "synthetic_job", "kind": "agent-run"},
-                "workflow": {"next_action_code": (
-                    "provider_ready_to_generate_plan" if policy == "retry" else workflow_code
-                )},
-            })
+        cases.append({
+            "code": code, "surface": "job",
+            "job": {**job, "job_id": "evening_export", "kind": "agent-run"},
+            "design": code in _DESIGN_STOPS or policy == "retry",
+            "workflow": {
+                "next_action_code": "provider_ready_to_generate_plan" if policy == "retry" else code,
+                "next_actions": actions if policy != "retry" else [],
+            },
+        })
         if code in PLAN_APPROVAL_STOPS or code == "operator_plan_approval_required":
             # An approval pause renders in the confirmation owner, not as a failed run.
             cases.append({"code": code, "surface": "review", "workflow": {"next_action_code": code}})
@@ -347,19 +388,32 @@ def _stop_card_cases():
         "deterministic_standard_executor_failed_closed": STANDARD_EXECUTOR_FAILURE_REASONS,
         WRITER_PROVIDER_TRANSPORT_UNAVAILABLE: RETRY_STOP_REASONS,
     }
-    for reason, causes in sorted(details.items()):
-        for cause in sorted(causes) or [None]:
-            detail = {"reason_code": reason, "cause_code": cause}
-            gate = {"status": "blocked", "reason": "research_agent_pipeline_failed_closed", "detail": detail}
-            cases.append({
-                "code": reason, "cause": cause, "surface": "run",
-                "run": {
-                    "run_id": "synthetic", "run_status": "failed",
-                    "gate_reason": gate["reason"], "gate_detail": detail,
-                    "next_actions": owner.project_stop_next_actions(gate),
-                },
-                "workflow": {"next_action_code": "failed_pipeline_execution_retry_futile"},
-            })
+    wrapped_pairs = dict.fromkeys(
+        (reason, cause)
+        for reason, causes in sorted(details.items())
+        for cause in sorted(causes) or [None]
+    )
+    for code in sorted(owner.STOP_POLICIES):
+        wrapped_pairs.setdefault((code, None))
+        wrapped_pairs.setdefault(("deterministic_standard_executor_failed_closed", code))
+    for reason, cause in wrapped_pairs:
+        detail = {
+            "reason_code": reason, "cause_code": cause,
+            "message": "Can the nightly sample distinguish the two collection protocols?",
+        }
+        gate = {"status": "blocked", "reason": "research_agent_pipeline_failed_closed", "detail": detail}
+        actions = owner.project_stop_next_actions(gate)
+        cases.append({
+            "code": reason, "cause": cause, "surface": "run",
+            "design": bool({reason, cause} & _DESIGN_STOPS),
+            "routes": _wrapped_stop_routes(reason, cause),
+            "run": {
+                "run_id": "synthetic", "run_status": "failed",
+                "gate_reason": gate["reason"], "gate_detail": detail,
+                "next_actions": actions,
+            },
+            "workflow": {"next_action_code": "failed_pipeline_execution_retry_futile", "next_actions": actions},
+        })
     for code in sorted(manuscript_reasons - analysis_reasons):
         cases.append({
             "code": code, "surface": "outcome",
@@ -389,6 +443,35 @@ def _stop_card_cases():
         cases.append({
             "code": code, "surface": "run",
             "run": {"run_id": "synthetic", "run_status": "failed", "gate_reason": code, "next_actions": actions},
+            "workflow": {"next_action_code": workflow},
+        })
+    for missing, expected in (
+        (["synthetic_source"], ["synthetic_alternative"]),
+        (["synthetic_source", "overnight_pulse"], ["synthetic_alternative", "overnight_pulse"]),
+    ):
+        cases.append({
+            "code": "study_coordinate_unavailable", "surface": "review", "drafts": expected,
+            "workflow": {
+                "next_action_code": "study_coordinate_unavailable",
+                "next_actions": owner.project_stop_next_actions({
+                    "status": "blocked", "reason": "study_coordinate_unavailable",
+                    "detail": {"missing_concepts": missing, "database": "miiv"},
+                }),
+            },
+        })
+    for workflow, label in (
+        ("provider_ready_to_generate_plan", ("Retry plan generation", "重试生成计划")),
+        ("planner_checkpoint_resume_available", ("Continue plan generation", "继续生成计划")),
+        ("plan_execution_upgrade_required", ("Retry data preparation", "重试数据准备")),
+    ):
+        code = "research_pipeline_cancelled"
+        cases.append({
+            "code": code, "surface": "run", "routes": ["confirm"], "label": label,
+            "run": {
+                "run_id": "synthetic", "run_status": "cancelled", "gate_reason": code,
+                "gate_detail": {"message": "Pause the evening candidate while I verify its sampling periods."},
+                "next_actions": owner.project_stop_next_actions({"status": "blocked", "reason": code}),
+            },
             "workflow": {"next_action_code": workflow},
         })
     for context in (
@@ -611,6 +694,17 @@ def test_a_message_alone_cannot_name_an_element_or_make_it_optional() -> None:
     ] == ["edit_plan"]
 
 
+def test_a_wrapped_design_stop_needs_its_concept_to_offer_removal() -> None:
+    detail = {
+        "reason_code": "design_element_unsupported",
+        "element": "evening_calibration",
+        "question_required": False,
+        "message": "The optional chart has no verified measurement coordinate.",
+    }
+    actions = owner.next_actions_for_stop("research_agent_pipeline_failed_closed", detail)
+    assert [action.kind for action in actions] == ["edit_plan"]
+
+
 def test_an_optional_compiler_coordinate_survives_the_failure_receipt(tmp_path) -> None:
     stop = ProgressivePlanCompileError(
         "synthetic_optional_failure",
@@ -766,6 +860,28 @@ def test_a_study_coordinate_the_source_lacks_offers_no_drop_or_regeneration(
         )
 
 
+def test_study_coordinates_without_alternatives_keep_their_own_edit_paths(monkeypatch) -> None:
+    monkeypatch.setattr(
+        owner, "concept_selection_policy",
+        lambda concept: SimpleNamespace(canonical_alternative="evening_pressure")
+        if concept == "night_pressure" else None,
+    )
+    monkeypatch.setattr(owner, "explain_concept_availability", lambda **_kw: SimpleNamespace(available=True))
+    choices = owner.next_actions_for_stop(
+        "study_coordinate_unavailable",
+        {
+            "missing_concepts": ["night_pressure", "overnight_pulse", "morning_weight"],
+            "message": "The overnight measurements are recorded on a different form.",
+        },
+        database="miiv",
+    )
+    assert [(action.kind, action.params.concept) for action in choices] == [
+        ("use_alternative_concept", "night_pressure"),
+        ("edit_study", "overnight_pulse"),
+        ("edit_study", "morning_weight"),
+    ]
+
+
 def test_a_planning_menu_gap_offers_no_plan_change() -> None:
     # The source provides the concept; EasyICU's menu lacks it. No edit, drop
     # or alternative fixes that on this build.
@@ -809,6 +925,68 @@ def test_all_named_missing_variables_get_a_choice_and_missing_coordinates_get_ed
     assert [
         action.kind for action in owner.next_actions_for_stop("data_foundation_blocked")
     ] == ["edit_plan"]
+
+
+def test_a_changed_question_supersedes_the_failed_runs_stop() -> None:
+    from easyicu.webserver import study_contexts
+    from tests.webserver.copilot.research_workflow_fixtures import complete_study
+
+    study = {**complete_study(), "question": "Does evening sampling distinguish the two assays?"}
+    run = {
+        "run_id": "evening_assay", "run_type": "full", "run_status": "failed",
+        "engine": "easyicu.research_agent.pipeline", "gate_status": "blocked",
+        "gate_reason": "research_agent_pipeline_failed_closed",
+        "gate_detail": {"reason_code": "study_stated_variable_unrecorded"},
+        "scientific_configuration_sha256": study_contexts.scientific_configuration_sha256(study),
+        "artifact_names": ["source_run_manifest.json"],
+    }
+    for question, change_required in (
+        (study["question"], True),
+        ("How does the recorded assay vary across sampling shifts?", None),
+    ):
+        snapshot = build_research_workflow_snapshot(
+            study={**study, "question": question}, active_export_present=True,
+            active_job=None, latest_run=run,
+        )
+        assert snapshot.next_action_code == "failed_pipeline_requires_fresh_plan"
+        assert [action.kind for action in snapshot.next_actions] == ["edit_plan"]
+        assert snapshot.next_actions[0].params.change_question is change_required
+
+
+def test_one_recovered_coordinate_leaves_the_other_coordinate_blocked(monkeypatch) -> None:
+    from easyicu.research_agent import concept_availability
+    from easyicu.webserver import study_contexts
+    from tests.webserver.copilot.research_workflow_fixtures import complete_study
+
+    study = {**complete_study(), "question": "Compare overnight pulse and morning weight by shift."}
+    recorded = {"overnight_pulse"}
+    monkeypatch.setattr(
+        concept_availability, "explain_concept_availability",
+        lambda *, concept, database: SimpleNamespace(available=concept in recorded, reason="test_roster"),
+    )
+    monkeypatch.setattr(owner, "concept_selection_policy", lambda _concept: None)
+    run = {
+        "run_id": "shift_check", "run_type": "full", "run_status": "failed",
+        "engine": "easyicu.research_agent.pipeline", "gate_status": "blocked",
+        "gate_reason": "research_agent_pipeline_failed_closed",
+        "gate_detail": {
+            "reason_code": "deterministic_standard_executor_failed_closed",
+            "cause_code": "study_coordinate_unavailable",
+            "missing_concepts": ["overnight_pulse", "morning_weight"],
+        },
+        "scientific_configuration_sha256": study_contexts.scientific_configuration_sha256(study),
+        "artifact_names": ["source_run_manifest.json"],
+    }
+    inputs = dict(study=study, active_export_present=True, active_job=None, latest_run=run)
+    snapshot = build_research_workflow_snapshot(**inputs)
+    assert snapshot.next_action_code == "study_coordinate_unavailable"
+    assert "morning_weight" in {action.params.concept for action in snapshot.next_actions}
+
+    recorded.add("morning_weight")
+    snapshot = build_research_workflow_snapshot(**inputs)
+    assert snapshot.next_action_code == "failed_pipeline_requires_fresh_plan"
+    assert [action.kind for action in snapshot.next_actions] == ["edit_plan"]
+    assert snapshot.next_actions[0].params.change_question is None
 
 
 def test_typed_missing_data_survives_the_exception_receipt(tmp_path) -> None:

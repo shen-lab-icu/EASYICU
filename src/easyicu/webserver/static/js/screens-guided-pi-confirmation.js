@@ -33,7 +33,8 @@
         tr('I want to choose the official Demo data source again for this study. Show the available choices.', '我想为本研究重新选择官方 Demo 数据源。请列出可用选项。'),
       ],
       source_or_question: [
-        tr('Change data source or question', '修改数据源或研究问题'),
+        target ? tr(`Change source or question for ${target}`, `为 ${target} 修改数据源或研究问题`)
+          : tr('Change data source or question', '修改数据源或研究问题'),
         target ? tr(
           `The current source cannot provide ${target}. I want to change the data source or research question as follows: `,
           `当前数据源无法提供 ${target}。我想按以下内容修改数据源或研究问题：`,
@@ -61,6 +62,18 @@
       tr(`I want to consider ${alternative} in place of ${concept} in the next plan. `, `我想在下一版计划中考虑用 ${alternative} 替代 ${concept}。`),
     ];
     return pair ? { label: pair[0], draft: pair[1] } : null;
+  }
+
+  function studyStopEdits(workflow) {
+    return (workflow.next_actions || []).filter(action =>
+      ['edit_study', 'use_alternative_concept', 'rephrase_in_scope'].includes(action.kind)
+      || (action.kind === 'edit_plan' && action.params?.change_question === true));
+  }
+
+  function offersFreshPlan(actions) {
+    return !Array.isArray(actions) || actions.some(({ kind, params }) =>
+      (kind === 'retry' && params.stage === 'planning')
+      || (kind === 'edit_plan' && !params.concept && !params.element && !params.step_id && !params.change_question));
   }
 
   function create(host) {
@@ -98,6 +111,19 @@
       const readiness = confirmation && host.runReadiness && host.runReadiness(confirmation.code);
       return readiness ? { ...confirmation, readiness, approveDisabled: true,
         nonApprovable: readiness.connect || confirmation.nonApprovable } : confirmation;
+    }
+
+    function studyStopConfirmation(workflow, code) {
+      const edits = studyStopEdits(workflow);
+      const copy = edits.length && stopActionCopy(edits[0], tr);
+      if (!copy) return null;
+      return {
+        code, grants: [], nonApprovable: true, editLabel: copy.label,
+        stopEdits: edits.length > 1 || edits[0].kind === 'use_alternative_concept' ? edits : [],
+        title: code === 'bound_export_cohort_invalid'
+          ? tr('The cohort settings or bound data need review', '请核对人群设置或绑定的数据')
+          : host.runFailureText?.(code) || copy.label,
+      };
     }
 
     function currentWorkflowConfirmation() {
@@ -166,9 +192,17 @@
       // records the cause with its typed detail; a job keeps only its bare
       // code, which names the generic cause of a typed stop.
       const failedRun = (Array.isArray(workflow.runs) ? workflow.runs : []).find(run => (
-        run && run.authoritative && ['failed', 'blocked'].includes(String(run.run_status || ''))
-        && /^research_pipeline_|^data_foundation_blocked$|^research_agent_pipeline_failed_closed$/.test(String(run.gate_reason_code || ''))
+        run && run.authoritative && (run.gate_status === 'blocked' || ['failed', 'blocked'].includes(run.run_status))
+        && /^research_pipeline_|^data_foundation_blocked$|^research_agent_pipeline_failed_closed$/.test(
+          String(run.gate_reason_code || run.gate_reason || ''))
       ));
+      // The failed run may require a changed question or source, or have no
+      // authorized remedy. Its typed choices also govern this review card.
+      const freshPlanOffered = offersFreshPlan(workflow.next_actions);
+      if ((failedRun || workflow.next_actions?.length) && !freshPlanOffered
+        && ['failed_pipeline_requires_fresh_plan', 'failed_pipeline_execution_retry_futile'].includes(code)) {
+        return studyStopConfirmation(workflow, code);
+      }
       const failureReason = typeof host.runFailureText !== 'function'
         ? ''
         : failedRun
@@ -270,6 +304,7 @@
       };
       if (code === 'failed_pipeline_execution_retry_available') return {
         code, grants: ['provider_run'],
+        hideEdit: !freshPlanOffered,
         message: tr(
           'Retry analysis from the failed step using the exact approved plan and unchanged study configuration. Reuse completed steps and do not run the Planner again.',
           '研究配置未改变。请复用精确批准的计划和已完成步骤，从失败步骤重新执行分析；不要再次运行 Planner。',
@@ -657,15 +692,7 @@
           { kind: 'research_artifact', run_id: reviewedPlanRunId, artifact: 'scientific_plan_review.json', label: tr('View review details', '查看审阅详情'), media_type: 'application/json' },
         ],
       };
-      const studyEdit = (workflow.next_actions || []).find(action => action.kind === 'edit_study');
-      const copy = studyEdit && stopActionCopy(studyEdit, tr);
-      if (copy) return {
-        code, grants: [], nonApprovable: true, editLabel: copy.label,
-        title: code === 'bound_export_cohort_invalid'
-          ? tr('The cohort settings or bound data need review', '请核对人群设置或绑定的数据')
-          : host.runFailureText?.(code) || copy.label,
-      };
-      return null;
+      return studyStopConfirmation(workflow, code);
     }
 
     // A gate offered against state that has since changed says so in place
@@ -1007,18 +1034,22 @@
         ? firstDecisionCopy.options.map(option => `<button class="gpi-decision-option" type="button" data-gpi-plan-decision-code="${esc(String(firstDecisionItem && firstDecisionItem.code || ''))}" data-gpi-plan-decision-option="${esc(option.optionId)}"${firstDecisionCopy.cardSha256 ? ` data-gpi-plan-decision-card="${esc(firstDecisionCopy.cardSha256)}"` : ''}><strong>${esc(option.label)}</strong><span>${esc(option.effect)}</span>${option.requirement ? `<small>${esc(option.requirement)}</small>` : ''}</button>`).join('')
         : '';
       const { readiness, retryPlanRevision } = confirmation;
+      const stopEdits = (confirmation.stopEdits || []).map(action => {
+        const copy = stopActionCopy(action, tr);
+        return copy ? `<button class="btn sm" type="button" data-gpi-stop-review data-gpi-stop-action="${esc(action.action_id)}" data-gpi-stop-workflow="${esc(confirmation.code)}">${esc(copy.label)}</button>` : '';
+      }).join('');
       const showPrimaryAction = retryPlanRevision ? !readiness?.connect : !confirmation.nonApprovable;
       const primaryLabel = retryPlanRevision ? confirmation.retryLabel : confirmation.approve;
       const primaryDisabled = confirmation.approveDisabled || (!retryPlanRevision && deferredScopeRejected);
       const showEdit = !decisionActions && !confirmation.hideEdit
         && (confirmation.code !== 'plan_scientific_changes_required' || decisionCount || icdSourceFinding);
-      const hasRecovery = showEdit || decisionActions || readiness?.connect || (showPrimaryAction && !primaryDisabled);
+      const hasRecovery = showEdit || stopEdits || decisionActions || readiness?.connect || (showPrimaryAction && !primaryDisabled);
       return `${planConversation}<section class="gpi-confirmation${confirmation.code === 'plan_scientific_changes_required' ? ' is-science-review' : ''}${confirmation.compactApproval ? ' is-plan-approval' : ''}"${hasRecovery ? ' data-gpi-review-recovery' : ''} aria-label="${tr('Workflow confirmation required', '需要确认科研流程')}">
         <span class="gpi-confirmation-icon" aria-hidden="true">${iconHtml('shield', 17)}</span>
         <div class="gpi-confirmation-body">${failureNotice}<strong>${esc(displayedTitle)}</strong>${confirmation.reason && !firstDecisionCopy ? `<p class="gpi-confirmation-reason">${esc(confirmation.reason)}</p>` : ''}${displayedNote ? `<small>${esc(displayedNote)}</small>` : ''}${desktopProfile}${reviewedPopulation}${deferredInputScope}${populationPreparation}${populationAcceptance}${sourceAdjustments}${flowSteps}${dataStatus}${pendingPreparation}${repeatedStaysDefault}${icdSourceNotice}${reviewStatus}${studyReadings}${trialBody}${groupNotes}${questionNotes}${reviewMaterials}${compactOtherAction}</div>
         <div class="gpi-confirmation-actions${decisionActions ? ' has-decision-options' : ''}">
           ${confirmation.dataStatus && !confirmation.compactApproval ? `<button class="btn sm" type="button" data-gpi-confirm-preview-data>${esc(tr('Preview analysis data', '先预览分析数据'))}</button>` : ''}
-          ${decisionActions || (showEdit ? `<button class="btn ${confirmation.code === 'plan_scientific_changes_required' ? 'primary ' : ''}sm" type="button" data-gpi-confirm-edit>${confirmation.editLabel ? esc(confirmation.editLabel) : icdSourceFinding && !decisionCount ? tr('Change cohort', '修改人群') : confirmation.code === 'plan_scientific_changes_required' ? tr('Answer this question', '回答这个问题') : confirmation.code === 'provider_ready_to_generate_plan' ? tr('Add research requirements', '我想先补充研究要求') : confirmation.code === 'failed_pipeline_execution_retry_available' ? tr('Generate a fresh research plan', '重新生成研究计划') : confirmation.compactApproval ? tr('Change plan', '修改计划') : tr('Request changes', '提出修改')}</button>` : '')}
+          ${decisionActions || stopEdits || (showEdit ? `<button class="btn ${confirmation.code === 'plan_scientific_changes_required' ? 'primary ' : ''}sm" type="button" data-gpi-confirm-edit>${confirmation.editLabel ? esc(confirmation.editLabel) : icdSourceFinding && !decisionCount ? tr('Change cohort', '修改人群') : confirmation.code === 'plan_scientific_changes_required' ? tr('Answer this question', '回答这个问题') : confirmation.code === 'provider_ready_to_generate_plan' ? tr('Add research requirements', '我想先补充研究要求') : confirmation.code === 'failed_pipeline_execution_retry_available' ? tr('Generate a fresh research plan', '重新生成研究计划') : confirmation.compactApproval ? tr('Change plan', '修改计划') : tr('Request changes', '提出修改')}</button>` : '')}
           ${decisionActions && icdSourceFinding ? `<button class="btn sm" type="button" data-gpi-confirm-edit>${esc(tr('Change cohort', '修改人群'))}</button>` : ''}
           ${decisionActions && !icdSourceFinding && firstDecisionCopy && firstDecisionCopy.allowEdit ? `<button class="btn sm" type="button" data-gpi-confirm-edit>${esc(String(firstDecisionItem && firstDecisionItem.code || '') === 'ADJUSTMENT_SET_NOT_USER_CONFIRMED' ? tr('Request plan changes', '提出计划修改') : tr('Choose another approach', '选择其他方案'))}</button>` : ''}
           ${confirmation.rejectMessage && !confirmation.compactApproval ? `<button class="btn sm" type="button" data-gpi-confirm-reject>${esc(confirmation.reject)}</button>` : ''}
@@ -1470,8 +1501,8 @@
       const trial = window.EasyICU.guidedPi.optional('targetTrial');
       const trialDraft = trial ? trial.changeDraft(workflow, tr) : '';
       if (trialDraft) return trialDraft;
-      const studyEdit = (workflow.next_actions || []).find(action => action.kind === 'edit_study');
-      const copy = studyEdit && stopActionCopy(studyEdit, tr);
+      const [stopEdit] = studyStopEdits(workflow);
+      const copy = stopEdit && stopActionCopy(stopEdit, tr);
       if (copy) return copy.draft;
       const review = workflow.plan_review_summary || {};
       const questions = Array.isArray(review.authorization_questions)
@@ -1491,5 +1522,5 @@
     };
   }
 
-  window.EasyICU.guidedPi.declare('confirmation', { create, stopActionCopy });
+  window.EasyICU.guidedPi.declare('confirmation', { create, stopActionCopy, studyStopEdits });
 })();

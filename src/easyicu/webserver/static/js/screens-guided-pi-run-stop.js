@@ -43,7 +43,8 @@
     const code = String(workflow && workflow.next_action_code || '');
     if (kind === 'retry' && params.route === 'retry') {
       if (params.stage === 'execution' && code === 'failed_pipeline_execution_retry_available') return 'retry';
-      return params.stage === 'planning' && PLAN_RETRY_CODES.has(code) ? 'confirm' : '';
+      return params.stage === 'planning'
+        && (PLAN_RETRY_CODES.has(code) || code === 'failed_pipeline_execution_retry_futile') ? 'confirm' : '';
     }
     if (['edit_plan', 'rerun_without_element', 'use_alternative_concept', 'drop_variable'].includes(kind)
       && params.route === 'plan_edit' && params.intent === 'candidate_plan'
@@ -76,8 +77,12 @@
   function latestJobStop(session, workflow) {
     if (workflow?.active_job?.present) return null;
     const job = session?.archived_child_jobs?.at(-1);
-    return job?.job_id && !job.run_id && STOP_STATUSES.has(job.status)
-      && ['agent-run', 'extract'].includes(job.kind) ? job : null;
+    if (!job?.job_id || job.run_id || !STOP_STATUSES.has(job.status) || !['agent-run', 'extract'].includes(job.kind)) return null;
+    const reason = gateReason(job) || job.error_code;
+    if (!reason || reason !== workflow?.next_action_code) return null;
+    const started = (job.created_at_epoch || job.finished_at_epoch) * 1000;
+    if (workflow.runs?.some(run => run.run_id && !(Date.parse(run.updated_at) < started))) return null;
+    return job;
   }
 
   function actionLabel(action, route, workflow, tr) {
@@ -87,7 +92,7 @@
       retry: 'retry',
       data: 'reexport_data',
       connect: 'check_connection',
-      confirm: action.kind === 'retry' ? code : 'edit_plan',
+      confirm: action.kind === 'retry' && PLAN_RETRY_CODES.has(code) ? code : 'edit_plan',
       edit: code === 'failed_pipeline_execution_retry_available' ? 'edit_plan' : 'plan_edit',
     };
     return window.EU_PRODUCT_LABELS.stopAction(labels[route], tr);
@@ -166,8 +171,8 @@
     function renderJob(session) {
       const workflow = deps.workflow?.();
       const job = latestJobStop(session, workflow);
-      if (!deps.canAct?.() || !job || !Array.isArray(job.next_actions) || !window.EU_PRODUCT_LABELS?.stopAction) return '';
-      const controls = actionButtons(job.next_actions, workflow, 'data-gpi-stop-job', job.job_id);
+      if (!deps.canAct?.() || !job || !window.EU_PRODUCT_LABELS?.stopAction) return '';
+      const controls = actionButtons(offeredActions(job, workflow), workflow, 'data-gpi-stop-job', job.job_id);
       if (!controls.length) return '';
       return `<div class="gpi-run-stop" role="note" data-gpi-job-stop><p>${esc(cause(job))}</p><div class="gpi-run-stop-actions">${controls.join('')}</div></div>`;
     }

@@ -116,6 +116,81 @@ for (language of ['zh', 'en']) {
 }
 console.log('stop actions: bilingual rendering, owner dispatch, stale/busy/historical guards passed');
 
+if (!catalog) {
+  for (const [reason, kind, route, resolved] of [
+    ['no_export_files', 'extract', 'data', 'provider_ready_to_generate_plan'],
+    ['research_pipeline_pi_verified_credentials_required', 'agent-run', 'connect', 'plan_execution_upgrade_required'],
+  ]) {
+    const offer = route === 'data'
+      ? action('reexport_data', 'data_extraction', { requires_explicit_choice: true })
+      : action('check_connection', 'model_connection');
+    const job = {
+      job_id: 'night_shift_export', kind, status: 'failed', error_code: reason,
+      finished_at_epoch: Date.parse('2026-01-05T18:00:00Z') / 1000, next_actions: [offer],
+    };
+    state.session.archived_child_jobs = [job];
+    workflow = state.workflow = { next_action_code: reason, next_actions: [offer], runs: [] };
+    const clickJob = () => clickControl('[data-gpi-stop-action]', {
+      gpiStopJob: job.job_id, gpiStopAction: offer.action_id, gpiStopWorkflow: workflow.next_action_code,
+    });
+    assert.match(owner.renderJob(state.session), /data-gpi-job-stop/);
+    clickJob();
+    assert.ok(route === 'data' ? calls.pop() === 'begin_local_selection' : state.showSetup);
+    state.showSetup = false;
+    workflow.next_actions = [];
+    assert.equal(owner.renderJob(state.session), '', 'a withdrawn workflow offer clears the job card');
+    clickJob();
+    assert.deepEqual(calls, []);
+    assert.equal(state.showSetup, false);
+    workflow.next_actions = [offer];
+    workflow.next_action_code = resolved;
+    assert.equal(owner.renderJob(state.session), '', 'the old stop cannot follow a resolved workflow');
+    clickJob();
+    assert.deepEqual(calls, []);
+    assert.equal(state.showSetup, false);
+    workflow.next_action_code = reason;
+    workflow.runs = [{ run_id: 'night_shift_candidate', updated_at: '2026-01-05T19:00:00Z' }];
+    assert.equal(owner.renderJob(state.session), '', 'a newer run owns the workflow');
+    clickJob();
+    assert.deepEqual(calls, []);
+    assert.equal(state.showSetup, false);
+  }
+  console.log('job stops: current workflow offer and supersession checks passed');
+}
+
+async function testSupersededDecisionRefresh() {
+  const steps = [];
+  const planActions = modules.require('planActions').create({
+    session: () => ({ session_id: 'evening_review', binding: { study_revision: 4, run_id: 'overnight_candidate' } }),
+    busy: () => false, sessionIsStale: () => false, projectId: () => 'pulse_project',
+    api: () => ({
+      async confirmPiCopilotPlanDecision(session, request) {
+        steps.push([session, request.run_id, request.option_id]);
+        throw { code: 'plan_decision_source_superseded', message: 'The evening review was replaced by a morning review.' };
+      },
+    }),
+    async refreshSession(force) {
+      await Promise.resolve();
+      steps.push(['refreshSession', force]);
+    },
+    async loadWorkflow() {
+      await Promise.resolve();
+      steps.push('loadWorkflow');
+    },
+    setBusy: value => steps.push(['busy', value]),
+    setError: value => steps.push(['error', value]),
+    errorText: error => error.message,
+    render: () => steps.push('render'),
+  });
+  await planActions.confirmDecision({ decision_code: 'meal_window', option_id: 'overnight' });
+  assert.deepEqual(steps, [
+    ['busy', true], ['error', ''], 'render', ['evening_review', 'overnight_candidate', 'overnight'],
+    ['refreshSession', true], 'loadWorkflow', ['busy', false],
+    ['error', 'The evening review was replaced by a morning review.'], 'render',
+  ]);
+  console.log('superseded decision refreshes the session and workflow before unlocking');
+}
+
 if (catalog) {
   const cases = JSON.parse(fs.readFileSync(0, 'utf8'));
   const failures = [];
@@ -125,7 +200,7 @@ if (catalog) {
   });
   for (language of ['en', 'zh']) {
     window.EU_LANG = language;
-    for (const { code, cause, surface, design, run, job, workflow: offer } of cases) {
+    for (const { code, cause, surface, design, routes, drafts: reviewDrafts, label, run, job, workflow: offer } of cases) {
       const name = [surface, code, cause, language].filter(Boolean).join('/');
       try {
         calls.length = drafts.length = 0;
@@ -145,6 +220,17 @@ if (catalog) {
         if (surface === 'review') {
           const html = confirmation.workflowConfirmationHtml();
           assert.match(html, / data-gpi-review-recovery/, 'the review exposes a forward action');
+          if (reviewDrafts) {
+            assert.ok(confirmation.planChangeDraft().includes(reviewDrafts[0]));
+            const controls = [...html.matchAll(/data-gpi-stop-review data-gpi-stop-action="([^"]+)" data-gpi-stop-workflow="([^"]+)"/g)];
+            assert.equal(controls.length, reviewDrafts.length);
+            for (const [i, [, id, workflowCode]] of controls.entries()) {
+              clickControl('[data-gpi-stop-action]', { gpiStopReview: '', gpiStopAction: id, gpiStopWorkflow: workflowCode });
+              assert.ok(drafts.pop().includes(reviewDrafts[i]));
+            }
+            assert.deepEqual(calls, [], 'review edits never start work');
+            continue;
+          }
           const primary = /<button[^>]*data-gpi-confirm-action[^>]*>/.exec(html)?.[0];
           if (primary && !primary.includes(' disabled')) {
             assert.ok(confirmation.workflowConfirmation().approve || confirmation.workflowConfirmation().retryLabel);
@@ -167,14 +253,26 @@ if (catalog) {
           continue;
         }
         const html = job ? owner.renderJob(state.session) : owner.render({ savedRuns: [run] });
+        if (job && design) {
+          assert.equal(html, '', 'this workflow has no current job stop action');
+          continue;
+        }
         assert.match(html, job ? /data-gpi-job-stop/ : /data-gpi-run-stop=/);
         const ids = [...html.matchAll(/data-gpi-stop-action="([^"]+)"/g)].map(match => match[1]);
+        if (label) assert.ok(html.includes(tr(...label)));
+        if (routes) {
+          assert.deepEqual(run.next_actions.map(choice => modules.require('runStop').actionRoute(choice, workflow)), routes);
+          if (!routes.includes('confirm')) {
+            assert.doesNotMatch(confirmation.workflowConfirmationHtml(), /data-gpi-confirm-action/,
+              'the companion confirmation must not restart the unchanged study');
+          }
+        }
         if (design) {
           assert.deepEqual(ids, [], 'revisit the design exception once an owner can act');
           continue;
         }
         assert.ok(ids.length, 'the projected stop renders a forward action without a receipt or generic fallback');
-        for (const choice of (job || run).next_actions) {
+        for (const [i, choice] of (job || run).next_actions.entries()) {
           assert.ok(ids.includes(choice.action_id), `unrendered action ${choice.kind}`);
           calls.length = drafts.length = 0;
           state.showSetup = false;
@@ -182,8 +280,16 @@ if (catalog) {
             gpiStopJob: job.job_id, gpiStopAction: choice.action_id, gpiStopWorkflow: offer.next_action_code,
           });
           else clickAction(choice.action_id);
-          if (['edit_study', 'rephrase_in_scope', 'use_alternative_concept', 'drop_variable', 'rerun_without_element'].includes(choice.kind)
-            || (choice.kind === 'edit_plan' && (choice.params.concept || choice.params.step_id || choice.params.element || choice.params.change_question))) {
+          const expected = routes?.[i] || (
+            ['edit_study', 'rephrase_in_scope', 'use_alternative_concept', 'drop_variable', 'rerun_without_element'].includes(choice.kind)
+              || (choice.kind === 'edit_plan' && (choice.params.concept || choice.params.step_id || choice.params.element || choice.params.change_question))
+              ? 'draft' : choice.kind === 'check_connection' ? 'connect'
+                : choice.kind === 'reexport_data' ? 'data'
+                  : choice.kind === 'retry' ? (offer.next_action_code === 'failed_pipeline_execution_retry_available' ? 'retry' : 'confirm')
+                    : ['failed_pipeline_requires_fresh_plan', 'failed_pipeline_execution_retry_futile'].includes(offer.next_action_code)
+                      ? 'confirm' : 'edit'
+          );
+          if (expected === 'draft') {
             assert.equal(drafts.length, 1, 'the existing composer opens a draft');
             assert.ok(drafts[0].trim());
             assert.deepEqual(calls, [], 'a draft does not start any work');
@@ -191,14 +297,10 @@ if (catalog) {
               assert.ok(drafts[0].includes(choice.params.alternative_concept));
               assert.ok(drafts[0].includes(choice.params.concept));
             }
-          } else if (choice.kind === 'check_connection') {
+          } else if (expected === 'connect') {
             assert.equal(state.showSetup, true, 'the current model setup opens');
           } else {
-            const expected = choice.kind === 'reexport_data' ? 'begin_local_selection'
-              : choice.kind === 'retry' ? (offer.next_action_code === 'failed_pipeline_execution_retry_available' ? 'retry' : 'confirm')
-                : ['failed_pipeline_requires_fresh_plan', 'failed_pipeline_execution_retry_futile'].includes(offer.next_action_code)
-                  ? 'confirm' : 'edit';
-            assert.deepEqual(calls, [expected]);
+            assert.deepEqual(calls, [expected === 'data' ? 'begin_local_selection' : expected]);
           }
         }
       } catch (error) {
@@ -209,3 +311,8 @@ if (catalog) {
   assert.equal(failures.length, 0, failures.join('\n'));
   console.log(`stop catalog: ${cases.length} cases, ${2 * cases.length} bilingual checks`);
 }
+
+if (!catalog) testSupersededDecisionRefresh().catch(error => {
+  console.error(error);
+  process.exitCode = 1;
+});

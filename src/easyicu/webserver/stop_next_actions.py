@@ -588,62 +588,48 @@ def next_actions_for_stop(
         return []
     cause = _code(detail.get("cause_code"))
     inner = _code(detail.get("reason_code"))
-    policy = STOP_POLICIES.get(reason, "edit_plan")
-    if policy == "model_connection":
+    # A transport or cancellation stop can carry details about the unfinished
+    # work. Its own retry policy still applies.
+    codes = (reason,) if reason in _RETRY_CODES else (reason, inner, cause)
+    policies = {STOP_POLICIES.get(code) for code in codes if code is not None}
+    if "none" in policies:
+        return []
+    if "data_extraction" in policies or "export_time_window_unbounded" in (
+        *codes, _code(detail.get("intake_error_code")),
+    ):
+        return [_action("reexport_data", DataExtractionParams())]
+    if "model_connection" in policies:
         return [_action("check_connection", ConnectionParams())]
-    if policy == "data_extraction":
-        return [_action("reexport_data", DataExtractionParams())]
-    if "export_time_window_unbounded" in {
-        reason, cause, inner, _code(detail.get("intake_error_code")),
-    }:
-        return [_action("reexport_data", DataExtractionParams())]
-    # EasyICU's planning menu lacks a concept the source provides, or the host
-    # named a coordinate its dictionary does not know: no plan edit, drop or
-    # regeneration on this build fixes its own gap; the stop's receipt and
-    # diagnostic report are the way forward.
-    if _UNAVAILABLE_OWNER_CODES & {reason, inner}:
-        return []
-    if policy == "none":
-        return []
-    study_edit = _STUDY_EDIT_FIELDS.get(reason)
+    study_edit = next((_STUDY_EDIT_FIELDS[code] for code in codes if code in _STUDY_EDIT_FIELDS), None)
     if study_edit and study_edit != "source_or_question":
         return [_action("edit_study", StudyEditParams(field=study_edit))]
-    if reason not in _RETRY_CODES and inner in _SCOPE_CODES:
-        policy = "scope"
-    if reason not in _RETRY_CODES and (inner in _DATA_CODES or cause in _DATA_CODES):
-        policy = "data"
+    scope_code = next((code for code in codes if code in _SCOPE_CODES), None)
+    if scope_code:
+        return [_action("rephrase_in_scope", ScopeParams(**v1_scope_description(
+            reason_code=scope_code, detail=detail, database=database,
+        )))]
     concepts = _codes(detail.get("missing_concepts"))
     element = _code(detail.get("element"))
     step = _step_id(detail.get("step_id"))
     concept = _code(detail.get("concept")) or next(iter(concepts), None)
-    coordinate_absent = "study_coordinate_unavailable" in {reason, inner}
-    if (policy == "data" or coordinate_absent) and not concepts and concept is not None:
+    coordinate_absent = "study_coordinate_unavailable" in codes
+    data_stop = "data" in policies
+    if (data_stop or coordinate_absent) and not concepts and concept is not None:
         concepts = (concept,)
     coordinates = {"element": element, "step_id": step, "concept": concept}
+    question_edit = bool(_QUESTION_EDIT_CODES.intersection(codes))
     edit = _action("edit_plan", PlanEditParams(
-        **coordinates, change_question=True if reason in _QUESTION_EDIT_CODES else None,
+        **coordinates, change_question=True if question_edit or (data_stop and not concept) else None,
     ))
-    if policy == "retry":
-        return [_action("retry", RetryParams())]
-    if policy == "scope":
-        return [
-            _action(
-                "rephrase_in_scope",
-                ScopeParams(
-                    **v1_scope_description(
-                        reason_code=inner or reason,
-                        detail=detail,
-                        database=database,
-                    )
-                ),
-            )
-        ]
     # The study's own exposure or outcome cannot simply be dropped.
-    if (policy == "data" or coordinate_absent) and concepts:
+    if (data_stop or coordinate_absent) and concepts:
         actions = []
         for missing in concepts:
             alternative = _available_alternative(missing, database, detail)
             if coordinate_absent and not alternative:
+                actions.append(_action("edit_study", StudyEditParams(
+                    field="source_or_question", concept=missing,
+                )))
                 continue
             actions.append(
                 _action(
@@ -655,19 +641,18 @@ def next_actions_for_stop(
                     ),
                 )
             )
-        if not coordinate_absent:
-            return [*actions, edit]
-        if actions:
-            return actions
+        return actions if coordinate_absent else [*actions, edit]
     if coordinate_absent:
-        return [_action("edit_study", StudyEditParams(
-            field="source_or_question", concept=concept,
-        ))]
+        return [_action("edit_study", StudyEditParams(field="source_or_question"))]
+    if question_edit or data_stop:
+        return [edit]
+    if "retry" in policies:
+        return [_action("retry", RetryParams())]
     if (
-        policy == "repair"
+        "repair" in policies
         and (element is not None or step is not None)
         and detail.get("question_required") is False
-        and (cause != "design_element_unsupported" or concept is not None)
+        and ("design_element_unsupported" not in codes or concept is not None)
     ):
         return [_action("rerun_without_element", PlanEditParams(**coordinates)), edit]
     return [edit]
@@ -717,10 +702,14 @@ def project_stop_next_actions(
     actions = next_actions_for_stop(reason, gate.get("detail"), database=database)
     # Only the workflow's existing retry assessment can add this offer; a
     # persisted stop record or model suggestion cannot authorize a retry.
-    if execution_retry_available and reason in {
-        "research_pipeline_execution_failed", "research_agent_pipeline_failed_closed",
-    }:
-        actions = [_action("retry", RetryParams(stage="execution")), *actions]
+    if execution_retry_available and actions and all(
+        isinstance(action.params, RetryParams)
+        or (isinstance(action.params, PlanEditParams) and not action.params.change_question)
+        and action.kind in {"edit_plan", "rerun_without_element"}
+        for action in actions
+    ):
+        fallback = [action for action in actions if action.kind != "retry"]
+        actions = [_action("retry", RetryParams(stage="execution")), *fallback]
     return [
         action.model_dump(mode="json", exclude_none=True)
         for action in actions

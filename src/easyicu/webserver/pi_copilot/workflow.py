@@ -966,6 +966,11 @@ def build_research_workflow_snapshot(
     failed_pipeline_regeneration_required = bool(
         pipeline_attempt_blocked and not pipeline_running and not plan_review_declared
     )
+    failed_stop_superseded = bool(
+        failed_pipeline_regeneration_required
+        and len(planned_scientific_digest) == 64
+        and planned_scientific_digest != current_scientific_digest
+    )
     failed_execution_retry_available = bool(
         failed_pipeline_regeneration_required
         and has_plan
@@ -1008,14 +1013,17 @@ def build_research_workflow_snapshot(
     # offered while the availability owner still says so; a changed source or
     # question, or a build that now provides it, offers one again.
     gate_detail = run_row.get("gate_detail")
-    source_coordinate_gap = bool(
+    source_coordinate_stop = bool(
         failed_pipeline_regeneration_required
         and isinstance(gate_detail, Mapping)
-        and gate_detail.get("reason_code") == "study_coordinate_unavailable"
+        and "study_coordinate_unavailable" in (gate_detail.get("reason_code"), gate_detail.get("cause_code"))
         and len(planned_scientific_digest) == 64
         and planned_scientific_digest == current_scientific_digest
-        and _coordinates_still_unavailable(gate_detail, study_row)
     )
+    coordinate_unavailable = (
+        _coordinates_still_unavailable(gate_detail, study_row) if source_coordinate_stop else None
+    )
+    source_coordinate_gap = coordinate_unavailable is True
     # A retry resumes the failed step's sealed code with its restored repair
     # budget.  When that budget is spent and nothing it runs on changed, the
     # retry can only repeat the failure, so it is not offered.
@@ -1362,6 +1370,10 @@ def build_research_workflow_snapshot(
         stop_gate.update(status="blocked", reason=next_action)
     if family_gap is not None and not metadata_candidate_gap:
         stop_gate["detail"] = family_gap
+    if next_action == "failed_pipeline_requires_fresh_plan" and (
+        failed_stop_superseded or coordinate_unavailable is False
+    ):
+        stop_gate = {"status": "blocked", "reason": next_action}
     planning_source = None
     if next_action == "bound_export_cohort_mismatch":
         from .demo_planning_source import resolve_demo_planning_source
@@ -1413,12 +1425,8 @@ def build_research_workflow_snapshot(
     )
 
 
-def _coordinates_still_unavailable(detail: Mapping[str, Any], study_row: Mapping[str, Any]) -> bool:
-    """Whether the availability owner still says the bound source lacks them.
-
-    A name the owner does not know (``concept_not_found``) is EasyICU's gap on
-    every source, never the source's, so it holds no plan back.
-    """
+def _coordinates_still_unavailable(detail: Mapping[str, Any], study_row: Mapping[str, Any]) -> bool | None:
+    """Read owner availability for every recorded coordinate, if known."""
 
     from easyicu.research_agent.concept_availability import explain_concept_availability
 
@@ -1429,12 +1437,14 @@ def _coordinates_still_unavailable(detail: Mapping[str, Any], study_row: Mapping
         if isinstance(value, str) and value.strip()
     ]
     if not database or not concepts:
-        return False
+        return None
     try:
         found = [explain_concept_availability(concept=value, database=database) for value in concepts]
-        return not any(item.available or item.reason == "concept_not_found" for item in found)
     except (KeyError, ValueError):
-        return False
+        return None
+    if any(not item.available and item.reason != "concept_not_found" for item in found):
+        return True
+    return False if all(item.available for item in found) else None
 
 
 #: Runtime findings an approvable candidate may still carry that the Host

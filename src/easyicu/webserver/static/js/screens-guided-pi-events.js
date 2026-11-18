@@ -181,12 +181,14 @@
           const owner = window.EasyICU.guidedPi.optional('runStop');
           const workflow = state.workflow || {};
           if (!owner || String(workflow.next_action_code || '') !== stopAction.dataset.gpiStopWorkflow) return;
-          const { gpiStopRun, gpiStopJob, gpiStopAction } = stopAction.dataset;
+          const { gpiStopRun, gpiStopJob, gpiStopAction, gpiStopReview } = stopAction.dataset;
           const run = (workflow.runs || []).find(row => row.run_id === gpiStopRun)
             || (state.latestRun?.run_id === gpiStopRun ? state.latestRun : null);
           const job = gpiStopJob && owner.latestJobStop(state.session, workflow);
-          const actions = job && job.job_id === gpiStopJob ? job.next_actions
-            : owner.currentRun(run, workflow, state.latestRun) ? owner.offeredActions(run, workflow) : [];
+          const review = window.EasyICU.guidedPi.optional('confirmation');
+          const actions = gpiStopReview !== undefined ? review?.studyStopEdits?.(workflow)
+            : gpiStopJob ? (job?.job_id === gpiStopJob ? owner.offeredActions(job, workflow) : [])
+              : owner.currentRun(run, workflow, state.latestRun) ? owner.offeredActions(run, workflow) : [];
           const action = actions?.find(row => row.action_id === gpiStopAction);
           const route = owner.actionRoute(action, workflow);
           if (route === 'retry' && typeof retryFailedExecution === 'function') retryFailedExecution();
@@ -195,7 +197,7 @@
           if (route === 'connect') openConnection();
           if (route === 'data' && typeof authorizeDataSource === 'function') authorizeDataSource('begin_local_selection');
           if (route === 'draft') {
-            const copy = window.EasyICU.guidedPi.optional('confirmation')?.stopActionCopy(action, tr);
+            const copy = review?.stopActionCopy(action, tr);
             if (copy) prepareEntryCompose({ text: copy.draft, intent: '' });
           }
           return;
