@@ -221,11 +221,14 @@ def test_legacy_effect_measures_on_delivery_and_hazard_ratio_are_invalid() -> No
             QuestionRequirement(id="r1", quote="Report the effect", kind=kind, coverage="plan", effect_measure=measure)
 
 
-@pytest.mark.parametrize(("parent", "clauses"), [
-    ("external validation, calibration", ("calibration", "external validation")),
-    ("calibration of predictions", ("calibration of predictions", "calibration")),
+@pytest.mark.parametrize(("parent", "clauses", "starts"), [
+    ("external validation, calibration", ("calibration", "external validation"), (21, 0)),
+    ("calibration of predictions", ("calibration of predictions", "calibration"), (0, 0)),
+    ("magnesium in mg/dL, phosphate in mg/dL, calibration", ("calibration", "in mg/dL", "in mg/dL"), (40, 10, 30)),
+    ("calibration of risks, calibration", ("calibration", "calibration of risks"), (22, 0)),
+    ("include figures and tables", ("tables", "tables"), (20, None)),
 ])
-def test_reordered_or_overlapping_clauses_keep_their_source_spans(parent, clauses, monkeypatch, caplog) -> None:
+def test_reordered_or_overlapping_clauses_keep_their_source_spans(parent, clauses, starts, monkeypatch, caplog) -> None:
     from easyicu.research_agent.planning.question_requirements import JudgedRequirement
     from easyicu.research_agent.planning.requirement_typing.shadow import observe_requirements
 
@@ -239,5 +242,7 @@ def test_reordered_or_overlapping_clauses_keep_their_source_spans(parent, clause
     observe_requirements([entry], plan=_model_plan(), question=f"Methods. {parent}.", context=_context())
     rows = _shadow_event(caplog)["parts"]
     assert [row["source_span"] for row in rows] == [
-        {"start": 9 + parent.index(clause), "end": 9 + parent.index(clause) + len(clause)} for clause in clauses
+        {"start": 9 + start, "end": 9 + start + len(clause)} if start is not None else None
+        for clause, start in zip(clauses, starts, strict=True)
     ]
+    assert all(row["v2_reason"] == "source_span_unavailable" for row in rows if row["source_span"] is None)

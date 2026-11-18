@@ -4,12 +4,14 @@ from __future__ import annotations
 
 import logging
 import os
+from collections import defaultdict
 from collections.abc import Iterable, Sequence
 from dataclasses import asdict, dataclass
 from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
     from ...schema import AnalysisPlan, ResearchContext
+    from ..question_quote import QuestionQuoteMatcher, QuestionQuoteSpan
     from ..question_requirements import EffectMeasureJudgment, JudgedRequirement, UnstatedConcept
     from .contract import FacetName
 
@@ -69,6 +71,44 @@ def _requirements(judged: Sequence[JudgedRequirement]) -> Iterable[_Observation]
         )
 
 
+def _clause_spans(
+    source: QuestionQuoteMatcher, parent_quote: str, observations: Sequence[_Observation],
+) -> dict[str, QuestionQuoteSpan]:
+    from ..question_quote import normalize_question_quote
+
+    container = source.find(parent_quote)
+    if container is None or source.find(parent_quote, offset=container.start + 1):
+        return {}
+
+    # Resolve longer clauses first so a shorter prefix can use a separate
+    # occurrence when one exists. Equal quotes keep their declared order.
+    def quote_length(item: _Observation) -> int:
+        return len(normalize_question_quote(item.quote or ""))
+
+    spans: dict[str, QuestionQuoteSpan] = {}
+    used: set[tuple[int, int]] = set()
+    for item in sorted(observations, key=quote_length, reverse=True):
+        if not item.quote:
+            continue
+        offset = container.start
+        overlap = None
+        while (span := source.find(item.quote, offset=offset)) and span.end <= container.end:
+            offset = span.start + 1
+            bounds = (span.start, span.end)
+            if bounds in used:
+                continue
+            if all(span.end <= start or end <= span.start for start, end in used):
+                break
+            if overlap is None:
+                overlap = span
+        else:
+            span = overlap
+        if span is not None:
+            spans[item.part_id] = span
+            used.add((span.start, span.end))
+    return spans
+
+
 def _observe(
     observations: Sequence[_Observation], *,
     plan: AnalysisPlan, context: ResearchContext | None, question: str | None,
@@ -92,31 +132,29 @@ def _observe(
         question=question, dictionary=dictionary, projected=projected, context=context,
         proposals=proposals, part_ids=frozenset(item.part_id for item in observations),
     ) if projected else None
-    # Resolve repeated source wording in order within each requirement. V1 may
-    # reuse quotes across requirements, which is kept visible by separate IDs.
-    offsets: dict[str, int] = {}
+    groups: dict[tuple[str, str], list[_Observation]] = defaultdict(list)
+    for item in observations:
+        if item.parent_quote:
+            parent = item.part_id.split("/clause/", 1)[0]
+            groups[parent, item.parent_quote].append(item)
+    clause_spans = {
+        part_id: span for (_, parent_quote), group in groups.items()
+        for part_id, span in _clause_spans(source, parent_quote, group).items()
+    }
     rows = []
     results = []
     for item in observations:
-        parent = item.part_id.split("/clause/", 1)[0]
-        container = source.find(item.parent_quote) if item.parent_quote else None
-        if container and source.find(item.parent_quote, offset=container.end):
-            container = None
-        start = max(offsets.get(parent, 0), container.start if container else 0)
-        span = source.find(item.quote, offset=start) if item.quote else None
-        if container and item.quote and (span is None or span.end > container.end):
-            span = source.find(item.quote, offset=container.start)
-        if span and item.parent_quote and (container is None or span.end > container.end):
-            span = None
-        if span and not item.parent_quote and source.find(item.quote, offset=span.end):
-            span = None
+        if item.parent_quote:
+            span = clause_spans.get(item.part_id)
+        else:
+            span = source.find(item.quote) if item.quote else None
+            if span and source.find(item.quote, offset=span.end):
+                span = None
         part = None
         decision = Unknown(
             reason="plan_contract_unavailable" if projected is None else "source_span_unavailable"
         )
         if span is not None:
-            if item.parent_quote:
-                offsets[parent] = max(offsets.get(parent, 0), span.end)
             part = AtomicPart(
                 part_id=item.part_id, source_span=SourceSpan(start=span.start, end=span.end),
                 key=None, facet_hint=item.facet_hint,

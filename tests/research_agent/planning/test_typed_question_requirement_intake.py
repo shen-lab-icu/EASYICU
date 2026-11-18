@@ -222,7 +222,7 @@ def _pairs():
         "method-odds", "Report the odds ratio for potassium and mortality", "报告血钾与死亡的比值比",
         key(Method(action_id="binary_effect_measure", parameters=(Parameter(name="measure", value="odds_ratio"),)),
             bind("k"), bind("death", "outcome")),
-        partial(_with_exposure, "k"), scripted=True,
+        partial(_with_exposure, "k"), state="not_covered", scripted=True,
     )
     for concept, en, zh, hours, operand, value, polarity in (
         ("k", "potassium", "血钾", 24, ">=", 5.5, "include"),
@@ -523,6 +523,36 @@ def test_family_response_typings_stay_out_of_v1_and_flow_to_shadow(monkeypatch, 
     assert row["repair"][0]["path"] == f"{PROPOSALS_FIELD}[0].source_span.start"
 
 
+@pytest.mark.parametrize(("source_concept", "scope", "expected"), [
+    ("kdigo_aki", "kdigo_aki and mortality", "covered"),
+    ("death", "mortality and death", "not_covered"),
+], ids=["distinct-concepts", "same-concept"])
+def test_compiled_binary_model_needs_distinct_concepts(source_concept, scope, expected, monkeypatch, caplog, tmp_path) -> None:
+    from easyicu.research_agent.planning.planner_output_contract import validate_fresh_planner_typed_product_specs
+
+    monkeypatch.setenv(FLAG, "shadow")
+    caplog.set_level(logging.DEBUG, logger=LOGGER.name)
+    quote = f"Please report the odds ratio for {scope}."
+    context = _family_context()
+    context = context.model_copy(update={"research_question": f"{context.research_question} {quote}"})
+    context.variable(context.primary_exposure).source_concept = source_concept
+    request = _request(context)
+    payload = _spec_payload(request, question_requirements=[{
+        "id": "r1", "quote": quote, "kind": "estimand", "coverage": "plan", "effect_measure": "odds_ratio",
+        "concepts": [], "deliverable_kinds": [], "note": None, "gap": None,
+    }])
+    asked = key(Method(action_id="binary_effect_measure", parameters=(Parameter(name="measure", value="odds_ratio"),)),
+                bind(source_concept), bind("death", "outcome"))
+    payload[PROPOSALS_FIELD] = [proposal("r1", quote, asked, start=context.research_question.index(quote))]
+    llm, planned = _run(context, [json.dumps(payload)])
+    assert len(llm.calls) == 1
+    assert planned.facts.compile_receipt is not None
+    validate_fresh_planner_typed_product_specs(planned.output, context=context)
+    question_requirement_outcome(context=context, plan=planned.output, facts=planned.facts, run_dir=tmp_path)
+    [row] = _shadow_event(caplog)["parts"]
+    assert row["v2"] == expected
+
+
 @pytest.mark.parametrize("endpoint_case", ["absent", "different_status", "different_name", "different_time"])
 def test_mortality_landmark_requires_the_endpoints_own_clock(endpoint_case) -> None:
     context, plan = _landmark(16)
@@ -537,6 +567,35 @@ def test_mortality_landmark_requires_the_endpoints_own_clock(endpoint_case) -> N
     dictionary = registered_dictionary(context.cohort.database)
     projected = project_facts(plan, context=context, dictionary=dictionary)
     assert not any(isinstance(item.key.facet, TimeZero) for item in (*projected.facts, *projected.study_choices))
+
+
+@pytest.mark.parametrize(("name", "event_column", "degraded", "expected"), [
+    ("death", "dialysis_status", False, False),
+    ("death", "mortality_status", True, False),
+    ("hospital_fatality", "mortality_status", False, True),
+    ("death", "mortality_status", False, True),
+], ids=["different-concept", "degraded", "logical-name", "matching-alias"])
+def test_mortality_landmark_binds_the_actual_event_column(name, event_column, degraded, expected) -> None:
+    context, plan = _landmark(7)
+    clock = _clock()
+    clock.observation_semantics = clock.observation_semantics.model_copy(update={"event_status_column": event_column})
+    event = ConceptDescriptor(
+        name=event_column, dtype="bool", source_concept="rrt" if event_column == "dialysis_status" else "death",
+        concept_enrichment_degraded=degraded,
+    )
+    question = "Use the mortality sensitivity landmark at seven hours after ICU admission."
+    context = context.model_copy(update={
+        "research_question": question, "variables": [clock, event], "target_outcome": name,
+        "endpoint": context.endpoint.model_copy(update={"name": name, "event_column": event_column}),
+    })
+    plan = plan.model_copy(update={"research_question": question})
+    plan.steps[-1].inputs = ["clock", event_column]
+    dictionary = registered_dictionary(context.cohort.database)
+    projected = project_facts(plan, context=context, dictionary=dictionary)
+    asked = key(TimeZero(purpose="sensitivity_landmark"), bind("death", "outcome"),
+                time=Point(anchor=ICU, unit="h", offset=7))
+    for evidence in (projected.facts, projected.study_choices):
+        assert [item.key for item in evidence if isinstance(item.key.facet, TimeZero)] == ([asked] if expected else [])
 
 
 @pytest.mark.parametrize("quote", [
@@ -591,6 +650,32 @@ def test_proposal_cannot_override_host_bound_window(submits_wrong_key, monkeypat
         assert row["repair"] == [{"path": f"{PROPOSALS_FIELD}[0].key", "code": "coordinates_need_source_binding"}]
 
 
+@pytest.mark.parametrize("claim", ["first", "second", "different", "alternatives", "abstain"])
+def test_proposal_preserves_conflicting_host_evidence(claim) -> None:
+    quote = "Please use maximum serum potassium in the first seven hours after ICU admission."
+    window = Window(purpose="aggregation", operation="max")
+    first = key(window, bind("k"), time=interval(0, 7))
+    second = key(window, bind("k"), time=interval(0, 420, unit="min"))
+    different = key(window, bind("k"), time=interval(0, 9))
+    authority = AUTHORITY.model_copy(update={"registry_sha256": contract_registry_sha256()})
+    projected = ProjectedFacts(authority, (fact(first, authority), fact(second, authority)))
+    part = AtomicPart(part_id="r1", source_span=SourceSpan(start=0, end=len(quote)), key=None)
+    common = dict(question=quote, dictionary=DICTIONARY, projected=projected, context=_context(),
+                  part_ids=frozenset({"r1"}))
+    baseline, _ = TypingIntake(**common, proposals=()).judge(part)
+    assert baseline.decision.reason == "conflicting_evidence"
+    assert baseline.part.alternatives == (first, second)
+
+    asked = {"first": first, "second": second, "different": different}.get(claim)
+    batch = [proposal("r1", quote, asked, alternatives=(first, different) if claim == "alternatives" else ())]
+    observed, repair = TypingIntake(**common, proposals=batch).judge(part)
+    assert observed == baseline
+    field = "alternatives" if claim == "alternatives" else "key"
+    assert [(issue.path, issue.code) for issue in repair] == (
+        [] if claim == "abstain" else [(f"{PROPOSALS_FIELD}[0].{field}", "coordinates_need_source_binding")]
+    )
+
+
 @pytest.mark.parametrize("choices", [
     (key(Window(purpose="aggregation", operation="max"), bind("k"), time=interval(0, 6)),
      key(Unit(code="mmol/L"), bind("k"))),
@@ -620,26 +705,49 @@ def test_atomic_alternatives_must_share_one_facet() -> None:
         )
 
 
-@pytest.mark.parametrize("refusal", ["schema", "gap"])
+@pytest.mark.parametrize("refusal", ["schema", "gap", "progressive_repair"])
 def test_rejected_family_response_does_not_publish_typings(refusal, monkeypatch) -> None:
-    from easyicu.research_agent.agents import family_spec_planner
+    from easyicu.research_agent.agents import family_spec_planner, progressive_planner
     from easyicu.research_agent.agents.progressive_attempt import progressive_planner_failure_facts
+    from easyicu.research_agent.planning.progressive_compiler import ProgressivePlanCompileError
     from easyicu.research_agent.providers.structured_retry import StructuredResponseFailure
 
     monkeypatch.setenv(FLAG, "shadow")
+    quote = "Include a set of figures with the study."
     context = _family_context()
+    context = context.model_copy(update={"research_question": f"{context.research_question} {quote}"})
     request = _request(context)
-    payload = _spec_payload(request)
-    payload[PROPOSALS_FIELD] = [proposal("r1", "Deliver figures", key(Delivery(output_id="figures"), STUDY_POPULATION))]
+    payload = _spec_payload(request, question_requirements=[{
+        "id": "r1", "quote": quote, "kind": "delivery", "coverage": "plan",
+        "concepts": [], "deliverable_kinds": ["figures"], "note": None, "gap": None,
+    }])
+    payload[PROPOSALS_FIELD] = [proposal(
+        "r1", quote, key(Delivery(output_id="figures"), STUDY_POPULATION), start=context.research_question.index(quote),
+    )]
+    prefix_checks = []
     if refusal == "schema":
         payload["unexpected_field"] = True
-    else:
+    elif refusal == "gap":
         def reject_gap(*args, **kwargs):
             raise ValueError("scripted invalid requirement gap")
 
         monkeypatch.setattr(family_spec_planner, "check_question_requirement_gaps", reject_gap)
+    else:
+        def reject_step(state, materialization, **kwargs):
+            step_id = materialization.step.step_id
+            prefix_checks.append(step_id)
+            raise ProgressivePlanCompileError(
+                "progressive_adjustment_roster_mismatch", "Scripted current-step refusal",
+                step_id=step_id, step_index=len(state.steps), path="model_terms",
+            )
+
+        monkeypatch.setattr(family_spec_planner, "compile_progressive_prefix", reject_step)
+        monkeypatch.setattr(progressive_planner, "compile_progressive_prefix", reject_step)
     with pytest.raises(StructuredResponseFailure) as error:
-        _run(context, [json.dumps(payload), "[]", "[]"])
+        _run(context, [json.dumps(payload), "[]", "[]", "[]"])
+    if refusal == "progressive_repair":
+        assert len(prefix_checks) == 2
+        assert prefix_checks[0] == prefix_checks[1]
     assert progressive_planner_failure_facts(error.value).question_requirement_typings == ()
 
 

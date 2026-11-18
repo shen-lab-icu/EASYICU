@@ -15,6 +15,8 @@ from ...canonical_json import canonical_sha256
 from ...contracts.association_execution import (
     LANDMARK_SPLINE_ASSOCIATION_CAPABILITY_ID,
     association_execution_verdict,
+    baseline_association_execution_verdict,
+    landmark_categorical_association_execution_verdict,
     primary_binary_effect_measure,
 )
 from ...contracts.descriptive_execution import exposure_outcome_distribution_execution_verdict
@@ -25,7 +27,6 @@ from ...contracts.model_terms import (
     preparation_for_step,
     validate_model_term_roster,
 )
-from ...contracts.model_tokens import binary_effect_measure
 from ...contracts.prediction_validation import external_validation_spec_for_step, external_validation_step_matches
 from ...contracts.product_files import RUN_DELIVERABLES
 from ...schema import AnalysisPlan, AnalysisStep, ResearchContext
@@ -292,12 +293,24 @@ class _Projection:
             return Point(anchor=anchor, unit="h", offset=spec.landmark_hours)
         return None
 
+    def landmark_outcome(self, endpoint: EndpointSpec) -> tuple[Binding, ...]:
+        if endpoint.event_column is None:
+            return ()
+        bindings = self.bind(((endpoint.event_column, "outcome"),))
+        if endpoint.name in self.variables or endpoint.name in self.dictionary.concept_ids:
+            if self.bind(((endpoint.name, "outcome"),)) != bindings:
+                return ()
+        return bindings
+
     def landmarks(self, step: AnalysisStep, source: str) -> None:
         context = self.context
         if not context or not context.user_preferences or not context.endpoint:
             return
         endpoint = context.endpoint
         if endpoint.name != context.target_outcome or endpoint.event_column not in step.inputs:
+            return
+        bindings = self.landmark_outcome(endpoint)
+        if not bindings:
             return
         for spec in context.user_preferences.sensitivity_specs:
             if (
@@ -311,7 +324,7 @@ class _Projection:
             if point:
                 self.add(
                     f"{source}.sensitivity_spec_ids/{spec.spec_id}",
-                    self.bind(((endpoint.name, "outcome"),)), TimeZero(purpose="sensitivity_landmark"), point,
+                    bindings, TimeZero(purpose="sensitivity_landmark"), point,
                 )
 
     def study_landmarks(self) -> None:
@@ -321,12 +334,15 @@ class _Projection:
         endpoint = context.endpoint
         if endpoint.name != context.target_outcome:
             return
+        bindings = self.landmark_outcome(endpoint)
+        if not bindings:
+            return
         for index, spec in enumerate(context.user_preferences.sensitivity_specs):
             point = self.landmark_point(spec, endpoint)
             if point:
                 self.add(
                     f"context.user_preferences.sensitivity_specs[{index}]",
-                    self.bind(((endpoint.name, "outcome"),)), TimeZero(purpose="sensitivity_landmark"),
+                    bindings, TimeZero(purpose="sensitivity_landmark"),
                     point, study_choice=True,
                 )
 
@@ -464,35 +480,43 @@ class _Projection:
         self.add(field, bindings, Method(action_id="prediction.external_validation", parameters=scope_parameters))
 
     def binary_measures(self, step: AnalysisStep, roles: Mapping[str, set[Role]], source: str) -> None:
-        def add(field: str, coordinates: tuple[tuple[str, Role], ...], measure: str) -> None:
-            self.add(
-                f"{source}.{field}", self.bind(coordinates),
-                Method(action_id="binary_effect_measure", parameters=(Parameter(name="measure", value=measure),)),
-            )
-
+        measure = primary_binary_effect_measure(step)
+        if not measure:
+            return
+        try:
+            preparation_for_step(step)
+        except PreparationRefusal:
+            return
         if step.scientific_capability == LANDMARK_SPLINE_ASSOCIATION_CAPABILITY_ID:
-            measure = primary_binary_effect_measure(step)
+            field = "scientific_capability"
             coordinates = tuple(
                 (column, role) for column, declared in roles.items()
                 for role in sorted(declared) if role in {"exposure", "outcome"}
             )
-            if measure and len(coordinates) == 2 and {role for _, role in coordinates} == {"exposure", "outcome"}:
-                add("scientific_capability", coordinates, measure)
-            return
-        inputs = set(step.inputs)
-        for index, requirement in enumerate(step.model_requirements):
+        else:
             if (
-                requirement.analysis_role != "primary" or requirement.outcome_type != "binary"
-                or not {requirement.exposure_source, requirement.outcome} <= inputs
+                not association_execution_verdict(step).claimed
+                and not baseline_association_execution_verdict(step).claimed
+                and not landmark_categorical_association_execution_verdict(step).claimed
             ):
-                continue
-            measure = binary_effect_measure(requirement.method_family)
-            if measure:
-                add(
-                    f"model_requirements[{index}].method_family",
-                    ((requirement.exposure_source, "exposure"), (requirement.outcome, "outcome")),
-                    measure,
-                )
+                return
+            [requirement] = step.model_requirements
+            if requirement.analysis_role != "primary" or not set(requirement.covariates or ()) <= set(step.inputs):
+                return
+            field = "model_requirements[0].method_family"
+            coordinates = ((requirement.exposure_source, "exposure"), (requirement.outcome, "outcome"))
+        if (
+            len(coordinates) != 2 or {role for _, role in coordinates} != {"exposure", "outcome"}
+            or any(roles.get(column) != {role} for column, role in coordinates)
+        ):
+            return
+        bindings = self.bind(coordinates)
+        if len(bindings) != 2 or len({binding.concept_id for binding in bindings}) != 2:
+            return
+        self.add(
+            f"{source}.{field}", bindings,
+            Method(action_id="binary_effect_measure", parameters=(Parameter(name="measure", value=measure),)),
+        )
 
 
 def _step_roles(step: AnalysisStep) -> Iterator[tuple[str, Role]]:

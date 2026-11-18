@@ -19,6 +19,7 @@ from easyicu.research_agent.contracts.model_terms import (
     DataPreparationPlan,
     ImputationVariable,
     MissingDataPlan,
+    ModelTermSpec,
     PlannedModelRequirement,
     WindowAggregation,
     preparation_method,
@@ -599,18 +600,36 @@ def test_repeated_stay_policy_does_not_credit_only_the_last_primary() -> None:
         assert _evaluate(CLUSTER, plan, context=context)[0].state == "not_covered"
 
 
-def test_separate_binary_model_requirements_project_their_own_pairs() -> None:
+@pytest.mark.parametrize("invalid", ["prose", "preparation", "missing_input", "ambiguous_role", "bundled"])
+def test_binary_facts_require_an_executable_association_step(invalid) -> None:
     plan = _model_plan()
-    plan.steps[0].inputs.extend(("mg", "kdigo_aki"))
-    plan.steps[0].model_requirements.append(_model(exposure="mg").model_copy(update={
-        "requirement_id": "m2", "outcome": "kdigo_aki",
-    }))
+    plan.research_question = "Please report the odds ratio for serum potassium and mortality, adjusted for age."
+    step = plan.steps[0]
+    step.inputs.append("age")
+    step.model_requirements[0].covariates = ["age"]
+    step.model_requirements[0].model_terms = [
+        ModelTermSpec(name=name, role=role, coding="continuous", transform="identity")
+        for name, role in (("k", "exposure"), ("age", "covariate"))
+    ]
     facet = Method(action_id="binary_effect_measure", parameters=(Parameter(name="measure", value="odds_ratio"),))
-    for index, (exposure, outcome) in enumerate((("k", "death"), ("mg", "kdigo_aki"))):
-        decision, _ = _evaluate(key(facet, bind(exposure), bind(outcome, "outcome")), plan, context=_context())
-        assert decision.state == "covered"
-        assert decision.provenance.source_field == f"plan.steps[0].model_requirements[{index}].method_family"
-    assert _evaluate(key(facet, bind("mg"), bind("death", "outcome")), plan)[0].state == "not_covered"
+    asked = key(facet, bind("k"), bind("death", "outcome"))
+    decision, _ = _evaluate(asked, plan, context=_context())
+    assert decision.state == "covered"
+    assert decision.provenance.source_field == "plan.steps[0].model_requirements[0].method_family"
+    if invalid == "prose":
+        step.method = "Fit a binary adjusted regression and report the odds ratio"
+    elif invalid == "preparation":
+        step.method += " with easyicu.data_preparation/1:invalid"
+    elif invalid == "missing_input":
+        step.inputs.remove("age")
+    elif invalid == "ambiguous_role":
+        step.model_requirements[0].covariates = ["death", "age"]
+    else:
+        step.inputs.extend(("mg", "kdigo_aki"))
+        step.model_requirements.append(_model(exposure="mg").model_copy(update={
+            "requirement_id": "m2", "outcome": "kdigo_aki",
+        }))
+    assert _evaluate(asked, plan, context=_context())[0].state == "not_covered"
 
 
 @pytest.mark.parametrize("variable", [

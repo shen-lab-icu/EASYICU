@@ -1553,7 +1553,7 @@ def run_family_spec_attempt(
     question_anchors = tuple(sealed.coordinate_concepts) if sealed else None
     parse_attempts = 0
 
-    def parse_spec(raw: str) -> tuple[FamilyPlanSpec, FamilySkeletonDraft]:
+    def parse_spec(raw: str) -> tuple[FamilyPlanSpec, FamilySkeletonDraft, object]:
         nonlocal parse_attempts
         parse_attempts += 1
         staged_typings: object = ()
@@ -1604,8 +1604,7 @@ def run_family_spec_attempt(
                 # Progressive step/suffix repair lane, which recompiles below.
                 if retryable_parse_error(exc):
                     raise
-            attempt.question_requirement_typings = staged_typings
-            return spec, draft
+            return spec, draft, staged_typings
         except ValueError as exc:
             if not retryable_parse_error(exc):
                 raise
@@ -1624,7 +1623,7 @@ def run_family_spec_attempt(
                 raise _QuestionRequirementSchemaRefusal(feedback) from exc
             raise
 
-    spec, draft = call_llm_with_structured_retry(
+    spec, draft, staged_typings = call_llm_with_structured_retry(
         llm,
         messages,
         parser=parse_spec,
@@ -1709,6 +1708,7 @@ def run_family_spec_attempt(
     attempt.prompt_metrics["final_skeleton_sha256"] = receipt.skeleton_sha256
     attempt.prompt_metrics["compiled_plan_sha256"] = receipt.analysis_plan_sha256
     capture_efficiency_metrics()
+    attempt.question_requirement_typings = staged_typings
     return plan
 
 

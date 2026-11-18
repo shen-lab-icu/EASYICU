@@ -239,6 +239,9 @@ class TypingIntake:
         keys = (("key", proposal.key),) if proposal.key else tuple(
             (f"alternatives[{index}]", key) for index, key in enumerate(proposal.alternatives)
         )
+        if keys and seeded.decision == Unknown(reason="conflicting_evidence"):
+            field = "key" if proposal.key else "alternatives"
+            return seeded, (submission.field(field, "coordinates_need_source_binding"),)
         hint = proposal.facet_hint or (keys[0][1].facet.kind if keys else part.facet_hint)
         if part.facet_hint not in (None, hint):
             issue = submission.field("facet_hint", "facet_does_not_bind_part")
