@@ -7,6 +7,29 @@ answers is in brackets.
 lead-r13 (0.1.0) is validated on SICdb 1.0.8, the default release, and
 remains compatible with SICdb 1.0.6 (the release is detected from the schema).
 
+## 2026-11-18 — fifteenth dictionary reseal: opt-in FiO₂ settings and C565 renal history [S732, #742]
+
+**What changed.** Under the user's consent ("同意 reseal 15") `tools/reseal_concept_dict.py` moved
+`concept-dict.LOCK.json` and the current research profiles to AUDIT15; AUDIT14 stays registered as history.
+The sealed dictionary (423 concepts, was 417) adds six concepts. The 417 existing entries, including `fio2`, are
+byte-identical. Both new modules are opt-in, so the default extraction and every existing module are unchanged.
+
+- `fio2_set` (module `vent_settings`) is the hourly ventilator FiO₂ *setting* in percent. It takes one pooled
+  median of all in-range (21–100 %) records per stay and ICU hour; fractions ≤ 1 are scaled by 100, and measured
+  FiO₂ items (AUMC 12279) are excluded. Sources: MIIV 223835; AUMC 12282/12329/12369/6699; HiRID 2010;
+  SICdb 2283; eICU respiratory charting `FiO2`/`respFlowSettings`; MIMIC-III CareVue 190/7570, through the CareVue
+  view only.
+- `esrd_dialysis`, `kidney_tx`, `ph_dialysis`, `ph_kidney_tx` and `renal_excl` (module `c565_renal_history`) are
+  per-stay prior-history exclusion flags from the frozen C565 V2 code lists:
+  - MIIV uses ICD-9/10 by version, from all admissions through the index admission.
+  - eICU uses diagnosis codes and past history across the sibling unit stays of one hospitalization.
+  - MIMIC-III CareVue uses ICD-9 within the view's admissions (an extension beyond frozen C565). Each row carries
+    `prior_window = view_admissions_only` and the note "prior_window CareVue-era not guaranteed".
+  - AUMC and HiRID are typed absent (`no_icd_diagnosis_source`). SICdb is typed absent ("no prior-history
+    diagnosis source"). MIMIC-III outside the CareVue view is refused (`carevue_view_required`).
+- A native export now publishes these typed absence reasons in `unavailable_modules` /
+  `unavailable_concepts`, instead of the generic `producer_returned_no_physical_output`.
+
 ## 2026-11-17 — fourteenth dictionary reseal [S732]
 
 **What changed.** Under the user's consent ("同意，全部封存") `tools/reseal_concept_dict.py` moved

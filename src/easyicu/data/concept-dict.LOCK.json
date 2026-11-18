@@ -2,9 +2,9 @@
   "finalized": true,
   "finalized_note": "2026-09-21 v6 数据基础已完成重建与质控：六库受影响模块均从原始数据刷新，全部 114 个 native-v2 模块由同一 clean runtime 97f508c6 重新发布。MIMIC-III/IV 住院死亡状态逐 stay 与原始 admissions 完全一致，death_time 的缺失性逐行一致，非缺失值仅有 float32 写出误差（最大分别 0.000115/0.000228 小时）。其余字典、临床合同、数据源与运行时修复均由候选包 provenance 和封存门禁绑定。",
   "locked_for_extraction_run": "full6_native_v6_clean_rebuild_97f508c6_20260921",
-  "concept_dict_sha256": "a8c46f348d67871d921882966e585aa45b09a244d6588304e06992a8f049ba81",
+  "concept_dict_sha256": "2aeb1be7b2a56b4654a5770f8fa63bc06172493c8028eba3f4cffed117c9d0cd",
   "sofa2_dict_sha256": "a0d1c96da76cb64bef07b96c268497d3506ef116cde0f2700aa8ab11aeceadcf",
-  "total_concepts": 417,
+  "total_concepts": 423,
   "new_this_round": [],
   "pending_foundation_changes": [],
   "previous_published_lock": {
@@ -180,6 +180,10 @@
     {
       "git_commit": "28eea769224fd6996135de130945d0cbc4805841",
       "change": "User-approved 20261117-audit14 reseal: fourteenth reseal: B1 sofa_resp + MIMIC microbiology + KDIGO pre-ICU creatinine + Sepsis-3 options + S732TW active-time dose rates Consent: 同意，全部封存"
+    },
+    {
+      "git_commit": "94616e32502f91eb7a8ae845ec6b1c54c549fbd7",
+      "change": "User-approved 20261118-audit15 reseal: fifteenth reseal: opt-in fio2_set and C565 renal history (r15) Consent: 同意 reseal 15"
     }
   ]
 }
