@@ -13,6 +13,7 @@ from pydantic import ValidationError
 from easyicu.clinical_contracts import load_clinical_contracts
 from easyicu.concept.metadata_sidecar import TimeCoordinate
 from easyicu.research_agent.canonical_json import canonical_sha256
+from easyicu.research_agent.contracts.endpoint import EndpointSpec
 from easyicu.research_agent.contracts.exposure_outcome_distribution import ExposureOutcomeDistributionSpec
 from easyicu.research_agent.contracts.model_terms import (
     DataPreparationPlan,
@@ -394,7 +395,12 @@ def test_sensitivity_landmark_needs_its_step_and_bound_outcome_clock() -> None:
         spec_id="landmark-16", axis="timing", strategy="landmark", landmark_hours=16,
         event_time_variable="clock", execution_variables=("clock",),
     )
-    context = _context(preferences=UserPreferences(sensitivity_specs=[spec]))
+    context = _context(preferences=UserPreferences(sensitivity_specs=[spec])).model_copy(update={
+        "endpoint": EndpointSpec(
+            name="death", kind="time_to_event", absence_semantics="no_absent_rows", levels=[False, True],
+            event_column="death", time_column="clock", time_origin=ICU, censoring_rule="specified",
+        ),
+    })
     plan = _model_plan()
     plan.steps.append(AnalysisStep(
         step_id="landmark", intent="prespecified landmark",

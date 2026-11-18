@@ -18,6 +18,7 @@ from ...contracts.association_execution import (
     primary_binary_effect_measure,
 )
 from ...contracts.descriptive_execution import exposure_outcome_distribution_execution_verdict
+from ...contracts.endpoint import EndpointSpec
 from ...contracts.model_terms import (
     PreparationRefusal,
     preparation_base_method,
@@ -39,7 +40,7 @@ from ..dependence_authority import (
     _host_restricted_to_first_icu_stays,
     context_dependence_authority,
 )
-from ..sensitivity_authority import EXECUTABLE_METHODS_BY_STRATEGY
+from ..sensitivity_authority import EXECUTABLE_METHODS_BY_STRATEGY, PrespecifiedSensitivitySpec
 from .contract import (
     Binding,
     CohortPredicate,
@@ -279,32 +280,38 @@ class _Projection:
                     Method(action_id="multiple_imputation", parameters=(m,)),
                 )
 
+    def landmark_point(self, spec: PrespecifiedSensitivitySpec, endpoint: EndpointSpec) -> Point | None:
+        if spec.strategy != "landmark" or spec.landmark_hours is None or endpoint.time_column != spec.event_time_variable:
+            return None
+        clock = self.variables.get(spec.event_time_variable or "")
+        semantics = clock.observation_semantics if clock else None
+        if semantics and semantics.event_status_column != endpoint.event_column:
+            return None
+        anchor = self.clock_anchor(spec.event_time_variable)
+        if anchor and anchor == registered_anchor(endpoint.time_origin, self.dictionary):
+            return Point(anchor=anchor, unit="h", offset=spec.landmark_hours)
+        return None
+
     def landmarks(self, step: AnalysisStep, source: str) -> None:
-        preferences = self.context.user_preferences if self.context else None
-        if not preferences:
+        context = self.context
+        if not context or not context.user_preferences or not context.endpoint:
             return
-        for spec in preferences.sensitivity_specs:
+        endpoint = context.endpoint
+        if endpoint.name != context.target_outcome or endpoint.event_column not in step.inputs:
+            return
+        for spec in context.user_preferences.sensitivity_specs:
             if (
-                spec.strategy != "landmark" or spec.spec_id not in step.sensitivity_spec_ids
+                spec.spec_id not in step.sensitivity_spec_ids
                 or preparation_base_method(step.method) not in EXECUTABLE_METHODS_BY_STRATEGY["landmark"]
-                or spec.landmark_hours is None or self.context is None or not self.context.target_outcome
                 or spec.event_time_variable not in step.inputs
-                or self.context.target_outcome not in step.inputs
                 or (spec.observation_duration_variable and spec.observation_duration_variable not in step.inputs)
-                or (self.context.endpoint is not None and (
-                    self.context.endpoint.name != self.context.target_outcome
-                    or self.context.endpoint.time_column != spec.event_time_variable
-                ))
             ):
                 continue
-            anchor = self.clock_anchor(spec.event_time_variable)
-            endpoint = self.context.endpoint
-            if anchor and (endpoint is None or anchor == registered_anchor(endpoint.time_origin, self.dictionary)):
+            point = self.landmark_point(spec, endpoint)
+            if point:
                 self.add(
                     f"{source}.sensitivity_spec_ids/{spec.spec_id}",
-                    self.bind(((self.context.target_outcome, "outcome"),)),
-                    TimeZero(purpose="sensitivity_landmark"),
-                    Point(anchor=anchor, unit="h", offset=spec.landmark_hours),
+                    self.bind(((endpoint.name, "outcome"),)), TimeZero(purpose="sensitivity_landmark"), point,
                 )
 
     def study_landmarks(self) -> None:
@@ -315,17 +322,12 @@ class _Projection:
         if endpoint.name != context.target_outcome:
             return
         for index, spec in enumerate(context.user_preferences.sensitivity_specs):
-            if spec.strategy != "landmark" or not spec.event_time_variable or spec.landmark_hours is None:
-                continue
-            anchor = self.clock_anchor(spec.event_time_variable)
-            if (
-                anchor and endpoint.time_column == spec.event_time_variable
-                and anchor == registered_anchor(endpoint.time_origin, self.dictionary)
-            ):
+            point = self.landmark_point(spec, endpoint)
+            if point:
                 self.add(
                     f"context.user_preferences.sensitivity_specs[{index}]",
                     self.bind(((endpoint.name, "outcome"),)), TimeZero(purpose="sensitivity_landmark"),
-                    Point(anchor=anchor, unit="h", offset=spec.landmark_hours), study_choice=True,
+                    point, study_choice=True,
                 )
 
     def model_terms(self, step: AnalysisStep, source: str) -> None:

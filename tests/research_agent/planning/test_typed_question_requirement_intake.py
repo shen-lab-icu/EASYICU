@@ -319,14 +319,32 @@ def test_wrong_facts_remain_uncovered_through_intake(case) -> None:
     authority = AUTHORITY.model_copy(update={"registry_sha256": contract_registry_sha256()})
     part = AtomicPart(part_id=case.id, source_span=SourceSpan(start=0, end=len(case.quote)),
                       key=None, facet_hint=case.facet)
+    scope = case.requested.bindings if case.requested else case.rejected[0].bindings
+    roles = {binding.role: binding.concept_id for binding in scope}
+    context = _context(preferences=UserPreferences(
+        covariates=[binding.concept_id for binding in scope if binding.role == "covariate"],
+        covariate_selection="exact", covariate_authority="user",
+    )).model_copy(update={
+        "primary_exposure": roles.get("exposure", "k"),
+        "target_outcome": roles.get("outcome", "death"),
+    })
+
+    def decide(evidence, proposals):
+        return TypingIntake(
+            question=case.quote, dictionary=DICTIONARY,
+            projected=ProjectedFacts(authority, tuple(fact(item, authority) for item in evidence)),
+            context=context, proposals=proposals, part_ids=frozenset({case.id}),
+        ).judge(part)[0].decision.state
+
     for rejected in (case.rejected, *((item,) for item in case.rejected)):
-        projected = ProjectedFacts(authority, tuple(fact(item, authority) for item in rejected))
-        intake = TypingIntake(
-            question=case.quote, dictionary=DICTIONARY, projected=projected, context=None,
-            proposals=[proposal(case.id, case.quote, case.requested, facet=case.facet)],
-            part_ids=frozenset({case.id}),
-        )
-        assert intake.judge(part)[0].decision.state != "covered"
+        for batch in (
+            (), [proposal(case.id, case.quote, case.requested, facet=case.facet)],
+            *([proposal(case.id, case.quote, item)] for item in rejected),
+        ):
+            assert decide(rejected, batch) != "covered"
+
+    if case.id.startswith("new/peak-potassium"):
+        assert decide((case.requested,), ()) == "covered"
 
 
 def test_matching_but_misbound_proposal_is_unknown(monkeypatch, caplog) -> None:
@@ -501,3 +519,123 @@ def test_family_response_typings_stay_out_of_v1_and_flow_to_shadow(monkeypatch, 
     assert row["v1"] == "covered"
     assert row["v2"] == "unknown"
     assert row["repair"][0]["path"] == f"{PROPOSALS_FIELD}[0].source_span.start"
+
+
+@pytest.mark.parametrize("endpoint_case", ["absent", "different_status", "different_name", "different_time"])
+def test_mortality_landmark_requires_the_endpoints_own_clock(endpoint_case) -> None:
+    context, plan = _landmark(16)
+    if endpoint_case == "absent":
+        context = context.model_copy(update={"endpoint": None})
+    elif endpoint_case == "different_status":
+        clock = context.variable("clock")
+        clock.observation_semantics = clock.observation_semantics.model_copy(update={"event_status_column": "rrt"})
+    else:
+        change = {"name": "rrt"} if endpoint_case == "different_name" else {"time_column": "other_clock"}
+        context = context.model_copy(update={"endpoint": context.endpoint.model_copy(update=change)})
+    dictionary = registered_dictionary(context.cohort.database)
+    projected = project_facts(plan, context=context, dictionary=dictionary)
+    assert not any(isinstance(item.key.facet, TimeZero) for item in (*projected.facts, *projected.study_choices))
+
+
+@pytest.mark.parametrize("quote", [
+    "Deliver result tables and a patient-level spreadsheet",
+    "Do not include figures", "不要包含图件", "请勿交付结果表",
+])
+def test_delivery_requires_a_complete_affirmative_request(quote, monkeypatch, caplog) -> None:
+    from easyicu.research_agent.planning.requirement_typing.source import source_supports
+
+    monkeypatch.setenv(FLAG, "shadow")
+    caplog.set_level(logging.DEBUG, logger=LOGGER.name)
+    context, plan = _with_exposure("k")
+    output = "figures" if ("figures" in quote or "图件" in quote) else "result_tables"
+    asked = key(Delivery(output_id=output), STUDY_POPULATION)
+    dictionary = registered_dictionary(context.cohort.database)
+    assert not source_supports(quote, asked, context=context, dictionary=dictionary)
+    for proposals in ((), [proposal("r1", quote, asked)]):
+        caplog.clear()
+        _judge(quote, context, plan, kind="delivery", outputs=(output,), proposals=proposals)
+        [row] = _shadow_event(caplog)["parts"]
+        assert row["v2"] == "unknown"
+
+
+def test_unregistered_unit_cannot_be_registered_by_an_applied_variable(monkeypatch, caplog) -> None:
+    monkeypatch.setenv(FLAG, "shadow")
+    caplog.set_level(logging.DEBUG, logger=LOGGER.name)
+    context, plan = _with_exposure("k", unit="mg/24h")
+    quote = "Specify potassium units in mg/24h"
+    asked = key(Unit(code="mg/24h"), bind("k"))
+    for proposals in ((), [proposal("r1", quote, asked)]):
+        caplog.clear()
+        _judge(quote, context, plan, proposals=proposals)
+        [row] = _shadow_event(caplog)["parts"]
+        assert row["v2"] == "unknown"
+        if proposals:
+            assert row["v2_reason"] == "unregistered_coordinate"
+
+
+@pytest.mark.parametrize("submits_wrong_key", [False, True], ids=["abstention", "unmatched-key"])
+def test_proposal_cannot_override_host_bound_window(submits_wrong_key, monkeypatch, caplog) -> None:
+    monkeypatch.setenv(FLAG, "shadow")
+    caplog.set_level(logging.DEBUG, logger=LOGGER.name)
+    context, plan = _window("k", 6, "max")
+    quote = "Use peak potassium in the first 6 hours after ICU entry"
+    wrong = key(Window(purpose="aggregation", operation="max"), bind("lact"), time=interval(0, 6))
+    _judge(quote, context, plan, proposals=[proposal("r1", quote, wrong if submits_wrong_key else None)])
+    [row] = _shadow_event(caplog)["parts"]
+    assert row["v2"] == "covered"
+    assert row["result"]["part"]["origin"] == "plan_contract"
+    assert row["result"]["part"]["key"]["bindings"][0]["concept_id"] == "k"
+    if submits_wrong_key:
+        assert row["repair"] == [{"path": f"{PROPOSALS_FIELD}[0].key", "code": "coordinates_need_source_binding"}]
+
+
+@pytest.mark.parametrize("choices", [
+    (key(Window(purpose="aggregation", operation="max"), bind("k"), time=interval(0, 6)),
+     key(Unit(code="mmol/L"), bind("k"))),
+    (key(Window(purpose="aggregation", operation="max"), bind("k"), time=interval(0, 6)),),
+    (key(Delivery(output_id="figures"), STUDY_POPULATION),),
+], ids=["mixed-facets", "wrong-facet", "wrong-output"])
+def test_delivery_checks_every_alternative(choices, monkeypatch, caplog) -> None:
+    monkeypatch.setenv(FLAG, "shadow")
+    caplog.set_level(logging.DEBUG, logger=LOGGER.name)
+    context, plan = _with_exposure("k")
+    quote = "Deliver result tables"
+    _judge(quote, context, plan, kind="delivery", outputs=("result_tables",),
+           proposals=[proposal("r1", quote, None, alternatives=choices)])
+    [row] = _shadow_event(caplog)["parts"]
+    assert row["v2_reason"] == "invalid_typing_proposal"
+    assert not row["result"]["part"]["alternatives"]
+
+
+def test_atomic_alternatives_must_share_one_facet() -> None:
+    from pydantic import ValidationError
+
+    with pytest.raises(ValidationError, match="facet"):
+        AtomicPart(
+            part_id="r1", source_span=SourceSpan(start=0, end=4), key=None, alternatives=(
+                key(Unit(code="mmol/L"), bind("k")), key(Delivery(output_id="figures"), STUDY_POPULATION),
+            ),
+        )
+
+
+@pytest.mark.parametrize("refusal", ["schema", "gap"])
+def test_rejected_family_response_does_not_publish_typings(refusal, monkeypatch) -> None:
+    from easyicu.research_agent.agents import family_spec_planner
+    from easyicu.research_agent.agents.progressive_attempt import progressive_planner_failure_facts
+    from easyicu.research_agent.providers.structured_retry import StructuredResponseFailure
+
+    monkeypatch.setenv(FLAG, "shadow")
+    context = _family_context()
+    request = _request(context)
+    payload = _spec_payload(request)
+    payload[PROPOSALS_FIELD] = [proposal("r1", "Deliver figures", key(Delivery(output_id="figures"), STUDY_POPULATION))]
+    if refusal == "schema":
+        payload["unexpected_field"] = True
+    else:
+        def reject_gap(*args, **kwargs):
+            raise ValueError("scripted invalid requirement gap")
+
+        monkeypatch.setattr(family_spec_planner, "check_question_requirement_gaps", reject_gap)
+    with pytest.raises(StructuredResponseFailure) as error:
+        _run(context, [json.dumps(payload), "[]", "[]"])
+    assert progressive_planner_failure_facts(error.value).question_requirement_typings == ()

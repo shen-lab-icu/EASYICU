@@ -999,12 +999,12 @@ def parse_family_plan_spec(
     payload = json.loads(str(raw or "").strip())
     if not isinstance(payload, dict):
         raise ValueError("family spec response root must be an object")
-    if typing_shadow_enabled():
+    shadow = typing_shadow_enabled()
+    proposals: object = ()
+    if shadow:
         from ..planning.requirement_typing.intake import PROPOSALS_FIELD
 
         proposals = payload.pop(PROPOSALS_FIELD, ())
-        if capture_typings is not None:
-            capture_typings(proposals)
     spec = FamilyPlanSpec.model_validate(
         {
             **payload,
@@ -1014,6 +1014,8 @@ def parse_family_plan_spec(
         }
     )
     validate_family_plan_spec(spec, request)
+    if shadow and capture_typings is not None:
+        capture_typings(proposals)
     return spec
 
 
@@ -1551,12 +1553,15 @@ def run_family_spec_attempt(
     question_anchors = tuple(sealed.coordinate_concepts) if sealed else None
     parse_attempts = 0
 
-    def capture_typings(proposals: object) -> None:
-        attempt.question_requirement_typings = proposals
-
     def parse_spec(raw: str) -> tuple[FamilyPlanSpec, FamilySkeletonDraft]:
         nonlocal parse_attempts
         parse_attempts += 1
+        staged_typings: object = ()
+
+        def capture_typings(proposals: object) -> None:
+            nonlocal staged_typings
+            staged_typings = proposals
+
         try:
             spec = (
                 parse_family_plan_spec(raw, request, capture_typings=capture_typings)
@@ -1599,6 +1604,7 @@ def run_family_spec_attempt(
                 # Progressive step/suffix repair lane, which recompiles below.
                 if retryable_parse_error(exc):
                     raise
+            attempt.question_requirement_typings = staged_typings
             return spec, draft
         except ValueError as exc:
             if not retryable_parse_error(exc):

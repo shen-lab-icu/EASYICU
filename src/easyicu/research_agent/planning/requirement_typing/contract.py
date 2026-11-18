@@ -292,8 +292,13 @@ class AtomicPart(_Record):
 
     @model_validator(mode="after")
     def _facet_agrees(self) -> AtomicPart:
-        if self.key is not None and self.facet_hint not in (None, self.key.facet.kind):
-            raise ValueError("the facet hint disagrees with the typed key")
+        facets = {key.facet.kind for key in self.alternatives}
+        if self.key is not None:
+            facets.add(self.key.facet.kind)
+        if self.facet_hint is not None:
+            facets.add(self.facet_hint)
+        if len(facets) > 1:
+            raise ValueError("the key, facet hint and alternatives must agree on the facet")
         return self
 
 
