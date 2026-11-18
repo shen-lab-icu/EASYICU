@@ -7,7 +7,7 @@
     function render({ path, database, ready }) {
       path = String(path || '').trim();
       if (!state || state.path !== path || state.database !== database || state.ready !== ready) {
-        state = { path, database, ready, group: null, failed: false, pending: false, selected: new Map() };
+        state = { path, database, ready, group: null, failed: false, pending: false, selected: new Map(), requested: null };
       }
       if (path && database && ready && !state.group && !state.failed && !state.pending && window.EU_API?.getJSON) {
         load(state);
@@ -15,8 +15,11 @@
     }
 
     function reset(keepSource) {
+      const sameSource = Boolean(state?.ready && keepSource &&
+        state.path === String(keepSource.path || '').trim() && state.database === keepSource.database);
+      if (sameSource && !state.group && prefill) state.requested = prefill;
       prefill = null;
-      if (state?.ready && keepSource && state.path === String(keepSource.path || '').trim() && state.database === keepSource.database) return true;
+      if (sameSource) return true;
       resetForConnection();
       return false;
     }
@@ -28,7 +31,9 @@
 
     function clear() {
       prefill = null;
-      state?.selected.clear();
+      if (!state) return;
+      state.requested = null;
+      state.selected.clear();
     }
 
     function setSelection(modules, concepts) {
@@ -40,10 +45,13 @@
 
     function resolveSelection(current) {
       const { group, selected } = current;
-      if (!group || !prefill || group.unavailable_reason || hosted()) return;
+      if (!group) return;
+      const requested = prefill || current.requested;
+      current.requested = null;
+      if (!requested || group.unavailable_reason || hosted()) return;
       for (const row of group.modules) {
-        if (!prefill.modules.has(row.id) || row.unavailable_reason || !Array.isArray(row.signals)) continue;
-        const projection = prefill.concepts?.[row.id];
+        if (!requested.modules.has(row.id) || row.unavailable_reason || !Array.isArray(row.signals)) continue;
+        const projection = requested.concepts?.[row.id];
         const signals = Array.isArray(projection) ? row.signals.filter(id => projection.includes(id)) : row.signals;
         if (signals.length) selected.set(row.id, signals);
       }

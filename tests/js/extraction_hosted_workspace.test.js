@@ -662,6 +662,28 @@ function minuteOwner(getJSON) {
   });
 }
 
+test('resetting a telemetry setup during coverage lookup keeps its systolic projection on that folder', async () => {
+  let finishCoverage;
+  const lookup = new Promise(resolve => { finishCoverage = resolve; });
+  const owner = minuteOwner(() => lookup);
+  const connected = { path: '/fixture/telemetry/day-shift', database: 'sic', ready: true };
+  owner.setSelection(['haemo_native'], { haemo_native: ['sbp_invasive'] });
+  owner.render(connected);
+  assert.match(owner.markup(), /Checking database coverage/);
+
+  assert.equal(owner.reset(connected), true);
+  finishCoverage(arterialCoverage);
+  await settle();
+  assert.deepEqual(Array.from(owner.keys()), ['haemo_native']);
+  assert.deepEqual(Array.from(owner.payload().haemo_native), ['sbp_invasive']);
+
+  owner.resetForConnection();
+  owner.render({ ...connected, path: '/fixture/telemetry/night-shift' });
+  await settle();
+  assert.match(owner.markup(), /data-ex-minute-module="haemo_native"/);
+  assert.deepEqual(Object.keys(owner.payload()), []);
+});
+
 for (const clear of ['clear', 'reset', 'checkbox']) {
   test(`a ${clear} clears inherited monitor choices before connecting another folder`, async () => {
     const owner = minuteOwner(async () => coverage);
