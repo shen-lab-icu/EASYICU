@@ -80,8 +80,9 @@
 
   function offersPlanRecovery(actions) {
     return !Array.isArray(actions) || actions.some(({ kind, params }) =>
-      ['retry', 'rerun_without_element', 'drop_variable'].includes(kind)
-      || (kind === 'edit_plan' && params.change_question !== true));
+      ['rerun_without_element', 'drop_variable'].includes(kind)
+      || (kind === 'retry' && params?.stage === 'planning')
+      || (kind === 'edit_plan' && params?.change_question !== true));
   }
 
   function create(host) {
@@ -207,7 +208,10 @@
       // The failed run may require a changed question or source, or have no
       // authorized remedy. Its typed choices also govern this review card.
       const planRecoveryOffered = offersPlanRecovery(workflow.next_actions);
-      if ((failedRun || workflow.next_actions?.length) && !planRecoveryOffered
+      const executionRetryOffered = code === 'failed_pipeline_execution_retry_available'
+        && (!Array.isArray(workflow.next_actions)
+          || workflow.next_actions.some(action => action.kind === 'retry' && action.params?.stage === 'execution'));
+      if ((failedRun || workflow.next_actions?.length) && !planRecoveryOffered && !executionRetryOffered
         && ['failed_pipeline_requires_fresh_plan', 'failed_pipeline_execution_retry_futile',
           'failed_pipeline_execution_retry_available'].includes(code)) {
         return studyStopConfirmation(workflow, code);
@@ -313,8 +317,7 @@
       };
       if (code === 'failed_pipeline_execution_retry_available') return {
         code, grants: ['provider_run'], hideEdit: !planRecoveryOffered,
-        nonApprovable: Array.isArray(workflow.next_actions)
-          && !workflow.next_actions.some(action => action.kind === 'retry' && action.params?.stage === 'execution'),
+        nonApprovable: !executionRetryOffered,
         message: tr(
           'Retry analysis from the failed step using the exact approved plan and unchanged study configuration. Reuse completed steps and do not run the Planner again.',
           '研究配置未改变。请复用精确批准的计划和已完成步骤，从失败步骤重新执行分析；不要再次运行 Planner。',

@@ -84,7 +84,16 @@
     return offeredActions(job, sameStop ? workflow : null);
   }
 
-  function latestJobStop(session, workflow, credentialVerifiedAt) {
+  function archivedJobTime(session, job) {
+    const replay = session.conversation_replay;
+    const turn = replay?.turns?.find(row => row?.kind === 'host_action'
+      && row.child_job_id === job.job_id && STOP_STATUSES.has(row.status)
+      && Number.isFinite(Date.parse(row.ended_at)));
+    // A replay write bounds the age of a bare receipt without its own turn.
+    return Date.parse(turn?.ended_at ?? replay?.updated_at);
+  }
+
+  function latestJobStop(session, workflow, { credentialVerifiedAt, codexAuthVerified } = {}) {
     if (session?.stale?.stale || workflow?.active_job?.status === 'running'
       || workflow?.next_action_code === 'starting') return null;
     const job = session?.archived_child_jobs?.at(-1);
@@ -93,15 +102,19 @@
     const binding = session.binding;
     if (binding?.study_context_id && study?.study_context_id
       && (binding.study_context_id !== study.study_context_id || binding.study_revision !== study.revision)) return null;
-    const started = (job.created_at_epoch ?? job.finished_at_epoch ?? NaN) * 1000;
-    const finished = (job.finished_at_epoch ?? NaN) * 1000;
+    const startEpoch = job.created_at_epoch ?? job.finished_at_epoch;
+    const started = startEpoch == null ? archivedJobTime(session, job) : startEpoch * 1000;
+    const finished = job.finished_at_epoch != null ? job.finished_at_epoch * 1000 : started;
     const newerThan = (date, epoch) => {
       const updated = Date.parse(date);
       return Number.isFinite(updated) && Number.isFinite(epoch) && updated > epoch;
     };
     const apiCredentialChanged = job.kind === 'agent-run' && session.research_provider?.provider !== 'codex'
       && newerThan(credentialVerifiedAt, started);
-    if (newerThan(session.created_at, started) || newerThan(study?.updated_at, finished)
+    const codexAuthRestored = job.kind === 'agent-run' && session.research_provider?.provider === 'codex'
+      && (gateReason(job) || job.error_code) === 'research_pipeline_codex_user_auth_required'
+      && codexAuthVerified === true;
+    if (codexAuthRestored || newerThan(session.created_at, started) || newerThan(study?.updated_at, finished)
       || newerThan(workflow?.bound_export_updated_at, finished) || apiCredentialChanged
       || workflow?.runs?.some(run => run.run_id && newerThan(run.updated_at, started))) return null;
     return job;
@@ -172,7 +185,7 @@
       const coordinateStop = workflow?.next_action_code;
       if (['study_coordinate_unavailable', 'study_coordinate_unrecognized'].includes(coordinateStop)
         && currentRun(run, workflow, deps.latestRun?.())) {
-        const missing = workflow.next_actions?.map(action => action.params?.concept).filter(Boolean);
+        const missing = workflow.missing_concepts ?? detail.missing_concepts ?? run.gate_missing_concepts;
         const currentCause = runFailureText(coordinateStop, { missing });
         if (currentCause) return currentCause;
       }
@@ -200,7 +213,7 @@
 
     function renderJob(session) {
       const workflow = deps.workflow?.();
-      const job = latestJobStop(session, workflow, deps.credentialVerifiedAt?.());
+      const job = latestJobStop(session, workflow, deps.connectionChecks?.());
       if (!deps.canAct?.() || !job || !window.EU_PRODUCT_LABELS?.stopAction) return '';
       const controls = actionButtons(jobActions(job, workflow), workflow, 'data-gpi-stop-job', job.job_id, job);
       if (!controls.length) return '';

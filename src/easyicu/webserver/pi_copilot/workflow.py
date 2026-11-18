@@ -50,6 +50,7 @@ from easyicu.webserver.stop_next_actions import (
     STOP_POLICIES,
     StopNextAction,
     project_stop_next_actions,
+    safe_stop_coordinates,
     stop_reason_codes,
 )
 
@@ -127,6 +128,7 @@ class ResearchWorkflowSnapshot(BaseModel):
     current_stage: str
     next_action_code: str
     next_actions: List[StopNextAction] = Field(default_factory=list, max_length=17)
+    missing_concepts: List[str] = Field(default_factory=list, max_length=16)
     missing_setup_fields: List[str] = Field(default_factory=list, max_length=20)
     planning_prerequisites_missing: List[str] = Field(
         default_factory=list, max_length=8
@@ -1025,13 +1027,17 @@ def build_research_workflow_snapshot(
     gate_detail = run_row.get("gate_detail")
     gate_detail = gate_detail if isinstance(gate_detail, Mapping) else {}
     gate_codes = stop_reason_codes(gate_reason, gate_detail)
-    source_coordinate_stop = bool(
-        failed_pipeline_regeneration_required
-        and "study_coordinate_unavailable" in gate_codes
-        and not failed_stop_superseded
+    source_coordinate_stop = (
+        next(
+            (code for code in gate_codes if code in {"study_coordinate_unavailable", "study_coordinate_unrecognized"}),
+            "",
+        )
+        if failed_pipeline_regeneration_required and not failed_stop_superseded
+        else ""
     )
     coordinate_stop, coordinate_detail = (
-        _recheck_source_coordinates(gate_detail, study_row) if source_coordinate_stop else ("", {})
+        _recheck_source_coordinates(gate_detail, study_row, reason=source_coordinate_stop)
+        if source_coordinate_stop else ("", {})
     )
     # A retry resumes the failed step's sealed code with its restored repair
     # budget.  When that budget is spent and nothing it runs on changed, the
@@ -1403,6 +1409,10 @@ def build_research_workflow_snapshot(
             database=(study_row.get("data_source") or {}).get("database")
             if isinstance(study_row.get("data_source"), Mapping) else None,
         ) if job_status != "running" else [],
+        missing_concepts=(
+            safe_stop_coordinates(coordinate_detail).get("missing_concepts", [])
+            if next_action == coordinate_stop else []
+        ),
         planning_prerequisites_missing=planning_prerequisites_missing,
         missing_setup_fields=missing,
         unconfirmed_outcome=(
@@ -1440,7 +1450,7 @@ def build_research_workflow_snapshot(
 
 
 def _recheck_source_coordinates(
-    detail: Mapping[str, Any], study_row: Mapping[str, Any],
+    detail: Mapping[str, Any], study_row: Mapping[str, Any], *, reason: str,
 ) -> tuple[str, Mapping[str, Any]]:
     """Reclassify recorded coordinates using the current source's owner."""
 
@@ -1452,13 +1462,14 @@ def _recheck_source_coordinates(
     if not isinstance(missing, (tuple, list)) or not missing:
         missing = (detail.get("concept"),)
     concepts = [value for value in missing if isinstance(value, str) and value.strip()]
+    unchecked_detail = {**detail, "missing_concepts": concepts}
     unavailable = "study_coordinate_unavailable"
     if not database or not concepts:
-        return unavailable, detail
+        return reason, unchecked_detail
     try:
         found = [(value, explain_concept_availability(concept=value, database=database)) for value in concepts]
     except (KeyError, ValueError):
-        return unavailable, detail
+        return reason, unchecked_detail
     absent = [value for value, item in found if not item.available and item.reason != "concept_not_found"]
     if absent:
         return unavailable, {"missing_concepts": absent}

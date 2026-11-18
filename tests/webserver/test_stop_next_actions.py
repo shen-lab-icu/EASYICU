@@ -116,6 +116,26 @@ def test_only_the_workflow_retry_owner_can_offer_retry_of_failed_execution(reaso
     )] == ["edit_plan"]
 
 
+def test_wrapped_execution_step_failure_offers_the_workflow_retry():
+    reason = "research_agent_pipeline_failed_closed"
+    detail = {
+        "reason_code": "research_pipeline_execution_failed",
+        "step_id": "normalize_handover_temperatures",
+        "message": "The handover temperature series could not be normalized.",
+    }
+    base_actions = owner.next_actions_for_stop(reason, detail)
+    assert [(choice.kind, choice.params.change_question) for choice in base_actions] == [
+        ("edit_plan", None),
+    ]
+    choices = owner.project_stop_next_actions(
+        {"status": "blocked", "reason": reason, "detail": detail},
+        execution_retry_available=True,
+    )
+    assert [(choice["kind"], choice["params"].get("stage")) for choice in choices] == [
+        ("retry", "execution"), ("edit_plan", None),
+    ]
+
+
 def test_a_required_design_gap_offers_plan_edit_without_dropping_it(tmp_path) -> None:
     stop = ProgressivePlanCompileError(
         "progressive_capability_gap",
@@ -597,14 +617,30 @@ def _recovery_contract_cases(monkeypatch):
             }
 
 
+    retry_code = "failed_pipeline_execution_retry_available"
+    execution = owner.project_stop_next_actions(
+        {"status": "blocked", "reason": "research_pipeline_execution_failed"},
+        execution_retry_available=True,
+    )[:1]
+    planning = owner.next_actions_for_stop("research_pipeline_provider_timeout")[0].model_dump(mode="json")
+    for label, recovery in (("execution only", []), ("planning retry", [planning]), ("legacy edit", [{"kind": "edit_plan"}])):
+        yield {
+            "code": retry_code, "surface": "confirmation-edit",
+            "cause": f"Resume the temperature normalization after handover/{label}",
+            "workflow": {"next_action_code": retry_code, "next_actions": [*recovery, *execution]},
+            "expect_edit": bool(recovery),
+        }
+
     study = {**complete_study(), "question": "Compare the evening reading across sampling schedules."}
+    unresolved = ["midnight_platelet_index", "handover_temperature_band"]
+    recovered = "shift_fluid_index"
     for wrapped, has_plan, available, recognized in product((False, True), repeat=4):
         if available and not recognized:
             continue
         gate_reason = "research_agent_pipeline_failed_closed" if wrapped else "study_coordinate_unavailable"
         detail = {
             **({"reason_code": "study_coordinate_unavailable"} if wrapped else {}),
-            "missing_concepts": ["dusk_assay"],
+            "missing_concepts": [*unresolved, recovered],
             "message": "The night register may use a different name for this measurement.",
         }
         run = {
@@ -620,7 +656,7 @@ def _recovery_contract_cases(monkeypatch):
         with monkeypatch.context() as patch:
             patch.setattr(
                 concept_availability, "explain_concept_availability",
-                lambda **_kw: SimpleNamespace(available=available, reason=(
+                lambda *, concept, database: SimpleNamespace(available=available or concept == recovered, reason=(
                     "recorded" if available else "absent_from_source" if recognized else "concept_not_found"
                 )),
             )
@@ -629,9 +665,43 @@ def _recovery_contract_cases(monkeypatch):
             )
         yield {
             "code": workflow.next_action_code, "surface": "coordinate-recovery",
-            "cause": f"source-coordinate/{wrapped=}/{has_plan=}/{available=}/{recognized=}",
+            "cause": f"shift inventory/{wrapped=}/{has_plan=}/{available=}/{recognized=}",
             "run": {**run, "artifact_names": [name for name in run["artifact_names"] if name != "source_run_manifest.json"]},
             "workflow": workflow.model_dump(mode="json"),
+            **({"missing": unresolved, "recovered": recovered} if not available else {}),
+        }
+
+
+def _archived_job_supersession_cases():
+    newer = "2026-01-05T19:00:00Z"
+    for change, updates, created in (
+        ("run", {"runs": [{"run_id": "repeat_handover_audit", "updated_at": newer}]}, None),
+        ("study", {"study_setup_receipt": {"updated_at": newer}}, None),
+        ("export", {"bound_export_updated_at": newer}, None),
+        ("export after a recorded start", {"bound_export_updated_at": newer}, 1767636000),
+    ):
+        job = project_archived_job_stop({
+            "job_id": "handover_export", "kind": "extract", "status": "failed",
+            "error_code": "no_export_files", "created_at_epoch": created,
+        })
+        yield {
+            "code": job["error_code"], "surface": "job-supersession", "cause": f"handover inventory/{change}",
+            "job": job, "workflow": {"next_action_code": "provider_ready_to_generate_plan", "runs": []},
+            "superseded_workflow": updates,
+        }
+    for provider, reason, checked in (
+        ("codex", "research_pipeline_codex_user_auth_required", {"codexAuth": {"authentication_verified": True}}),
+        ("openai", "research_pipeline_pi_verified_credentials_required",
+         {"runtime": {"configuration": {"verified_at": newer}}}),
+    ):
+        job = project_archived_job_stop({
+            "job_id": "handover_model_check", "kind": "agent-run", "status": "failed", "error_code": reason,
+        })
+        yield {
+            "code": reason, "surface": "job-supersession", "cause": "Connect the model for the handover audit.",
+            "job": job, "workflow": {"next_action_code": reason, "runs": []}, "provider": provider,
+            "superseded_workflow": {"next_action_code": "provider_ready_to_generate_plan"},
+            "verified_provider": checked,
         }
 
 
@@ -642,7 +712,7 @@ def test_every_stop_card_has_a_forward_action_with_an_owner(monkeypatch) -> None
         if concept == "synthetic_source" else None,
     )
     monkeypatch.setattr(owner, "explain_concept_availability", lambda **_kw: SimpleNamespace(available=True))
-    cases = [*_stop_card_cases(), *_recovery_contract_cases(monkeypatch)]
+    cases = [*_stop_card_cases(), *_recovery_contract_cases(monkeypatch), *_archived_job_supersession_cases()]
     root = Path(__file__).resolve().parents[2]
     js = root / "src/easyicu/webserver/static/js"
     result = subprocess.run(
@@ -659,6 +729,7 @@ def test_every_stop_card_has_a_forward_action_with_an_owner(monkeypatch) -> None
         cwd=root, input=json.dumps(cases), capture_output=True, text=True, timeout=30,
     )
     assert result.returncode == 0, result.stdout + result.stderr
+    print(result.stdout, end="")
 
 
 def test_outcome_confirmation_offers_an_explicit_edit_instead_of_plan_replacement():
@@ -1088,6 +1159,45 @@ def test_one_recovered_coordinate_leaves_the_other_coordinate_blocked(monkeypatc
     assert snapshot.next_action_code == "failed_pipeline_requires_fresh_plan"
     assert [action.kind for action in snapshot.next_actions] == ["edit_plan"]
     assert snapshot.next_actions[0].params.change_question is None
+
+
+@pytest.mark.parametrize("wrapped", [False, True])
+def test_an_unrecognized_coordinate_is_rechecked_after_the_dictionary_changes(monkeypatch, wrapped):
+    from easyicu.research_agent import concept_availability
+    from easyicu.webserver import study_contexts
+    from tests.webserver.copilot.research_workflow_fixtures import complete_study
+
+    study = {**complete_study(), "question": "Does the morning humidity index vary by ward?"}
+    coordinate = "morning_humidity_index"
+    stop = "study_coordinate_unrecognized"
+    available = False
+    monkeypatch.setattr(
+        concept_availability, "explain_concept_availability",
+        lambda **_kw: SimpleNamespace(available=available, reason="recorded" if available else "concept_not_found"),
+    )
+    run = {
+        "run_id": "morning_humidity", "run_type": "full", "run_status": "failed",
+        "engine": "easyicu.research_agent.pipeline", "gate_status": "blocked",
+        "gate_reason": "data_foundation_blocked" if wrapped else stop,
+        "gate_detail": {
+            "missing_concepts": [coordinate],
+            **({"reason_code": stop} if wrapped else {}),
+        },
+        "scientific_configuration_sha256": study_contexts.scientific_configuration_sha256(study),
+        "artifact_names": ["source_run_manifest.json"],
+    }
+    inputs = dict(study=study, active_export_present=True, active_job=None, latest_run=run)
+    blocked = build_research_workflow_snapshot(**inputs)
+    assert blocked.next_action_code == stop
+    assert [(choice.kind, choice.params.change_question) for choice in blocked.next_actions] == [
+        ("edit_plan", True),
+    ]
+    available = True
+    ready = build_research_workflow_snapshot(**inputs)
+    assert ready.next_action_code == "failed_pipeline_requires_fresh_plan"
+    assert [(choice.kind, choice.params.change_question) for choice in ready.next_actions] == [
+        ("edit_plan", None),
+    ]
 
 
 @pytest.mark.parametrize("shape", ["wrapped", "gate_reason", "gate_reason_code"])

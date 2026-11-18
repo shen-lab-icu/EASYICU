@@ -22,7 +22,10 @@ const owner = modules.require('runStop').create({ tr, runFailureText,
   workflow: () => workflow, latestRun: () => workflow.runs.find(row => row.authoritative),
   resourceButton: (resource, label, options) => `<button class="${(options && options.className) || 'gpi-resource-link'}" data-resource="${resource.artifact}">${label}</button>`,
   canAct: () => true, canPreview: () => true,
-  credentialVerifiedAt: () => state.runtime?.configuration?.verified_at });
+  connectionChecks: () => ({
+    credentialVerifiedAt: state.runtime?.configuration?.verified_at,
+    codexAuthVerified: state.codexAuth?.authentication_verified,
+  }) });
 let statedDetail;
 modules.require('runStop').create({ tr, runFailureText: (_code, detail) => {
   statedDetail = detail;
@@ -214,6 +217,16 @@ if (!catalog) {
     assert.match(owner.renderJob(state.session), /data-gpi-job-stop/,
       'missing dates cannot establish that an old run replaced the evening export failure');
   }
+  state.session.conversation_replay = {
+    updated_at: '2026-01-05T21:00:00Z',
+    turns: [{
+      kind: 'host_action', child_job_id: job.job_id, status: 'failed', ended_at: '2026-01-05T18:00:00Z',
+    }],
+  };
+  workflow.bound_export_updated_at = '2026-01-05T19:00:00Z';
+  assert.equal(owner.renderJob(state.session), '',
+    'the overnight replacement export supersedes the failed handover even after later messages');
+  delete state.session.conversation_replay;
   console.log('job stops: current workflow offer and supersession checks passed');
 }
 
@@ -259,13 +272,58 @@ if (catalog) {
   });
   for (language of ['en', 'zh']) {
     window.EU_LANG = language;
-    for (const { code, cause, surface, design, routes, drafts: reviewDrafts, label, run, job, workflow: offer } of cases) {
+    for (const { code, cause, surface, design, routes, drafts: reviewDrafts, label, run, job, workflow: offer,
+      expect_edit, missing, recovered, superseded_workflow, verified_provider, provider } of cases) {
       const name = [surface, code, cause, language].filter(Boolean).join('/');
       try {
         calls.length = drafts.length = 0;
         workflow = state.workflow = { ...offer, runs: run ? [{ ...run, authoritative: true }] : offer.runs || [] };
         state.latestRun = run || null;
         state.session.archived_child_jobs = job ? [job] : [];
+        if (surface === 'confirmation-edit') {
+          const html = confirmation.workflowConfirmationHtml();
+          assert.match(html, /<button(?![^>]* disabled)[^>]*data-gpi-confirm-action/, 'retry remains enabled');
+          assert.equal(html.includes('data-gpi-confirm-edit'), expect_edit, 'a plan recovery offer controls fresh planning');
+          clickControl('[data-gpi-confirm-action]', {});
+          assert.deepEqual(calls.splice(0), ['confirm']);
+          if (expect_edit) {
+            assert.match(html, /<button(?![^>]* disabled)[^>]*data-gpi-confirm-edit/);
+            clickControl('[data-gpi-confirm-edit]', {});
+            assert.deepEqual(calls, ['edit']);
+          }
+          continue;
+        }
+        if (surface === 'job-supersession') {
+          state.session.conversation_replay = { updated_at: '2026-01-05T18:00:00Z' };
+          if (provider) state.session.research_provider = { provider };
+          try {
+            const [choice] = job.next_actions;
+            const clickJob = () => clickControl('[data-gpi-stop-action]', {
+              gpiStopJob: job.job_id, gpiStopAction: choice.action_id, gpiStopWorkflow: workflow.next_action_code,
+            });
+            const html = owner.renderJob(state.session);
+            assert.match(html, /data-gpi-job-stop/);
+            const buttons = html.match(/<button(?![^>]* disabled)[^>]*>/g) || [];
+            assert.ok(buttons.some(button => button.includes(`data-gpi-stop-action="${choice.action_id}"`)));
+            clickJob();
+            if (provider) assert.equal(state.showSetup, true);
+            else assert.deepEqual(calls.splice(0), ['begin_local_selection']);
+            state.showSetup = false;
+            Object.assign(workflow, superseded_workflow);
+            if (provider) assert.match(owner.renderJob(state.session), /data-gpi-job-stop/, 'a workflow label does not verify a connection');
+            Object.assign(state, verified_provider);
+            assert.equal(owner.renderJob(state.session), '', 'the archived job was superseded');
+            clickJob();
+            assert.deepEqual(calls, []);
+            assert.equal(state.showSetup, false);
+          } finally {
+            delete state.session.conversation_replay;
+            delete state.session.research_provider;
+            delete state.runtime;
+            delete state.codexAuth;
+          }
+          continue;
+        }
         if (surface === 'coordinate-recovery') {
           const card = confirmation.workflowConfirmationHtml();
           const stop = owner.render({ savedRuns: [run] });
@@ -273,21 +331,27 @@ if (catalog) {
           assert.ok(html.trim());
           const actions = offer.next_actions;
           if (code === 'study_coordinate_unrecognized') {
-            assert.match(html, /dusk_assay/);
             assert.doesNotMatch(html, /Choose a database that records it|请换一个记录了它的数据库/);
             assert.doesNotMatch(html, /data-gpi-confirm-action/, 'the unknown coordinate needs clarification');
           }
-          const canPlan = actions.some(({ kind, params }) => kind === 'retry'
+          if (missing) {
+            for (const concept of missing) assert.ok(stop.includes(concept), `the stop text names ${concept}`);
+            assert.ok(!stop.includes(recovered), 'the stop text omits a coordinate the source now has');
+          }
+          const canRetry = actions.some(choice => choice.kind === 'retry' && choice.params.stage === 'execution');
+          if (code === 'failed_pipeline_execution_retry_available'
+            && /^research_pipeline_(provider_timeout|execution_failed)\//.test(cause)) {
+            assert.equal(canRetry, true, 'the eligible failed step projects an execution retry');
+            assert.deepEqual(actions.map(choice => choice.kind), ['retry', 'edit_plan']);
+            assert.match(card, /data-gpi-confirm-action/, 'the projected retry offers execution');
+          }
+          const canPlan = actions.some(({ kind, params }) => (kind === 'retry' && params.stage === 'planning')
             || kind === 'drop_variable' || kind === 'rerun_without_element'
             || (kind === 'edit_plan' && params.change_question !== true));
           if (canPlan && code.startsWith('failed_pipeline_')) {
             if (code === 'failed_pipeline_execution_retry_available') {
               assert.match(card, /data-gpi-confirm-edit/, 'the retry card also offers fresh planning');
-              const canRetry = actions.some(choice => choice.kind === 'retry' && choice.params.stage === 'execution');
               assert.equal(card.includes('data-gpi-confirm-action'), canRetry, 'only a projected retry offers execution');
-              if (cause.startsWith('research_pipeline_provider_timeout')) {
-                assert.deepEqual(actions.map(choice => choice.kind), ['retry', 'edit_plan']);
-              }
             } else {
               assert.match(card, /data-gpi-confirm-action/, 'the failed attempt keeps its workflow confirmation');
             }

@@ -184,7 +184,10 @@
           const { gpiStopRun, gpiStopJob, gpiStopAction, gpiStopReview } = stopAction.dataset;
           const run = (workflow.runs || []).find(row => row.run_id === gpiStopRun)
             || (state.latestRun?.run_id === gpiStopRun ? state.latestRun : null);
-          const job = gpiStopJob && owner.latestJobStop(state.session, workflow, state.runtime?.configuration?.verified_at);
+          const job = gpiStopJob && owner.latestJobStop(state.session, workflow, {
+            credentialVerifiedAt: state.runtime?.configuration?.verified_at,
+            codexAuthVerified: state.codexAuth?.authentication_verified,
+          });
           const review = window.EasyICU.guidedPi.optional('confirmation');
           const actions = gpiStopReview !== undefined ? review?.studyStopEdits?.(workflow)
             : gpiStopJob ? (job?.job_id === gpiStopJob ? owner.jobActions(job, workflow) : [])
