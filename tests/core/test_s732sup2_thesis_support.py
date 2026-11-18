@@ -8,7 +8,8 @@ import pandas as pd
 import pytest
 
 from easyicu.api.extraction import EXTRACT_MODULE_ORDER, EXTRACT_MODULES, extract_database
-from easyicu.concept.thesis_support import load_thesis_support
+from easyicu.concept import thesis_support
+from easyicu.concept.thesis_support import load_thesis_support, thesis_support_manifest
 from easyicu.config import DATABASE_ID_CONFIG
 from tools.thesis_support import frozen_equivalence
 
@@ -54,6 +55,18 @@ def _peep_source(root, database):
             "patientid": members, "datetime": timestamps, "value": vals,
             "variableid": [2600, 2600, 2600, 2600, 2600, 2610, 2010, 2600, 2600, 2600],
         })
+    elif database == "sic":
+        offsets = [-1, 0, 3599, 3600, 3601, 0, 0, 0, 7200, 0, None, 10800]
+        icu_offset = 12_345
+        _stays(root, database, ICUOffset=[icu_offset, 500])
+        _write(root, "data_float_h", {
+            "CaseID": members + [_STAY, _STAY],
+            "Offset": pd.array(
+                [icu_offset + t if t is not None else None for t in offsets], dtype="Int64",
+            ),
+            "Val": vals + [8., None],
+            "DataID": [2278, 2278, 2278, 2278, 2278, 2283, 710, 2278, 2278, 2278, 2278, 2278],
+        })
     else:
         _stays(root, database, intime=_ADMISSION, outtime=_ADMISSION, hadm_id=[71, 81])
         _write(root, "chartevents", {
@@ -62,7 +75,7 @@ def _peep_source(root, database):
         })
 
 
-@pytest.mark.parametrize("database", ["aumc", "hirid", "miiv"])
+@pytest.mark.parametrize("database", ["aumc", "hirid", "miiv", "sic"])
 def test_peep_uses_original_source_clock_range_channel_and_median(tmp_path, database):
     _peep_source(tmp_path, database)
     rows = _load(tmp_path, database, "observed_peep_set")
@@ -72,91 +85,44 @@ def test_peep_uses_original_source_clock_range_channel_and_median(tmp_path, data
     assert rows.observed_peep_set.tolist() == [6., 5., 40.]
 
 
-def _hourly_imv_source(root, database):
-    _stays(root, database)
-    _write(root, f"{database}_hourly_core", {
-        "stay_id": [_STAY] * 5 + [_OTHER], "icu_hour": [-2, -1, 0, 1, 12, 5],
-        "imv": pd.Series([True, False, True, None, True, True], dtype="boolean"),
-    })
-
-
-@pytest.mark.parametrize("database", ["aumc", "miiv", "sic"])
-def test_imv_flags_preserve_source_clock_and_disconnected_hours(tmp_path, database):
-    _hourly_imv_source(tmp_path, database)
-    rows = _load(tmp_path, database, "imv_recorded_compat")
-    assert rows.charttime.tolist() == [-2., 0., 12.]
-    assert rows.imv.tolist() == [True] * 3
-    assert rows.imv_recorded_end_hour.isna().all()
-
-
-def _hirid_imv_source(root):
-    _stays(root, "hirid", admissiontime=_ADMISSION)
-    # The frozen consumer receives these first/last bounds. Separate
-    # recording bursts for the same stay are already spanned by its anchor.
-    _write(root, "hirid_vent_anchor", {
-        "stay_id": [_STAY, _OTHER], "imv_t0_h": [-0.25, 4.9], "imv_end_h": [12.75, 4.3],
-    })
-
-
-def test_hirid_joins_disconnected_recordings_through_the_frozen_span(tmp_path):
-    _hirid_imv_source(tmp_path)
-    rows = load_thesis_support(
-        module="imv_recorded_compat", database="hirid", data_path=tmp_path, patient_ids=[_STAY, _OTHER],
-    )
-    assert rows.charttime.tolist() == [0., 4.]
-    assert rows.imv_recorded_end_hour.tolist() == [12., 4.]
-    assert rows.imv.isna().all()
-
-
-def _rrt_source(root, database):
-    _stays(root, database)
-    if database == "miiv":
-        # An actual end before a scheduled end leaves no active rows at the
-        # later hours, even when a generic procedure record would imply them.
-        _write(root, "miiv_rrt_time", {
-            "stay_id": [_STAY] * 5 + [_OTHER], "charttime": [-23.5, -1., 1., 2., 5., 50.],
-            "rrt": [True, True, True, False, None, True],
-        })
-        _write(root, "procedureevents", {
-            "stay_id": [_STAY], "itemid": [225802],
-            "starttime": [_ADMISSION], "endtime": [_ADMISSION + pd.Timedelta(hours=6)],
-        })
-        return [-24., -1., 1.]
-    if database == "mimic":
-        _write(root, "mimic3cv_rrt_hours", {"stay_id": [_STAY, _STAY, _OTHER], "icu_hour": [-25, 3, 11]})
-    else:
-        _write(root, f"{database}_hourly_core", {
-            "stay_id": [_STAY] * 4 + [_OTHER], "icu_hour": [-25, 0, 3, 11, 12],
-            "rrt": pd.Series([True, False, True, None, True], dtype="boolean"),
-        })
-    return [-25., 3.]
-
-
-@pytest.mark.parametrize("database", ["aumc", "eicu", "hirid", "miiv", "mimic", "sic"])
-def test_rrt_projects_active_treatment_and_preserves_the_full_clock(tmp_path, database):
-    expected = _rrt_source(tmp_path, database)
-    rows = _load(tmp_path, database, "rrt_time")
-    assert rows.charttime.tolist() == expected
-    assert rows.rrt_active.tolist() == [True] * len(expected)
-
-
-@pytest.mark.parametrize("database,module,value,dtype", [
-    ("eicu", "imv_recorded_compat", "imv", "boolean"),
-    ("mimic", "imv_recorded_compat", "imv", "boolean"),
-    ("hirid", "imv_recorded_compat", "imv_recorded_end_hour", "float64"),
-    ("sic", "imv_recorded_compat", "imv", "boolean"),
-    ("eicu", "observed_peep_set", "observed_peep_set", "float64"),
-    ("mimic", "observed_peep_set", "observed_peep_set", "float64"),
-    ("sic", "observed_peep_set", "observed_peep_set", "float64"),
-    ("miiv", "rrt_time", "rrt_active", "boolean"),
-    ("sic", "rrt_time", "rrt_active", "boolean"),
+@pytest.mark.parametrize("database,module,missing_input", [
+    *((db, "imv_recorded_compat", f"{db}/respiratory.parquet:mech_vent")
+      for db in ("aumc", "miiv", "hirid", "sic")),
+    *((db, "rrt_time", f"{db}_hourly_core.parquet:rrt") for db in ("aumc", "eicu", "hirid", "sic")),
+    ("miiv", "rrt_time", "raw_timestamp_actual_end.parquet"),
+    ("mimic", "rrt_time", "mimiciii/chartevents/*.parquet"),
+    *((db, module, None) for db in ("eicu", "mimic") for module in ("imv_recorded_compat", "observed_peep_set")),
 ])
-def test_missing_authority_is_typed_and_distinguished_from_an_empty_source(tmp_path, database, module, value, dtype):
-    _stays(tmp_path, database)
+def test_typed_absence_without_any_source_reads(tmp_path, monkeypatch, database, module, missing_input):
+    def unexpected_source(*args, **kwargs):
+        pytest.fail("an unavailable reducer opened a source")
+
+    monkeypatch.setattr(thesis_support, "storage_source", unexpected_source)
+    monkeypatch.setattr(frozen_equivalence, "storage_source", unexpected_source)
     rows = _load(tmp_path, database, module)
+    stay = DATABASE_ID_CONFIG[database]["id_col"]
+    fields = {
+        "imv_recorded_compat": {"imv": "boolean", "imv_recorded_end_hour": "float64"},
+        "observed_peep_set": {"observed_peep_set": "float64"},
+        "rrt_time": {"rrt_active": "boolean"},
+    }
     assert rows.empty
-    assert str(rows[value].dtype) == dtype
+    assert rows.dtypes.astype(str).to_dict() == {stay: "int64", "charttime": "float64", **fields[module]}
     assert rows.attrs["available_fields"] == []
+    receipt = thesis_support_manifest(module, database, rows.attrs["available_fields"])
+    if missing_input is None:
+        assert receipt == {"source": None, "status": "no_frozen_reducer"}
+    else:
+        assert receipt["status"] == "UNAVAILABLE_IN_SCOPE"
+        assert receipt["reason"] == "no_raw_producer"
+        assert missing_input in receipt["missing_inputs"]
+    if database == "mimic" and module == "rrt_time":
+        assert "#641 CareVue view" in receipt["detail"]
+        assert "mimiciii/procedureevents_mv.parquet" in receipt["missing_inputs"]
+    report = frozen_equivalence.run_equivalence(
+        database=database, db_root=tmp_path, stay_ids=[_STAY], module=module,
+    )
+    assert report == {"status": receipt["status"]}
 
 
 def test_miiv_thesis_export_requires_explicit_stay_selection(tmp_path):
@@ -168,40 +134,39 @@ def test_miiv_thesis_export_requires_explicit_stay_selection(tmp_path):
 def test_native_export_is_opt_in_and_seals_typed_support_receipts(tmp_path, stream):
     source = tmp_path / "source"
     source.mkdir()
-    _stays(source, "aumc", admittedat=0)
-    _write(source, "aumc_hourly_core", {
-        "stay_id": [_STAY, _STAY, _OTHER], "icu_hour": [-32, 14, 5],
-        "imv": [True, True, True], "rrt": [True, False, True],
-    })
+    _peep_source(source, "sic")
+    # The old authority path would fail if it tried to read this file.
+    (source / "sic_hourly_core.parquet").write_bytes(b"unused staged input")
     assert all(name in EXTRACT_MODULES and name not in EXTRACT_MODULE_ORDER for name in _MODULES)
     output = tmp_path / "out"
     extract_database(
-        "aumc", data_path=source, output_dir=output, modules=list(_MODULES),
+        "sic", data_path=source, output_dir=output, modules=list(_MODULES),
         patient_ids=[_STAY], stream_output_batches=stream, batch_size=1,
         native_export_v2=True, max_workers=1,
     )
     manifest = json.loads((output / "_manifest.json").read_text())
     entries = {entry["module"]: entry for entry in manifest["files"]}
-    assert entries["rrt_time"]["thesis_support"]["source"] == "sealed_hourly_rrt"
-    assert entries["rrt_time"]["thesis_support"]["status"] == "projected"
-    assert entries["imv_recorded_compat"]["time_axis_audit"]["policy"] == "frozen_source_icu_hours"
+    for module in ("imv_recorded_compat", "rrt_time"):
+        assert entries[module]["availability"] == "structurally_unavailable"
+        assert entries[module]["thesis_support"]["status"] == "UNAVAILABLE_IN_SCOPE"
+        assert entries[module]["thesis_support"]["reason"] == "no_raw_producer"
+        assert entries[module]["time_axis_audit"]["policy"] == "frozen_source_icu_hours"
+    assert "sic_hourly_core.parquet:rrt" in entries["rrt_time"]["thesis_support"]["missing_inputs"]
     imv = pd.read_parquet(output / "imv_recorded_compat.parquet")
-    assert imv.charttime.tolist() == [-32., 14.]
-    assert imv.imv.tolist() == [True, True]
-    assert imv.imv_recorded_end_hour.isna().all()
+    assert imv.empty and str(imv.imv.dtype) == "boolean"
+    assert str(imv.imv_recorded_end_hour.dtype) == "float64"
     rrt = pd.read_parquet(output / "rrt_time.parquet")
-    assert rrt.charttime.tolist() == [-32.]
-    assert rrt.rrt_active.tolist() == [True]
+    assert rrt.empty and str(rrt.rrt_active.dtype) == "boolean"
     peep = pd.read_parquet(output / "observed_peep_set.parquet")
-    assert peep.empty and str(peep.observed_peep_set.dtype) == "float64"
-    assert entries["observed_peep_set"]["availability"] == "structurally_unavailable"
-    assert entries["observed_peep_set"]["thesis_support"]["status"] == "authority_unavailable"
+    assert peep.charttime.tolist() == [-1., 0., 1.]
+    assert peep.observed_peep_set.tolist() == [6., 5., 40.]
+    assert entries["observed_peep_set"]["availability"] == "available"
+    assert entries["observed_peep_set"]["thesis_support"]["input_tables"] == ["cases", "data_float_h"]
 
 
-def test_native_export_describes_hirid_spans_and_peep_medians(tmp_path):
+def test_native_export_describes_absent_hirid_spans_and_peep_medians(tmp_path):
     source = tmp_path / "source"
     source.mkdir()
-    _hirid_imv_source(source)
     _peep_source(source, "hirid")
     output = tmp_path / "out"
     extract_database(
@@ -210,31 +175,36 @@ def test_native_export_describes_hirid_spans_and_peep_medians(tmp_path):
     )
     manifest = json.loads((output / "_manifest.json").read_text())
     entries = {entry["module"]: entry for entry in manifest["files"]}
+    assert entries["imv_recorded_compat"]["thesis_support"]["status"] == "UNAVAILABLE_IN_SCOPE"
     assert entries["imv_recorded_compat"]["thesis_support"]["source_grain"] == "stay"
     assert entries["imv_recorded_compat"]["thesis_support"]["charttime_role"] == "first_recorded_hour"
     sidecar = json.loads((output / manifest["column_metadata"]["file"]).read_text())
     metadata = {entry["module"]: entry["columns"] for entry in sidecar["files"]}
     assert metadata["observed_peep_set"]["observed_peep_set"]["metadata"]["aggregation"] == "median"
-    assert metadata["imv_recorded_compat"]["imv_recorded_end_hour"]["metadata"]["time_unit"] == "h"
+    imv_entry = entries["imv_recorded_compat"]
+    assert imv_entry["physical_schema"]["imv_recorded_end_hour"] == "double"
+    assert imv_entry["concept_status"]["imv_recorded_end_hour"]["availability"] == "structurally_unavailable_placeholder"
 
 
 @pytest.mark.parametrize("stream", [False, True])
-def test_no_treatment_preserves_rrt_source_availability(tmp_path, stream):
+@pytest.mark.parametrize("has_source", [False, True])
+def test_available_peep_source_with_no_qualifying_rows(tmp_path, stream, has_source):
     source = tmp_path / "source"
     source.mkdir()
-    _stays(source, "aumc")
-    _write(source, "aumc_hourly_core", {"stay_id": [_STAY], "icu_hour": [0], "rrt": [False]})
+    _stays(source, "sic", ICUOffset=0)
+    if has_source:
+        _write(source, "data_float_h", {"CaseID": [_STAY], "Offset": [0], "DataID": [2278], "Val": [41.]})
     output = tmp_path / "out"
     extract_database(
-        "aumc", data_path=source, output_dir=output, modules=["rrt_time"],
+        "sic", data_path=source, output_dir=output, modules=["observed_peep_set"],
         patient_ids=[_STAY], stream_output_batches=stream, batch_size=1,
         native_export_v2=True, max_workers=1,
     )
     manifest = json.loads((output / "_manifest.json").read_text())
     entry, = manifest["files"]
     assert entry["rows"] == 0
-    assert entry["thesis_support"]["status"] == "projected"
-    assert entry["availability"] == "available"
+    assert entry["thesis_support"]["status"] == ("projected" if has_source else "authority_unavailable")
+    assert entry["availability"] == ("available" if has_source else "structurally_unavailable")
 
 
 @pytest.fixture
@@ -245,34 +215,21 @@ def frozen_src_dir():
     return Path(value)
 
 
-@pytest.mark.parametrize("database,module", [
-    *((db, "observed_peep_set") for db in ("aumc", "hirid", "miiv")),
-    *((db, "imv_recorded_compat") for db in ("aumc", "hirid", "miiv", "sic")),
-    *((db, "rrt_time") for db in ("aumc", "eicu", "hirid", "miiv", "mimic", "sic")),
-])
-def test_harness_agrees_with_frozen_sql_for_identical_synthetic_inputs(tmp_path, frozen_src_dir, database, module):
-    if module == "observed_peep_set":
-        _peep_source(tmp_path, database)
-    elif module == "rrt_time":
-        _rrt_source(tmp_path, database)
-    elif database == "hirid":
-        _hirid_imv_source(tmp_path)
-    else:
-        _hourly_imv_source(tmp_path, database)
+@pytest.mark.parametrize("database", ["aumc", "hirid", "miiv", "sic"])
+def test_harness_agrees_with_frozen_sql_for_identical_synthetic_inputs(tmp_path, frozen_src_dir, database):
+    _peep_source(tmp_path, database)
     report = frozen_equivalence.run_equivalence(
-        database=database, db_root=tmp_path, stay_ids=[_STAY], module=module, frozen_src_dir=frozen_src_dir,
+        database=database, db_root=tmp_path, stay_ids=[_STAY],
+        module="observed_peep_set", frozen_src_dir=frozen_src_dir,
     )
     assert report["status"] == "agree"
-    assert report["module"] == report["frozen"]
-    assert report["module"]["rows"] is None
-    assert report["module"]["stays"] is None
-    assert len(report["module"]["sha256"]) == 64
+    assert report["module"] == report["frozen"] == {"rows": None, "stays": None}
 
 
 def test_harness_detects_a_planted_difference_and_prints_aggregates_only(
     tmp_path, frozen_src_dir, monkeypatch, capsys,
 ):
-    _peep_source(tmp_path, "aumc")
+    _peep_source(tmp_path, "sic")
     load = frozen_equivalence.load_thesis_support
 
     def planted(**kwargs):
@@ -282,7 +239,7 @@ def test_harness_detects_a_planted_difference_and_prints_aggregates_only(
 
     monkeypatch.setattr(frozen_equivalence, "load_thesis_support", planted)
     status = frozen_equivalence.main([
-        "--database", "aumc", "--db-root", str(tmp_path), "--stay-ids", str(_STAY),
+        "--database", "sic", "--db-root", str(tmp_path), "--stay-ids", str(_STAY),
         "--module", "observed_peep_set", "--frozen-src-dir", str(frozen_src_dir),
     ])
     out = capsys.readouterr()
@@ -290,7 +247,7 @@ def test_harness_detects_a_planted_difference_and_prints_aggregates_only(
     assert status == 1 and report["status"] == "different"
     assert report["mismatching_rows"] is None
     assert report["mismatching_cells"]["observed_peep_set"] is None
-    assert report["module"]["sha256"] != report["frozen"]["sha256"]
+    assert report["module"] == report["frozen"] == {"rows": None, "stays": None}
     assert str(_STAY) not in out.out and "332929.5" not in out.out
     assert not out.err
 

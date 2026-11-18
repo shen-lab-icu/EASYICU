@@ -2,50 +2,43 @@
 
 Select `imv_recorded_compat`, `observed_peep_set`, and `rrt_time` explicitly
 in `easyicu.extract_database(..., modules=[...], native_export_v2=True)`.
-Each module publishes hours on the frozen source clock. Pass the approved
-MIIV stay IDs explicitly. The native manifest's `files[].thesis_support`
-receipt identifies the source and its availability.
+Pass the approved MIIV stay IDs explicitly. The native manifest records
+source availability in `files[].thesis_support`.
 
-| Module | Database | Input under the supplied DB root | Output |
-| --- | --- | --- | --- |
-| `imv_recorded_compat` | AUMC, MIIV, SIC | Authoritative `{db}_hourly_core.parquet` with `stay_id, icu_hour, imv` | `charttime` and `imv=True` for each invasive hour |
-| `imv_recorded_compat` | HiRID | Authoritative `hirid_vent_anchor.parquet` with `stay_id, imv_t0_h, imv_end_h` | `charttime` as the inclusive first hour and `imv_recorded_end_hour` as the inclusive last hour |
-| `observed_peep_set` | AUMC, HiRID, MIIV | Raw `numericitems`, `observations`, or `chartevents` and the associated stay table | Median of the valid raw setting records at each observed ICU hour |
-| `rrt_time` | AUMC, eICU, HiRID, SIC | Authoritative `{db}_hourly_core.parquet` with `stay_id, icu_hour, rrt` | `charttime` and `rrt_active=True` for each active hour |
-| `rrt_time` | MIIV | Authoritative `miiv_rrt_time.parquet` with `stay_id, charttime, rrt` | Active hours from the corrected actual-end clock |
-| `rrt_time` | MIMIC-III | Authoritative CareVue `mimic3cv_rrt_hours.parquet` with `stay_id, icu_hour` | Active hours on the supplied CareVue clock |
+| Module | Database | Raw inputs or availability |
+| --- | --- | --- |
+| `observed_peep_set` | AUMC | `admissions` and `numericitems` |
+| `observed_peep_set` | HiRID | `general` and `observations` |
+| `observed_peep_set` | MIIV | `icustays` and `chartevents` |
+| `observed_peep_set` | SIC | `cases.ICUOffset` and `data_float_h` with DataID 2278 and Val in [0, 40] |
+| `observed_peep_set`, `imv_recorded_compat` | eICU, MIMIC-III | Typed absence by spec |
+| `imv_recorded_compat` | AUMC, HiRID, MIIV, SIC | `UNAVAILABLE_IN_SCOPE`. The named builders consume precomputed respiratory inputs. |
+| `rrt_time` | AUMC, eICU, HiRID, SIC | `UNAVAILABLE_IN_SCOPE`. The named builders consume the precomputed hourly RRT flag or its dynamic module under the frozen contract. |
+| `rrt_time` | MIIV | `UNAVAILABLE_IN_SCOPE`. The named code copies precomputed actual-end hours. |
+| `rrt_time` | MIMIC-III | `UNAVAILABLE_IN_SCOPE`. The frozen CareVue producer requires MIMIC-III raw tables outside the approved #641 view. |
 
-The staged authority tables use the frozen input schemas. For HiRID IMV and
-MIIV RRT, the available frozen files specify the executable projection of
-the upstream tables. Raw reconstruction requires the original generators
-for the anchor's native airway and mode codes and for RRT's actual ends.
-A missing authority publishes a typed empty module. A present, valid
-authority with no qualifying hours publishes zero rows and records that
-the projection ran.
-
-The permitted frozen `sources.py` dispatches SIC PEEP to
-`new_sources.py`. SIC PEEP remains unavailable until that reducer's
-channel, units, and hour rules can be verified. The eICU and MIMIC-III
-IMV and PEEP modules publish typed absence by contract.
+PEEP publishes the median in cmH2O for each observed ICU hour. SIC uses
+`floor(("Offset" - ICUOffset) / 3600.0)`. A readable raw PEEP source with
+no qualifying events publishes zero rows and reports `projected`.
+Absent producers publish typed empty modules. The
+`UNAVAILABLE_IN_SCOPE` receipts give `reason: no_raw_producer` and list
+the missing inputs under `missing_inputs`.
 
 ## Equivalence check
 
-Point `--frozen-src-dir` at the directory containing frozen `cohort.py`,
-`sources.py`, and `readers.py`. Provide the same database root for both
-sides, including any staged inputs in the table above.
+Run with an approved raw sample root and stay cohort. The tool imports the
+named frozen `sources.py` or `new_sources.py` from the approved path
+read-only. It binds the frozen PEEP SQL to the same raw files and cohort
+as the EasyICU rebuild.
 
 ```bash
 PYTHONPATH=src python tools/thesis_support/frozen_equivalence.py \
-  --database miiv --db-root "$DB_ROOT" --stay-ids 101 102 \
-  --module rrt_time --frozen-src-dir "$FROZEN_SRC"
+  --database sic --db-root "$DB_ROOT" --stay-ids 101 102 \
+  --module observed_peep_set
 ```
 
-The output includes sorted-row SHA-256 digests over all projection columns.
-It aligns rows by stay and hour, or by stay for the HiRID span. An unmatched
-row contributes one mismatch to each column. Counts below ten are shown as
-JSON null. Other counts round to the nearest ten. Exit codes are 0 for
-agreement, 1 for a mismatch, and 2 when the comparison cannot run.
-
-For a staged authority, the check establishes agreement of the consuming
-projection. The staged table determines the upstream clinical observation
-and clock semantics on both sides.
+The tool compares every column by stay and hour and includes duplicate
+row multiplicity. It prints status and aggregate counts only. Counts
+below ten are JSON null and other counts round to the nearest ten. Exit
+codes are 0 for agreement, 1 for a mismatch, and 2 when the comparison
+cannot run.

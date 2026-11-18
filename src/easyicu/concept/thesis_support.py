@@ -24,55 +24,79 @@ from .support_exports import select_support_cohort
 
 
 @dataclass(frozen=True)
-class _Authority:
+class _RawPEEP:
     source: str
     tables: tuple[str, ...]
-    value: str
 
-
-_IMV = {
-    db: _Authority("sealed_hourly_imv", (f"{db}_hourly_core",), "imv")
-    for db in ("aumc", "miiv", "sic")
-}
-_IMV["hirid"] = _Authority("hirid_recorded_anchor", ("hirid_vent_anchor",), "imv_recorded_end_hour")
 
 _PEEP = {
-    "aumc": _Authority("aumc_numericitems", ("admissions", "numericitems"), "observed_peep_set"),
-    "hirid": _Authority("hirid_observations", ("general", "observations"), "observed_peep_set"),
-    "miiv": _Authority("miiv_chartevents", ("icustays", "chartevents"), "observed_peep_set"),
+    "aumc": _RawPEEP("aumc_numericitems", ("admissions", "numericitems")),
+    "hirid": _RawPEEP("hirid_observations", ("general", "observations")),
+    "miiv": _RawPEEP("miiv_chartevents", ("icustays", "chartevents")),
+    "sic": _RawPEEP("sic_data_float_h.Val", ("cases", "data_float_h")),
 }
 
-_RRT = {
-    db: _Authority("sealed_hourly_rrt", (f"{db}_hourly_core",), "rrt_active")
-    for db in ("aumc", "eicu", "hirid", "sic")
+# The frozen hourly builder reads native-v2 modules under an external contract.
+# These names explain the missing producer in the manifest and are never
+# passed to storage resolution.
+_NO_RAW_PRODUCER = {
+    "imv_recorded_compat": {
+        **{
+            db: (
+                f"{db}/respiratory.parquet:mech_vent",
+                f"{db}/outcome.parquet:los_icu",
+                "config/hourly_core_v7.json",
+            )
+            for db in ("aumc", "miiv", "sic")
+        },
+        "hirid": ("hirid/respiratory.parquet:mech_vent",),
+    },
+    "rrt_time": {
+        **{
+            db: (
+                f"{db}_hourly_core.parquet:rrt",
+                f"{db}/outcome.parquet:los_icu",
+                "config/hourly_core_v7.json:dynamic",
+            )
+            for db in ("aumc", "eicu", "hirid", "sic")
+        },
+        "miiv": ("miiv_rrt_time.parquet", "raw_timestamp_actual_end.parquet"),
+        "mimic": (
+            "mimiciii/icustays.parquet",
+            "mimiciii/chartevents/*.parquet",
+            "mimiciii/procedureevents_mv.parquet",
+            "hc_original.rrt",
+        ),
+    },
 }
-_RRT["miiv"] = _Authority("miiv_rrt_time_authority_actual_end", ("miiv_rrt_time",), "rrt_active")
-_RRT["mimic"] = _Authority("carevue_timed_chart_procedure", ("mimic3cv_rrt_hours",), "rrt_active")
-
-_AUTHORITIES = {"imv_recorded_compat": _IMV, "observed_peep_set": _PEEP, "rrt_time": _RRT}
 
 
 def thesis_support_manifest(module: str, database: str, fields: Collection[str]) -> dict:
-    """Describe the frozen input and distinguish an unavailable authority."""
+    """Report raw input provenance or the frozen producer's missing inputs."""
     family = database.removesuffix("_demo")
-    authority = _AUTHORITIES[module].get(family)
-    if authority is None:
-        sic_peep = module == "observed_peep_set" and family == "sic"
-        return {
-            "source": "sic_data_float_h.Val" if sic_peep else None,
-            "status": "frozen_reducer_unavailable" if sic_peep else "no_frozen_reducer",
+    missing = _NO_RAW_PRODUCER.get(module, {}).get(family)
+    if missing is not None:
+        span = module == "imv_recorded_compat" and family == "hirid"
+        receipt = {
+            "source": None,
+            "status": "UNAVAILABLE_IN_SCOPE",
+            "reason": "no_raw_producer",
+            "missing_inputs": list(missing),
+            "charttime_role": "first_recorded_hour" if span else "icu_hour",
+            "source_grain": "stay" if span else "stay_hour",
         }
-    span = authority.source == "hirid_recorded_anchor"
+        if family == "mimic":
+            receipt["detail"] = "The frozen cv_rrt producer requires raw MIMIC-III tables outside the approved #641 CareVue view."
+        return receipt
+    raw = _PEEP.get(family) if module == "observed_peep_set" else None
+    if raw is None:
+        return {"source": None, "status": "no_frozen_reducer"}
     return {
-        "source": authority.source,
-        "input_tables": list(authority.tables),
-        "status": "projected" if authority.value in fields else "authority_unavailable",
-        "charttime_role": "first_recorded_hour" if span else "icu_hour",
-        "source_grain": "stay" if span else "stay_hour",
-        **(
-            {"upstream_tables": ["chartevents", "procedureevents"]}
-            if authority.source == "miiv_rrt_time_authority_actual_end" else {}
-        ),
+        "source": raw.source,
+        "input_tables": list(raw.tables),
+        "status": "projected" if "observed_peep_set" in fields else "authority_unavailable",
+        "charttime_role": "icu_hour",
+        "source_grain": "stay_hour",
     }
 
 
@@ -98,38 +122,6 @@ def support_input_files(source, table, stay, ids):
     return resolve_table_files(source, table, stay_column=stay, stay_values=ids)
 
 
-def _imv_recorded_compat(con, family, relation):
-    """Project frozen cohort.py:45–52 and :84–104.
-
-    HiRID consumes the recorded first/last native invasive bounds from the
-    flat anchor. The upstream airway/mode codes and span builder are outside
-    those lines, so this projection requires the authoritative anchor. Bounds
-    already use ICU-admission-relative hours. Clamp start to zero, bring end
-    up to start if needed, then floor both to inclusive hour labels. The
-    first hour is charttime and the last hour is imv_recorded_end_hour.
-
-    AUMC, MIIV and SIC carry the sealed ICU-hour key as-is, selecting only
-    true invasive flags. No time filter, rounding or aggregation is applied.
-    Gap tolerance, longest run and episode duration are downstream.
-    """
-    if family == "hirid":
-        return con.execute(f"""
-            SELECT stay_id,
-                   CAST(floor(greatest(imv_t0_h, 0)) AS INTEGER) AS charttime,
-                   CAST(floor(greatest(imv_end_h, greatest(imv_t0_h, 0))) AS INTEGER)
-                       AS imv_recorded_end_hour
-            FROM {relation}
-            SEMI JOIN selected_stays USING (stay_id)
-            WHERE greatest(imv_t0_h, 0) IS NOT NULL
-        """).df()
-    return con.execute(f"""
-        SELECT stay_id, icu_hour AS charttime, imv
-        FROM {relation}
-        SEMI JOIN selected_stays USING (stay_id)
-        WHERE imv
-    """).df()
-
-
 # Clock expressions use raw Parquet units. The general concept loader can
 # normalize AUMC milliseconds before subtracting the admission timestamp.
 _PEEP_SPEC = {
@@ -138,6 +130,7 @@ _PEEP_SPEC = {
               "epoch(CAST(e.datetime AS TIMESTAMP) - CAST(s.admissiontime AS TIMESTAMP)) / 3600.0"),
     "miiv": ("stay_id", "itemid", "220339", "valuenum",
              "epoch(CAST(e.charttime AS TIMESTAMP) - CAST(s.intime AS TIMESTAMP)) / 3600.0"),
+    "sic": ("CaseID", "DataID", "2278", "Val", '(e."Offset" - s.ICUOffset) / 3600.0'),
 }
 
 
@@ -150,8 +143,8 @@ def _observed_peep_set(con, family, stays, events):
     ICU admission (seconds converted to hours). Floor to [hour, hour+1),
     including negative hours. A setting with no hour cannot join the panel.
     The later eligibility filter in events.py:34–46 applies to event pairs.
-    SIC dispatches to new_sources.py via sources.py:149–151. Its reducer is
-    required to establish how the original hourly Val was interpreted.
+    SIC uses the unconverted Val and subtracts cases.ICUOffset in seconds
+    before flooring, following frozen new_sources.py:129–151.
     """
     stay, item, ids, value, offset = _PEEP_SPEC[family]
     return con.execute(f"""
@@ -166,64 +159,27 @@ def _observed_peep_set(con, family, stays, events):
     """).df()
 
 
-def _rrt_time(con, family, relation):
-    """Project frozen cohort.py:55–65 and prepare_miiv_views.py:24, :28–31.
-
-    MIIV requires the corrected actual-end authority derived from chart and
-    procedure records, including its pre-ICU -24 h window. It retains true
-    treatment hours and casts the supplied ICU-relative charttime to INTEGER
-    with DuckDB's cast semantics. The producer rules for actual ends are
-    outside the frozen view copier. CareVue consumes the preselected timed
-    chart/procedure hours. The other databases select true rrt from sealed
-    hourly core. Those hour keys already use the native ICU admission clock.
-    No flooring, carry, aggregation or extra ICU/landmark clipping is applied.
-    """
-    hour, where = {
-        "miiv": ("CAST(charttime AS INTEGER)", "WHERE rrt"),
-        "mimic": ("icu_hour", ""),
-    }.get(family, ("icu_hour", "WHERE coalesce(rrt, FALSE)"))
-    return con.execute(f"""
-        SELECT stay_id, {hour} AS charttime, TRUE AS rrt_active
-        FROM {relation}
-        SEMI JOIN selected_stays USING (stay_id)
-        {where}
-    """).df()
-
-
-_REDUCERS = {
-    "imv_recorded_compat": _imv_recorded_compat,
-    "observed_peep_set": _observed_peep_set,
-    "rrt_time": _rrt_time,
-}
-
-
 @in_binding_unit
 def load_thesis_support(*, module, database, data_path, patient_ids=None) -> pd.DataFrame:
-    """Load selected source stays and carry a typed schema even when unavailable.
-
-    The lead can stage authoritative L-COMMON inputs as named Parquet tables
-    under the database root. No raw proxy is substituted for an unstaged input.
-    For MIIV, pass the approved stay IDs as the requested cohort.
-    """
+    """Rebuild from raw inputs for selected stays, with a typed empty fallback."""
     family = database.removesuffix("_demo")
     stay = DATABASE_ID_CONFIG[database]["id_col"]
     frame = _empty(module, stay)
     frame.attrs["available_fields"] = []
-    authority = _AUTHORITIES[module].get(family)
-    if authority is None:
-        return frame
-
     if family == "miiv" and patient_ids is None:
         raise ValueError("MIIV thesis support requires an explicit allowed stay cohort")
+    raw = _PEEP.get(family) if module == "observed_peep_set" else None
+    if raw is None:
+        return frame
+
     source = storage_source(database, data_path)
     selection = select_support_cohort(database, data_path, patient_ids)
     ids = None if selection is None else selection[stay]
-    source_key = stay if module == "observed_peep_set" else "stay_id"
-    inputs = [support_input_files(source, table, source_key, ids) for table in authority.tables]
+    inputs = [support_input_files(source, table, stay, ids) for table in raw.tables]
     if any(files is None for files in inputs):
         return frame
 
-    frame.attrs["available_fields"] = [authority.value]
+    frame.attrs["available_fields"] = ["observed_peep_set"]
     if ids == [] or any(not files for files in inputs):
         return frame
 
@@ -240,11 +196,11 @@ def load_thesis_support(*, module, database, data_path, patient_ids=None) -> pd.
             """)
         else:
             con.register("selected_stays", pd.DataFrame({"stay_id": ids}))
-        rows = _REDUCERS[module](
+        rows = _observed_peep_set(
             con, family, *(parquet_relation(files, ordered=False) for files in inputs),
         ).rename(columns={"stay_id": stay})
 
-    keys = [stay] if authority.source == "hirid_recorded_anchor" else [stay, "charttime"]
+    keys = [stay, "charttime"]
     require_unique_keys(rows, keys, table=module)
     if rows.charttime.isna().any():
         raise ValueError(f"{module}: active rows require a source ICU hour")
