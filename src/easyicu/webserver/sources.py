@@ -10,6 +10,8 @@ from __future__ import annotations
 import copy
 import hashlib
 import json
+import re
+import secrets
 import threading
 from dataclasses import dataclass
 from datetime import datetime
@@ -133,6 +135,19 @@ def _source_id(path: str) -> str:
     return "src_" + hashlib.sha1(path.encode("utf-8")).hexdigest()[:12]
 
 
+_NONCE_RE = re.compile(r"[0-9a-f]{32}")
+
+
+def _kept_nonce(source: Mapping[str, Any]) -> Dict[str, str]:
+    """The saved registration's own nonce: kept by every write of the same row.
+
+    Removing a folder drops its row, so registering it again starts a new
+    registration that a receipt bound to the old one does not match.
+    """
+    nonce = source.get("registration_nonce")
+    return {"registration_nonce": nonce} if isinstance(nonce, str) and _NONCE_RE.fullmatch(nonce) else {}
+
+
 def _registration_fields(source: Mapping[str, Any]) -> Dict[str, str]:
     identity = SourceIdentity.from_record({**source, "registration_id": source.get("id")})
     if identity is None:
@@ -168,14 +183,14 @@ def stored_registration_sha256(identity: SourceIdentity) -> str | None:
     """Digest of this one saved registration, unchanged by other registry writes.
 
     Selecting, renaming or comparing sources and registering other folders
-    leave it as it was. Removing this folder, or registering it again with a
-    different release claim, makes it unavailable or different.
+    leave it as it was, and so does registering the same row again. Removing
+    the folder ends its registration: registering it afterwards is new.
     """
     row = _stored_row_for_identity(identity)
     if row is None:
         return None
     record = {key: row.get(key) for key in (
-        "path", "id", "database", "version", "source_id", "archive_sha256")}
+        "path", "id", "database", "version", "source_id", "archive_sha256", "registration_nonce")}
     return hashlib.sha256(json.dumps(record, sort_keys=True).encode("utf-8")).hexdigest()
 
 
@@ -419,6 +434,7 @@ def load_registry(*, planning_metadata_only: bool = False) -> Dict[str, Any]:
             **({"planning_metadata_only": True} if planning_metadata_only else {}),
         )
         source.update(_registration_fields(item))
+        source.update(_kept_nonce(item))
         by_path[source["path"]] = source
     for path in _autodiscovered_paths(**({"planning_metadata_only": True} if planning_metadata_only else {})):
         if _norm_path(path) in removed_paths:
@@ -668,6 +684,7 @@ def save_registry(
             source = _source_from_path(str(path), label=label)
             # UI patches can edit labels/selections, never manufacture release receipts.
             source.update(_registration_fields(existing.get(source["path"], {})))
+            source.update(_kept_nonce(existing.get(source["path"], {})))
             if _registered_identity is not None and source["id"] == _registered_identity.registration_id:
                 for key in ("version", "source_id", "archive_sha256"):
                     source.pop(key, None)
@@ -692,6 +709,7 @@ def save_registry(
             "label": s.get("label"),
             "registered_at": s.get("registered_at"),
             **_registration_fields(s),
+            "registration_nonce": _kept_nonce(s).get("registration_nonce") or secrets.token_hex(16),
             **({"source_kind": "synthetic"} if s.get("source_kind") == "synthetic" else {}),
         }
         for s in existing.values()
@@ -773,6 +791,7 @@ def rename_source(path: str, label: str) -> Dict[str, Any]:
                     "registered_at": item.get("registered_at")
                     or current.get("registered_at"),
                     **_registration_fields(current),
+                    **_kept_nonce(item),
                     **({"source_kind": "synthetic"} if current.get("source_kind") == "synthetic" else {}),
                 }
             )
@@ -784,6 +803,7 @@ def rename_source(path: str, label: str) -> Dict[str, Any]:
                     "label": item.get("label"),
                     "registered_at": item.get("registered_at"),
                     **_registration_fields(item),
+                    **_kept_nonce(item),
                     **({"source_kind": "synthetic"} if item.get("source_kind") == "synthetic" else {}),
                 }
             )
@@ -794,6 +814,7 @@ def rename_source(path: str, label: str) -> Dict[str, Any]:
                 "label": clean_label,
                 "registered_at": current.get("registered_at") or _now(),
                 **_registration_fields(current),
+                **_kept_nonce(current),
                 **({"source_kind": "synthetic"} if current.get("source_kind") == "synthetic" else {}),
             }
         )
@@ -884,6 +905,7 @@ def remove_source(path: str) -> Dict[str, Any]:
             "label": item.get("label"),
             "registered_at": item.get("registered_at"),
             **_registration_fields(item),
+            **_kept_nonce(item),
         }
         for item in stored
         if isinstance(item, dict)

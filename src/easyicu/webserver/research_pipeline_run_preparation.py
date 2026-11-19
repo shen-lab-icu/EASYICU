@@ -940,7 +940,7 @@ def prepare_research_pipeline_run(
         except (ValueError, OSError, dataio.ExportCohortError, AuthorityFilesystemError) as exc:
             raise ResearchPipelineRunError(
                 "research_pipeline_demo_planning_authority_stale",
-                "The confirmed official Demo source changed, so this conversation cannot use that choice. "
+                "The confirmed Demo planning source changed, so this conversation cannot use that choice. "
                 "The researcher starts a new project and chooses the official Demo there; "
                 "no Demo preparation or source binding in this conversation can restore it.",
             ) from exc

@@ -279,7 +279,7 @@ def test_confirmed_raw_choice_binds_launch_and_survives_only_lifecycle_changes(c
     )
     assert preparation.prepare_research_pipeline_run(request).source_identity == identity
     from dataclasses import replace
-    with pytest.raises(preparation.ResearchPipelineRunError, match="confirmed official Demo source changed"):
+    with pytest.raises(preparation.ResearchPipelineRunError, match="confirmed Demo planning source changed"):
         preparation.prepare_research_pipeline_run(replace(request, export_path=str(choice.paths.export)))
     other = {**finished, "id": "different-study"}
     with pytest.raises(ValueError, match="stale"):
@@ -289,6 +289,39 @@ def test_confirmed_raw_choice_binds_launch_and_survives_only_lifecycle_changes(c
     assert not changed.get("demo_planning_authority_ref")
     study_contexts.upsert_context({"id": study["id"], "data_source": finished["data_source"]})
     assert resolve_choice(study_contexts.get_context(study["id"])) is None
+
+
+@pytest.mark.parametrize("change", ["viz_toggle", "extraction_finished", "drift"])
+def test_an_approved_raw_demo_plan_launches_after_an_ordinary_registry_write(choice, monkeypatch, tmp_path, change):
+    """M2 launch path: ordinary writes keep the launch; a changed source never launches."""
+    from easyicu.webserver.pi_copilot.demo_planning_authority import resolve_choice
+    from easyicu.webserver import research_pipeline_run_preparation as preparation
+
+    choice.service.authorize_data_source(choice.record.session_id, **choice.body)
+    study = study_contexts.get_context(choice.study["id"])
+    identity = resolve_choice(study)
+    monkeypatch.setattr(preparation, "_prepare_scientific_launch", lambda request: None)
+    monkeypatch.setattr(preparation, "_authorize_launch_provider", lambda request: None)
+    monkeypatch.setattr(preparation, "_prepare_launch_execution", lambda *args: (None, None))
+    request = preparation.ResearchPipelineLaunchRequest(
+        export_path=study["data_source"]["path"], study_context=study, project_root=None,
+        provider={}, provider_environment={}, credential_source="pi_verified", literature_search_authorized=False,
+        plan_revision_source_run_id="", execution_resume_source_run_id="", development_resume_source_job_id="",
+        budget_mode="planner_canary", runner_image=None,
+    )
+    if change == "viz_toggle":
+        sources.save_registry({"active_path": str(choice.paths.export), "crossdb_paths": []})
+    elif change == "extraction_finished":
+        other = tmp_path / "other-export"
+        other.mkdir()
+        sources.register_source(str(other))
+    else:
+        path = choice.paths.converted_marker
+        path.write_text(path.read_text() + " ")
+        with pytest.raises(preparation.ResearchPipelineRunError, match="confirmed Demo planning source changed"):
+            preparation.prepare_research_pipeline_run(request)
+        return
+    assert preparation.prepare_research_pipeline_run(request).source_identity == identity
 
 
 @pytest.mark.parametrize("write", ["select", "compare", "no_change", "same_release_again"])
@@ -323,9 +356,9 @@ def test_confirmed_raw_choice_fails_closed_after_drift(choice, change):
     if change == "registry":
         sources.remove_source(str(choice.paths.export))
     elif change == "reregister":
-        # Registered again without the host's release claim.
         sources.remove_source(str(choice.paths.export))
-        sources.register_source(str(choice.paths.export))
+        source = storage.verified_public_demo_raw(choice.paths.raw)
+        demo_source_prepare.register_export(source, choice.paths, SimpleNamespace(emit=lambda event: None))
     elif change == "export_manifest":
         path = choice.paths.export / "_manifest.json"
         path.write_text(path.read_text() + " ")
