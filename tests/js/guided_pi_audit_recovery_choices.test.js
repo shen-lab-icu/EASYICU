@@ -45,7 +45,8 @@ for (const lang of ['zh', 'en']) {
     assert.ok(html.includes(tr(
       'One step in this plan needs code written by the model during the run, and the desktop app does not run such code.',
       '计划里有一步要靠模型临时写代码才能完成，桌面版不运行这类代码。')));
-    assert.ok(html.includes(tr('Preparing the data again with this plan will not change the result.', '用这份计划重新准备数据不会改变结果。')));
+    assert.ok(html.includes(tr('Preparing the data again with this plan gives the same result unless EasyICU has been updated since.',
+      '除非 EasyICU 此后已更新，否则用这份计划重新准备数据会得到同样的结果。')));
     assert.doesNotMatch(html, /research_pipeline_plan_step_needs_sandbox/);
     // An unlisted stop keeps the general sentence and points to the receipt.
     runs[0].gate_reason_code = 'synthetic_unlisted_stop';

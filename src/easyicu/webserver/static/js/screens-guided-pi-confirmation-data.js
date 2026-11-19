@@ -281,7 +281,7 @@
       const text = String(host.runFailureText(value) || '');
       if (!text || text === String(host.runFailureText('easyicu_unlisted_stop') || '')) return '';
       return SAME_PLAN_STOPS.has(value)
-        ? `${text}${tr(' Preparing the data again with this plan will not change the result.', '用这份计划重新准备数据不会改变结果。')}`
+        ? `${text}${tr(' Preparing the data again with this plan gives the same result unless EasyICU has been updated since.', '除非 EasyICU 此后已更新，否则用这份计划重新准备数据会得到同样的结果。')}`
         : text;
     }
 
