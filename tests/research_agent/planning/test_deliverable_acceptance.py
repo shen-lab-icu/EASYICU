@@ -23,7 +23,8 @@ from easyicu.research_agent.cohort import materializer
 from easyicu.research_agent.cohort.schema import materialize_locked_analysis_cohort, write_locked_cohort_definition
 from easyicu.research_agent.contracts.claim_ceiling import first_result_instructions
 from easyicu.research_agent.contracts.product_files import (
-    HOST_DELIVERY_KINDS, DeliveryRequest, PlanDeliverables, delivery_requests, requested_deliverable_kinds,
+    HOST_DELIVERY_KINDS, DeliveryRequest, PlanDeliverables, delivery_requests, host_delivery_omissions,
+    requested_deliverable_kinds,
 )
 from easyicu.research_agent.execution.owner_declaration import require_host_rendered_plan
 from easyicu.research_agent.execution.runners.selection import resolve_standard_executor
@@ -305,6 +306,10 @@ def _publish(tmp_path, monkeypatch, context, plan, evidence, config, findings, l
 def _render(latest, language, *, session_condition="ready"):
     node = shutil.which("node")
     assert node
+    shell = _read("js/screens-guided-pi.js")
+    # Run the shell's actual dependency wiring with the synthetic session state.
+    stale_guard = shell[shell.index("  function sessionIsStale()"):shell.index("  function iconHtml(")]
+    outcome_wiring = shell[shell.index("  const RUN_OUTCOME ="):shell.index("  const ACTIVITY =")]
     js = run_node(node, f"""
       global.window = {{EU_LANG:{language!r}, requestAnimationFrame: callback => callback()}};
       global.document = {{querySelector:()=>null, readyState:'loading', addEventListener() {{}}}};
@@ -329,12 +334,18 @@ def _render(latest, language, *, session_condition="ready"):
       const api = () => window.EU_API;
       const esc = window.EU_HTML.esc;
       const resources = window.EU_GUIDED_PI_RESOURCES.create({{esc}});
-      const owner = window.EU_GUIDED_PI_RUN_OUTCOME.create({{
-        tr:(en,zh)=>{language!r} === 'zh' ? zh : en, esc, iconHtml:()=>'', manuscriptNotPassedText:String,
-        api, projectId, session:()=>state.session,
-        canPreview:()=>Boolean(state.session && !state.busy && !state.childJobId && !state.session.stale.stale),
-        resourceButton:(row,label)=>{{ labels.push(label); return resources.button(row,label); }},
-      }});
+      const MODULES = window.EasyICU.guidedPi;
+      const tr = (en,zh) => {language!r} === 'zh' ? zh : en;
+      const iconHtml = () => '';
+      const manuscriptNotPassedText = String;
+      const resourceButton = (row,label) => {{ labels.push(label); return resources.button(row,label); }};
+      const previewWorkflowContext = () => workflow;
+      const errorText = String;
+      const recordHostAction = () => {{ throw new Error('Unexpected host action'); }};
+      const render = () => {{}};
+      {stale_guard}
+      {outcome_wiring}
+      const owner = RUN_OUTCOME;
       const html = owner.render(latest, workflow);
       const button = html.match(/<button[^>]*data-gpi-article-run[^>]*>/);
       if (button) {{
@@ -636,7 +647,8 @@ def test_delivery_request(tmp_path, monkeypatch, tier, language, kind, wording):
     assert all(row["status"] == "verified" for row in verified)
     assert {row["kind"]: row["step_id"] for row in verified} == owners
     for product in HOST_DELIVERY_KINDS:
-        _assert_card_choice(card, product, "yes" if product in expected else "no")
+        choice = "yes" if product in expected else "deferred" if first and positive and product == kind else "no"
+        _assert_card_choice(card, product, choice)
         if product not in expected:
             artifacts = set(ARTIFACTS[product])
             assert not artifacts.intersection(files | rows | refs)
@@ -859,6 +871,63 @@ def test_article_pipeline_keeps_card_exclusions(tmp_path, monkeypatch, language)
     assert [step.host_delivery_kind for step in plan.steps if step.host_delivery_kind] == [PDF]
 
 
+@pytest.mark.parametrize(("language", "tier", "question", "requested"), [
+    ("en", "first_result", "Summarize overnight ward transfers. A browser preview might help at handover.", []),
+    ("zh", "article", "汇总夜间转科情况。交班时也许用得上在线预览。", [PDF]),
+])
+def test_legacy_edit_names_unanswered_delivery_without_attributing_a_no(language, tier, question, requested):
+    draft = AnalysisPlan(research_question=question, steps=[])
+    if tier == "first_result":
+        _, attempt, _ = _plan(question, tier)
+        draft = attempt.output.model_copy(update={"deliverables": None})
+    assert draft.deliverables is None
+    assert delivery_requests(question)[PREVIEW] is DeliveryRequest.CHECK
+    plan = bind_run_deliverables(draft, question=question, defaults=HOST_DELIVERY_KINDS, edit={
+        "requested": requested, "confirmed": True, "source": "user_edit",
+    })
+    selection = plan.deliverables
+    assert selection.requested == tuple(requested)
+    assert selection.deferred == ()
+    assert selection.excluded == (PREVIEW,)
+    serialized = AnalysisPlan.model_validate_json(plan.model_dump_json()).model_dump(mode="json")
+    omissions = host_delivery_omissions(serialized)
+    assert omissions == [{"kind": PREVIEW, "reason_code": "delivery_choice_unanswered"}]
+    html = _render(_result_with_artifacts(
+        "manuscript_provenance.json", report_revision_ready=True, deliverable_dispositions=omissions,
+    ), language)["html"]
+    message = re.search(r'data-deliverable-disposition="article_preview"[^>]*>(.*?)</li>', html)
+    assert message and LABELS[PREVIEW][language == "zh"] in message.group(1)
+    assert ("未收到选择，本次未生成" if language == "zh" else "No choice was recorded, so this item was not produced") in message.group(1)
+    assert "manuscript_provenance.json" not in html
+
+
+@pytest.mark.parametrize(("question", "article_exclusion"), [
+    ("Summarize early ward discharges.", "No bibliography."),
+    ("汇总病房早期出院情况。", "无需参考文献。"),
+])
+def test_first_result_delivery_selection_binds_to_article(question, article_exclusion):
+    _, attempt, _ = _plan(question, "first_result")
+    first_selection = PlanDeliverables(
+        requested=(), excluded=(PREVIEW,), deferred=(PDF, REFERENCES), confirmed=True, source="user_edit",
+    )
+    first = bind_run_deliverables(attempt.output, question=question, defaults=None,
+                                  edit=first_selection.model_dump(mode="json"))
+    assert set(first.deliverables.deferred) == {PDF, REFERENCES}
+    assert not any(step.host_delivery_kind for step in first.steps)
+    article_question = f"{question} {article_exclusion}"
+    assert delivery_requests(article_question)[REFERENCES] is DeliveryRequest.NOT_REQUESTED
+    draft = AnalysisPlan(research_question=article_question, steps=[])
+    article = bind_run_deliverables(draft, question=article_question, defaults=HOST_DELIVERY_KINDS,
+                                    edit=first.deliverables.model_dump(mode="json"))
+    assert article.deliverables.requested == (PDF,)
+    assert article.deliverables.deferred == ()
+    assert set(article.deliverables.excluded) == {PREVIEW, REFERENCES}
+    assert [step.host_delivery_kind for step in article.steps] == [PDF]
+    assert {row["reason_code"] for row in host_delivery_omissions(article.model_dump(mode="json"))} == {
+        "excluded_by_user",
+    }
+
+
 def _screened_out(question):
     return _literature(question).model_copy(update={"screening_decisions": []})
 
@@ -916,17 +985,31 @@ def _result_with_artifacts(*artifacts, **state):
 
 @pytest.mark.parametrize("language", ("en", "zh"))
 def test_excluded_preview_stays_hidden_after_report_revision(language):
+    preview_files = ("article_report.json", "manuscript_draft.json", "manuscript_provenance.json")
     latest = _result_with_artifacts(
-        "article_report.json", "manuscript_revision.pdf", "manuscript_provenance.json",
+        *preview_files, "manuscript_revision.pdf",
         report_revision_ready=True, report_revision_pdf_ready=True,
-        deliverable_dispositions=[{"kind": PREVIEW, "reason_code": "excluded_by_user"}],
     )
-    visible = _render(latest, language)
+    allowed = _render(latest, language)
+    visible = _render({
+        **latest, "deliverable_dispositions": [{"kind": PREVIEW, "reason_code": "excluded_by_user"}],
+    }, language)
     rows = {row["artifact"] for row in visible["rows"]}
-    assert "article_report.json" not in rows
-    assert "article_report.json" not in visible["html"] + visible["shelf"]
-    assert ("查看含图文章报告" if language == "zh" else "View article report with figures") not in visible["labels"]
-    assert ("预览证据绑定文章" if language == "zh" else "Preview evidence-bound article") not in visible["labels"]
+    assert 'data-gpi-resource-artifact="manuscript_provenance.json"' in allowed["html"]
+    for artifact in preview_files:
+        assert artifact in allowed["shelf"]
+        assert artifact not in rows
+        assert artifact not in visible["html"]
+        assert artifact not in visible["shelf"]
+        assert artifact not in visible["labels"]
+    for labels in [
+        ("View article report with figures", "查看含图文章报告"),
+        ("View report draft and revision status", "查看报告草稿与修订状态"),
+        ("Preview evidence-bound article", "预览证据绑定文章"),
+    ]:
+        label = labels[language == "zh"]
+        assert label in allowed["labels"]
+        assert label not in visible["labels"]
     assert "manuscript_revision.pdf" in rows
     assert "manuscript_revision.pdf" in visible["html"]
     assert ("按你的选择省略" if language == "zh" else "Excluded at your request") in visible["html"]
@@ -956,6 +1039,8 @@ def test_acceptance_reaches_download_and_article_click(language):
         visible.get("shelf", ""),
     )
     visible = _render(_deferred_result(), language)
+    button = re.search(r"<button[^>]+data-gpi-article-run[^>]*>", visible["html"])
+    assert button and " disabled" not in button.group()
     zh = language == "zh"
     assert visible["articleClick"] == {
         "draft": ("请为这项研究另行启动论文任务，并提供PDF。" if zh else

@@ -254,6 +254,8 @@ class PlanDeliverables(BaseModel):
     check: tuple[HostDeliveryKind, ...] = ()
     excluded: tuple[HostDeliveryKind, ...] = Field(default=(), exclude_if=lambda value: not value)
     deferred: tuple[HostDeliveryKind, ...] = Field(default=(), exclude_if=lambda value: not value)
+    # An unanswered legacy choice omits the item without recording a user's No.
+    unanswered: tuple[HostDeliveryKind, ...] = Field(default=(), exclude_if=lambda value: not value)
     confirmed: bool
     source: Literal["detector_prefill", "user_edit"]
 
@@ -264,6 +266,9 @@ class PlanDeliverables(BaseModel):
         kinds = (*self.requested, *self.check, *self.excluded, *self.deferred)
         if len(kinds) != len(set(kinds)):
             raise ValueError("Each deliverable must have one state.")
+        unanswered = set(self.unanswered)
+        if len(unanswered) != len(self.unanswered) or not unanswered.issubset(self.excluded):
+            raise ValueError("Unanswered choices must name distinct excluded deliverables.")
         return self
 
 
@@ -325,6 +330,7 @@ def delivery_requests(question: str) -> dict[HostDeliveryKind, DeliveryRequest]:
 
 FIRST_RESULT_DELIVERY_STOP = "first_result_delivery_requires_article"
 DELIVERY_EXCLUDED_BY_USER = "excluded_by_user"
+DELIVERY_CHOICE_UNANSWERED = "delivery_choice_unanswered"
 EMPTY_BIBTEX = "@comment{No citable references}\n"
 
 
@@ -354,12 +360,19 @@ def host_delivery_omissions(plan: Mapping[str, object]) -> list[dict[str, str]]:
     selection = plan.get("deliverables")
     if not isinstance(selection, Mapping) or selection.get("confirmed") is not True:
         return []
+    unanswered = selection.get("unanswered")
+    if not isinstance(unanswered, (list, tuple)):
+        unanswered = ()
     omitted = []
     for field, reason in (("excluded", DELIVERY_EXCLUDED_BY_USER), ("deferred", FIRST_RESULT_DELIVERY_STOP)):
         kinds = selection.get(field)
         if isinstance(kinds, (list, tuple)):
             omitted.extend(
-                {"kind": kind, "reason_code": reason, **({"next_action": "article"} if field == "deferred" else {})}
+                {
+                    "kind": kind,
+                    "reason_code": DELIVERY_CHOICE_UNANSWERED if field == "excluded" and kind in unanswered else reason,
+                    **({"next_action": "article"} if field == "deferred" else {}),
+                }
                 for kind in HOST_DELIVERY_KINDS if kind in kinds
             )
     return omitted

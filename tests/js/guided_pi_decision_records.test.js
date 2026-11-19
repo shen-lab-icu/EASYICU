@@ -544,6 +544,62 @@ test('choosing an article output for an analysis-only review shows the composer 
   assert.deepEqual(owner.deliverableSelection(form), { requested: [], deferred: ['manuscript_pdf'], excluded: [] });
 });
 
+function reviewedDeliveryForm(selection) {
+  const owner = modules.require('planActions');
+  const html = owner.deliverablesField({
+    requested: [], confirmed: true, source: 'user_edit', article_required: true, ...selection,
+  }, { tr: en => en, esc, disabled: false });
+  const fields = Object.fromEntries(Array.from(html.matchAll(/<select name="([^"]+)"([^>]*)>(.*?)<\/select>/gs),
+    ([, name, attrs, options]) => [name, {
+      name, value: options.match(/<option value="([^"]*)" selected>/)[1],
+      dataset: {
+        gpiDeliverableOriginal: attrs.match(/data-gpi-deliverable-original="([^"]*)"/)[1],
+        gpiDeliverableOmission: attrs.match(/data-gpi-deliverable-omission="([^"]*)"/)[1],
+      },
+    }]));
+  const approve = { disabled: false, dataset: {} };
+  const forward = { disabled: true };
+  const route = { hidden: true };
+  const form = {
+    querySelectorAll: () => Object.values(fields),
+    querySelector: selector => selector === '[data-gpi-deliverables-article]' ? route : forward,
+    closest: () => ({ querySelector: () => approve }),
+    hasAttribute: name => name === 'data-gpi-analysis-deliverables' && html.includes(name),
+  };
+  return { fields, approve, forward, route, readSelection: () => owner.deliverableSelection(form) };
+}
+
+test('a deferred PDF for the ward handover can be explicitly declined', () => {
+  const { fields, approve, forward, readSelection } = reviewedDeliveryForm({ deferred: ['manuscript_pdf'] });
+  const initial = fields.manuscript_pdf.value;
+  fields.manuscript_pdf.value = 'no';
+  assert.deepEqual(readSelection(), { requested: [], deferred: [], excluded: ['manuscript_pdf'] });
+  assert.equal(initial, 'deferred');
+  assert.equal(approve.disabled, true);
+  assert.equal(forward.disabled, false);
+});
+
+test('reselecting Yes for a deferred handover PDF leaves analysis approval reachable', () => {
+  const { fields, approve, forward, route, readSelection } = reviewedDeliveryForm({ deferred: ['manuscript_pdf'] });
+  fields.manuscript_pdf.value = 'yes';
+  assert.equal(readSelection(), null);
+  assert.equal(approve.disabled, false);
+  assert.equal(forward.disabled, true);
+  assert.equal(route.hidden, false);
+});
+
+test('editing a ward bibliography leaves an unanswered preview distinct from a declined item', () => {
+  const { fields, readSelection } = reviewedDeliveryForm({
+    excluded: ['article_preview'], unanswered: ['article_preview'],
+  });
+  fields.references.value = 'yes';
+  assert.deepEqual(readSelection(), {
+    requested: [], deferred: ['references'], excluded: ['article_preview'], unanswered: ['article_preview'],
+  });
+  fields.article_preview.value = 'no';
+  assert.deepEqual(readSelection(), { requested: [], deferred: ['references'], excluded: ['article_preview'] });
+});
+
 test('saving a check choice starts a new plan review and never submits approval', async () => {
   const calls = [];
   const session = {

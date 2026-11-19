@@ -66,12 +66,17 @@
     const requested = selection.requested || [];
     const check = selection.check || [];
     const fields = DELIVERABLE_KINDS.map((kind, index) => {
-      const value = check.includes(kind) ? '' : requested.includes(kind) ? 'yes' : 'no';
-      const omission = selection.excluded?.includes(kind) ? 'excluded'
-        : selection.deferred?.includes(kind) ? 'deferred' : '';
+      const pending = check.includes(kind);
+      const deferred = selection.deferred?.includes(kind);
+      const unanswered = selection.unanswered?.includes(kind);
+      const omission = selection.excluded?.includes(kind) ? 'excluded' : '';
+      const value = pending ? '' : requested.includes(kind) ? 'yes'
+        : deferred ? 'deferred' : unanswered ? 'unanswered' : 'no';
       const option = (key, label) => `<option value="${key}"${value === key ? ' selected' : ''}>${esc(label)}</option>`;
       return `<label>${esc(names[index])}<select name="${kind}" required data-gpi-deliverable-original="${value}" data-gpi-deliverable-omission="${omission}"${disabled ? ' disabled' : ''}>
-        ${check.includes(kind) ? option('', tr('Choose', '请选择')) : ''}${option('yes', tr('Yes', '是'))}${option('no', tr('No', '否'))}
+        ${pending ? option('', tr('Choose', '请选择')) : ''}${option('yes', tr('Yes', '是'))}${option('no', tr('No', '否'))}
+        ${deferred ? option('deferred', tr('Deferred to an article run', '留待论文任务')) : ''}
+        ${unanswered ? option('unanswered', tr('Unanswered', '未选择')) : ''}
       </select></label>`;
     }).join('');
     const articleConflict = selection.article_required && requested.length;
@@ -92,12 +97,14 @@
   function deliverableSelection(form) {
     const fields = Array.from(form.querySelectorAll('select[data-gpi-deliverable-original]'));
     const requested = fields.filter(field => field.value === 'yes').map(field => field.name);
-    const changed = fields.some(field => field.value !== field.dataset.gpiDeliverableOriginal);
-    const complete = fields.length === DELIVERABLE_KINDS.length
-      && fields.every(field => field.value === 'yes' || field.value === 'no');
     const requiresArticle = form.hasAttribute('data-gpi-analysis-deliverables') && requested.length > 0;
+    // Compare the choice that would be saved. Yes on an analysis-only card defers the item.
+    const valueForRun = field => requiresArticle && field.value === 'yes' ? 'deferred' : field.value;
+    const changed = fields.some(field => valueForRun(field) !== field.dataset.gpiDeliverableOriginal);
+    const complete = fields.length === DELIVERABLE_KINDS.length
+      && fields.every(field => ['yes', 'no', 'deferred', 'unanswered'].includes(field.value));
     const forward = form.querySelector('[data-gpi-deliverables-apply]');
-    forward.disabled = !complete || (!changed && !requiresArticle) || fields.some(field => field.disabled);
+    forward.disabled = !complete || !changed || fields.some(field => field.disabled);
     form.querySelector('[data-gpi-deliverables-article]').hidden = !requiresArticle;
     const approve = form.closest('.gpi-confirmation')?.querySelector('[data-gpi-confirm-action]');
     if (approve) {
@@ -105,13 +112,14 @@
       approve.disabled = approve.dataset.originalDisabled === 'true' || changed;
     }
     if (forward.disabled) return null;
-    const excluded = fields.filter(field => field.value === 'no'
-      && (field.dataset.gpiDeliverableOriginal !== 'no' || field.dataset.gpiDeliverableOmission === 'excluded'));
-    const deferred = fields.filter(field => field.value === 'no' && field.dataset.gpiDeliverableOmission === 'deferred');
+    const excluded = fields.filter(field => field.value === 'unanswered' || (field.value === 'no'
+      && (field.dataset.gpiDeliverableOriginal !== 'no' || field.dataset.gpiDeliverableOmission === 'excluded')));
+    const unanswered = fields.filter(field => field.value === 'unanswered').map(field => field.name);
     return {
       requested: requiresArticle ? [] : requested,
       excluded: excluded.map(field => field.name),
-      deferred: [...(requiresArticle ? requested : []), ...deferred.map(field => field.name)],
+      deferred: fields.filter(field => valueForRun(field) === 'deferred').map(field => field.name),
+      ...(unanswered.length ? { unanswered } : {}),
     };
   }
 

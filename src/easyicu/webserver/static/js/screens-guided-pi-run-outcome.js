@@ -26,7 +26,12 @@
     const deliveryDispositions = run => Array.isArray(run?.deliverable_dispositions)
       ? run.deliverable_dispositions.filter(row => row && Object.hasOwn(deliveryLabels, row.kind)) : [];
     const previewExcluded = run => deliveryDispositions(run).some(row =>
-      row.kind === 'article_preview' && row.reason_code === 'excluded_by_user');
+      row.kind === 'article_preview' && ['excluded_by_user', 'delivery_choice_unanswered'].includes(row.reason_code));
+    const previewFiles = new Set(['article_report.json', 'manuscript_draft.json', 'manuscript_provenance.json']);
+    function visibleArtifactRefs(run) {
+      const refs = Array.isArray(run.artifact_refs) ? run.artifact_refs : [];
+      return previewExcluded(run) ? refs.filter(row => !previewFiles.has(row?.artifact)) : refs;
+    }
     const emptyBibliography = run => deliveryDispositions(run).some(row =>
       row.kind === 'references' && row.reason_code === 'no_citable_references');
 
@@ -41,14 +46,18 @@
     }
 
     function renderDeliveryDispositions(run) {
+      const notes = {
+        excluded_by_user: ['Excluded at your request.', '按你的选择省略。'],
+        delivery_choice_unanswered: ['No choice was recorded, so this item was not produced.', '未收到选择，本次未生成。'],
+        first_result_delivery_requires_article: [
+          'This run produces first results only. This item requires a separate article run.',
+          '本次仅生成首轮分析结果。此交付物需要另行启动论文任务。',
+        ],
+        no_citable_references: ['This run has no citable references.', '本次没有可引用的参考文献。'],
+      };
       const rows = deliveryDispositions(run).flatMap(({ kind, reason_code: reason }) => {
         const name = tr(...deliveryLabels[kind]);
-        const note = reason === 'excluded_by_user' ? tr('Excluded at your request.', '按你的选择省略。')
-          : reason === 'first_result_delivery_requires_article'
-            ? tr('This run produces first results only. This item requires a separate article run.',
-              '本次仅生成首轮分析结果。此交付物需要另行启动论文任务。')
-            : reason === 'no_citable_references'
-              ? tr('This run has no citable references.', '本次没有可引用的参考文献。') : '';
+        const note = Object.hasOwn(notes, reason) ? tr(...notes[reason]) : '';
         return note ? [`<li data-deliverable-disposition="${esc(kind)}"><strong>${esc(name)}</strong> ${esc(note)}</li>`] : [];
       });
       if (!rows.length) return '';
@@ -233,12 +242,10 @@
     function renderShelf(latestRun, workflow, query = '', options = {}) {
       const rows = collection(latestRun, workflow);
       if (!rows.length) return '';
-      const hidePreview = previewExcluded(latestRun);
-      const files = (Array.isArray(latestRun.artifact_refs) ? latestRun.artifact_refs : [])
+      const files = visibleArtifactRefs(latestRun)
         .filter(row => row && row.run_id === latestRun.run_id
           && (/^[A-Za-z0-9_.-]+\.json$/.test(String(row.artifact || ''))
             || ['manuscript_revision.pdf', 'manuscript_scaffold.pdf', 'manuscript_scaffold.bib'].includes(row.artifact)))
-        .filter(row => !hidePreview || !['article_report.json', 'manuscript_draft.json', 'manuscript_provenance.json'].includes(row.artifact))
         .filter(row => row.artifact !== 'manuscript_scaffold.pdf'
           || latestRun.report_revision_ready !== true)
         .filter(row => row.artifact !== 'manuscript_revision.pdf'
@@ -419,7 +426,7 @@
     }
 
     function renderReviewSummary(latestRun) {
-      const refs = (latestRun.artifact_refs || []).filter(row => row && row.run_id === latestRun.run_id
+      const refs = visibleArtifactRefs(latestRun).filter(row => row && row.run_id === latestRun.run_id
         && /^[a-f0-9]{64}$/.test(String(row.sha256 || '')));
       const evidence = name => refs.find(row => row.artifact === name);
       const reviewRef = scientificReviewReference(latestRun);
@@ -513,7 +520,7 @@
       const manuscriptReady = latestRun.manuscript_ready === true || latestRun.report_revision_ready === true;
       const hidePreview = previewExcluded(latestRun);
       const figureCount = Number.isInteger(latestRun.figure_count) ? latestRun.figure_count : null;
-      const resources = Array.isArray(latestRun.artifact_refs) ? latestRun.artifact_refs : [];
+      const resources = visibleArtifactRefs(latestRun);
       const ledger = resources.find(row => row && row.run_id === latestRun.run_id
         && row.artifact === 'evidence_ledger.json');
       const reportResource = name => {
@@ -563,8 +570,7 @@
         `<button class="btn sm" type="button" data-gpi-run-outcome-data>${iconHtml('viz', 13)} ${esc(tr('Open data visualization', '打开数据可视化'))}</button>`,
       ];
       detailActions.push(...Object.keys(labels).map(name => {
-          if (name === 'manuscript_provenance.json' && (!manuscriptReady || hidePreview)) return '';
-          if (name === 'manuscript_draft.json' && hidePreview) return '';
+          if (name === 'manuscript_provenance.json' && !manuscriptReady) return '';
           if (name === 'figure_gallery.json' && latestRun.figure_count === 0) return '';
           const resource = resources.find(row => row && row.artifact === name);
           const label = tr(labels[name][0], labels[name][1]);
