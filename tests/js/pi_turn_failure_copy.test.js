@@ -73,6 +73,8 @@ for (const language of ['zh', 'en']) {
       errors.jobErrorText('codex_auth_app_server_request_failed')]) {
       assert.match(text, language === 'zh' ? /模型服务暂时不可用.*请稍后重试/ : /model service is temporarily unavailable.*try again shortly/);
       assert.doesNotMatch(text, /codex_auth_app_server_request_failed/);
+      // A job may already have completed actions: never claim that nothing ran.
+      assert.doesNotMatch(text, language === 'zh' ? /没有运行任何内容/ : /Nothing was run/);
     }
     assert.doesNotMatch(errors.errorText('pi_gateway_timeout_other'), language === 'zh' ? /本次等待已超时/ : /This wait timed out/);
   });
