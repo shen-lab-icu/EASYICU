@@ -4,7 +4,7 @@ const { test } = require('node:test');
 const path = require('node:path');
 const root = process.env.EASYICU_TEST_OWNER_ROOT || path.resolve(__dirname, '../..');
 global.window = { EU_LANG: 'zh' };
-for (const file of ['screens-guided-pi-modules', 'html-escape', 'screens-guided-pi-plan-actions',
+for (const file of ['screens-guided-pi-modules', 'html-escape', 'screens-guided-pi-error-text', 'screens-guided-pi-plan-actions',
   'screens-guided-pi-confirmation-data', 'screens-guided-pi-confirmation', 'screens-guided-pi-regeneration', 'screens-guided-pi-question-requirements',
   'screens-guided-pi-study-readings', 'screens-guided-pi-target-trial-copy', 'screens-guided-pi-target-trial']) {
   require(path.join(root, 'src/easyicu/webserver/static/js', file + '.js'));
@@ -30,6 +30,28 @@ function fixture(code, extra = {}) {
     }),
   };
   return { workflow, session, calls, host, card: modules.require('confirmation').create(host) };
+}
+
+for (const lang of ['zh', 'en']) {
+  // UX leg 3 (S1457): a failed preparation said only "prepare again"; its
+  // typed reason was in the receipt alone.
+  test(`${lang}: a failed preparation names its typed reason on the card`, () => {
+    window.EU_LANG = lang;
+    const failure = { run_id: 'attempt-b', candidate_run_id: 'candidate-a', checkpoint_resume_available: false, reason: 'preparation_failed' };
+    const runs = [{ run_id: 'attempt-b', gate_reason_code: 'research_pipeline_plan_step_needs_sandbox' }];
+    const item = fixture('plan_execution_upgrade_required', { latest_attempt_failure: failure, runs });
+    item.host.runFailureText = modules.require('errorText').create({ tr }).runFailureText;
+    const html = item.card.workflowConfirmationHtml();
+    assert.ok(html.includes(tr(
+      'One step in this plan needs code written by the model during the run, and the desktop app does not run such code.',
+      '计划里有一步要靠模型临时写代码才能完成，桌面版不运行这类代码。')));
+    assert.ok(html.includes(tr('Preparing the data again with this plan will not change the result.', '用这份计划重新准备数据不会改变结果。')));
+    assert.doesNotMatch(html, /research_pipeline_plan_step_needs_sandbox/);
+    // An unlisted stop keeps the general sentence and points to the receipt.
+    runs[0].gate_reason_code = 'synthetic_unlisted_stop';
+    assert.ok(item.card.workflowConfirmationHtml().includes(tr(
+      'This attempt stopped before analysis. Follow the next action below.', '本次尝试已停止，分析尚未开始。请按下方提示处理。')));
+  });
 }
 
 for (const lang of ['zh', 'en']) {

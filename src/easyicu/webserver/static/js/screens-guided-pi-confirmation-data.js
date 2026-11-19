@@ -272,6 +272,19 @@
       </section>`;
     }
 
+    // The run's typed reason in plain words, not only in its receipt (UX leg
+    // 3, S1457); a stop the same plan meets again says that retrying does not help.
+    const SAME_PLAN_STOPS = new Set(['research_pipeline_plan_step_needs_sandbox']);
+    function typedStopText(code) {
+      const value = String(code || '');
+      if (!value || typeof host.runFailureText !== 'function') return '';
+      const text = String(host.runFailureText(value) || '');
+      if (!text || text === String(host.runFailureText('easyicu_unlisted_stop') || '')) return '';
+      return SAME_PLAN_STOPS.has(value)
+        ? `${text}${tr(' Preparing the data again with this plan will not change the result.', '用这份计划重新准备数据不会改变结果。')}`
+        : text;
+    }
+
     function latestAttemptFailureHtml() {
       const workflow = host.workflow() || {};
       const failure = workflow.latest_attempt_failure;
@@ -291,7 +304,8 @@
       const detail = providerFailure ? tr(
         'Transient timeouts are retried once automatically. If the service remains unavailable, planning pauses. Use the next action below when ready.',
         '短暂超时会自动重试一次。服务仍未恢复时，计划生成会暂停；请按下方提示处理。',
-      ) : tr('This attempt stopped before analysis. Follow the next action below.', '本次尝试已停止，分析尚未开始。请按下方提示处理。');
+      ) : typedStopText(attempt.gate_reason_code)
+        || tr('This attempt stopped before analysis. Follow the next action below.', '本次尝试已停止，分析尚未开始。请按下方提示处理。');
       const receipt = resourceButton({
         kind: 'research_artifact', run_id: failure.run_id, artifact: 'source_run_manifest.json',
         media_type: 'application/json', label: tr('View failure receipt', '查看失败回执'),
