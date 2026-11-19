@@ -374,6 +374,14 @@ def landmark_timing_specification(
     -- compile to this one shape, so neither invents a follow-up column name.
     """
 
+    if not landmark_followup_axis_available(outcome):
+        # Every landmark producer compiles through here: none may issue a
+        # follow-up column that data readiness would later refuse (B2).
+        raise PlanDecisionError(
+            "agent_plan_landmark_not_compilable",
+            "No owner materializes the follow-up axis a landmark on this outcome needs.",
+            details={"outcome": outcome},
+        )
     columns = _landmark_axis_columns(outcome)
     return {
         "spec_id": spec_id,
@@ -1968,7 +1976,13 @@ def compile_plan_decision(
     )
 
     if option == "landmark_24h":
-        if not fixed_24h_landmark or not landmark_followup_axis_available(outcome):
+        if not landmark_followup_axis_available(outcome):
+            raise PlanDecisionError(
+                "plan_decision_option_not_applicable",
+                "No owner materializes the follow-up axis a landmark on this outcome needs.",
+                details={"decision_code": code, "option_id": option, "outcome": outcome},
+            )
+        if not fixed_24h_landmark:
             raise PlanDecisionError(
                 "plan_decision_option_not_applicable",
                 "A 24-hour landmark requires a design read over a "

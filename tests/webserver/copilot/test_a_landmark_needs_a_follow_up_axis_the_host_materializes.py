@@ -80,9 +80,33 @@ def test_a_forced_landmark_choice_on_28_day_mortality_is_refused() -> None:
         compile_plan_decision(decision_code=_TIMING, option_id="landmark_24h",
                               study=_study(), agent_plan=_plan("mort_28d"))
     assert raised.value.code == "plan_decision_option_not_applicable"
+    assert raised.value.details["outcome"] == "mort_28d"
 
 
-def test_the_offered_choices_on_28_day_mortality_compile() -> None:
-    compiled = compile_plan_decision(decision_code=_TIMING, option_id="descriptive_only",
+@pytest.mark.parametrize("option", ["descriptive_only", "time_varying_reextract"])
+def test_the_offered_choices_on_28_day_mortality_compile(option: str) -> None:
+    compiled = compile_plan_decision(decision_code=_TIMING, option_id=option,
                                      study=_study(), agent_plan=_plan("mort_28d"))
     assert not any(spec.get("strategy") == "landmark" for spec in compiled.patch.get("sensitivity_specs") or [])
+
+
+def _outcome_catalogue() -> list[str]:
+    from easyicu.concept.catalog import CONCEPT_GROUPS_INTERNAL
+
+    return sorted({"death", *CONCEPT_GROUPS_INTERNAL.get("outcome", ())})
+
+
+@pytest.mark.parametrize("outcome", _outcome_catalogue())
+def test_no_outcome_compiles_a_landmark_data_readiness_would_refuse(outcome: str) -> None:
+    """S1414(1): every landmark producer goes through one spec owner, for every outcome."""
+    from easyicu.research_agent.planning.sensitivity_authority import PrespecifiedSensitivitySpec
+    from easyicu.webserver.pi_copilot.plan_decisions import landmark_timing_specification
+
+    if not landmark_followup_axis_available(outcome):
+        with pytest.raises(PlanDecisionError):
+            landmark_timing_specification(outcome=outcome, landmark_hours=24, spec_id="probe")
+        return
+    spec = PrespecifiedSensitivitySpec.model_validate(
+        landmark_timing_specification(outcome=outcome, landmark_hours=24, spec_id="probe"))
+    # Nothing left for the source catalog to resolve: the launch gate has no column to refuse.
+    assert spec.source_materialization_variables == ()
