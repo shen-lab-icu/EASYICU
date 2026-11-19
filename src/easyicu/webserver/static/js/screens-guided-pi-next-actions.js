@@ -317,6 +317,22 @@
     return `<details class="gpi-next-step is-past" aria-label="${heading}"><summary>${heading}<span aria-hidden="true">⌄</span></summary><ul class="gpi-next-past">${items}</ul></details>`;
   }
 
+  /* m23: while mined ideas await a choice, the data-source continue turn has
+     nothing it may do. The researcher freezes the direction instead; the
+     events owner sends that as a composer message (no new authority). */
+  function renderIdeaFreeze(exploration, language, disabled) {
+    const zh = language === 'zh';
+    const question = String(exploration.question || '').trim();
+    const heading = zh ? '先冻结一个研究方向' : 'Freeze one direction first';
+    const detail = question
+      ? (zh ? `当前讨论的方向：${question}。冻结后，EasyICU 以它作为本项目的研究问题，继续可行性检查和研究计划。`
+        : `Direction under discussion: ${question}. Once frozen, EasyICU uses it as this project's research question and continues with feasibility and the research plan.`)
+      : (zh ? '请先在上方选择一个挖掘出的方向，再冻结它并继续。' : 'Choose one of the mined directions above, then freeze it and continue.');
+    const label = question ? (zh ? '冻结一个方向并继续' : 'Freeze a direction and continue') : (zh ? '选择一个方向' : 'Choose a direction');
+    const carried = question ? ` data-gpi-idea-freeze-question="${esc(question)}"` : '';
+    return `<section class="gpi-next-step is-resolved" data-gpi-idea-freeze-step aria-label="${esc(heading)}"><strong>${esc(heading)}</strong><p>${esc(detail)}</p><div class="gpi-next-actions"><button type="button" data-gpi-idea-freeze${carried} ${disabled ? 'disabled' : ''}><span>${esc(label)}</span><b aria-hidden="true">→</b></button></div></section>`;
+  }
+
   function render(step, options) {
     if (!step) return '';
     if (options && options.suppressFallback && !step.explicit) return '';
@@ -327,6 +343,11 @@
     const workflowActionCode = String(options && options.workflowActionCode || '');
     const prematurePlanChoice = workflowActionCode !== 'provider_ready_to_generate_plan'
       && step.choices.some(isFormalPlanChoice);
+    const exploration = options && options.ideaExploration;
+    if (exploration && exploration.open === true && authorization && authorization.status === 'confirmed'
+      && (prematurePlanChoice || isDataSourceStep(step))) {
+      return renderIdeaFreeze(exploration, language, disabled);
+    }
     if (prematurePlanChoice && authorization && authorization.status === 'confirmed') {
       const heading = language === 'zh' ? '先确认数据准备要求' : 'Confirm data-preparation requirements first';
       const detail = language === 'zh'

@@ -234,6 +234,9 @@
           dataSourceAuthorization: DATA_CONSENT && DATA_CONSENT.authorization(state.session),
           namedDatabase: HOST_JOBS && typeof HOST_JOBS.namedDatabase === 'function' ? HOST_JOBS.namedDatabase() : null,
           workflowActionCode: String((state.workflow && state.workflow.next_action_code) || ''),
+          ideaExploration: state.session && state.session.idea_exploration_open === true ? {
+            open: true, question: String(MODULES.optional('researchDraft')?.current(state.messages)?.draft?.question || ''),
+          } : null,
           suppressFallback: String((state.workflow && state.workflow.next_action_code) || '') === 'provider_ready_to_generate_plan',
         }) : '';
       const messageActions = MESSAGE_ACTIONS.render(publicRow, {
