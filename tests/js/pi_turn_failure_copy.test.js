@@ -68,6 +68,12 @@ for (const language of ['zh', 'en']) {
       errors.modelErrorText('pi_model_provider_unavailable', false));
     assert.match(errors.modelErrorText('codex_auth_app_server_request_failed', false),
       language === 'zh' ? /连接中断.*连接恢复后再继续/ : /connection was interrupted.*once connectivity recovers/);
+    // The refused-run banner (errorText/jobErrorText) names the same retry, not the bare code.
+    for (const text of [errors.errorText({ code: 'codex_auth_app_server_request_failed' }),
+      errors.jobErrorText('codex_auth_app_server_request_failed')]) {
+      assert.match(text, language === 'zh' ? /模型服务暂时不可用.*请稍后重试/ : /model service is temporarily unavailable.*try again shortly/);
+      assert.doesNotMatch(text, /codex_auth_app_server_request_failed/);
+    }
     assert.doesNotMatch(errors.errorText('pi_gateway_timeout_other'), language === 'zh' ? /本次等待已超时/ : /This wait timed out/);
   });
 }

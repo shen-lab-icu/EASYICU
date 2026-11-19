@@ -260,6 +260,11 @@
       if (error.code === 'codex_auth_login_required') {
         return tr('Sign in with your ChatGPT account before starting this conversation.', '请先登录你的 ChatGPT 账户，再开始这段对话。');
       }
+      // A refused run start or host step whose Codex account request failed
+      // is the same transient model-service fault the turn copy names.
+      if (error.code === 'codex_auth_app_server_request_failed') {
+        return tr('The model service is temporarily unavailable, so this step did not start. Nothing was run; try again shortly.', '模型服务暂时不可用，这一步没有开始，也没有运行任何内容。请稍后重试。');
+      }
       if (error.code === 'codex_auth_model_unavailable') {
         return tr('That model is no longer available for this Codex account. Refresh the account model list.', '该 Codex 账户已无法使用这个模型，请刷新账户模型列表。');
       }
