@@ -124,6 +124,16 @@ def study_for_first_plan(study: Mapping[str, Any]) -> Mapping[str, Any]:
     return {**study, **patch} if patch else study
 
 
+def has_prior_run(study: Mapping[str, Any]) -> bool:
+    """Whether a run already owns this study's workflow (its next plan is not its first)."""
+    from .run_authority import latest_bound_run_id, research_pipeline_project_root
+
+    study_id = str(study.get("id") or "").strip() or None
+    return latest_bound_run_id(
+        study_context_id=study_id, project_root=research_pipeline_project_root(study_id),
+    ) is not None
+
+
 def study_for_next_plan(study: Mapping[str, Any], *, after_run: bool) -> Mapping[str, Any]:
     """The study the next plan is drafted on: a first plan's stated scope only.
 

@@ -323,10 +323,13 @@ def _with_stated_first_stay(study: Dict[str, Any]) -> Dict[str, Any]:
 
     Without it, the plan stops on the stated criterion and the population
     proposal starts a second plan (population_preparation owns the rule).
+    After a run the scope is the researcher's; a relaunch never re-adds it.
     """
 
     from easyicu.webserver.pi_copilot import population_preparation
 
+    if population_preparation.has_prior_run(study):
+        return study
     patch = population_preparation.stated_first_stay_planning_default(study)
     return _with_planning_default(study, patch, label="stated first-stay")
 

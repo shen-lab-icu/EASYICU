@@ -111,3 +111,22 @@ def test_the_submission_persists_the_scope_and_survives_a_refused_write(monkeypa
 
     monkeypatch.setattr(study_contexts, "upsert_context", refuse)
     assert submission._with_stated_first_stay(study) is study
+
+
+def test_a_relaunch_after_a_run_keeps_the_scope_the_researcher_left(monkeypatch) -> None:
+    # The workflow and the official-demo choice draft on the stated first
+    # stay before a first run only; the launch uses the same predicate, so a
+    # scope the researcher cleared after a run is not silently re-added.
+    from easyicu.webserver import agent_runs
+    from easyicu.webserver import research_run_submission as submission
+    from easyicu.webserver import study_contexts
+
+    def forbidden(*_args, **_kwargs):
+        pytest.fail("a relaunch after a run must not write a first-stay scope")
+
+    monkeypatch.setattr(study_contexts, "upsert_context", forbidden)
+    monkeypatch.setattr(agent_runs, "list_run_history",
+                        lambda **_: {"runs": [{"run_id": "run-earlier", "study_id": "study_a"}]})
+    study = _study(revision=4)
+    assert stated_first_stay_planning_default(study) is not None
+    assert submission._with_stated_first_stay(study) is study
