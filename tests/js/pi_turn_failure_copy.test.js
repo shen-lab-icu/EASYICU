@@ -64,6 +64,10 @@ for (const language of ['zh', 'en']) {
     assert.doesNotMatch(errors.modelErrorText('pi_model_provider_unavailable', true), /工具操作已完成|tool action completed/);
     assert.match(errors.modelErrorText('pi_model_provider_unavailable', false),
       language === 'zh' ? /连接中断/ : /connection was interrupted/);
+    assert.equal(errors.modelErrorText('codex_auth_app_server_request_failed', false),
+      errors.modelErrorText('pi_model_provider_unavailable', false));
+    assert.match(errors.modelErrorText('codex_auth_app_server_request_failed', false),
+      language === 'zh' ? /连接中断.*连接恢复后再继续/ : /connection was interrupted.*once connectivity recovers/);
     assert.doesNotMatch(errors.errorText('pi_gateway_timeout_other'), language === 'zh' ? /本次等待已超时/ : /This wait timed out/);
   });
 }

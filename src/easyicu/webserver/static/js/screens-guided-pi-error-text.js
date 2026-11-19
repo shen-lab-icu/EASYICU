@@ -496,7 +496,9 @@
       }
       if (value === 'pi_model_context_limit') return tr('The model context limit was reached. Start a new conversation or shorten the request.', '模型上下文已达到上限，请新建会话或缩短请求。');
       if (value === 'pi_model_rate_limited') return tr('The model service is temporarily rate-limited. Review this turn\'s completed records before continuing once the service recovers.', '模型服务暂时限流。请先核对本轮已完成的记录，服务恢复后再继续。');
-      if (value === 'pi_model_provider_unavailable') return tr('The model service connection was interrupted. Review this turn\'s completed records before continuing once connectivity recovers.', '模型服务连接中断。请先核对本轮已完成的记录，连接恢复后再继续。');
+      // A failed Codex account request is the same transient model-service
+      // fault as an unavailable provider, so it reads as a retry, not a bug.
+      if (value === 'pi_model_provider_unavailable' || value === 'codex_auth_app_server_request_failed') return tr('The model service connection was interrupted. Review this turn\'s completed records before continuing once connectivity recovers.', '模型服务连接中断。请先核对本轮已完成的记录，连接恢复后再继续。');
       return tr('The model service could not complete this turn. Review the execution records to see which actions completed.', '模型服务未能完成本轮，请从执行记录核对哪些操作已完成。');
     }
 
