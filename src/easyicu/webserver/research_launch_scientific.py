@@ -1373,6 +1373,39 @@ def _checked_stated_variable(
     return {"variable": variable, "words": words, "concept": concept, "source_status": status}
 
 
+def bound_source_planning_concepts(source: Mapping[str, Any], *, database: Optional[str] = None) -> set[str]:
+    """The concepts a plan may name on a study's bound source.
+
+    The one planning-catalog reader for a bound path (S1506). A verified raw
+    demo is preparation input, not an exported concept table: its capability
+    menu lets the plan request a later extraction. Any other raw source chosen
+    for the study (a converted folder, not an export package) is likewise
+    planned on its database's capability menu; only an export package has a
+    physical concept catalog to read, and final prepared inputs keep it.
+    """
+
+    from easyicu.research_agent.acquisition.catalog import (
+        build_available_catalog,
+        build_database_capability_catalog,
+    )
+    from easyicu.research_agent.intake.export_package import is_export_package
+    from easyicu.webserver.demo_source_storage import verified_public_demo_raw
+
+    path = str(source.get("path") or "").strip()
+    raw_demo = verified_public_demo_raw(Path(path)) if path else None
+    raw_database = (
+        raw_demo.database if raw_demo is not None
+        else str(source.get("database") or database or "").strip()
+        if path and Path(path).is_dir() and not is_export_package(path) else ""
+    )
+    if raw_database:
+        return {item.concept_id for item in build_database_capability_catalog(raw_database).concepts}
+    from easyicu.webserver.raw_preparation_dependencies import native_planning_metadata
+
+    native = native_planning_metadata(export_path=Path(path), database=str(source.get("database") or database or "") or None)
+    return {item.concept_id for item in (native["catalog"] if native is not None else build_available_catalog(Path(path))).concepts}
+
+
 def checked_stated_variables(
     statements: Any,
     *,
@@ -1391,40 +1424,14 @@ def checked_stated_variables(
     others are kept; without it the first failure raises.
     """
 
-    from easyicu.research_agent.acquisition.catalog import (
-        build_available_catalog,
-        build_database_capability_catalog,
-    )
+    from easyicu.research_agent.acquisition.catalog import build_database_capability_catalog
     from easyicu.research_agent.planning.adjustment_authority import normalize_stated_variables
-    from easyicu.research_agent.intake.export_package import is_export_package
     from easyicu.webserver.study_intent import catalog_named_concepts
-    from easyicu.webserver.demo_source_storage import verified_public_demo_raw
 
     if not isinstance(statements, list) or len(statements) > 16:
         raise ValueError("stated variables must be a list of at most 16 readings")
     path = str(source.get("path") or "").strip()
-    # A verified raw demo is preparation input, not an exported concept table.
-    # Its capability menu lets the plan request a later extraction. Final
-    # prepared inputs retain their physical catalog and cannot borrow this menu.
-    raw_demo = verified_public_demo_raw(Path(path)) if path else None
-    # Any other raw source chosen for the study (a converted folder, not an
-    # export package) is likewise planned on its database's capability menu;
-    # only an export package has a physical concept catalog to read.
-    raw_database = (
-        raw_demo.database if raw_demo is not None
-        else str(source.get("database") or database or "").strip()
-        if path and Path(path).is_dir() and not is_export_package(path) else ""
-    )
-    native = None
-    if path and not raw_database:
-        from easyicu.webserver.raw_preparation_dependencies import native_planning_metadata
-        native = native_planning_metadata(export_path=Path(path), database=str(source.get("database") or database or "") or None)
-    available = (
-        {item.concept_id for item in build_database_capability_catalog(raw_database).concepts}
-        if raw_database else
-        {item.concept_id for item in (native["catalog"] if native is not None else build_available_catalog(Path(path))).concepts}
-        if path else set()
-    )
+    available = bound_source_planning_concepts(source, database=database) if path else set()
     database_concepts: frozenset[str] = frozenset()
     if not path and database and statements:
         try:
@@ -1467,9 +1474,7 @@ def checked_exposure_concept(
     planning coordinate from an unavailable or unbound, unchecked identifier.
     This check is repeated at launch, including after a source changes.
     """
-    from easyicu.research_agent.acquisition.catalog import (
-        build_available_catalog, build_database_capability_catalog,
-    )
+    from easyicu.research_agent.acquisition.catalog import build_database_capability_catalog
     from easyicu.webserver.study_intent import catalog_named_concepts
 
     path = str(source.get("path") or "").strip()
@@ -1477,13 +1482,10 @@ def checked_exposure_concept(
         raise ValueError("尚未指定数据库，无法核验分组或暴露的概念；请先指定数据库并查找概念。")
     if not isinstance(concept, str) or not concept.strip():
         raise ValueError("请保存查找返回的分组或暴露概念标识。")
-    if path:
-        from easyicu.webserver.raw_preparation_dependencies import native_planning_metadata
-        native = native_planning_metadata(export_path=Path(path), database=str(source.get("database") or database or "") or None)
-        catalog = native["catalog"] if native is not None else build_available_catalog(Path(path))
-    else:
-        catalog = build_database_capability_catalog(database)
-    available = {item.concept_id for item in catalog.concepts}
+    available = (
+        bound_source_planning_concepts(source, database=database) if path
+        else {item.concept_id for item in build_database_capability_catalog(database).concepts}
+    )
     record = _checked_stated_variable(
         {"variable": exposure, "words": exposure, "concept": concept},
         question=question, question_concepts=set(catalog_named_concepts(question)),
@@ -2000,7 +2002,7 @@ def _metadata_only_planning_coordinates(
     }
 
 
-def _catalog_path(export_path: str, study: Mapping[str, Any]) -> str:
+def bound_source_authority_path(export_path: str, study: Mapping[str, Any]) -> str:
     """The package whose catalog describes the study's bound source.
 
     For the study's own bound path this is ``source_authority_export_path``:
@@ -2036,7 +2038,7 @@ def _data_foundation_profile(
 
     ``source_study`` is the launch's own study when ``study`` is a
     materialization view of it: the source's signed choice belongs to the
-    launch study, and the catalog is read through it (``_catalog_path``).
+    launch study, and the catalog is read through it (``bound_source_authority_path``).
 
     ``analysis_inputs`` are an accepted candidate's primary-analysis concepts
     (``planning.accepted_analysis_inputs``); they are materialized like any
@@ -2059,7 +2061,7 @@ def _data_foundation_profile(
     from easyicu.research_agent.intake.export_package import ExportPackageError
 
     try:
-        catalog = build_available_catalog(Path(_catalog_path(export_path, source_study or study)).expanduser())
+        catalog = build_available_catalog(Path(bound_source_authority_path(export_path, source_study or study)).expanduser())
     except ExportPackageError as exc:
         # The launch's typed intake stop (dataio owns the public diagnostic),
         # so the card names the package problem and offers its re-export.

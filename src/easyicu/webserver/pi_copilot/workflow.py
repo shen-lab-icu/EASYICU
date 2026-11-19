@@ -1548,9 +1548,13 @@ def _study_source_groups_stays(study: Mapping[str, Any]) -> bool:
     before it writes anything.
     """
 
+    from easyicu.webserver.research_launch_scientific import source_authority_export_path
+
     source = study.get("data_source")
     source = source if isinstance(source, Mapping) else {}
-    export_path = str(source.get("path") or "").strip()
+    # A raw Demo study's signed choice answers from the registered export
+    # (B9, S1506); otherwise this is the bound path.
+    export_path = source_authority_export_path(study)
     database = str(source.get("database") or "").strip()
     if not export_path or not database:
         return False

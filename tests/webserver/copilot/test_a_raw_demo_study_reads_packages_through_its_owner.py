@@ -1,0 +1,205 @@
+"""A raw official-Demo study reads packages and identity through one owner.
+
+B6, B9 and B11 (UX legs, 2026-11-19) were one class: a consumer opened the
+study's bound path -- for a raw Demo study the raw folder, not an export
+package -- as a package or identity source. The S1506 sweep routed the
+remaining direct consumers through ``source_authority_export_path`` (identity
+and package reads) or ``bound_source_planning_concepts`` (the planning menu),
+and classified every other reader. A new reader of a package or identity
+source must be classified here before it lands.
+Synthetic official-Demo fixture; no benchmark item.
+"""
+
+import ast
+from pathlib import Path
+from types import SimpleNamespace
+
+import pytest
+
+from easyicu.research_agent.acquisition import catalog as catalog_owner
+from easyicu.research_agent.intake.export_package import ExportPackageError
+from easyicu.webserver import agent_runs, research_launch_scientific as launch, source_identity_authority, sources, study_contexts
+from easyicu.webserver.pi_copilot import study_context_update, workflow
+from easyicu.webserver.pi_copilot.demo_planning_authority import resolve_choice
+from tests.support.official_demo_choice import choice as choice
+from tests.support.official_demo_raw import official_raw as official_raw
+
+
+@pytest.fixture
+def chosen(choice, monkeypatch):
+    monkeypatch.setattr(agent_runs, "list_run_history", lambda **_: {"runs": []})
+    monkeypatch.setattr(sources, "_autodiscovered_paths", lambda **_: [])
+    choice.service.authorize_data_source(choice.record.session_id, **choice.body)
+    study = study_contexts.get_context(choice.study["id"])
+    assert resolve_choice(study) is not None and study["data_source"]["path"] == str(choice.paths.raw)
+    return study
+
+
+def _asked(monkeypatch, name):
+    asked = []
+
+    def resolve(*, export_path, database):
+        asked.append(str(export_path))
+        return None
+
+    monkeypatch.setattr(source_identity_authority, name, resolve)
+    return asked
+
+
+def test_the_first_plan_asks_the_official_export_whether_it_groups_stays(choice, chosen, monkeypatch):
+    from easyicu.webserver import research_run_submission
+
+    asked = _asked(monkeypatch, "resolve_study_patient_grouping")
+    research_run_submission._with_repeated_stays_default(chosen, path=chosen["data_source"]["path"])
+    assert asked == [str(choice.paths.export)]
+    # Without a choice that resolves, the bound raw folder is asked, as before.
+    asked.clear()
+    unsigned = {**chosen, "demo_planning_authority_ref": ""}
+    research_run_submission._with_repeated_stays_default(unsigned, path=unsigned["data_source"]["path"])
+    assert asked == [str(choice.paths.raw)]
+
+
+def test_the_workflow_asks_the_official_export_whether_it_groups_stays(choice, chosen, monkeypatch):
+    asked = _asked(monkeypatch, "resolve_study_patient_grouping")
+    workflow._source_groups_stays_at.cache_clear()
+    workflow._study_source_groups_stays(chosen)
+    assert asked == [str(choice.paths.export)]
+
+
+def test_an_exposure_on_the_raw_folder_is_checked_on_its_planning_menu(choice, chosen):
+    # The stated-variable check already planned a raw Demo on its database's
+    # capability menu; the exposure check opened the raw folder as a package.
+    source = chosen["data_source"]
+    assert launch.checked_exposure_concept(
+        "age", "age", question="Is age associated with hospital mortality?", source=source,
+    ) == "age"
+    assert "age" in launch.bound_source_planning_concepts(source)
+    with pytest.raises(ExportPackageError):
+        catalog_owner.build_available_catalog(Path(source["path"]))
+
+
+def test_exact_columns_bind_against_the_official_export_or_wait_for_a_package(choice, chosen, monkeypatch):
+    read = []
+    real = catalog_owner.build_available_catalog
+
+    def catalog(path):
+        read.append(str(path))
+        return SimpleNamespace(concepts=())
+
+    monkeypatch.setattr(catalog_owner, "build_available_catalog", catalog)
+    assert study_context_update._execution_catalog(chosen, {}, chosen["data_source"]) is not None
+    assert read == [str(choice.paths.export)]
+    # Unsigned, the raw folder has no package marker: the columns wait.
+    monkeypatch.setattr(catalog_owner, "build_available_catalog", real)
+    unsigned = {**chosen, "demo_planning_authority_ref": ""}
+    assert study_context_update._execution_catalog(unsigned, {}, unsigned["data_source"]) is None
+
+    # Any other package failure still refuses.
+    def broken(path):
+        raise ExportPackageError("synthetic", code="manifest_file_missing")
+
+    monkeypatch.setattr(catalog_owner, "build_available_catalog", broken)
+    with pytest.raises(ExportPackageError):
+        study_context_update._execution_catalog(chosen, {}, chosen["data_source"])
+
+
+# Every call in src/easyicu/webserver that opens a path as an export package
+# or asks an identity authority of it, by (file, enclosing function, reader).
+# OWNER: the path comes from source_authority_export_path /
+# bound_source_authority_path / bound_source_planning_concepts, or a raw folder
+# is diverted first. REGISTERED: only a registry row, a validated prepared
+# binding or a full_reviewed package reaches it. REFUSES: a raw folder gets a
+# typed refusal, by contract. The S1506 sweep table records the evidence.
+_READERS = frozenset({
+    "build_available_catalog", "open_export_package", "inspect_export_layout",
+    "validate_research_pipeline_source", "prepared_export_manifest_path", "index_export_package",
+    "resolve_study_patient_grouping", "resolve_study_first_icu_stay",
+    "resolve_study_first_icu_stay_per_hospitalization", "resolve_patient_grouping_authority",
+})
+_CLASSIFIED = {
+    ("agent_pipeline_runs.py", "_metadata_only_planning_catalog", "build_available_catalog"): "OWNER",
+    ("agent_pipeline_runs.py", "make_research_pipeline_run_runner.runner", "validate_research_pipeline_source"): "REGISTERED",
+    ("agent_pipeline_runs.py", "resume_research_pipeline", "validate_research_pipeline_source"): "REGISTERED",
+    ("agent_review_recovery.py", "recover_pending_review", "validate_research_pipeline_source"): "REGISTERED",
+    ("case_duration_materialization.py", "materialize_approved_case_duration_universe", "open_export_package"): "REGISTERED",
+    ("data_package_execution_readiness.py", "_first_icu_stay_flags", "resolve_study_first_icu_stay"): "REGISTERED",
+    ("data_package_execution_readiness.py", "_first_icu_stay_review", "resolve_study_first_icu_stay"): "REGISTERED",
+    ("data_package_execution_readiness.py", "_hospital_first_eligibility_review", "resolve_study_first_icu_stay_per_hospitalization"): "REGISTERED",
+    ("data_package_execution_readiness.py", "_hospital_first_stay_review", "resolve_study_first_icu_stay_per_hospitalization"): "REGISTERED",
+    ("data_package_execution_readiness.py", "_patient_grouping_review", "resolve_study_patient_grouping"): "REGISTERED",
+    ("data_package_review.py", "build_registered_data_package_review", "build_available_catalog"): "REFUSES",
+    ("dataio.py", "_detect_database", "inspect_export_layout"): "OWNER",
+    ("dataio.py", "scan_path", "inspect_export_layout"): "OWNER",
+    ("dataio.py", "validate_research_pipeline_source", "inspect_export_layout"): "REFUSES",
+    ("dataio.py", "validate_research_pipeline_source", "open_export_package"): "REFUSES",
+    ("dataio.py", "validate_research_pipeline_source", "prepared_export_manifest_path"): "REFUSES",
+    ("demo_source_storage.py", "egress_source_database", "inspect_export_layout"): "OWNER",
+    ("manuscript_repair.py", "make_report_only_run_runner", "validate_research_pipeline_source"): "REGISTERED",
+    ("pi_copilot/service.py", "PiCopilotService.apply_agent_plan_configuration", "resolve_study_first_icu_stay"): "OWNER",
+    ("pi_copilot/service.py", "PiCopilotService.apply_agent_plan_configuration", "resolve_study_patient_grouping"): "OWNER",
+    ("pi_copilot/study_context_update.py", "_execution_catalog", "build_available_catalog"): "OWNER",
+    ("pi_copilot/tools.py", "_assess_idea_feasibility", "build_available_catalog"): "REFUSES",
+    ("pi_copilot/tools.py", "_list_concept_catalog", "build_available_catalog"): "REGISTERED",
+    ("pi_copilot/workflow.py", "_source_groups_stays_at", "resolve_study_patient_grouping"): "OWNER",
+    ("quick_answer/preparation.py", "_verified_identity", "resolve_study_first_icu_stay"): "REGISTERED",
+    ("quick_answer/preparation.py", "_verified_identity", "resolve_study_patient_grouping"): "REGISTERED",
+    ("quick_answer/preparation.py", "prepare_registered_question", "validate_research_pipeline_source"): "REGISTERED",
+    ("research_append_source.py", "registered_source_changed", "validate_research_pipeline_source"): "REGISTERED",
+    ("research_launch_resume.py", "_development_resume_launch_scope", "validate_research_pipeline_source"): "REGISTERED",
+    ("research_launch_scientific.py", "_bound_source_column", "build_available_catalog"): "OWNER",
+    ("research_launch_scientific.py", "_data_foundation_profile", "build_available_catalog"): "OWNER",
+    ("research_launch_scientific.py", "_first_icu_stay_for_cohort", "resolve_study_first_icu_stay"): "OWNER",
+    ("research_launch_scientific.py", "_first_icu_stay_per_hospitalization_for_cohort", "resolve_study_first_icu_stay_per_hospitalization"): "OWNER",
+    ("research_launch_scientific.py", "bound_source_planning_concepts", "build_available_catalog"): "OWNER",
+    ("research_launch_scientific.py", "verified_patient_grouping", "resolve_study_patient_grouping"): "OWNER",
+    ("research_multi_extraction.py", "prepare_source", "prepared_export_manifest_path"): "OWNER",
+    ("research_multi_extraction.py", "prepare_source", "validate_research_pipeline_source"): "REGISTERED",
+    ("research_multi_pipeline.py", "PipelineDatabaseOwner._plan", "validate_research_pipeline_source"): "REGISTERED",
+    ("research_pipeline_run_preparation.py", "_prepare_scientific_launch", "validate_research_pipeline_source"): "REGISTERED",
+    ("research_plan_revision.py", "load_prepared_plan_revision", "validate_research_pipeline_source"): "REGISTERED",
+    ("research_resume_package.py", "_package_offer_verdict", "validate_research_pipeline_source"): "REGISTERED",
+    ("research_resume_package.py", "prepared_package_identity", "prepared_export_manifest_path"): "REGISTERED",
+    ("research_run_submission.py", "_with_repeated_stays_default", "resolve_study_patient_grouping"): "OWNER",
+    ("research_run_submission.py", "submit_research_run", "prepared_export_manifest_path"): "OWNER",
+    ("research_run_submission.py", "submit_research_run", "validate_research_pipeline_source"): "REGISTERED",
+    ("run_population_proof.py", "verified_first_stay_applied", "open_export_package"): "REGISTERED",
+    ("scientific_runtime_projection.py", "export_kdigo_strict_derivation_available", "open_export_package"): "OWNER",
+    ("source_identity_authority.py", "resolve_study_first_icu_stay", "resolve_study_patient_grouping"): "OWNER",
+    ("source_identity_authority.py", "resolve_study_patient_grouping", "resolve_patient_grouping_authority"): "OWNER",
+    ("time_origin_source_authority.py", "attest_case_duration_for_review", "open_export_package"): "REGISTERED",
+    ("time_origin_source_authority.py", "attest_registered_export_time_origin", "open_export_package"): "REGISTERED",
+}
+
+
+def _reader_sites() -> set[tuple[str, str, str]]:
+    root = Path(__file__).resolve().parents[3] / "src/easyicu/webserver"
+    sites = set()
+    for path in sorted(root.rglob("*.py")):
+        relative = path.relative_to(root).as_posix()
+
+        def walk(node, scope):
+            for child in ast.iter_child_nodes(node):
+                if isinstance(child, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)):
+                    walk(child, [*scope, child.name])
+                    continue
+                if isinstance(child, ast.Call):
+                    func = child.func
+                    name = func.id if isinstance(func, ast.Name) else func.attr if isinstance(func, ast.Attribute) else None
+                    if name in _READERS:
+                        sites.add((relative, ".".join(scope) or "<module>", name))
+                walk(child, scope)
+
+        walk(ast.parse(path.read_text(encoding="utf-8")), [])
+    return sites
+
+
+def test_every_package_or_identity_reader_is_classified():
+    sites = _reader_sites()
+    new = sorted(sites - _CLASSIFIED.keys())
+    assert not new, (
+        "Classify these readers (route a study's bound path through "
+        "source_authority_export_path / bound_source_authority_path, or record "
+        f"why a raw Demo folder cannot reach them): {new}"
+    )
+    assert not sorted(_CLASSIFIED.keys() - sites), "a classified reader is gone; drop its row"
+    assert set(_CLASSIFIED.values()) <= {"OWNER", "REGISTERED", "REFUSES"}

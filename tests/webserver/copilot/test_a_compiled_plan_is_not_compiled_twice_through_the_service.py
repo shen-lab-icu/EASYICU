@@ -312,10 +312,10 @@ def test_the_round_two_plan_reads_the_registered_export_not_the_raw_folder(choic
     assert read == [str(choice.paths.export)]
     # The materialization view alone cannot resolve the signed choice; it is
     # the launch study's.
-    assert launch._catalog_path(str(choice.paths.raw), scientific.materialization_study) == str(choice.paths.raw)
+    assert launch.bound_source_authority_path(str(choice.paths.raw), scientific.materialization_study) == str(choice.paths.raw)
     # A study with no resolving choice keeps its bound path, so it refuses as before.
     unsigned = {**scientific.study, "demo_planning_authority_ref": ""}
-    assert launch._catalog_path(str(choice.paths.raw), unsigned) == str(choice.paths.raw)
+    assert launch.bound_source_authority_path(str(choice.paths.raw), unsigned) == str(choice.paths.raw)
 
 
 def test_a_launch_on_an_unreadable_package_names_it_and_offers_its_reexport(choice, runs):

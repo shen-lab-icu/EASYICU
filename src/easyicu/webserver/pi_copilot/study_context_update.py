@@ -1129,6 +1129,33 @@ def _causal_receipt_text(receipt: Mapping[str, Any]) -> str:
     return ""
 
 
+def _execution_catalog(
+    current: Optional[Mapping[str, Any]], patch: Mapping[str, Any], source: Mapping[str, Any],
+) -> Any:
+    """The package catalog that binds exact columns, or None without a package.
+
+    The bound path is read through its owner (a raw Demo study's signed choice
+    reads its registered export, S1506). A folder with no package marker binds
+    the columns later, as an unconfirmed source does; any other package
+    failure still refuses.
+    """
+
+    from easyicu.research_agent.acquisition.catalog import build_available_catalog
+    from easyicu.research_agent.intake.export_package import ExportPackageError
+    from easyicu.webserver.research_launch_scientific import bound_source_authority_path
+
+    path = str(source.get("path") or "").strip()
+    if not path:
+        return None
+    owner = bound_source_authority_path(path, {**(current or {}), **patch, "data_source": dict(source)})
+    try:
+        return build_available_catalog(Path(owner).expanduser())
+    except ExportPackageError as exc:
+        if exc.code == "manifest_marker_missing":
+            return None
+        raise
+
+
 def update_study_context(
     context: ToolExecutionContext,
     params: Mapping[str, Any],
@@ -2001,7 +2028,9 @@ def update_study_context(
     if effective_modules is None:
         effective_modules = (current or {}).get("modules") or []
     execution = patch.get("execution_concepts")
-    if execution is not None and not str(effective_source.get("path") or "").strip():
+    # Exact columns read a package catalog (_execution_catalog, S1506).
+    execution_catalog = _execution_catalog(current, patch, effective_source) if execution is not None else None
+    if execution is not None and execution_catalog is None:
         # Exact columns are bound against a source's catalog. Before one is
         # confirmed, the rest of the setup is still the researcher's stated
         # study: save it and leave the columns to the planner, which reads
@@ -2052,13 +2081,9 @@ def update_study_context(
         ]
         concept_modules = {}
         if bound_ids:
-            source_path = str(effective_source.get("path") or "").strip()
-            from easyicu.research_agent.acquisition.catalog import build_available_catalog
-
-            catalog = build_available_catalog(Path(source_path).expanduser())
             concept_modules = {
                 concept.concept_id: Path(concept.file_name).stem.lower()
-                for concept in catalog.concepts
+                for concept in execution_catalog.concepts
             }
         absent_from_source = sorted(set(bound_ids) - set(concept_modules))
         if absent_from_source:

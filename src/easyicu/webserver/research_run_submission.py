@@ -307,11 +307,15 @@ def _with_repeated_stays_default(study: Dict[str, Any], *, path: str) -> Dict[st
 
     from easyicu.webserver import source_identity_authority
     from easyicu.webserver.pi_copilot import plan_decisions
+    from easyicu.webserver.research_launch_scientific import bound_source_authority_path
 
     source = study.get("data_source")
     database = str(source.get("database") or "") if isinstance(source, Mapping) else ""
+    # The study's bound path asks through its identity owner: a raw Demo
+    # study's signed choice answers from the registered export (B9, S1506).
+    owner_path = bound_source_authority_path(path, study)
     try:
-        grouping = source_identity_authority.resolve_study_patient_grouping(export_path=path, database=database)
+        grouping = source_identity_authority.resolve_study_patient_grouping(export_path=owner_path, database=database)
     except source_identity_authority.PatientGroupingAuthorityError:
         grouping = None
     patch = plan_decisions.repeated_stays_planning_default(study, source_groups_stays=grouping is not None)
