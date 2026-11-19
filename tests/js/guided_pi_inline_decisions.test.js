@@ -381,21 +381,25 @@ for (const [step, workflow, method] of [
   ['Approve', trialReview, 'approvePiCopilotTargetTrial'],
 ]) {
   for (const exit of ['current error', 'stale success', 'stale error', 'stale after reload']) {
-    test(`${step} releases the action on ${exit}`, async () => {
+    test(`${step} updates busy state only for its own selection on ${exit}`, async () => {
       const { state, api, click } = trialActions();
       state.workflow = workflow;
       let loads = 0;
+      const switchSelection = () => {
+        state.selection += 1;
+        state.busy = true; // The newly selected conversation has work in flight.
+      };
       state.onLoad = () => {
         loads += 1;
-        if (exit === 'stale after reload') state.selection += 1;
+        if (exit === 'stale after reload') switchSelection();
       };
       api[method] = async () => {
-        if (['stale success', 'stale error'].includes(exit)) state.selection += 1;
+        if (['stale success', 'stale error'].includes(exit)) switchSelection();
         if (exit !== 'stale success') throw new Error('Synthetic transport failure');
         return { job_id: 'old-job' };
       };
       await click();
-      assert.equal(state.busy, false);
+      assert.equal(state.busy, exit !== 'current error');
       assert.deepEqual(state.watched, []);
       assert.equal(loads, ['current error', 'stale after reload'].includes(exit) ? 1 : 0);
       assert.equal(state.error, exit === 'current error' ? 'Synthetic transport failure' : '');

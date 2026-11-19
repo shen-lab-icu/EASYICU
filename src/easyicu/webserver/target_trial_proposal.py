@@ -37,36 +37,47 @@ from easyicu.webserver.causal_trial_reading import (
     time_zero_spans,
 )
 from easyicu.webserver.primary_cohort import ADULT_AGE_FLOOR_YEARS
-from easyicu.webserver.study_intent import concept_named_by
+from easyicu.webserver.study_intent import (
+    _catalog_name_readings,
+    _match_concept,
+    concept_named_by,
+)
 from easyicu.webserver.target_trial_setup import (
     TargetTrialSetupError,
     TargetTrialStatement,
     read_target_trial_statement,
 )
 
-# Restrict the automatic population reading to one explicit clinical indication.
-_INDICATION = re.compile(
-    r"(?:patients?|adults?|stays)\s+with\s+(?P<en>[^,.;?]{2,100})(?=[,.;?])"
-    r"|(?:在)?(?:成人|成年)?(?P<zh>[^，。；、？]{2,100})患者(?:中|人群)(?=[，。；？])",
+# A Chinese population topic may also use 患者中 without its opening 在.
+_POPULATION = re.compile(
+    r"(?:(?:in|among)\s+(?:(?P<en_qualifier>adult)\s+patients?|(?P<en_noun>adults?)|patients?|stays)"
+    r"\s+with\s+(?P<en>[^,，.;；。?!？！]{2,100})"
+    r"|(?:在\s*)?(?P<zh_adult>成人|成年)?\s*(?P<zh>[^,，.;；。?!？！、]{2,100}?)患者(?:中|人群))"
+    r"\s*[,，.;；。?!？！]",
     re.IGNORECASE,
 )
-_ADULTS = re.compile(r"\badults?\b|成人|成年", re.IGNORECASE)
-_EXTRA_ELIGIBILITY = re.compile(
+_POPULATION_LINK = re.compile(r"\s*(?:(?:with|set|define)\s+|以\s*)?", re.IGNORECASE)
+# Preserve the stop for explicit eligibility clauses outside the opening topic.
+_SEPARATE_ELIGIBILITY = re.compile(
     r"\b(?:exclude|excluding|paediatric|pediatric|first\s+(?:icu\s+)?(?:stay|admission)|"
     r"readmission|include|including|aged|eligibility)\b|排除|不纳入|仅纳入|儿童|首次|再入|年龄[≥>≤<]",
     re.IGNORECASE,
 )
-_COMPOUND_INDICATION = re.compile(
-    r"\b(?:and|or|without|who|before|after)\b|以及|伴有|合并|或|并且|无", re.I
-)
-_OUTCOME_OTHER_ORIGIN = re.compile(
-    r"^\s*(?:from|after|since)\s+(?:time[- ]?zero|treatment|hospital admission)\b"
-    r"|^\s*(?:自|从)(?:时间零点|开始治疗|入院)",
+_SENTENCE_END = re.compile(r"[。；;？?！!]|\.(?=\s|$)")
+_EN_ORIGIN_CUE = r"\b(?:from|after|since|following|post|starting\s+at|as\s+of)[\s\-‐–—]+"
+_ORIGIN_CUE = re.compile(
+    rf"{_EN_ORIGIN_CUE}|自|从|起算|为起点|[后後]",
     re.IGNORECASE,
 )
-_GRACE_OTHER_ORIGIN = re.compile(
-    r"^\s*(?:from|after|since)\s+(?:(?:icu|hospital)\s+)?admission\b"
-    r"|^\s*(?:自|从)入(?:住\s*ICU|\s*ICU|院)",
+_ICU_ADMISSION_ORIGIN = re.compile(
+    rf"{_EN_ORIGIN_CUE}(?:the\s+)?ICU[\s\-‐–—]+admission\b(?!\s+(?:to|until|day|and|or)\b)"
+    r"|(?:(?:自|从)\s*入(?:住)?\s*ICU(?:\s*(?:起算|算起|起|[后後]))?|入(?:住)?\s*ICU\s*[后後])"
+    r"(?![a-z]|\s*(?:第|至|到|或))",
+    re.IGNORECASE,
+)
+_ADJUSTMENT_TIMING = re.compile(
+    r"\bafter\s+(?:adjusting|adjustment|controlling)\s+for\b"
+    r"|(?<=[,，])\s*(?:调整|校正)[^,，。；?!？！自从后後]+[后後](?=\s*[,，])",
     re.IGNORECASE,
 )
 # An explicit continued-use or titration rule is outside the two fixed strategies.
@@ -95,10 +106,33 @@ class TargetTrialProposal:
 
 
 def _indication_concept(words: str) -> str | None:
-    if _COMPOUND_INDICATION.search(words):
-        return None
-    concept = concept_named_by(words, include_catalog_labels=True)
-    return concept if concept and concept_declares_event_status(concept) else None
+    # A name inside a longer phrase cannot stand in for that whole phrase.
+    text = words.lower().replace("_", " ")
+    concepts = {
+        concept
+        for concept, start, end in _catalog_name_readings(text)
+        if start == 0 and end == len(text)
+    } | {concept for concept, _ in _match_concept(text, full_span_only=True)}
+    concept = next(iter(concepts)) if len(concepts) == 1 else None
+    return concept if isinstance(concept, str) and concept_declares_event_status(concept) else None
+
+
+def _local_clause(
+    question: str, start: int, end: int, other_elements: tuple[tuple[int, int], ...]
+) -> str:
+    """The surrounding words up to the next trial element or sentence boundary."""
+
+    boundaries = (*other_elements, *(match.span() for match in _SENTENCE_END.finditer(question)))
+    left = max((finish for _, finish in boundaries if finish <= start), default=0)
+    right = min((begin for begin, _ in boundaries if begin >= end), default=len(question))
+    return question[left:right]
+
+
+def _states_origin(clause: str, *, allow_icu_admission: bool = False) -> bool:
+    clause = _ADJUSTMENT_TIMING.sub(" ", clause)
+    if allow_icu_admission:
+        clause = _ICU_ADMISSION_ORIGIN.sub(" ", clause)
+    return _ORIGIN_CUE.search(clause) is not None
 
 
 def _treatment(
@@ -185,7 +219,10 @@ def _proposal_adjustments(
 
 
 def _fixed_outcome(
-    question: str, confirmed_label: Any, database: str
+    question: str,
+    confirmed_label: Any,
+    database: str,
+    other_elements: tuple[tuple[int, int], ...] = (),
 ) -> tuple[FixedHorizonMortalityEndpoint, str] | None:
     # Read the primary from its confirmation when the question states more
     # than one horizon. Its proof remains the exact words of the question.
@@ -221,8 +258,14 @@ def _fixed_outcome(
     ):
         return None
     selected = [item for candidate, item in mentions if candidate == endpoint]
-    if any(_OUTCOME_OTHER_ORIGIN.match(question[item.end :]) for item in selected):
-        return None
+    for item in selected:
+        neighbours = (
+            *other_elements,
+            *((other.start, other.end) for _, other in mentions if other != item),
+        )
+        clause = _local_clause(question, item.start, item.end, neighbours)
+        if _states_origin(clause, allow_icu_admission=endpoint.time_origin == "icu_admission"):
+            return None
     match = selected[0]
     return endpoint, question[match.start : match.end]
 
@@ -254,13 +297,10 @@ def target_trial_proposal(study: Mapping[str, Any]) -> TargetTrialProposal | Non
 
     spec: dict[str, Any] = {}
     treatment = _treatment(question, reading, database)
-    treatment_words = None
-    if reading.treatment:
+    if treatment and reading.treatment:
         start, end = reading.treatment
-        treatment_words = add("treatment", question[start:end])
-    if treatment and treatment_words:
         spec["treatment"] = {
-            **treatment_words,
+            **add("treatment", question[start:end]),
             "concepts": treatment[0],
             "treatment_class": treatment[1],
         }
@@ -280,6 +320,13 @@ def target_trial_proposal(study: Mapping[str, Any]) -> TargetTrialProposal | Non
     else:
         missing.append("strategies")
 
+    population = _POPULATION.match(question)
+    zero_spans = time_zero_spans(question)
+    strategy_spans = {
+        item.element: (item.start, item.end)
+        for item in reading.elements
+        if item.element in {"initiate_strategy", "defer_strategy"}
+    }
     zero, grace = reading.time_zero_hours, reading.grace_period_hours
     zero_words = evidence.get("time_zero")
     if (
@@ -287,7 +334,7 @@ def target_trial_proposal(study: Mapping[str, Any]) -> TargetTrialProposal | Non
         and zero is not None
         and zero.is_integer()
         and MIN_TIME_ZERO_HOURS <= zero <= MAX_TIME_ZERO_HOURS
-        and len(time_zero_spans(question)) == 1
+        and len(zero_spans) == 1
     ):
         spec["time_zero"] = {
             **add("time_zero", zero_words),
@@ -295,24 +342,30 @@ def target_trial_proposal(study: Mapping[str, Any]) -> TargetTrialProposal | Non
         }
     else:
         missing.append("time_zero")
-    initiation = next(
-        (item for item in reading.elements if item.element == "initiate_strategy"), None
-    )
+    initiation = strategy_spans.get("initiate_strategy")
+    grace_context = zero_spans
+    if population:
+        grace_context += (population.span(),)
+    if "defer_strategy" in strategy_spans:
+        grace_context += (strategy_spans["defer_strategy"],)
     if (
         grace is not None
         and grace.is_integer()
         and 1 <= grace <= MAX_GRACE_PERIOD_HOURS
-        and initiation is not None
-        and not _GRACE_OTHER_ORIGIN.match(question[initiation.end :])
+        and initiation
+        # The executable window starts at trial time zero. Other wording needs review.
+        and not _states_origin(_local_clause(question, *initiation, grace_context))
     ):
         spec["grace_period"] = {
-            **add("grace_period", initiation.evidence),
+            **add("grace_period", initiate),
             "hours": int(grace),
         }
     else:
         missing.append("grace_period")
 
-    outcome = _fixed_outcome(question, study.get("outcome"), database)
+    outcome = _fixed_outcome(
+        question, study.get("outcome"), database, (*zero_spans, *strategy_spans.values())
+    )
     if outcome:
         endpoint, words = outcome
         spec["outcome"] = {**add("outcome", words), "endpoint": endpoint.event_concept}
@@ -320,38 +373,40 @@ def target_trial_proposal(study: Mapping[str, Any]) -> TargetTrialProposal | Non
     else:
         missing.append("outcome")
 
-    indication_matches = list(_INDICATION.finditer(question))
-    match = indication_matches[0] if len(indication_matches) == 1 else None
-    words = (match["en"] or match["zh"]).strip() if match else ""
-    indication = _indication_concept(words) if words else None
+    indication = None
+    if population and zero_spans and not _SEPARATE_ELIGIBILITY.search(question, population.end()):
+        # A comma can introduce another population restriction. Account for
+        # all text between the population and the start of the trial design.
+        design_start = min(start for start, _ in (*zero_spans, *strategy_spans.values()))
+        if design_start >= population.end() and _POPULATION_LINK.fullmatch(
+            question[population.end():design_start]
+        ):
+            indication = _indication_concept((population["en"] or population["zh"]).strip())
     criteria = []
-    if (
-        indication
-        and zero is not None
-        and "time_zero" in spec
-        and not _EXTRA_ELIGIBILITY.search(question)
-    ):
+    if indication and "time_zero" in spec:
+        start, end = population.span()
+        population_words = question[start : end - 1].rstrip()
         criteria.append(
             {
                 "id": "c1",
                 "role": "include",
                 "kind": "condition_present",
-                "quote": match[0],
+                "quote": population_words,
                 "source": "question",
                 "concepts_all_of": [indication],
                 "window": {"start_hours": 0, "end_hours": int(zero)},
             }
         )
-        spec["indication"] = {**add("eligibility", match[0]), "criterion_ids": ["c1"]}
+        spec["indication"] = {**add("eligibility", population_words), "criterion_ids": ["c1"]}
         add("eligibility_at_zero", indication, default=True)
-        adult = _ADULTS.search(question)
-        if adult is not None:
+        adult = population["en_qualifier"] or population["en_noun"] or population["zh_adult"]
+        if adult:
             criteria.append(
                 {
                     "id": "c2",
                     "role": "include",
                     "kind": "age_years",
-                    "quote": adult[0] if len(adult[0]) > 1 else match[0],
+                    "quote": adult,
                     "source": "question",
                     "min_years": ADULT_AGE_FLOOR_YEARS,
                 }

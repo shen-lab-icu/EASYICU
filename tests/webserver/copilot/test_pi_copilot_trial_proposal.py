@@ -5,6 +5,7 @@ from pathlib import Path
 import pytest
 
 from easyicu.webserver import target_trial_card
+from easyicu.webserver import target_trial_proposal as owner
 from easyicu.webserver.pi_copilot.workflow import build_research_workflow_snapshot
 
 
@@ -15,7 +16,8 @@ from easyicu.webserver.pi_copilot.workflow import build_research_workflow_snapsh
         "for 90-day mortality, adjusted for age.",
         "示例病症患者中，以入 ICU 后第8小时为时间零点，10小时内开始示例治疗，"
         "与这10小时内不开始相比，比较90天死亡率，调整年龄。",
-    ]
+    ],
+    ids=["en", "zh"],
 )
 def study(request, tmp_path: Path):
     return {
@@ -40,16 +42,25 @@ def study(request, tmp_path: Path):
     }
 
 
-def test_question_has_an_inline_proposal_and_no_plan_offer_before_review(
-    study, monkeypatch
-):
-    # Use a synthetic capture entry; the real owner tests exercise existing registry data.
-    from easyicu.webserver import target_trial_proposal as owner
-
+@pytest.fixture
+def synthetic_treatment(monkeypatch):
     monkeypatch.setattr(
         owner, "_treatment", lambda *args: (("sample_event",), "sample_class")
     )
+
+
+@pytest.fixture
+def complete_trial(study, synthetic_treatment, monkeypatch):
     monkeypatch.setattr(owner, "_indication_concept", lambda words: "example_condition")
+    card = target_trial_card.target_trial_card(study, None)
+    assert card["state"] == "proposal"
+    assert card["proposal"]["missing"] == []
+    assert card["proposal"]["digest"] is not None
+    return study
+
+
+def test_question_has_an_inline_proposal_and_no_plan_offer_before_review(complete_trial):
+    study = complete_trial
     snapshot = build_research_workflow_snapshot(
         study=study, active_export_present=True, active_job=None, latest_run=None
     )
@@ -87,81 +98,173 @@ def test_missing_clinical_details_are_one_clarification(study):
 
 
 @pytest.mark.parametrize(
-    ("question", "missing"),
+    ("removed_en", "removed_zh", "missing"),
     [
         (
-            "Estimate the causal effect of withholding treatment at time zero at hour 8 "
-            "after ICU admission on 90-day mortality.",
-            "strategies",
+            " versus not starting it within 10 hours",
+            "与这10小时内不开始相比，",
+            ["treatment", "strategies", "grace_period"],
         ),
         (
-            "Estimate the causal effect of starting sample therapy within 10 hours versus "
-            "deferring it on 90-day mortality.",
-            "time_zero",
+            "with time zero at hour 8 after ICU admission, ",
+            "以入 ICU 后第8小时为时间零点，",
+            ["time_zero", "eligibility"],
         ),
     ],
 )
-def test_incomplete_causal_questions_show_a_clarification(tmp_path, question, missing):
-    study = {
-        "question": question,
-        "data_source": {"database": "miiv", "path": str(tmp_path / "export")},
-        "analysis_design": {
-            "analysis_family": "causal_inference",
-            "analysis_unit": "icu_stay",
-            "variance_estimator": "model_based",
-        },
-    }
+def test_incomplete_causal_questions_show_a_clarification(
+    complete_trial, removed_en, removed_zh, missing,
+):
+    study = complete_trial
+    # Name the causal method so the reader still runs when a trial element is removed.
+    zh = "示例" in study["question"]
+    study["question"] += "采用目标试验模拟。" if zh else " Use target trial emulation."
+    assert target_trial_card.target_trial_card(study, None)["state"] == "proposal"
+    removed = removed_zh if zh else removed_en
+    assert study["question"].count(removed) == 1
+    study["question"] = study["question"].replace(removed, "", 1)
     card = target_trial_card.target_trial_card(study, None)
     assert card["state"] == "clarification"
-    assert missing in card["proposal"]["missing"]
+    assert card["proposal"]["missing"] == missing
     assert card["proposal"]["digest"] is None
 
 
 @pytest.mark.parametrize(
     ("dropped_element", "missing"),
-    [("initiate_strategy", "strategies"), ("time_zero", "time_zero")],
+    [
+        ("initiate_strategy", ["strategies", "grace_period"]),
+        ("time_zero", ["time_zero", "eligibility"]),
+    ],
 )
 def test_partial_reader_evidence_fails_closed_on_the_workflow_card(
-    tmp_path, monkeypatch, dropped_element, missing
+    complete_trial, monkeypatch, dropped_element, missing
 ):
     from dataclasses import replace
 
-    from easyicu.webserver import target_trial_proposal as owner
-
-    question = (
-        "For a causal estimate in patients with abnormal perfusion, set time zero at hour 9 "
-        "after ICU admission and give sample therapy within 7 hours versus withholding "
-        "treatment. Compare 90-day mortality with adjustment for age."
-    )
-    reading = owner.causal_trial_reading(question)
-    keys = {item.element for item in reading.elements}
-    assert {"time_zero", "initiate_strategy", "defer_strategy"} <= keys
+    study = complete_trial
+    reading = owner.causal_trial_reading(study["question"])
     partial = replace(
         reading,
         elements=tuple(item for item in reading.elements if item.element != dropped_element),
     )
+    assert len(partial.elements) == len(reading.elements) - 1
     monkeypatch.setattr(owner, "causal_trial_reading", lambda _: partial)
-    monkeypatch.setattr(owner, "_treatment", lambda *args: (("sample_event",), "sample_class"))
-    study = {
-        "id": "synthetic",
-        "revision": 3,
-        "question": question,
-        "data_source": {"database": "miiv", "path": str(tmp_path / "export")},
-        "analysis_design": {
-            "analysis_family": "causal_inference",
-            "analysis_unit": "icu_stay",
-            "variance_estimator": "model_based",
-        },
-    }
     snapshot = build_research_workflow_snapshot(
         study=study, active_export_present=True, active_job=None, latest_run=None
     )
     assert snapshot.next_action_code == "target_trial_statement_needed"
     card = target_trial_card.target_trial_card(study, None)
     assert card["state"] == "clarification"
-    assert missing in card["proposal"]["missing"]
+    assert card["proposal"]["missing"] == missing
     assert card["proposal"]["digest"] is None
     assert card["approval"] is None
+
+
+@pytest.mark.parametrize(
+    ("population_en", "population_zh", "adult"),
+    [
+        ("Among patients with suspected infection", "在疑似感染患者中", False),
+        ("Among adult patients with suspected infection", "在成人疑似感染患者中", True),
+        ("In adults with suspected infection", "在成年疑似感染患者中", True),
+        ("In non-adult patients with suspected infection", "在未成年疑似感染患者中", None),
+        ("Among non-adult patients with suspected infection", "在非成人疑似感染患者中", None),
+        ("In mechanically ventilated patients with suspected infection", "在机械通气疑似感染患者中", None),
+        ("In patients with suspected infection, age >= 65", "在65岁以上疑似感染患者中", None),
+        ("In patients with suspected infection, age 65", "在65岁疑似感染患者中", None),
+        ("In patients with suspected infection, age ≥ 65", "在65岁及以上疑似感染患者中", None),
+        ("In patients with suspected infection, age > 65", "在超过65岁的疑似感染患者中", None),
+        ("In patients with suspected infection, at least 65 years old", "在年龄65岁的疑似感染患者中", None),
+        ("Among patients with suspected infection, excluding children", "在除儿童外的疑似感染患者中", None),
+        ("In patients with suspected infection, children excluded", "在不含儿童的疑似感染患者中", None),
+        ("In patients with no suspected infection", "在非疑似感染患者中", None),
+        ("Among mechanically ventilated adults aged at least 65 with sepsis", "在65岁以上机械通气脓毒症患者中", None),
+        ("In patients with suspected infection and no prior ventilation", "在合并呼吸衰竭的疑似感染患者中", None),
+        ("In patients with suspected infection at presentation", "在疑似感染的首次入住患者中", None),
+    ],
+)
+def test_population_requires_a_bare_indication(study, synthetic_treatment, population_en, population_zh, adult):
+    question = study["question"]
+    zh = "示例" in question
+    delimiter = "，" if zh else ","
+    study["question"] = (population_zh if zh else population_en) + delimiter + question.split(delimiter, 1)[1]
+    proposal = owner.target_trial_proposal(study)
+    card = target_trial_card.target_trial_card(study, None)
+    if adult is None:
+        assert proposal.statement is None
+        assert card["state"] == "clarification"
+        assert card["proposal"]["missing"] == ["eligibility"]
+        assert card["proposal"]["digest"] is None
+        return
+    assert card["state"] == "proposal"
+    assert proposal.missing == []
+    criteria = proposal.statement.population_spec.criteria
+    assert [(item.kind, item.role) for item in criteria] == (
+        [("condition_present", "include")] + ([("age_years", "include")] if adult else [])
+    )
+    assert list(criteria[0].concepts_all_of) == ["susp_inf"]
+    assert (criteria[0].window.start_hours, criteria[0].window.end_hours) == (0, 8)
+    if adult:
+        assert (criteria[1].min_years, criteria[1].max_years) == (18, None)
+    assert proposal.statement.spec.confounders[0].name == "age"
+
+
+@pytest.mark.parametrize(
+    ("element", "en", "zh", "accepted"),
+    [
+        ("outcome", "the from-time-zero {term}", "自时间零点起{term}", False),
+        ("outcome", "from time zero, {term}", "从开始治疗起{term}", False),
+        ("outcome", "{term} from treatment start", "{term}自插管起算", False),
+        ("outcome", "from intubation, {term}", "自插管起{term}", False),
+        ("outcome", "{term} after discharge", "{term}从出院起算", False),
+        ("outcome", "{term} counted starting at extubation", "拔管后{term}", False),
+        ("outcome", "from ICU admission to extubation, {term}", "自入ICU后第2日起{term}", False),
+        ("outcome", "from ICU admission, {term}", "自入ICU起{term}", True),
+        ("outcome", "{term} from ICU admission", "{term}自入ICU起算", True),
+        ("outcome", "{term} after ICU admission", "入住ICU后{term}", True),
+        ("grace_period", "from intubation, {term}", "自插管起{term}", False),
+        ("grace_period", "after extubation, {term}", "拔管后{term}", False),
+        ("grace_period", "{term} from intubation", "{term}自插管起算", False),
+        ("grace_period", "from treatment start, {term}", "从开始治疗起{term}", False),
+        ("grace_period", "{term} from treatment start", "{term}自时间零点起算", False),
+        ("grace_period", "from time zero, {term}", "自时间零点起{term}", False),
+        ("grace_period", "from ICU admission, {term}", "自入ICU起{term}", False),
+        ("grace_period", "{term} from ICU admission", "{term}自入ICU起算", False),
+    ],
+)
+def test_trial_origin_is_preserved_or_requested(complete_trial, element, en, zh, accepted):
+    study = complete_trial
+    question = study["question"]
+    outcome = element == "outcome"
+    if "示例" in question:
+        term = "90天死亡率" if outcome else "10小时内开始示例治疗"
+        wording = zh
+    else:
+        term = "90-day mortality" if outcome else "start sample therapy within 10 hours"
+        wording = en
+    study["question"] = question.replace(term, wording.format(term=term), 1)
+    proposal = owner.target_trial_proposal(study)
+    card = target_trial_card.target_trial_card(study, None)
+    if not accepted:
+        assert proposal.statement is None
+        assert card["state"] == "clarification"
+        assert card["proposal"]["missing"] == [element]
+        assert card["proposal"]["digest"] is None
+        return
+    assert card["state"] == "proposal"
+    assert proposal.missing == []
+    endpoint = owner.fixed_horizon_mortality_endpoint(proposal.statement.spec.outcome.endpoint)
+    assert (endpoint.horizon_days, endpoint.time_origin) == (90, "icu_admission")
+
+
+def test_rejected_treatment_is_absent_from_clarification_elements(complete_trial, monkeypatch):
+    study = complete_trial
+    assert owner.causal_trial_reading(study["question"]).treatment is not None
+    monkeypatch.setattr(owner, "_treatment", lambda *args: None)
+    card = target_trial_card.target_trial_card(study, None)
+    assert card["state"] == "clarification"
+    assert card["proposal"]["missing"] == ["treatment"]
+    assert card["proposal"]["digest"] is None
+    assert "treatment" not in {row["key"] for row in card["proposal"]["elements"]}
 
 
 def test_noncausal_question_has_no_proposal(study):

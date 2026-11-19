@@ -946,7 +946,7 @@
         if (!isCurrent()) return;
         host.setError(owner.refusalText(error, tr) || host.errorText(error));
       } finally {
-        setPending(false);
+        if (isCurrent()) setPending(false);
       }
       if (jobId && isCurrent()) host.watchChildJob(jobId, 'easyicu_target_trial_compile_submitted');
     }
@@ -976,7 +976,7 @@
         if (!isCurrent()) return;
         host.setError(owner.refusalText(error, tr) || host.errorText(error));
       } finally {
-        setPending(false);
+        if (isCurrent()) setPending(false);
       }
     }
 
