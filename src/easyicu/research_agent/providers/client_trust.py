@@ -153,7 +153,8 @@ def require_run_clearance(database: str, additional_sources: Sequence[str] | Non
 
 
 def _require_replay_source(client: Any, source: str) -> ReplayScope | None:
-    scope = None
+    leaf_scopes: set[ReplayScope | None] = set()
+    scopes: set[ReplayScope] = set()
     stack, seen = [client], set()
     while stack:
         item = stack.pop()
@@ -161,14 +162,31 @@ def _require_replay_source(client: Any, source: str) -> ReplayScope | None:
             continue
         seen.add(id(item))
         record = _trusted_client_record(item)
-        if record is not None and record.replay_scope is not None:
-            scope = record.replay_scope
-            require_replay_scope(scope)
-            if source != scope.database:
-                raise ReplayError("model_replay_source_forbidden")
+        bound = record.replay_scope if record is not None else None
+        if bound is not None:
+            scopes.add(bound)
         if record is not None and record.kind == "wrapper" and record.children_getter:
             stack.extend(record.children_getter())
-    return scope
+        else:
+            leaf_scopes.add(bound)
+
+    if None in leaf_scopes and len(leaf_scopes) > 1:
+        raise ReplayError("model_replay_mixed_provider_forbidden")
+    if len(scopes) > 1:
+        raise ReplayError("model_replay_source_mismatch")
+    if not scopes:
+        return None
+    scope = scopes.pop()
+    require_replay_scope(scope)
+    if source != scope.database:
+        raise ReplayError("model_replay_source_forbidden")
+
+    # A directly supplied recorder has its own registered scope. A recorder
+    # nested in a non-replay graph cannot confer its scope on other clients.
+    root = _trusted_client_record(client)
+    if scope in leaf_scopes or (root is not None and root.replay_scope == scope):
+        return scope
+    return None
 
 
 def require_context_clearance(context: Any, *clients: Any) -> None:

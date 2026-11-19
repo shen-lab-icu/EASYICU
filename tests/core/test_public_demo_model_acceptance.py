@@ -157,10 +157,13 @@ def test_replay_receipts_mark_both_success_and_downstream_failure(tmp_path, monk
     def run(**kwargs):
         from easyicu.research_agent.providers.clients import ReplayLLMClient
         assert type(kwargs["client"]) is ReplayLLMClient
+        assert kwargs["materialized"].is_dir()
+        provisional = json.loads((kwargs["work_dir"] / "model_replay_receipt.json").read_text())
+        assert provisional == kwargs["client"].receipt()
         if failure is not None:
             raise failure
         return {"status": "passed", "evidence_bound_result": True}
-    monkeypatch.setattr(facade, "run_public_demo", run)
+    monkeypatch.setattr(facade, "_run_public_demo_analysis", run)
     result = facade.replay_public_demo(cassette_path=path, export_path=tmp_path, database="eicu_demo",
         work_dir=tmp_path / "work", question="Describe an invented shape.", primary_exposure="a",
         target_outcome="b", covariates=())

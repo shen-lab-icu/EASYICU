@@ -26,6 +26,8 @@ from .providers.protocol import SCRIPTED_REPLAY_DISCLOSURE, RecordedApproval, Re
 
 __all__ = ["go", "replicate", "resume_human_review"]
 
+_REPLAY_RECEIPT_FILENAME = "model_replay_receipt.json"
+
 
 def go(
     question: str,
@@ -226,63 +228,89 @@ def _write_replay_receipt(work_dir: Path, receipt: dict) -> None:
     try:
         with output:
             output.write(json.dumps(receipt, indent=2) + "\n")
-        temporary.replace(work_dir / "model_replay_receipt.json")
+        temporary.replace(work_dir / _REPLAY_RECEIPT_FILENAME)
     finally:
         temporary.unlink(missing_ok=True)
 
 
-def _blocked_replay_result(exc: ReplayError) -> dict:
-    return {"status": "blocked", "reason_code": exc.reason_code, "evidence_bound_result": False,
-            "missing_request_sha256": exc.request_sha256, "analysis_executed": False,
+def _blocked_replay_result(exc: Exception) -> dict:
+    replay_error = exc if isinstance(exc, ReplayError) else None
+    return {"status": "blocked",
+            "reason_code": replay_error.reason_code if replay_error else "model_replay_pipeline_failed",
+            "evidence_bound_result": False,
+            "missing_request_sha256": replay_error.request_sha256 if replay_error else None,
+            "analysis_executed": False,
             "reportable": False, "publishable": False}
+
+
+def _reserve_replay_work_dir(work_dir: Path) -> Path:
+    from easyicu.synthetic_desktop_source import FIRST_STAY_COORDINATE_FILENAME
+
+    materialized = work_dir / "materialized"
+    try:
+        for filename in ("runs", FIRST_STAY_COORDINATE_FILENAME, _REPLAY_RECEIPT_FILENAME):
+            artifact = work_dir / filename
+            if artifact.exists() or artifact.is_symlink():
+                raise ReplayError("model_replay_workdir_not_empty")
+        # The exclusive mkdir elects one owner before any output is written.
+        materialized.mkdir(parents=True)
+    except (FileExistsError, NotADirectoryError) as exc:
+        reason = "model_replay_workdir_not_empty" if work_dir.is_dir() else "model_replay_workdir_not_directory"
+        raise ReplayError(reason) from exc
+    return materialized
 
 
 def run_public_demo(*, export_path: Path, database: str, work_dir: Path, client,
                     question: str, primary_exposure: str, target_outcome: str,
                     covariates: Sequence[str], review: Callable):
-    """The same materializer, profile and pipeline for recording and playback."""
-    from easyicu.synthetic_desktop_source import (
-        ANALYSIS_INPUTS, FIRST_STAY_COORDINATE_FILENAME, first_stay_materializer_options,
+    """Run acceptance with a client bound to the verified replay source."""
+    from .providers.client_trust import (
+        _require_replay_source, require_provider_client_authorization, require_run_clearance,
     )
+
+    scope = _require_replay_source(client, database)
+    if scope is None:
+        raise ReplayError("model_replay_client_required")
+    require_run_clearance(database, None, client)
+    require_provider_client_authorization(client)
+    if export_path.resolve() != scope.export_path:
+        raise ReplayError("model_replay_source_mismatch")
+
+    materialized = _reserve_replay_work_dir(work_dir)
+    receipt = client.receipt() if type(client) is ReplayLLMClient else {}
+    scripted_scope = scope if scope.scripted else None
+    if scripted_scope is not None:
+        receipt.update(model_mode="scripted_replay", model_disclosure=SCRIPTED_REPLAY_DISCLOSURE)
+    _write_replay_receipt(work_dir, receipt)
+    try:
+        result = _run_public_demo_analysis(export_path=export_path, database=database, work_dir=work_dir,
+            materialized=materialized, client=client, scripted_scope=scripted_scope, question=question,
+            primary_exposure=primary_exposure, target_outcome=target_outcome, covariates=covariates, review=review)
+    except Exception as exc:
+        _write_replay_receipt(work_dir, {**receipt, **_blocked_replay_result(exc)})
+        raise
+    receipt.update(result)
+    _write_replay_receipt(work_dir, receipt)
+    return receipt
+
+
+def _run_public_demo_analysis(*, export_path: Path, database: str, work_dir: Path, materialized: Path,
+                              client, scripted_scope, question: str, primary_exposure: str, target_outcome: str,
+                              covariates: Sequence[str], review: Callable) -> dict:
+    from easyicu.synthetic_desktop_source import ANALYSIS_INPUTS, first_stay_materializer_options
 
     from .cohort.materializer import materialize_to_parquet
     from .orchestration.config import PipelineConfig
     from .orchestration.services import PipelineServices
     from .pipeline import ResearchAgentPipeline
-    from .providers.client_trust import require_credentialed_data_clearance, require_provider_client_authorization
 
-    if client is None:
-        raise ReplayError("model_replay_client_required")
-    scope = require_credentialed_data_clearance(client, database)
-    require_provider_client_authorization(client)
-    if scope is not None and export_path.resolve() != scope.export_path:
-        raise ReplayError("model_replay_source_mismatch")
-    scripted_scope = scope if scope is not None and scope.scripted else None
+    materializer_options = {}
     if scripted_scope is not None:
         covariates = tuple(covariates)
         analysis_inputs = {"question": question, "primary_exposure": primary_exposure,
                            "target_outcome": target_outcome, "covariates": covariates}
         if analysis_inputs != ANALYSIS_INPUTS:
             raise ReplayError("model_replay_scripted_inputs_mismatch")
-
-    materialized = work_dir / "materialized"
-    # Reserving the output directory also makes simultaneous attempts refuse
-    # reuse before writing the first-stay coordinate.
-    try:
-        for artifact in (work_dir / "runs", work_dir / FIRST_STAY_COORDINATE_FILENAME):
-            if artifact.exists() or artifact.is_symlink():
-                raise FileExistsError(artifact)
-        materialized.mkdir(parents=True)
-    except FileExistsError as exc:
-        error = ReplayError("model_replay_workdir_not_empty")
-        result = _blocked_replay_result(error)
-        if scripted_scope is not None:
-            result.update(model_mode="scripted_replay", model_disclosure=SCRIPTED_REPLAY_DISCLOSURE)
-        _write_replay_receipt(work_dir, result)
-        raise error from exc
-
-    materializer_options = {}
-    if scripted_scope is not None:
         materializer_options = first_stay_materializer_options(work_dir, scripted_scope.source.archive_sha256)
     paths = materialize_to_parquet(materialized, data_path=export_path,
         database=database, static_concepts=tuple(dict.fromkeys((primary_exposure, *covariates))),
@@ -354,25 +382,15 @@ def replay_public_demo(*, cassette_path: Path, export_path: Path, database: str,
     with public_demo_replay_scope(export_path=export_path, database=database,
                                   profile_ref=PUBLIC_DEMO_ACCEPTANCE.ref, synthetic_source=synthetic_source):
         client = ReplayLLMClient(cassette)
-        receipt = client.receipt()
-        work_dir.mkdir(parents=True, exist_ok=True)
-        # Persist provenance before the first model request, including failures.
-        _write_replay_receipt(work_dir, receipt)
         try:
-            result = run_public_demo(export_path=export_path, database=database, work_dir=work_dir,
+            return run_public_demo(export_path=export_path, database=database, work_dir=work_dir,
                 client=client, question=question, primary_exposure=primary_exposure, target_outcome=target_outcome,
                 covariates=covariates,
                 review=lambda pending: replay_review_decisions(pending, cassette.approvals, scripted=synthetic_source))
-        except ReplayError as exc:
-            result = _blocked_replay_result(exc)
-        except Exception:
-            # Aggregate receipts retain replay provenance even when a later
-            # owner fails; raw diagnostics stay in the private run directory.
-            result = {"status": "blocked", "reason_code": "model_replay_pipeline_failed",
-                      "evidence_bound_result": False, "analysis_executed": False}
-        receipt.update(result)
-        _write_replay_receipt(work_dir, receipt)
-        return receipt
+        except Exception as exc:
+            if isinstance(exc, ReplayError) and exc.reason_code == "model_replay_workdir_not_directory":
+                raise
+            return {**client.receipt(), **_blocked_replay_result(exc)}
 
 
 def record_review(pending, recorder: RecordingLLMClient, *, ask: Callable[[str], str] = input,
