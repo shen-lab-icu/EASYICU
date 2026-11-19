@@ -2434,11 +2434,16 @@ def _requested_adjustment_concepts(
     source = _clean(text, 2_000)
     clauses: List[str] = []
     for pattern in (
-        r"(?:按|依据)\s*([^。；;]{1,120}?)\s*(?:调整|校正|控制)",
-        r"(?:调整|校正|控制)(?:变量|因素)?(?:包括|为|：|:)?\s*([^。；;]{1,120})",
+        r"(?:按|依据)\s*([^。；;，]{1,120}?)\s*(?:调整|校正|控制)",
+        # A Chinese list uses 、; a full-width comma ends the adjustment clause.
+        r"(?:调整|校正|控制)(?!组)(?:变量|因素)?(?:包括|为|：|:)?\s*([^。；;，]{1,120})",
         r"(?:adjust(?:ed|ing)?\s+for|controlled\s+for|covariates?(?:\s+include|\s+were|\s*:))\s*([^.;]{1,160})",
     ):
-        clauses.extend(match.group(1) for match in re.finditer(pattern, source, re.I))
+        clauses.extend(
+            match.group(1)
+            for match in re.finditer(pattern, source, re.I)
+            if not _ROLE_CLAUSE_DANGLING.match(match.group(1))
+        )
     if not clauses:
         return []
 
@@ -2460,6 +2465,50 @@ def _requested_adjustment_concepts(
     return selected
 
 
+# A role clause captured after its keyword that starts at punctuation or a
+# conjunction belongs to a noun phrase the keyword ended (动态乳酸暴露、院内死亡…):
+# in Chinese the modifier precedes the keyword, so it names nothing.
+_ROLE_CLAUSE_DANGLING = re.compile(r"^\s*(?:[、，,。；;：:与和及或的]|并且|以及)")
+_ZH_EXPOSURE_ROLE = r"(?:暴露因素|暴露变量|暴露|预测因子|自变量)"
+# (pattern, the capture precedes the keyword).  A keyword names a clause only
+# with a prefix (主要暴露) or a copula/colon (暴露为 / 暴露因素是 / exposure is),
+# or as the object of 以…为 / …作为 (S1444).
+_EXPOSURE_CLAUSE_PATTERNS: Tuple[Tuple[str, bool], ...] = (
+    (rf"(?:主要|核心|首要){_ZH_EXPOSURE_ROLE}(?:采用|定义为|为|是|：|:)?\s*([^。；;，,]{{1,140}})", False),
+    (rf"{_ZH_EXPOSURE_ROLE}(?:采用|定义为|为|是|：|:)\s*([^。；;，,]{{1,140}})", False),
+    (rf"(?:以|将|把)\s*([^。；;，,、]{{1,60}}?)\s*(?:作为|为|当作|当成)\s*(?:主要|核心|首要)?{_ZH_EXPOSURE_ROLE}", True),
+    (rf"([^。；;，,、以将把]{{1,60}}?)\s*(?:作为|当作|当成)\s*(?:主要|核心|首要)?{_ZH_EXPOSURE_ROLE}", True),
+    (r"(?:primary|main)\s+(?:exposure|predictor)(?:\s+(?:is|was|will\s+be|of)|\s*[:=])\s*([^.;,]{1,180})", False),
+    (r"(?:exposure|predictor)\s+(?:is|was|will\s+be)\s+([^.;,]{1,180})", False),
+    (r"\b(?:with|using)\s+([^.;,]{1,60}?)\s+as\s+(?:the\s+)?(?:primary\s+|main\s+)?(?:exposure|predictor)\b", True),
+)
+
+
+def _clause_concept(
+    clause: str, hits: List[Dict[str, Any]], *, nearest_end: bool
+) -> Optional[str]:
+    normalized = _norm_text(clause)
+    ranked: List[Tuple[int, int, str]] = []
+    for row in hits:
+        concept_id = str(row.get("concept_id") or "").strip()
+        if not concept_id or concept_id in {"death", "los_icu"}:
+            continue
+        label = str(row.get("label") or "")
+        aliases = {concept_id, label, str(row.get("matched_alias") or "")}
+        aliases.update(_extra_aliases(concept_id, label))
+        matched = [
+            _norm_text(alias) for alias in aliases if alias and _alias_hit(normalized, alias)
+        ]
+        if not matched:
+            continue
+        # A capture before its keyword names the concept closest to it.
+        end = max(normalized.rfind(alias) + len(alias) for alias in matched)
+        ranked.append((end if nearest_end else 0, max(len(alias) for alias in matched), concept_id))
+    if not ranked:
+        return None
+    return max(ranked)[2]
+
+
 def _requested_exposure_concepts(
     text: str,
     hits: List[Dict[str, Any]],
@@ -2467,37 +2516,44 @@ def _requested_exposure_concepts(
     """Return predictors explicitly named as the primary exposure."""
 
     source = _clean(text, 2_000)
-    clauses: List[str] = []
-    for pattern in (
-        r"(?:主要|核心|首要)?(?:暴露|预测因子|自变量)(?:采用|定义为|为|：|:)?\s*([^。；;，,]{1,140})",
-        r"(?:primary|main)\s+(?:exposure|predictor)(?:\s+is|\s*:)?\s*([^.;,]{1,180})",
-    ):
-        clauses.extend(match.group(1) for match in re.finditer(pattern, source, re.I))
-    if not clauses:
-        return []
     selected: List[str] = []
-    for clause in clauses:
-        normalized = _norm_text(clause)
-        ranked: List[Tuple[int, str]] = []
-        for row in hits:
-            concept_id = str(row.get("concept_id") or "").strip()
-            if not concept_id or concept_id in {"death", "los_icu"}:
+    for pattern, before in _EXPOSURE_CLAUSE_PATTERNS:
+        for match in re.finditer(pattern, source, re.I):
+            clause = match.group(1)
+            if not before and _ROLE_CLAUSE_DANGLING.match(clause):
                 continue
-            label = str(row.get("label") or "")
-            aliases = {concept_id, label, str(row.get("matched_alias") or "")}
-            aliases.update(_extra_aliases(concept_id, label))
-            matched = [
-                _norm_text(alias)
-                for alias in aliases
-                if alias and _alias_hit(normalized, alias)
-            ]
-            if matched:
-                ranked.append((max(len(alias) for alias in matched), concept_id))
-        if ranked:
-            concept_id = max(ranked, key=lambda item: (item[0], item[1]))[1]
-            if concept_id not in selected:
+            concept_id = _clause_concept(clause, hits, nearest_end=before)
+            if concept_id and concept_id not in selected:
                 selected.append(concept_id)
     return selected
+
+
+def _population_qualifier_concepts(text: str, hits: List[Dict[str, Any]]) -> set[str]:
+    """Concepts the text uses to name who is studied (脓毒症患者, patients with sepsis)."""
+
+    haystack = _norm_text(text)
+    qualified: set[str] = set()
+    for row in hits:
+        concept_id = str(row.get("concept_id") or "").strip()
+        label = str(row.get("label") or "")
+        aliases = {concept_id, label, str(row.get("matched_alias") or "")}
+        aliases.update(_extra_aliases(concept_id, label))
+        for alias in aliases:
+            needle = _norm_text(alias)
+            if len(needle) < 2:
+                continue
+            escaped = re.escape(needle)
+            if re.search(r"[\u4e00-\u9fff]", needle):
+                pattern = rf"{escaped}\s*(?:成人|老年)?(?:患者|病人|人群|病例)"
+            else:
+                pattern = (
+                    rf"(?<![a-z0-9]){escaped}(?![a-z0-9])\s+(?:patients|cohort|population)\b"
+                    rf"|\b(?:in|among|with)\s+(?:adult\s+|adults\s+)?(?:icu\s+)?(?:patients\s+with\s+)?{escaped}(?![a-z0-9])"
+                )
+            if re.search(pattern, haystack):
+                qualified.add(concept_id)
+                break
+    return qualified
 
 
 def _idea_design_support(
@@ -2598,7 +2654,7 @@ def _idea_from_source(
     concepts = _select_idea_concepts(text, hits, outcome)
     predictor = _primary_predictor(concepts)
     if predictor is None:
-        predictor = _pick_predictor(hits, outcome)
+        predictor = _pick_predictor(hits, outcome, text)
         if predictor is not None:
             predictor_id = str(predictor.get("concept_id") or "")
             concepts = [
@@ -5036,7 +5092,7 @@ def _discovery_topic_clause(topic: str, body: Dict[str, Any]) -> str:
 
     hits = _match_concepts(topic)
     outcome_hit = _pick_outcome(topic, hits)
-    predictor_hit = _pick_predictor(hits, outcome_hit)
+    predictor_hit = _pick_predictor(hits, outcome_hit, topic)
     inferred = [
         _pubmed_title_abstract_clause(
             _literature_concept_phrase(row.get("concept_id") or row.get("label"))
@@ -6404,17 +6460,23 @@ def _pick_outcome(text: str, hits: List[Dict[str, Any]]) -> Optional[Dict[str, A
 
 
 def _pick_predictor(
-    hits: List[Dict[str, Any]], outcome: Optional[Dict[str, Any]]
+    hits: List[Dict[str, Any]], outcome: Optional[Dict[str, Any]], text: str = ""
 ) -> Optional[Dict[str, Any]]:
     outcome_id = outcome.get("concept_id") if outcome else None
-    for row in hits:
-        if row.get("concept_id") != outcome_id and row.get("concept_id") not in {
-            "death",
-            "los_icu",
-            *_VENTILATION_EPISODE_CONCEPTS,
-        }:
-            return row
-    return None
+    candidates = [
+        row
+        for row in hits
+        if row.get("concept_id") != outcome_id
+        and row.get("concept_id") not in {"death", "los_icu", *_VENTILATION_EPISODE_CONCEPTS}
+    ]
+    # S1444: neither the studied population (脓毒症患者中乳酸与死亡) nor a named
+    # adjustment covariate (调整年龄、性别) is the predictor.
+    population = _population_qualifier_concepts(text, candidates) if text else set()
+    adjusted = set(_requested_adjustment_concepts(text, candidates)) if text else set()
+    preferred = [
+        row for row in candidates if row.get("concept_id") not in population | adjusted
+    ]
+    return (preferred or candidates or [None])[0]
 
 
 def _select_idea_concepts(
