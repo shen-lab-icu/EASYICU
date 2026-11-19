@@ -1225,6 +1225,7 @@
     "src/easyicu/storage_binding.py",
     "src/easyicu/storage_layout.py",
     "src/easyicu/storage_seal_publication.py",
+    "src/easyicu/synthetic_desktop_source.py",
     "src/easyicu/synthetic_exports.py",
     "src/easyicu/synthetic_source_provenance.py",
     "src/easyicu/synthetic_source_tables.py",
@@ -1601,7 +1602,7 @@
     "src/easyicu/webserver/zotero_probe.py"
   ],
   "scorer_tree_root": "benchmarks/figure2_canonical9/successor_v4",
-  "scorer_tree_sha256": "6b6d70361b1e9a341b14802ed6f9178ec213953057527f65bea8eaa3c519e1e8",
+  "scorer_tree_sha256": "8ad630102e4ceb366dd255056bd2af9ecb3844364817afbc026c9cac22d9c2c5",
   "suite_projection_sha256": "11c39afac69c9a0b560c6aa92be19f05725f04c66b9d2c499cfdb353c40295ab",
   "suite_ref": "easyicu_evaluation_protocol_suite/v2",
   "tasks": [
