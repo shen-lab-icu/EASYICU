@@ -1633,9 +1633,9 @@ def _enrich_plan_review(
                 },
             }
         )
-    review = snapshot.plan_review_summary if isinstance(snapshot.plan_review_summary, Mapping) else {}
-    finding_codes = review.get("finding_codes")
-    asked = review.get("authorization_questions")
+    summary_view = snapshot.plan_review_summary if isinstance(snapshot.plan_review_summary, Mapping) else {}
+    finding_codes = summary_view.get("finding_codes")
+    asked = summary_view.get("authorization_questions")
     # Only the host marks a researcher choice; a review artifact cannot.
     asked = [
         {key: value for key, value in item.items() if key != "researcher_choice"}
@@ -1646,7 +1646,7 @@ def _enrich_plan_review(
             study if isinstance(study, Mapping) else {}, agent_plan,
             [str(code) for code in finding_codes] if isinstance(finding_codes, (list, tuple)) else (),
         )
-        if isinstance(agent_plan, Mapping) and review
+        if isinstance(agent_plan, Mapping) and summary_view
         and snapshot.next_action_code
         in {"plan_scientific_changes_required", "agent_plan_revision_nonconvergent"}
         else None
@@ -1657,7 +1657,7 @@ def _enrich_plan_review(
         # A question the reviewer already asked keeps its own wording.
         marker = {"researcher_choice": timing_question["researcher_choice"]}
         reviewer_asked = any(item.get("code") == timing_question["code"] for item in asked)
-        summary = dict(review)
+        summary = dict(summary_view)
         summary["authorization_questions"] = (
             [{**item, **marker} if item.get("code") == timing_question["code"] else item for item in asked]
             if reviewer_asked else [timing_question, *asked]
@@ -1665,8 +1665,8 @@ def _enrich_plan_review(
         snapshot = snapshot.model_copy(update={
             "next_action_code": "plan_scientific_changes_required", "plan_review_summary": summary,
         })
-    elif isinstance(review.get("authorization_questions"), (list, tuple)):
-        snapshot = snapshot.model_copy(update={"plan_review_summary": {**dict(review), "authorization_questions": asked}})
+    elif isinstance(summary_view.get("authorization_questions"), (list, tuple)):
+        snapshot = snapshot.model_copy(update={"plan_review_summary": {**dict(summary_view), "authorization_questions": asked}})
     current_summary = snapshot.plan_review_summary
     remediation = (
         current_summary.get("remediation_buckets")
