@@ -13,6 +13,7 @@ from easyicu.research_agent.authority.manuscript_claim_policy import (
     missing_scientific_claims_in_results,
     place_scientific_claim_tokens_in_results,
 )
+from easyicu.research_agent.authority.manuscript_method_facts import ManuscriptMethodFact
 from easyicu.research_agent.authority.scientific_claims import ScientificClaim
 
 
@@ -98,6 +99,72 @@ def test_partially_filtered_abstract_body_keeps_its_line_break_after_label() -> 
 
     assert filtered.scaffold == f"## Abstract\n\n**Results:**\n{retained}\n"
     assert filtered.unsupported_scientific_claim_sentences == (rejected,)
+
+
+@pytest.mark.parametrize(
+    ("retained", "rejected_heading"),
+    [
+        (
+            "## Results\n\n{claim:04_association.adjusted_association}",
+            "## Methods (Executed data preparation: queue reconciliation)",
+        ),
+        (
+            "## Abstract\n\n**Results:**",
+            "### Methods: Executed data preparation: queue reconciliation",
+        ),
+        (
+            "## Abstract\n\n**Results:**",
+            "> ### Methods: Recorded units for the selected exposure: seconds",
+        ),
+    ],
+    ids=["results", "abstract", "quoted-abstract"],
+)
+def test_rejected_heading_does_not_end_findings(retained, rejected_heading) -> None:
+    assertion = "The revised scheduler cleared stale jobs [@scheduler_review]."
+    filtered = filter_evidence_bound_scaffold(
+        f"{retained}\n\n{rejected_heading}\n\n{assertion}", resolve_claim=_resolver,
+    )
+    second_pass = filter_evidence_bound_scaffold(filtered.scaffold, resolve_claim=_resolver)
+
+    assert second_pass.scaffold == filtered.scaffold
+    assert filtered.scaffold == retained + "\n"
+    assert filtered.unsupported_scientific_claim_sentences == (rejected_heading, assertion)
+
+
+@pytest.mark.parametrize("separator", [" ", "\n"], ids=["inline", "separate-line"])
+def test_rejected_abstract_heading_does_not_orphan_results_label(separator) -> None:
+    heading = "## Abstract (Executed class model: queue profiles)"
+    assertion = "The revised scheduler cleared stale jobs [@scheduler_review]."
+    filtered = filter_evidence_bound_scaffold(
+        f"{heading}\n\n**Results:**{separator}{assertion}", resolve_claim=_resolver,
+    )
+
+    assert filtered.scaffold == "\n"
+    assert filtered.unsupported_scientific_claim_sentences == (heading, assertion)
+    assert filter_evidence_bound_scaffold(
+        filtered.scaffold, resolve_claim=_resolver,
+    ).scaffold == filtered.scaffold
+
+
+def test_rejected_heading_does_not_displace_exact_method_fact() -> None:
+    fact = ManuscriptMethodFact(
+        source_field="exposure.units",
+        text="Recorded units for the selected exposure: seconds",
+        source_sha256="0" * 64,
+    )
+    retained = "## Methods\n\n### Variables\n\n"
+    heading = "## Introduction (Executed data preparation: queue reconciliation)"
+    filtered = filter_evidence_bound_scaffold(
+        f"{retained}{heading}\n{fact.scaffold}",
+        resolve_claim=_resolver,
+        method_facts=(fact,),
+    )
+
+    assert filtered.scaffold == f"{retained}\n{fact.scaffold}\n"
+    assert filtered.unsupported_scientific_claim_sentences == (heading,)
+    assert filter_evidence_bound_scaffold(
+        filtered.scaffold, resolve_claim=_resolver, method_facts=(fact,),
+    ).scaffold == filtered.scaffold
 
 
 @pytest.mark.parametrize(

@@ -855,10 +855,6 @@ def filter_evidence_bound_scaffold(
         for raw_line in block.splitlines() if opaque else (block,):
             line = raw_line.rstrip()
             stripped = line.strip()
-            if region.kind == "heading" and re.fullmatch(r"##\s+.+", stripped):
-                section, subsection = stripped, ""
-            elif region.kind == "heading" and re.fullmatch(r"###\s+.+", stripped):
-                subsection = stripped
             if line in method_lines and (section, subsection) == _METHOD_FACT_PLACES[
                 method_lines[line]
             ]:
@@ -872,8 +868,23 @@ def filter_evidence_bound_scaffold(
                 and INLINE_SECTION_LABEL_RE.fullmatch(structure_prefix.strip())
                 else ""
             )
-            method_fact_candidate = is_method_fact_candidate(line)
-            if not method_fact_candidate and (stripped.startswith(("```", "~~~")) or not stripped):
+            # Neutral labels may already have been separated from their claim/body
+            # by the Markdown owner. They still determine the findings boundary.
+            abstract_label = (
+                _ABSTRACT_LABEL_RE.match(content)
+                or INLINE_SECTION_LABEL_RE.search(structure_prefix)
+            )
+            if not opaque and in_abstract and abstract_label is not None:
+                abstract_findings = abstract_label.group("label").casefold() not in {
+                    "background", "methods", "背景", "方法"
+                }
+            if is_method_fact_candidate(line):
+                rejected = content.strip() if abstract_label_line else stripped
+                unsupported_scientific_claims.append(rejected)
+                filtered_claims.append(rejected)
+                filtered_lines.append(abstract_label_line)
+                continue
+            if stripped.startswith(("```", "~~~")) or not stripped:
                 filtered_lines.append(line)
                 continue
             heading_prefix, heading_content = _split_markdown_heading_prefix(content)
@@ -882,6 +893,10 @@ def filter_evidence_bound_scaffold(
                 name = _normalized_heading(heading_content)
                 depth = heading_prefix.count("#")
                 if region.kind == "heading":
+                    if re.fullmatch(r"##\s+.+", stripped):
+                        section, subsection = stripped, ""
+                    elif re.fullmatch(r"###\s+.+", stripped):
+                        subsection = stripped
                     if (
                         in_abstract and findings_depth is not None and depth > findings_depth
                         and name in {"background", "methods", "results", "findings", "conclusion", "conclusions"}
@@ -904,31 +919,12 @@ def filter_evidence_bound_scaffold(
                     and not ((in_abstract or quoted_heading) and name in _CONTEXT_HEADINGS)
                     and _CAPTION_LABEL_RE.fullmatch(heading_content) is None
                 )
-                if not (
-                    method_fact_candidate or restricted_heading
-                    or _heading_requires_evidence(heading_content)
-                ):
+                if not restricted_heading and not _heading_requires_evidence(heading_content):
                     filtered_lines.append(line)
                     continue
                 heading_requires_claim = True
                 structure_prefix += heading_prefix
                 content = heading_content
-            # Neutral labels may already have been separated from their claim/body
-            # by the Markdown owner. They still determine the findings boundary.
-            abstract_label = (
-                _ABSTRACT_LABEL_RE.match(content)
-                or INLINE_SECTION_LABEL_RE.search(structure_prefix)
-            )
-            if not opaque and in_abstract and abstract_label is not None:
-                abstract_findings = abstract_label.group("label").casefold() not in {
-                    "background", "methods", "背景", "方法"
-                }
-            if method_fact_candidate:
-                rejected = content.strip() if abstract_label_line else stripped
-                unsupported_scientific_claims.append(rejected)
-                filtered_claims.append(rejected)
-                filtered_lines.append(abstract_label_line)
-                continue
             restricted_line = bool(
                 (findings_depth is not None and (not in_abstract or abstract_findings))
                 or (abstract_label is not None and abstract_label.group("label").casefold()
