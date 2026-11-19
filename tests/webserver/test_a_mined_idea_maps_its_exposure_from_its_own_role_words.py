@@ -118,3 +118,40 @@ def test_the_concept_next_to_the_keyword_is_the_exposure(text: str, exposure: st
 def test_an_adjustment_needs_its_own_clause(text: str, adjusted: set[str]) -> None:
     hits = mining._match_concepts(text)
     assert set(mining._requested_adjustment_concepts(text, hits)) == adjusted
+
+
+@pytest.mark.parametrize(("text", "exposure"), [
+    # Carbon delta1446 finding 1: a noun ending in 分/变 keeps 以…为暴露.
+    ("以SOFA评分为主要暴露，基线乳酸纳入分析，结局为院内死亡", "sofa"),
+    ("以早期乳酸改变为主要暴露探讨脓毒症患者院内死亡", "lact"),
+    # Finding 2: an inline "primary exposure" before a verb names no clause.
+    ("Whether lactate as the primary exposure increases sepsis mortality", "lact"),
+    ("Using lactate as the primary exposure predicts in-hospital mortality in sepsis patients", "lact"),
+])
+def test_an_inline_role_phrase_keeps_its_own_exposure(text: str, exposure: str) -> None:
+    roles = _roles(_idea(text))
+    assert roles[exposure] in {"exposure", "predictor"}
+    assert roles.get("sep3_sofa1") not in {"exposure", "predictor"}
+
+
+@pytest.mark.parametrize("text", [
+    # Finding 3: a clause naming only the studied population names no exposure.
+    "主要暴露为脓毒症患者急性肾损伤分期，结局为院内死亡",
+    "Primary exposure: sepsis-associated acute kidney injury; outcome: mortality",
+    "脓毒症患者的院内死亡",
+])
+def test_the_studied_population_alone_leaves_the_design_incomplete(text: str) -> None:
+    idea = _idea(text)
+    assert _roles(idea).get("sep3_sofa1") not in {"exposure", "predictor"}
+    assert not any(row["role"] in {"exposure", "predictor"} for row in idea["mapped_concepts"])
+
+
+@pytest.mark.parametrize(("text", "adjusted"), [
+    # Finding 4: 之后/后 ends the list; 控制…为 without 变量/因素 is a noun.
+    ("按年龄和性别调整之后乳酸与院内死亡的关系", {"age", "sex"}),
+    ("调整年龄和性别后乳酸与院内死亡的关系", {"age", "sex"}),
+    ("以血糖控制为主要暴露探讨乳酸与脓毒症院内死亡", set()),
+])
+def test_an_adjustment_list_ends_before_after_adjustment(text: str, adjusted: set[str]) -> None:
+    hits = mining._match_concepts(text)
+    assert set(mining._requested_adjustment_concepts(text, hits)) == adjusted

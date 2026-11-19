@@ -2436,12 +2436,13 @@ def _requested_adjustment_concepts(
     for pattern in (
         r"(?:按|依据)\s*([^。；;，]{1,120}?)\s*(?:调整|校正|控制)",
         # A Chinese list uses 、; a full-width comma ends the adjustment clause.
-        r"(?:调整|校正)(?!组|后)(?:变量|因素)?(?:包括|为|：|:)?\s*([^。；;，]{1,120})",
-        r"控制(?:变量|因素)?(?:包括|为|：|:)\s*([^。；;，]{1,120})",
+        r"(?:调整|校正)(?!组|之?后|前)(?:变量|因素)?(?:包括|为|：|:)?\s*([^。；;，]{1,120})",
+        r"控制(?:(?:变量|因素)(?:包括|为|：|:)?|包括|：|:)\s*([^。；;，]{1,120})",
         r"(?:adjust(?:ed|ing)?\s+for|controlled\s+for|covariates?(?:\s+include|\s+were|\s*:))\s*([^.;]{1,160})",
     ):
         clauses.extend(
-            match.group(1)
+            # 调整年龄和性别后乳酸…: the list ends where "after adjustment" begins.
+            re.split(r"之?后", match.group(1), maxsplit=1)[0]
             for match in re.finditer(pattern, source, re.I)
             if not _ROLE_CLAUSE_DANGLING.match(match.group(1))
         )
@@ -2478,22 +2479,27 @@ _ZH_COPULA = r"(?:采用|定义为|为(?!止|主)|是(?!否)|：|:)"
 # the first after it, or the last before it.
 _EXPOSURE_CLAUSE_PATTERNS: Tuple[Tuple[str, bool], ...] = (
     (rf"(?:主要|核心|首要)?{_ZH_EXPOSURE_ROLE}{_ZH_COPULA}\s*([^。；;，,]{{1,140}})", False),
-    (rf"(?:以|将|把)\s*([^。；;，,、]{{1,60}}?)\s*(?:作为|(?<![分成变认因])为|当作|当成)\s*(?:主要|核心|首要)?{_ZH_EXPOSURE_ROLE}", True),
+    (rf"以\s*([^。；;，,、]{{1,60}}?)\s*(?:作为|为|当作|当成)\s*(?:主要|核心|首要)?{_ZH_EXPOSURE_ROLE}", True),
+    (rf"(?:将|把)\s*([^。；;，,、]{{1,60}}?)\s*(?:作为|当作|当成)\s*(?:主要|核心|首要)?{_ZH_EXPOSURE_ROLE}", True),
     (rf"([^。；;，,、以将把]{{1,60}}?)\s*(?:作为|当作|当成)\s*(?:主要|核心|首要)?{_ZH_EXPOSURE_ROLE}", True),
-    # Without a copula the next word must not be a preposition (... the primary
-    # exposure in sepsis patients names no exposure after the keyword).
-    (r"(?:primary|main)\s+(?:exposure|predictor)(?:\s+(?:is|was|will\s+be|of)\s+|\s*[:=]\s*"
-     r"|\s+(?!(?:in|among|for|with|within|during|on|at|and|or|to|from|by|as|after|before)\b))([^.;,:=]{1,180})", False),
+    (r"(?:primary|main)\s+(?:exposure|predictor)(?:\s+(?:is|was|will\s+be|of)\s+|\s*[:=]\s*)([^.;,]{1,180})", False),
+    # A header without a copula ("Primary exposure urine output; ...") opens a
+    # clause only at its start and only before a noun phrase.
+    (r"(?:^|[.;,()\n])\s*(?:primary|main)\s+(?:exposure|predictor)\s+(?!\s)"
+     r"(?!(?:in|among|for|with|within|during|on|at|and|or|to|from|by|as|after|before|between|across"
+     r"|versus|vs|that|which|is|was|were|are|has|have|had|does|did|can|may|will|would|should|could)\b)"
+     r"([^.;,]{1,180})", False),
     (r"\b(?:exposure|predictor)(?:\s+(?:is|was|will\s+be)\s+|\s*[:=]\s*)([^.;,]{1,180})", False),
     (r"\b(?:with|using)\s+([^.;,]{1,60}?)\s+as\s+(?:the\s+)?(?:primary\s+|main\s+)?(?:exposure|predictor)\b", True),
 )
 
 
 def _clause_concept(
-    clause: str, hits: List[Dict[str, Any]], *, nearest_end: bool
+    clause: str, hits: List[Dict[str, Any]], *, nearest_end: bool,
+    population: frozenset[str] = frozenset(),
 ) -> Optional[str]:
     normalized = _norm_text(clause)
-    ranked: List[Tuple[int, int, str]] = []
+    ranked: List[Tuple[bool, Tuple[int, int], str]] = []
     for row in hits:
         concept_id = str(row.get("concept_id") or "").strip()
         if not concept_id or concept_id in {"death", "los_icu"}:
@@ -2509,10 +2515,13 @@ def _clause_concept(
         # The concept adjacent to the keyword: the last one before it, or the
         # first one after it; a longer alias breaks a tie at one position.
         if nearest_end:
-            position = max(normalized.rfind(alias) + len(alias) for alias in matched)
+            place = max((normalized.rfind(alias) + len(alias), len(alias)) for alias in matched)
         else:
-            position = -min(normalized.find(alias) for alias in matched)
-        ranked.append((position, max(len(alias) for alias in matched), concept_id))
+            place = max((-normalized.find(alias), len(alias)) for alias in matched)
+        # The studied population (脓毒症患者…的X) is never the exposure a clause names.
+        if concept_id in population:
+            continue
+        ranked.append((True, place, concept_id))
     if not ranked:
         return None
     return max(ranked)[2]
@@ -2525,13 +2534,14 @@ def _requested_exposure_concepts(
     """Return predictors explicitly named as the primary exposure."""
 
     source = _clean(text, 2_000)
+    population = frozenset(_population_qualifier_concepts(text, hits))
     selected: List[str] = []
     for pattern, before in _EXPOSURE_CLAUSE_PATTERNS:
         for match in re.finditer(pattern, source, re.I):
             clause = match.group(1)
             if not before and _ROLE_CLAUSE_DANGLING.match(clause):
                 continue
-            concept_id = _clause_concept(clause, hits, nearest_end=before)
+            concept_id = _clause_concept(clause, hits, nearest_end=before, population=population)
             if concept_id and concept_id not in selected:
                 selected.append(concept_id)
     return selected
@@ -2553,11 +2563,12 @@ def _population_qualifier_concepts(text: str, hits: List[Dict[str, Any]]) -> set
                 continue
             escaped = re.escape(needle)
             if re.search(r"[\u4e00-\u9fff]", needle):
-                pattern = rf"{escaped}\s*(?:成人|老年)?(?:患者|病人|人群|病例)"
+                pattern = rf"{escaped}\s*(?:(?:成人|老年)?(?:患者|病人|人群|病例)|相关性?)"
             else:
                 pattern = (
                     rf"(?<![a-z0-9]){escaped}(?![a-z0-9])\s+(?:patients|cohort|population)\b"
                     rf"|\b(?:patients|adults|subjects|cohort|population)\s+with\s+{escaped}(?![a-z0-9])"
+                    rf"|(?<![a-z0-9]){escaped}[- ](?:associated|related)\b"
                 )
             if re.search(pattern, haystack):
                 qualified.add(concept_id)
@@ -6485,7 +6496,9 @@ def _pick_predictor(
     preferred = [
         row for row in candidates if row.get("concept_id") not in population | adjusted
     ]
-    return (preferred or candidates or [None])[0]
+    # With only the population or adjustment covariates left, nothing names the
+    # predictor: the idea stays design-incomplete rather than guessing one.
+    return (preferred or [None])[0]
 
 
 def _select_idea_concepts(
