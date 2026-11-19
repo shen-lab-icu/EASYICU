@@ -372,7 +372,6 @@ def _prepare_scientific_launch(
         request.execution_resume_source_run_id
         or _development_resume_source(request)
     ):
-        from easyicu.research_agent.authority.filesystem import AuthorityFilesystemError
         from easyicu.webserver.pi_copilot.plan_decisions import record_post_baseline_landmark
 
         try:
@@ -381,9 +380,9 @@ def _prepare_scientific_launch(
                 primary_exposure=primary_exposure, target=target,
                 endpoint=planning_coordinates.get("endpoint"), database=database,
             )
-        except (ValueError, OSError, AuthorityFilesystemError) as exc:
+        except ValueError as exc:
             # The confirmed raw Demo choice could not follow the launch timing.
-            if study.get("demo_planning_authority_ref") and str(exc).startswith("demo_planning_"):
+            if study.get("demo_planning_authority_ref") and str(exc) == "demo_planning_authority_stale":
                 raise _demo_choice_stale() from exc
             raise
         if timed_study is not study:

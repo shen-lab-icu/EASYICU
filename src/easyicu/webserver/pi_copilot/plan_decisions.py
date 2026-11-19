@@ -565,9 +565,17 @@ def record_post_baseline_landmark(
     authority: Dict[str, Any] = {}
     if study.get("demo_planning_authority_ref"):
         # The confirmed raw Demo choice follows this host-derived timing only.
+        from easyicu.research_agent.authority.filesystem import AuthorityFilesystemError
+        from easyicu.webserver import dataio
+
         from .demo_planning_authority import follow_launch_timing
 
-        patch = {**patch, "demo_planning_authority_ref": follow_launch_timing(study, patch)}
+        try:
+            followed = follow_launch_timing(study, patch)
+        except (ValueError, OSError, dataio.ExportCohortError, AuthorityFilesystemError) as exc:
+            # An unreadable or damaged receipt is a stale choice, never a crash.
+            raise ValueError("demo_planning_authority_stale") from exc
+        patch = {**patch, "demo_planning_authority_ref": followed}
         authority["_server_demo_planning_authority_write"] = True
     if (
         not study.get("id") or study.get("revision") is None

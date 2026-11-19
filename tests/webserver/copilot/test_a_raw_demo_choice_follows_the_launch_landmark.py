@@ -23,13 +23,12 @@ def _landmark_patch(study):
     return plan_decisions.agent_post_baseline_landmark_patch(study)
 
 
-@pytest.fixture
-def chosen(choice):
+def _choose(choice, **extra):
     """The official Demo chosen for a first-day-exposure association study."""
     study = study_contexts.upsert_context({
         "id": choice.study["id"], "analysis_design": {
             "analysis_family": "association_study", "analysis_unit": "icu_stay", "variance_estimator": "model_based",
-        },
+        }, **extra,
     })
     choice.record.binding = choice.service._binding_for_context(study)
     offer = resolve_demo_planning_source(study)
@@ -40,6 +39,11 @@ def chosen(choice):
     identity = resolve_choice(study)
     assert identity is not None
     return SimpleNamespace(study=study, identity=identity)
+
+
+@pytest.fixture
+def chosen(choice):
+    return _choose(choice)
 
 
 def test_the_launch_landmark_keeps_the_confirmed_choice(chosen):
@@ -56,7 +60,7 @@ def test_the_launch_landmark_keeps_the_confirmed_choice(chosen):
 
 @pytest.mark.parametrize("change", [
     "extra_field", "other_spec_id", "other_hours", "other_confirmation", "dropped_row",
-    "timing_row_before", "another_study", "chained_follow", "no_ref",
+    "another_study", "chained_follow", "no_ref",
 ])
 def test_nothing_but_the_hosts_own_landmark_follows(chosen, change):
     study, patch = chosen.study, _landmark_patch(chosen.study)
@@ -72,8 +76,6 @@ def test_nothing_but_the_hosts_own_landmark_follows(chosen, change):
         patch = {**patch, "confirmations": {**patch["confirmations"], "plan_timing_time_varying": True}}
     elif change == "dropped_row":
         patch = {**patch, "sensitivity_specs": []}
-    elif change == "timing_row_before":
-        study = {**study, "sensitivity_specs": [row]}
     elif change == "another_study":
         study = {**study, "id": "different-study"}
     elif change == "chained_follow":
@@ -84,6 +86,17 @@ def test_nothing_but_the_hosts_own_landmark_follows(chosen, change):
         study = {**study, "demo_planning_authority_ref": ""}
     with pytest.raises(ValueError, match="demo_planning_authority_stale"):
         follow_launch_timing(study, patch)
+
+
+def test_a_study_that_already_has_a_timing_row_does_not_follow(choice):
+    """Carbon b31107 minor 2: a valid receipt on a study with a timing row still refuses."""
+    row = plan_decisions.landmark_timing_specification(
+        outcome="death", landmark_hours=plan_decisions.QUESTION_LANDMARK_HOURS, spec_id="question_landmark_24h",
+    )
+    chosen = _choose(choice, sensitivity_specs=[row])
+    assert resolve_choice(chosen.study) == chosen.identity  # the receipt itself is valid
+    with pytest.raises(ValueError, match="demo_planning_authority_stale"):
+        follow_launch_timing(chosen.study, _landmark_patch(chosen.study))
 
 
 def test_no_client_path_writes_the_followed_choice(chosen):
@@ -110,17 +123,41 @@ def test_only_the_hosts_launch_landmark_calls_the_follow():
     import ast
     from pathlib import Path
 
-    import easyicu.webserver as webserver
+    import easyicu
 
-    callers = set()
-    for source in Path(webserver.__file__).parent.rglob("*.py"):
+    users = set()
+    for source in Path(easyicu.__file__).parent.rglob("*.py"):
         tree = ast.parse(source.read_text(encoding="utf-8"))
-        for function in ast.walk(tree):
-            if isinstance(function, (ast.FunctionDef, ast.AsyncFunctionDef)) and any(
-                isinstance(node, ast.Name) and node.id == "follow_launch_timing" for node in ast.walk(function)
-            ) and function.name != "follow_launch_timing":
-                callers.add((source.name, function.name))
-    assert callers == {("plan_decisions.py", "record_post_baseline_landmark")}
+        scopes = {id(child): node.name for node in ast.walk(tree)
+                  if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)) for child in ast.walk(node)}
+        for node in ast.walk(tree):
+            named = (
+                (isinstance(node, ast.Name) and node.id == "follow_launch_timing")
+                or (isinstance(node, ast.Attribute) and node.attr == "follow_launch_timing")
+                or (isinstance(node, ast.alias) and "follow_launch_timing" in (node.name, node.asname))
+            )
+            if named:
+                users.add((source.name, scopes.get(id(node), "<module>")))
+    assert users == {("plan_decisions.py", "record_post_baseline_landmark")}
+
+
+def test_a_damaged_receipt_at_launch_is_the_typed_stale_refusal(monkeypatch, tmp_path):
+    """Carbon b31107 minor 1: a receipt that cannot be read refuses launch, never crashes it."""
+    from easyicu.webserver import research_pipeline_run_preparation as preparation
+    from easyicu.webserver.pi_copilot import demo_planning_authority
+    from tests.webserver.test_a_first_day_association_starts_at_24_hours import _study, launch as _launch
+
+    prepare, _coordinates = _launch.__wrapped__(monkeypatch, tmp_path)
+    study = {**_study(), "revision": 1, "demo_planning_authority_ref": "a" * 64,
+             "data_source": {"database": "eicu", "path": str(tmp_path / "synthetic-source")}}
+
+    def unreadable(_ref):
+        raise FileNotFoundError("receipt")
+
+    monkeypatch.setattr(demo_planning_authority, "_signed_body", unreadable)
+    with pytest.raises(preparation.ResearchPipelineRunError) as raised:
+        prepare(study)
+    assert raised.value.code == "research_pipeline_demo_planning_authority_stale"
 
 
 def test_a_staged_launch_hands_the_runner_and_the_store_a_choice_that_resolves(chosen, monkeypatch):
