@@ -95,6 +95,7 @@
       preparedDataStatus, validDeferredInputScope, deferredInputScopeHtml,
       reviewedPopulationSpecHtml, populationPreparationHtml, populationAcceptanceHtml,
       localizedAuthorizationQuestion, localizedDecisionEvidence, survivalLandmarkDecisionCopy,
+      staleConfirmationHtml, latestAttemptFailureHtml, planConversationHtml,
     } = window.EasyICU.guidedPi.require('confirmationData').create(host);
     const cohortEligibilityDecisionHtml = typeof host.cohortEligibilityDecisionHtml === 'function'
       ? host.cohortEligibilityDecisionHtml : () => '';
@@ -118,6 +119,13 @@
 
     function deferredScopeRejected(review) {
       return Boolean(review?.deferred_input_scope && !validDeferredInputScope(review.deferred_input_scope));
+    }
+
+    function asksForExposureChoice(review) {
+      const notes = review?.question_requirements;
+      const uncovered = notes?.items?.filter?.(item => item?.disposition === 'not_covered') || [];
+      return notes?.status === 'shown' && notes.judged_on_plan_under_review !== false
+        && uncovered.length === 1 && Boolean(uncovered[0].exposure_choice?.additional_exposures?.length);
     }
 
     function workflowConfirmation() {
@@ -373,16 +381,19 @@
           approve: tr('Generate a fresh research plan', '重新生成研究计划'),
         };
       }
+      const repairStopText = window.EasyICU.guidedPi.optional('runStop')?.repairStopText;
+      const repairStop = !providerFailure && failedRun?.run_id && repairStopText?.(failedRun.plan_repair, tr);
+      const failedReceipt = repairStop && failedRun.artifact_names?.includes('source_run_manifest.json');
       if (code === 'failed_pipeline_requires_fresh_plan') return {
         code, grants: ['provider_run', 'literature'], hideEdit: true,
         message: tr(
           'Keep the failed planning attempt and the previous candidate plan as history. Start a fresh Research Agent planning run from the current study configuration, and pause for my review before analysis.',
           '保留失败的规划尝试和上一版候选计划作为历史。请按当前研究配置启动一次新的 Research Agent 规划，并在分析前停下让我审核。',
         ),
-        title: providerFailure ? tr('Plan generation paused because the model service did not respond', '模型服务暂时未响应，计划生成已暂停') : planContractExhausted
+        title: providerFailure ? tr('Plan generation paused because the model service did not respond', '模型服务暂时未响应，计划生成已暂停') : repairStop || planContractExhausted
           ? tr('Plan generation did not finish', '计划生成未完成')
           : tr('The previous research task did not complete', '上次科研任务未完成'),
-        note: providerFailure ? tr(
+        note: repairStop || (providerFailure ? tr(
           'Transient timeouts are retried once automatically. If the service remains unavailable, use the action below to generate a new plan later. Analysis has not started.',
           '短暂超时会自动重试一次。服务仍未恢复时，请稍后使用下方操作重新生成计划。分析尚未开始。',
         ) : planContractExhausted
@@ -390,14 +401,16 @@
             'Planning exhausted its allowed attempts before producing a valid plan. No analysis started. The failed attempt remains in the run history; generate a fresh plan for review.',
             '规划在允许的尝试次数内未能生成有效计划，分析尚未开始。失败尝试保留在运行记录中；需要重新生成计划并审阅。',
           )
-          : '',
+          : ''),
         approve: tr('Generate a fresh plan', '重新生成新计划'),
         // A stopped run's cause is said once, by its run-stop block in the
         // conversation right above this card; a job that failed before any
         // run existed has no such block, so the card says it.
-        reason: failedRun ? '' : failureReason,
+        reason: failedRun && !repairStop ? '' : failureReason,
         reviewMaterialsTitle: tr('Read-only outputs from the failed-closed run', '失败关闭运行的只读产物'),
-        reviewResources: historicalRunId ? [
+        reviewResources: failedReceipt ? [
+          { kind: 'research_artifact', run_id: failedRun.run_id, artifact: 'source_run_manifest.json', label: window.EU_PRODUCT_LABELS?.stopAction?.('receipt', tr) || tr('Open failure receipt', '打开失败回执'), media_type: 'application/json' },
+        ] : historicalRunId ? [
           { kind: 'research_report', run_id: historicalRunId, artifact: 'full_analysis_report.json', label: tr('Preview complete analysis report', '预览完整分析报告'), media_type: 'application/json' },
           { kind: 'research_report', run_id: historicalRunId, artifact: 'article_report.json', label: tr('Preview article report with figures', '预览含图文章报告'), media_type: 'application/json' },
           { kind: 'research_report', run_id: historicalRunId, artifact: 'technical_report.json', label: tr('Preview technical analysis report', '预览技术分析报告'), media_type: 'application/json' },
@@ -433,6 +446,7 @@
         title: tr('The plan and pre-analysis data check are ready', '计划与分析前数据检查已准备好'),
         note: tr('Review the plan, data readiness, and references. Approval then builds the final cohort, preprocesses the data, and runs the analysis.', '请查看计划、数据准备情况和文献依据；批准后才会生成最终分析队列、完成预处理并运行分析。'),
         approve: tr('Approve and start analysis', '批准并开始分析'),
+        approveDisabled: !workflow.plan_review_summary,
         compactApproval: true,
         dataStatus: preparedDataStatus(),
         reject: tr('Reject this plan', '拒绝当前计划'),
@@ -632,37 +646,70 @@
         { kind: 'research_artifact', run_id: reviewedPlanRunId, artifact: 'question_requirements_review.json', label: tr('View the question requirements', '查看题面要求'), media_type: 'application/json' },
         ...planStopResources,
       ] : [];
+      const reviewedRun = reviewedPlanRunId
+        && (workflow.runs || []).find(run => run?.run_id === reviewedPlanRunId);
+      const reviewedRepairStop = repairStopText?.(reviewedRun?.plan_repair, tr);
+      const exposureClarification = asksForExposureChoice(workflow.plan_review_summary);
       const questionOwner = window.EasyICU.guidedPi.optional('questionRequirements');
       const arrangement = code === 'question_requirement_not_covered'
         ? questionOwner?.exposureArrangement(workflow, tr) : null;
       if (arrangement) return {
         code, grants: ['provider_run', 'literature'], exposureArrangement: arrangement, hideEdit: true,
         title: tr('Confirm the exposure arrangement', '确认暴露安排'),
-        note: arrangement.note,
+        note: [reviewedRepairStop, arrangement.note].filter(Boolean).join(' '),
         approve: tr('Continue', '继续'),
         reviewResources: questionStopResources,
       };
-      if (code === 'question_requirement_not_covered' && editPlanOffered) return {
+      if (code === 'question_requirement_not_covered' && editPlanOffered && !exposureClarification) return {
         code, grants: [], nonApprovable: true, primaryEdit: true,
         title: tr('This plan does not answer an analysis the question asks for', '题面要求的一项分析，这份计划没有回答'),
+        note: reviewedRepairStop,
         reviewMaterialsTitle: tr('View the plan and review evidence', '查看计划与审阅依据'),
         reviewResources: questionStopResources,
       };
       if (code === 'question_requirement_not_covered') return {
-        code, grants: ['provider_run', 'literature'],
+        code, grants: exposureClarification ? [] : ['provider_run', 'literature'],
+        nonApprovable: exposureClarification,
+        clarification: exposureClarification,
+        editLabel: exposureClarification ? tr('Answer this question', '回答这个问题') : undefined,
         message: tr(
           'Keep the current candidate plan as review evidence. Generate a fresh candidate plan from the current study configuration, and pause again for my review before analysis.',
           '保留当前候选计划作为审阅记录。请按当前研究配置重新生成候选计划，并在分析前再次停下让我审核。',
         ),
         title: tr('This plan does not answer an analysis the question asks for', '题面要求的一项分析，这份计划没有回答'),
-        note: tr(
+        note: [reviewedRepairStop, exposureClarification ? tr(
+          'This plan cannot be approved. Answer the exposure question below before generating a revised plan.',
+          '这份计划不能批准。请先回答下方的暴露问题，再生成修订计划。',
+        ) : tr(
           'This plan cannot be approved, and no analysis has started. Generate the plan again. To change what the question asks, say so in the conversation first.',
           '这份计划不能批准，分析尚未开始。请重新生成计划。如果要改题面的要求，请先在对话中说明。',
-        ),
+        )].filter(Boolean).join(' '),
         approve: tr('Generate fresh plan', '重新生成计划'),
         reviewMaterialsTitle: tr('View the plan and review evidence', '查看计划与审阅依据'),
         reviewResources: questionStopResources,
       };
+      if (code === 'first_result_delivery_requires_article' || code === 'host_delivery_request_ambiguous') {
+        const selection = workflow.plan_review_summary?.deliverables;
+        const inlineChoice = code === 'host_delivery_request_ambiguous'
+          ? Boolean(selection?.check?.length) : Boolean(selection?.article_required);
+        return {
+          code, grants: [], nonApprovable: true, clarification: true,
+          hideEdit: inlineChoice,
+          editLabel: tr('Revise in the conversation', '在对话里修改'),
+          title: code === 'host_delivery_request_ambiguous'
+            ? tr('Clarify the requested deliverables', '请明确交付要求')
+            : tr('The requested deliverables require an article run', '所请求的交付物需要在论文任务中生成'),
+          note: inlineChoice ? '' : code === 'host_delivery_request_ambiguous' ? tr(
+            'This plan cannot be approved until you clarify which deliverables to include. Specify your choices in the conversation.',
+            '请在对话中说明需要哪些交付物，以及应省略哪些。明确交付要求后才能继续，这份计划目前不能批准。',
+          ) : tr(
+            'This plan cannot be approved with the requested article deliverables. Revise the question for this analysis-only run, or start a separate article run to keep them.',
+            '本次仅分析任务无法满足论文交付要求，这份计划不能批准。请在对话中修改研究问题。如需保留这些要求，请另行启动论文任务。',
+          ),
+          reviewMaterialsTitle: tr('View the plan and review evidence', '查看计划与审阅依据'),
+          reviewResources: planStopResources.slice(0, 1),
+        };
+      }
       if (code === 'question_requirement_capability_gap') return {
         code, grants: ['provider_run', 'literature'],
         message: tr(
@@ -670,10 +717,10 @@
           '保留当前候选计划作为审阅记录。请按当前研究配置重新生成候选计划，并在分析前再次停下让我审核。',
         ),
         title: tr('Planning found an analysis the question asks for that this plan cannot do', '规划发现：题面要求的一项分析，这份计划做不到'),
-        note: tr(
+        note: [reviewedRepairStop, tr(
           'This plan cannot be approved, and no analysis has started. Revise or drop that requirement in the conversation, or generate the plan again; unless the question changes, a new plan may stop here again.',
           '这份计划不能批准，分析尚未开始。可以在对话中修改或去掉这项要求，或重新生成计划；题面不改的话，新计划可能还会停在这里。',
-        ),
+        )].filter(Boolean).join(' '),
         approve: tr('Generate fresh plan', '重新生成计划'),
         reviewMaterialsTitle: tr('View the plan and review evidence', '查看计划与审阅依据'),
         reviewResources: questionStopResources,
@@ -735,18 +782,6 @@
         ],
       };
       return studyStopConfirmation(workflow, code);
-    }
-
-    // A gate offered against state that has since changed says so in place
-    // instead of offering its buttons (the strip above offers the rebind).
-    function staleConfirmationHtml(confirmation) {
-      return `<section class="gpi-confirmation is-stale" data-gpi-stale-gate aria-label="${tr('Workflow confirmation required', '需要确认科研流程')}">
-        <span class="gpi-confirmation-icon" aria-hidden="true">${iconHtml('shield', 17)}</span>
-        <div class="gpi-confirmation-body"><strong>${esc(confirmation.title)}</strong><small>${esc(tr(
-          'This decision was for an earlier state of the study and can no longer be answered here. Rebind the current state above first.',
-          '这项确认针对研究之前的状态，已不能在这里作答。请先在上方重新绑定当前状态。',
-        ))}</small></div>
-      </section>`;
     }
 
     function workflowConfirmationHtml() {
@@ -1051,11 +1086,12 @@
       )
         ? planConversationHtml(planPreview)
         : '';
-      const displayedTitle = review && review.deferred_input_scope
+      const deliveryConflict = ['first_result_delivery_requires_article', 'host_delivery_request_ambiguous'].includes(confirmation.code);
+      const displayedTitle = !deliveryConflict && review && review.deferred_input_scope
         ? scopeRejected ? tr('The plan’s data-read scope is not verified', '计划的数据读取范围尚未核验')
           : tr('Review the complete plan and data-read scope', '审阅完整计划与数据读取范围')
         : firstDecisionCopy ? firstDecisionCopy.cardTitle : confirmation.title;
-      const displayedNote = review && review.deferred_input_scope ? ''
+      const displayedNote = !deliveryConflict && review && review.deferred_input_scope ? ''
         : firstDecisionCopy ? firstDecisionCopy.context : confirmation.note;
       const profileName = String(review && review.submission_profile_ref || '').split('/')[0];
       const desktopProfile = ['desktop_first_result_dev', 'desktop_first_result_live_pubmed_dev'].includes(profileName)
@@ -1070,6 +1106,10 @@
       const adjustmentOwner = window.EasyICU.guidedPi.optional('sourceAdjustments');
       const sourceAdjustments = adjustmentOwner
         ? adjustmentOwner.render(((host.workflow() || {}).plan_review_summary || {}).source_adjustments) : '';
+      const planActions = window.EasyICU.guidedPi.optional('planActions');
+      const deliverables = planActions?.deliverablesField?.(review && review.deliverables, {
+        tr, esc, disabled: host.busy(),
+      }) || '';
       const failureNotice = latestAttemptFailureHtml();
       const decisionActions = firstDecisionCopy && Array.isArray(firstDecisionCopy.options)
         ? firstDecisionCopy.options.map(option => `<button class="gpi-decision-option" type="button" data-gpi-plan-decision-code="${esc(String(firstDecisionItem && firstDecisionItem.code || ''))}" data-gpi-plan-decision-option="${esc(option.optionId)}"${firstDecisionCopy.cardSha256 ? ` data-gpi-plan-decision-card="${esc(firstDecisionCopy.cardSha256)}"` : ''}><strong>${esc(option.label)}</strong><span>${esc(option.effect)}</span>${option.requirement ? `<small>${esc(option.requirement)}</small>` : ''}</button>`).join('')
@@ -1089,7 +1129,7 @@
       const hasRecovery = showEdit || stopEdits || decisionActions || readiness?.connect || (showPrimaryAction && !primaryDisabled);
       return `${planConversation}<section class="gpi-confirmation${confirmation.code === 'plan_scientific_changes_required' ? ' is-science-review' : ''}${confirmation.compactApproval ? ' is-plan-approval' : ''}"${hasRecovery ? ' data-gpi-review-recovery' : ''}${confirmation.clarification ? ' data-gpi-clarification' : ''} aria-label="${tr('Workflow confirmation required', '需要确认科研流程')}">
         <span class="gpi-confirmation-icon" aria-hidden="true">${iconHtml('shield', 17)}</span>
-        <div class="gpi-confirmation-body">${failureNotice}<strong>${esc(displayedTitle)}</strong>${confirmation.reason && !firstDecisionCopy ? `<p class="gpi-confirmation-reason">${esc(confirmation.reason)}</p>` : ''}${displayedNote ? `<small>${esc(displayedNote)}</small>` : ''}${desktopProfile}${reviewedPopulation}${deferredInputScope}${populationPreparation}${populationAcceptance}${sourceAdjustments}${flowSteps}${dataStatus}${pendingPreparation}${repeatedStaysDefault}${icdSourceNotice}${reviewStatus}${studyReadings}${trialBody}${groupNotes}${questionNotes}${reviewMaterials}${compactOtherAction}</div>
+        <div class="gpi-confirmation-body">${failureNotice}<strong>${esc(displayedTitle)}</strong>${confirmation.reason && !firstDecisionCopy ? `<p class="gpi-confirmation-reason">${esc(confirmation.reason)}</p>` : ''}${displayedNote ? `<small>${esc(displayedNote)}</small>` : ''}${desktopProfile}${reviewedPopulation}${deferredInputScope}${populationPreparation}${populationAcceptance}${sourceAdjustments}${deliverables}${flowSteps}${dataStatus}${pendingPreparation}${repeatedStaysDefault}${icdSourceNotice}${reviewStatus}${studyReadings}${trialBody}${groupNotes}${questionNotes}${reviewMaterials}${compactOtherAction}</div>
         <div class="gpi-confirmation-actions${decisionActions ? ' has-decision-options' : ''}">
           ${confirmation.dataStatus && !confirmation.compactApproval ? `<button class="btn sm" type="button" data-gpi-confirm-preview-data>${esc(tr('Preview analysis data', '先预览分析数据'))}</button>` : ''}
           ${decisionActions || stopEdits || (showEdit ? `<button class="btn ${editPrimary ? 'primary ' : ''}sm" type="button" data-gpi-confirm-edit>${confirmation.editLabel ? esc(confirmation.editLabel) : icdSourceFinding && !decisionCount ? tr('Change cohort', '修改人群') : confirmation.code === 'plan_scientific_changes_required' ? tr('Answer this question', '回答这个问题') : confirmation.code === 'provider_ready_to_generate_plan' ? tr('Add research requirements', '我想先补充研究要求') : confirmation.code === 'failed_pipeline_execution_retry_available' ? tr('Generate a fresh research plan', '重新生成研究计划') : confirmation.compactApproval ? tr('Change plan', '修改计划') : tr('Request changes', '提出修改')}</button>` : '')}
@@ -1101,64 +1141,6 @@
           ${showPrimaryAction ? `<button class="btn primary sm" type="button" data-gpi-confirm-action${primaryDisabled}>${esc(primaryLabel)}</button>` : ''}
         </div>
       </section>`;
-    }
-
-    function latestAttemptFailureHtml() {
-      const workflow = host.workflow() || {};
-      const failure = workflow.latest_attempt_failure;
-      const reviewedId = workflow.plan_review_summary && workflow.plan_review_summary.run_id;
-      if (!failure || !failure.run_id || failure.run_id === reviewedId
-        || !reviewedId || failure.candidate_run_id !== reviewedId) return '';
-      const attempt = (workflow.runs || []).find(run => run && run.run_id === failure.run_id) || {};
-      const providerFailure = failure.reason === 'provider_unavailable'
-        || ['research_pipeline_provider_timeout', 'research_pipeline_planner_provider_unavailable'].includes(attempt.gate_reason_code);
-      const title = providerFailure
-        ? tr('The model service did not respond; plan generation is paused', '模型服务暂时未响应，计划生成已暂停')
-        : failure.reason === 'planner_budget_exhausted'
-          ? tr('Plan generation reached its attempt limit', '计划生成已达到本次尝试上限')
-          : failure.reason === 'plan_bindings_invalid' || attempt.gate_reason_code === 'research_pipeline_plan_contract_exhausted'
-          ? tr('Plan generation did not finish', '计划生成未完成')
-          : tr('Data preparation did not finish', '数据准备未完成');
-      const detail = providerFailure ? tr(
-        'Transient timeouts are retried once automatically. If the service remains unavailable, planning pauses. Use the next action below when ready.',
-        '短暂超时会自动重试一次。服务仍未恢复时，计划生成会暂停；请按下方提示处理。',
-      ) : tr('This attempt stopped before analysis. Follow the next action below.', '本次尝试已停止，分析尚未开始。请按下方提示处理。');
-      const receipt = resourceButton({
-        kind: 'research_artifact', run_id: failure.run_id, artifact: 'source_run_manifest.json',
-        media_type: 'application/json', label: tr('View failure receipt', '查看失败回执'),
-      }, tr('View failure receipt', '查看失败回执'));
-      return `<div class="gpi-confirmation-failure" role="status"><strong>${esc(title)}</strong><small>${esc(detail)}</small>${receipt}</div>`;
-    }
-
-    function planConversationHtml(preview) {
-      const labels = window.EU_PRODUCT_LABELS;
-      if (!labels || typeof labels.clinicalPlan !== 'function') return '';
-      const summary = labels.clinicalPlan(preview && preview.clinical_summary, tr);
-      const rows = summary.lines;
-      const design = preview && preview.design && typeof preview.design === 'object' ? preview.design : {};
-      // The planner's sentences quote column ids (「按sex分层」); the prose
-      // owner names them for a Chinese reader.
-      const prose = window.AGENT_PLAN_PROSE;
-      const named = text => (prose ? prose.namedZh(String(text || ''), {}) : String(text || ''));
-      const variableName = id => (prose && prose.chineseName({}, id)) || id;
-      const designRows = [
-        [tr('Estimand', '要估计什么'), design.estimand],
-        [tr('Analysis time zero', '分析时间零点'), design.time_zero],
-        [tr('Follow-up', '随访范围'), design.observation_window],
-        [tr('Primary method', '主要方法'), design.primary_method],
-      ].filter(row => String(row[1] || '').trim());
-      const designHtml = designRows.length
-        ? `<section class="gpi-plan-exact-settings"><strong>${esc(tr('Exact settings proposed by the plan', '计划建议的具体设定'))}</strong>${designRows.map(row => `<div><b>${esc(row[0])}</b><span>${esc(named(row[1]))}</span></div>`).join('')}${Array.isArray(design.required_variables) && design.required_variables.length ? `<small>${esc(tr('Required variables: ', '需要的变量：'))}${esc(design.required_variables.map(variableName).join('、'))}</small>` : ''}</section>`
-        : '';
-      const designDisclosure = designHtml
-        ? `<details class="gpi-plan-design-disclosure"><summary>${esc(tr('View exact model and variable settings', '查看精确模型与变量设置'))}</summary>${designHtml}</details>`
-        : '';
-      const rowHtml = row => `<li><b>${esc(row.label)}</b><em>${esc(row.text)}</em></li>`;
-      const append = preview && preview.append;
-      const addition = append ? `<section class="gpi-plan-addition"><strong>${esc(tr(append.label_en, append.label_zh))}</strong><p>${esc(tr(append.source_notice, append.source_notice_zh))}</p><ul>${(append.steps || []).map(step => `<li>${esc(tr(step.intent, step.intent_zh))}</li>`).join('')}</ul><small>${esc(tr('Approve this addition to run it in the same study.', '确认后，这项追加分析会在同一研究里运行。'))}</small></section>` : '';
-      return `<article class="gpi-plan-conversation" aria-label="${esc(tr('Candidate research plan summary', '候选研究计划摘要'))}">
-        <details class="gpi-plan-conversation-summary" open><summary>${esc(append ? tr('Existing study plan', '已有研究计划') : tr('Candidate plan summary', '候选计划摘要'))}</summary><ol class="gpi-clinical-lines">${rows.map(rowHtml).join('')}</ol>${summary.timing ? `<p class="gpi-plan-timing">${esc(summary.timing)}</p>` : ''}${designDisclosure}</details>${addition}
-      </article>`;
     }
 
     function localizedAuthorizationDecisionCopy(item) {
@@ -1456,6 +1438,9 @@
       if (workflow.next_action_code === 'study_primary_outcome_confirmation_required') return tr(
         'Primary outcome: ', '主要结局：',
       );
+      if (['first_result_delivery_requires_article', 'host_delivery_request_ambiguous'].includes(workflow.next_action_code)) return tr(
+        'I want to revise the requested deliverables for this run: ', '我想修改本次任务的交付要求：',
+      );
       const findingCodes = (workflow.plan_review_summary || {}).finding_codes;
       if (workflow.next_action_code === 'plan_icd_source_unverified'
           || (Array.isArray(findingCodes) && findingCodes.includes('HOST_ICD_SOURCE_UNVERIFIED'))) return stopActionCopy({ kind: 'edit_study', params: { field: 'cohort' } }, tr).draft;
@@ -1472,6 +1457,11 @@
       const [stopEdit] = studyStopEdits(workflow);
       const copy = stopEdit && stopActionCopy(stopEdit, tr);
       if (copy) return copy.draft;
+      if (workflow.next_action_code === 'question_requirement_not_covered'
+        && asksForExposureChoice(workflow.plan_review_summary)) return tr(
+        'For this study, analyse these exposures as follows: ',
+        '本研究请按以下方式分析这些暴露：',
+      );
       const review = workflow.plan_review_summary || {};
       const questions = Array.isArray(review.authorization_questions)
         ? review.authorization_questions.filter(item => item && (item.question || item.code))

@@ -596,7 +596,7 @@ class TargetTrialRuntimeAuthority(_Closed):
         """Return the deterministic analysis owner after validating the suite."""
 
         self.require_execution_origin()
-        if len(plan.steps) != 3:
+        if len(plan.execution_steps) != 3:
             raise TargetTrialAuthorityError(
                 "target trial suite must have cohort, analysis and figure owners"
             )

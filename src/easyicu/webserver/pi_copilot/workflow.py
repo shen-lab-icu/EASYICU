@@ -14,7 +14,7 @@ from typing import Any, Dict, List, Literal, Mapping, Optional, Sequence
 
 from pydantic import BaseModel, ConfigDict, Field, ValidationError
 
-from easyicu.research_agent.planning.approval_stops import PLAN_APPROVAL_STOPS
+from easyicu.research_agent.planning.approval_stops import DELIVERY_APPROVAL_STOPS, PLAN_APPROVAL_STOPS
 from easyicu.webserver import agent_pipeline_runs, agent_runs, jobs, sources
 from easyicu.webserver import host_action_starting
 from easyicu.webserver.host_action_contracts import (
@@ -807,7 +807,7 @@ def build_research_workflow_snapshot(
             # How the selected database changes the study (db capability review).
             **({"source_adjustments": source_adjustments} if source_adjustments is not None else {}),
         }
-        if raw_scientific_review
+        if raw_scientific_review or isinstance(review_authority.get("deliverables"), Mapping)
         else None
     )
     current_scientific_digest = study_context_owner.scientific_configuration_sha256(
@@ -842,6 +842,13 @@ def build_research_workflow_snapshot(
         and plan_configuration_matches
         and not (planning_running or analysis_running)
     )
+    if plan_review_pending and plan_review_summary is not None:
+        deliverables = review_authority.get("deliverables")
+        if isinstance(deliverables, Mapping):
+            plan_review_summary["deliverables"] = {
+                **deliverables,
+                "article_required": review_authority.get("deliverables_require_article") is True,
+            }
     # Sibling choices may continue across host-receipted edits, but the
     # superseded candidate still cannot be approved or executed.
     choices_pending = bool(
@@ -859,8 +866,11 @@ def build_research_workflow_snapshot(
         and str(review_authority.get("budget_mode") or "full_reviewed")
         != "planner_canary"
     )
+    delivery_reason = next((code for code in DELIVERY_APPROVAL_STOPS if code in active_plan_review_codes), None)
     live_plan_reason = (
-        "plan_icd_source_unverified"
+        delivery_reason
+        if delivery_reason
+        else "plan_icd_source_unverified"
         if "plan_icd_source_unverified" in active_plan_review_codes
         else "agent_plan_revision_nonconvergent"
         if "agent_plan_revision_nonconvergent" in active_plan_review_codes
@@ -883,7 +893,7 @@ def build_research_workflow_snapshot(
     )
     plan_review_reason_code = (
         "plan_scientific_changes_required"
-        if choices_pending
+        if choices_pending and not delivery_reason
         else live_plan_reason
         if plan_review_pending
         else "plan_configuration_superseded"

@@ -6,11 +6,16 @@ delivery promises no scientific result, patient export or publication readiness.
 
 from __future__ import annotations
 
+import hashlib
+import json
 import re
 from dataclasses import dataclass
+from enum import Enum
 from pathlib import Path
 from types import MappingProxyType
 from typing import Literal, Mapping, Sequence
+
+from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 
 FIGURE_SUFFIXES = frozenset({".png", ".svg", ".pdf", ".tif", ".tiff"})
@@ -118,6 +123,7 @@ def contained_regular_output_file(out_dir: Path, value: object) -> Path:
 
 RUN_DELIVERY_SCHEMA_VERSION = "easyicu.run_delivery/1"
 HOST_DELIVERY_REASON = "question_requirement_covered_by_host_delivery"
+HostDeliveryKind = Literal["article_preview", "manuscript_pdf", "references"]
 DeliverableKind = Literal[
     "article_preview", "manuscript_pdf", "result_tables", "figures", "references",
 ]
@@ -148,17 +154,18 @@ RUN_DELIVERABLES: Mapping[DeliverableKind, RunDeliverable] = MappingProxyType({
         ("manuscript_draft.json", "manuscript_provenance.json"),
         r"(?:web|html|browser|online|网页|在线|浏览器)\s*"
         r"(?:(?:article|manuscript|report|文章|论文|报告)\s*)?(?:preview|预览)"
+        r"|(?:article|manuscript|report|文章|论文|报告)\s*(?:preview|预览)"
         r"|(?:article|manuscript|report)\s+text|正文",
     ),
     "manuscript_pdf": RunDeliverable(
         ("manuscript_scaffold.pdf", "manuscript_revision.pdf", "manuscript_pdf_receipt.json"),
-        r"pdf",
+        r"pdf|typeset copy",
     ),
     "result_tables": RunDeliverable(
         ("result_tables.json",), r"(?:result\s+)?tables?|结果表(?:格)?|表格",
     ),
     "figures": RunDeliverable(
-        ("figure_gallery.json",), r"figures?|图表|图件|图形|图片",
+        ("figure_gallery.json",), r"figures?|plots?|图表|图件|图形|图片",
     ),
     "references": RunDeliverable(
         ("manuscript_scaffold.bib",),
@@ -173,13 +180,21 @@ RUN_DELIVERY_ARTIFACT_NAMES = tuple(dict.fromkeys(
 
 # Neutral delivery grammar only. Unknown words (methods, data requests,
 # destinations, formats, etc.) leave a residue and keep ordinary gap handling.
+_DELIVERY_VERB = (
+    r"(?:\b(?:provide|include|deliver|(?:give|send)\s+me|export|generate|supply|share|render)\b"
+    r"|提供|包含|交付|导出|生成)"
+)
 _DELIVERY_GRAMMAR = re.compile(
-    r"\b(?:please|provide|include|deliver|a|an|the|and|or|with|downloadable|"
-    r"download|manuscript|article|report|files?|readable)\b"
-    r"|(?:请|提供|包含|交付|以及|并|和|及|与|或|可下载|下载|文件|信息充分|清晰|且|可读|的)",
+    rf"{_DELIVERY_VERB}|\b(?:please|"
+    r"a|an|the|and|either|or|of|with|set|study|estimates|downloadable|download|manuscript|article|report|files?|readable)\b"
+    r"|(?:请|以及|并|和|及|与|或者|或是|还是|或|可下载|下载|文件|论文|文章|报告|信息充分|清晰|且|可读|的)",
     re.IGNORECASE,
 )
 _SEPARATORS = re.compile(r"[\s,，、;；。.：:()（）/\-]+")
+_DELIVERY_NAMES = {
+    kind: re.compile(r"(?<![a-z])(?:" + spec.request_names + r")(?![a-z])", re.IGNORECASE)
+    for kind, spec in RUN_DELIVERABLES.items()
+}
 
 
 def requested_deliverable_kinds(quote: str) -> tuple[DeliverableKind, ...]:
@@ -190,8 +205,7 @@ def requested_deliverable_kinds(quote: str) -> tuple[DeliverableKind, ...]:
     """
     remainder = quote
     kinds: list[DeliverableKind] = []
-    for kind, spec in RUN_DELIVERABLES.items():
-        pattern = re.compile(r"(?<![a-z])(?:" + spec.request_names + r")(?![a-z])", re.IGNORECASE)
+    for kind, pattern in _DELIVERY_NAMES.items():
         remainder, count = pattern.subn(" ", remainder)
         if count:
             kinds.append(kind)
@@ -199,19 +213,268 @@ def requested_deliverable_kinds(quote: str) -> tuple[DeliverableKind, ...]:
     return tuple(kinds) if kinds and not _SEPARATORS.sub("", remainder) else ()
 
 
-def host_delivery_coverage(kinds: Sequence[DeliverableKind]) -> dict[str, object] | None:
-    """Resolve typed kinds against the export contract, never feasibility prose."""
-    if not kinds or any(kind not in RUN_DELIVERABLES for kind in kinds):
+HOST_DELIVERY_KINDS: tuple[HostDeliveryKind, ...] = ("article_preview", "manuscript_pdf", "references")
+
+_DELIVERY_SENTENCE_BOUNDARY = re.compile(r"[。？！?!；;\n]+|\.(?!\d)")
+_DELIVERY_PLEASE = r"(?:\bplease\s+|请\s*)"
+_DIRECT_NEGATION = (
+    rf"(?:\b(?:do\s+not|don['’]t|never|no|not)\b|无需|不必|不要|不需要|不用|(?:不|别|勿)(?={_DELIVERY_VERB}))"
+)
+_DELIVERY_EXCLUSION = re.compile(
+    rf"^(?:{_DELIVERY_PLEASE})?(?:{_DIRECT_NEGATION}|\bwithout\b)\s*", re.IGNORECASE,
+)
+_DELIVERY_CLAUSE_BOUNDARY = re.compile(
+    rf"(?:[,，]\s*(?:(?:\b(?:and|but)\s+|并\s*|但(?:是)?\s*|不过\s*))?"
+    rf"|\b(?:and|but)\s+|并\s*|但(?:是)?\s*|不过\s*)"
+    rf"(?=(?:{_DELIVERY_PLEASE})?(?:{_DIRECT_NEGATION}|{_DELIVERY_VERB}))"
+    rf"|(?=\bwithout\s+(?:(?:a|an|the)\s+)?(?:"
+    + "|".join(spec.request_names for spec in RUN_DELIVERABLES.values()) + r")(?![a-z]))",
+    re.IGNORECASE,
+)
+_DELIVERY_COMMAND = re.compile(rf"^(?:{_DELIVERY_PLEASE})?{_DELIVERY_VERB}", re.IGNORECASE)
+_DELIVERY_RESET = re.compile(_DELIVERY_PLEASE, re.IGNORECASE)
+_DELIVERY_ALTERNATIVE = re.compile(r"\bor\b|或者?|二选一", re.IGNORECASE)
+
+HOST_DELIVERY_CLARIFICATION = "host_delivery_request_ambiguous"
+HOST_DELIVERY_CLARIFICATION_MESSAGE = "Choose which deliverables to include on the plan review card."
+
+
+class DeliveryRequest(Enum):
+    REQUESTED = "requested"
+    NOT_REQUESTED = "not_requested"
+    UNMENTIONED = "unmentioned"
+    CHECK = "check"
+
+
+class PlanDeliverables(BaseModel):
+    """The editable selection sealed with a reviewed plan."""
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+    requested: tuple[HostDeliveryKind, ...]
+    check: tuple[HostDeliveryKind, ...] = ()
+    excluded: tuple[HostDeliveryKind, ...] = Field(default=(), exclude_if=lambda value: not value)
+    deferred: tuple[HostDeliveryKind, ...] = Field(default=(), exclude_if=lambda value: not value)
+    # An unanswered legacy choice omits the item without recording a user's No.
+    unanswered: tuple[HostDeliveryKind, ...] = Field(default=(), exclude_if=lambda value: not value)
+    confirmed: bool
+    source: Literal["detector_prefill", "user_edit"]
+
+    @model_validator(mode="after")
+    def _consistent(self) -> PlanDeliverables:
+        if self.confirmed == bool(self.check) or (self.check and self.source == "user_edit"):
+            raise ValueError("A confirmed deliverable set cannot have unresolved choices.")
+        kinds = (*self.requested, *self.check, *self.excluded, *self.deferred)
+        if len(kinds) != len(set(kinds)):
+            raise ValueError("Each deliverable must have one state.")
+        unanswered = set(self.unanswered)
+        if len(unanswered) != len(self.unanswered) or not unanswered.issubset(self.excluded):
+            raise ValueError("Unanswered choices must name distinct excluded deliverables.")
+        return self
+
+
+def neutral_delivery_kinds(quote: str) -> tuple[DeliverableKind, ...]:
+    """Read only product identities from an entirely delivery-only quote."""
+    kinds: set[DeliverableKind] = set()
+    for sentence in _DELIVERY_SENTENCE_BOUNDARY.split(quote):
+        for fragment in _DELIVERY_CLAUSE_BOUNDARY.split(sentence):
+            clause = fragment.strip()
+            if not _SEPARATORS.sub("", clause):
+                continue
+            exclusion = _DELIVERY_EXCLUSION.match(clause)
+            if exclusion:
+                clause = clause[exclusion.end():]
+            matched = requested_deliverable_kinds(clause)
+            if not matched:
+                return ()
+            kinds.update(matched)
+    return tuple(kind for kind in RUN_DELIVERABLES if kind in kinds)
+
+
+def _delivery_object_kinds(clause: str) -> set[DeliverableKind]:
+    """Read a neutral object at the start of a delivery command."""
+    kinds = set(requested_deliverable_kinds(clause))
+    if not kinds and _DELIVERY_COMMAND.match(clause):
+        for kind, pattern in _DELIVERY_NAMES.items():
+            if any(kind in requested_deliverable_kinds(clause[:name.end()]) for name in pattern.finditer(clause)):
+                kinds.add(kind)
+    return kinds
+
+
+def delivery_requests(question: str) -> dict[HostDeliveryKind, DeliveryRequest]:
+    """Suggest initial card values from local delivery commands and exclusions."""
+    decisions: dict[HostDeliveryKind, DeliveryRequest] = {}
+    for sentence in _DELIVERY_SENTENCE_BOUNDARY.split(question):
+        negated_delivery = False
+        for fragment in _DELIVERY_CLAUSE_BOUNDARY.split(sentence):
+            clause = fragment.strip()
+            exclusion = _DELIVERY_EXCLUSION.match(clause)
+            if exclusion or _DELIVERY_RESET.match(clause):
+                negated_delivery = False
+            object_text = clause[exclusion.end():] if exclusion else clause
+            objects = _delivery_object_kinds(object_text)
+            alternative = len(objects) > 1 and _DELIVERY_ALTERNATIVE.search(object_text)
+            for kind in HOST_DELIVERY_KINDS:
+                if not _DELIVERY_NAMES[kind].search(clause):
+                    continue
+                if kind not in objects or negated_delivery or (alternative and not exclusion):
+                    verdict = DeliveryRequest.CHECK
+                elif exclusion:
+                    verdict = DeliveryRequest.NOT_REQUESTED
+                else:
+                    verdict = DeliveryRequest.REQUESTED
+                previous = decisions.get(kind, verdict)
+                decisions[kind] = verdict if previous is verdict else DeliveryRequest.CHECK
+            negated_delivery |= bool(exclusion and objects)
+    return {kind: decisions.get(kind, DeliveryRequest.UNMENTIONED) for kind in HOST_DELIVERY_KINDS}
+
+
+FIRST_RESULT_DELIVERY_STOP = "first_result_delivery_requires_article"
+DELIVERY_EXCLUDED_BY_USER = "excluded_by_user"
+DELIVERY_CHOICE_UNANSWERED = "delivery_choice_unanswered"
+EMPTY_BIBTEX = "@comment{No citable references}\n"
+
+
+HOST_DELIVERY_RECEIPT = "host_delivery_receipt.json"
+HOST_DELIVERY_RECEIPT_SCHEMA = "easyicu.host_delivery_receipt/1"
+_BOUND_MANUSCRIPT = "manuscript_scaffold_bound.md"
+HOST_DELIVERY_SOURCES: Mapping[HostDeliveryKind, tuple[str, ...]] = MappingProxyType({
+    "article_preview": (_BOUND_MANUSCRIPT, "manuscript_provenance.json"),
+    "manuscript_pdf": (_BOUND_MANUSCRIPT, "manuscript_scaffold.pdf", "manuscript_pdf_receipt.json"),
+    "references": ("manuscript_scaffold.bib",),
+})
+
+
+def confirmed_host_delivery_kinds(plan: Mapping[str, object]) -> tuple[HostDeliveryKind, ...]:
+    """Read the confirmed selection from an authoritative serialized plan."""
+    selection = plan.get("deliverables")
+    if not isinstance(selection, Mapping) or selection.get("confirmed") is not True:
+        return ()
+    requested = selection.get("requested")
+    if not isinstance(requested, (tuple, list)):
+        return ()
+    return tuple(kind for kind in HOST_DELIVERY_KINDS if kind in requested)
+
+
+def host_delivery_omissions(plan: Mapping[str, object]) -> list[dict[str, str]]:
+    """Project the individual omissions sealed with the approved selection."""
+    selection = plan.get("deliverables")
+    if not isinstance(selection, Mapping) or selection.get("confirmed") is not True:
+        return []
+    unanswered = selection.get("unanswered")
+    if not isinstance(unanswered, (list, tuple)):
+        unanswered = ()
+    omitted = []
+    for field, reason in (("excluded", DELIVERY_EXCLUDED_BY_USER), ("deferred", FIRST_RESULT_DELIVERY_STOP)):
+        kinds = selection.get(field)
+        if isinstance(kinds, (list, tuple)):
+            omitted.extend(
+                {
+                    "kind": kind,
+                    "reason_code": DELIVERY_CHOICE_UNANSWERED if field == "excluded" and kind in unanswered else reason,
+                    **({"next_action": "article"} if field == "deferred" else {}),
+                }
+                for kind in HOST_DELIVERY_KINDS if kind in kinds
+            )
+    return omitted
+
+
+def host_delivery_owners(plan: Mapping[str, object]) -> dict[HostDeliveryKind, str]:
+    """Read terminal delivery owners from a serialized, authoritative plan."""
+    steps = plan.get("steps")
+    if not isinstance(steps, list):
+        return {}
+    # Historical runs sealed their selected deliveries as typed owner steps.
+    allowed = confirmed_host_delivery_kinds(plan) if "deliverables" in plan else HOST_DELIVERY_KINDS
+    return {
+        step["host_delivery_kind"]: step["step_id"]
+        for step in steps
+        if isinstance(step, Mapping) and step.get("host_delivery_kind") in HOST_DELIVERY_KINDS
+        and step["host_delivery_kind"] in allowed
+        and isinstance(step.get("step_id"), str) and step["step_id"]
+    }
+
+
+def host_delivery_failure_code(kind: HostDeliveryKind) -> str:
+    return f"research_pipeline_{kind}_delivery_unverified"
+
+
+def read_host_delivery_source(run_dir: Path, name: str) -> bytes:
+    limit = RUN_DOCUMENT_SPECS.get(name, {}).get("max_bytes", 8 * 1024 * 1024)
+    path = contained_regular_output_file(run_dir, name)
+    with path.open("rb") as source:
+        raw = source.read(limit + 1)
+    if len(raw) > limit or not raw.strip():
+        raise ValueError("host_delivery_source_empty_or_oversize")
+    return raw
+
+
+def host_delivery_source_digests(sources: Mapping[str, bytes]) -> dict[str, str]:
+    return {name: hashlib.sha256(raw).hexdigest() for name, raw in sources.items()}
+
+
+def _host_delivery_receipt(run_dir: Path, run_id: str) -> dict:
+    try:
+        receipt = json.loads(read_host_delivery_source(run_dir, HOST_DELIVERY_RECEIPT))
+    except (OSError, ValueError):
+        return {}
+    if (
+        isinstance(receipt, dict) and receipt.get("schema_version") == HOST_DELIVERY_RECEIPT_SCHEMA
+        and receipt.get("run_id") == run_id and isinstance(receipt.get("deliveries"), dict)
+    ):
+        return receipt
+    return {}
+
+
+def recorded_host_delivery_owners(run_dir: Path, *, run_id: str) -> dict[HostDeliveryKind, str]:
+    """Identify obligations to report as unverified when the plan is unavailable."""
+    receipt = _host_delivery_receipt(run_dir, run_id)
+    planned = receipt.get("planned_owners")
+    if not isinstance(planned, dict):
+        planned = {
+            kind: entry.get("step_id") for kind, entry in receipt.get("deliveries", {}).items()
+            if isinstance(entry, dict)
+        }
+    return {
+        kind: step_id for kind in HOST_DELIVERY_KINDS
+        if isinstance(step_id := planned.get(kind), str) and step_id
+    }
+
+
+def verified_host_deliveries(
+    run_dir: Path, *, run_id: str, plan_sha256: str, owners: Mapping[HostDeliveryKind, str],
+) -> dict[HostDeliveryKind, dict[str, bytes]]:
+    """Recheck the producer's receipt against the run, plan and current files."""
+    if not owners:
+        return {}
+    receipt = _host_delivery_receipt(run_dir, run_id)
+    if receipt.get("plan_sha256") != plan_sha256:
+        return {}
+    verified = {}
+    for kind, step_id in owners.items():
+        try:
+            sources = {name: read_host_delivery_source(run_dir, name) for name in HOST_DELIVERY_SOURCES[kind]}
+            if receipt["deliveries"].get(kind) == {
+                "step_id": step_id, "sha256_by_artifact": host_delivery_source_digests(sources),
+            }:
+                verified[kind] = sources
+        except (OSError, ValueError):
+            continue
+    return verified
+
+
+def host_delivery_coverage(owners: Mapping[DeliverableKind, Sequence[str]]) -> dict[str, object] | None:
+    """Describe host delivery backed by a plan's typed product owners."""
+    if not owners or not all(steps and kind in RUN_DELIVERABLES for kind, steps in owners.items()):
         return None
-    read = tuple(dict.fromkeys(kinds))
     return {
         "source": "host_verified",
         "contract": RUN_DELIVERY_SCHEMA_VERSION,
-        "deliverable_kinds": list(read),
+        "deliverable_kinds": list(owners),
         "artifact_names": list(dict.fromkeys(
-            name for kind in read for name in RUN_DELIVERABLES[kind].artifact_names
+            name for kind in owners for name in RUN_DELIVERABLES[kind].artifact_names
         )),
-        "reason": "The host delivery contract covers these outputs independently of analysis steps.",
+        "owner_step_ids_by_kind": {kind: list(steps) for kind, steps in owners.items()},
+        "reason": "The host verified a typed owner for each requested deliverable in this plan.",
     }
 
 

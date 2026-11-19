@@ -83,6 +83,7 @@ _ROW_LEVEL_KEYS = {
     "entityids",
 }
 _CONTEXT_FIELDS = {
+    "plan_deliverables",
     "attached_skills",
     "mentioned_objects",
     "id",
@@ -337,6 +338,7 @@ _LITERATURE_SCOPE_FIELDS_V2 = (
     "idea_handoff",
 )
 _SCIENTIFIC_CONFIGURATION_FIELDS = (
+    "plan_deliverables",
     "quick_answer_handoff",
     "attached_skills",
     "mentioned_objects",
@@ -1448,6 +1450,7 @@ def _sanitize_patch(
     allow_quick_answer_handoff: bool = False,
     allow_question_wording: bool = False,
     allow_design_variance_basis: bool = False,
+    allow_plan_deliverables: bool = False,
 ) -> Dict[str, Any]:
     if not isinstance(raw, dict):
         raise StudyContextError({"error": "study_context_body_required"})
@@ -1460,6 +1463,19 @@ def _sanitize_patch(
         )
 
     patch: Dict[str, Any] = {}
+    if "plan_deliverables" in raw:
+        if not allow_plan_deliverables:
+            raise StudyContextError({"error": "plan_deliverables_review_required"})
+        from easyicu.research_agent.contracts.product_files import PlanDeliverables
+
+        value = raw["plan_deliverables"]
+        try:
+            selection = PlanDeliverables.model_validate(value) if value is not None else None
+            if selection is not None and selection.source != "user_edit":
+                raise ValueError("Only user edits may be saved.")
+            patch["plan_deliverables"] = selection.model_dump(mode="json") if selection else None
+        except ValueError as exc:
+            raise StudyContextError({"error": "plan_deliverables_invalid"}) from exc
     if "quick_answer_handoff" in raw:
         if not allow_quick_answer_handoff:
             raise StudyContextError({"error": "quick_handoff_server_owned"})
@@ -1964,6 +1980,7 @@ def _contexts_from_raw(raw: Dict[str, Any]) -> List[Dict[str, Any]]:
             allow_quick_answer_handoff=True,
             allow_question_wording=True,
             allow_design_variance_basis=True,
+            allow_plan_deliverables=True,
         )
         if "analysis_design" in row:
             # Historical contradictions must stay inspectable, not break the
@@ -2329,6 +2346,7 @@ def upsert_context(
     _server_quick_answer_handoff_write: bool = False,
     _server_question_wording_write: bool = False,
     _server_design_variance_basis_write: bool = False,
+    _server_plan_deliverables_write: bool = False,
     _server_agent_landmark_decision: bool = False,
     _server_skill_attachments_write: bool = False,
 ) -> Dict[str, Any]:
@@ -2354,6 +2372,7 @@ def upsert_context(
         allow_quick_answer_handoff=_server_quick_answer_handoff_write,
         allow_question_wording=_server_question_wording_write,
         allow_design_variance_basis=_server_design_variance_basis_write,
+        allow_plan_deliverables=_server_plan_deliverables_write,
     )
     if expected_revision is not None and (
         isinstance(expected_revision, bool)
@@ -2416,6 +2435,8 @@ def upsert_context(
             _carry_forward_concept_selection_authority(
                 patch, current, client_concept_selection_authority
             )
+        if current and "question" in patch and patch["question"] != current.get("question") and current.get("plan_deliverables"):
+            patch["plan_deliverables"] = None
         proposed_context = {**dict(current or {}), **patch}
         _apply_attached_setup(
             patch, proposed_context,
@@ -2423,7 +2444,7 @@ def upsert_context(
         )
         proposed_context.update(patch)
         if (current and current.get("demo_planning_authority_ref")
-                and not _server_demo_planning_authority_write
+                and not (_server_demo_planning_authority_write or _server_plan_deliverables_write)
                 and scientific_configuration_sha256(current) != scientific_configuration_sha256(proposed_context)):
             patch["demo_planning_authority_ref"] = ""
             proposed_context["demo_planning_authority_ref"] = ""
@@ -2940,8 +2961,11 @@ def _scientific_fields_sha256(
         allow_target_trial_design=True,
         allow_question_wording=True,
         allow_quick_answer_handoff=True,
+        allow_plan_deliverables=True,
     )
     sanitized.pop("id", None)
+    if sanitized.get("plan_deliverables") is None:
+        sanitized.pop("plan_deliverables", None)
     if not sanitized.get("unconfirmed_outcome"):
         sanitized.pop("unconfirmed_outcome", None)
     if not sanitized.get("quick_answer_handoff"):

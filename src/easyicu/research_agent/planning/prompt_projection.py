@@ -6,6 +6,8 @@ import copy
 import json
 import re
 from collections import Counter
+from contextlib import contextmanager
+from contextvars import ContextVar
 from dataclasses import dataclass, replace
 from typing import Any, Literal, Mapping, Sequence
 
@@ -976,6 +978,20 @@ def _planner_block_bytes(
     return counts
 
 
+_REPAIR_FEEDBACK: ContextVar[str] = ContextVar("planner_repair_feedback", default="")
+
+
+@contextmanager
+def planner_repair_feedback_scope(feedback: str):
+    # Repair quotes belong to the prompt. They cannot be part of the
+    # host-authored planning contract that is parsed to bind signed suites.
+    token = _REPAIR_FEEDBACK.set(feedback)
+    try:
+        yield
+    finally:
+        _REPAIR_FEEDBACK.reset(token)
+
+
 def project_planner_request(
     messages: Sequence[LLMMessage],
     blocks: Sequence[PlannerPromptBlock],
@@ -995,6 +1011,8 @@ def project_planner_request(
     if "\n\n".join(block.text for block in current if block.text) != user:
         # An unannotated/custom renderer has no proven advisory boundaries.
         current = (PlannerPromptBlock("response_shape", user),)
+    if feedback := _REPAIR_FEEDBACK.get():
+        current = (*current, PlannerPromptBlock("article_question_context", feedback))
     source_counts = _planner_block_bytes(system, current, schema_bytes)
     counts = source_counts
     tried = ["plan_revision_lossless", "complete"]

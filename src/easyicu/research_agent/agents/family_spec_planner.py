@@ -89,7 +89,7 @@ from ..planning.question_requirements import (
     question_effect_measures,
     question_requirements_schema,
     question_requirements_shape,
-    requirement_delivery_coverage,
+    requirement_delivery_kinds,
     question_analysis_exposures,
 )
 from ..planning.literature_design_authority import (
@@ -1066,7 +1066,7 @@ def question_requirement_gap_feedback(
     """Reconsider scientific gaps that lack host verification."""
     feedback = []
     for index, item in enumerate(spec.question_requirements):
-        if item.gap is None or requirement_delivery_coverage(item) is not None:
+        if item.gap is None or requirement_delivery_kinds(item):
             continue
         if (
             item.gap.requirement == "estimand_unsupported"
@@ -1084,6 +1084,31 @@ def question_requirement_gap_feedback(
                 path=f"question_requirements[{index}].gap",
             ))
     return tuple(feedback)
+
+
+def check_question_requirement_gaps(
+    spec: FamilyPlanSpec, repair: CapabilityGapRepair, feedback: tuple[RepairFeedback, ...],
+    *, regressions: tuple[RepairFeedback, ...] = (),
+) -> None:
+    """Carry a rejected requirement from bounded spec repair to plan repair."""
+    try:
+        repair.check(feedback, regressions=regressions)
+    except ProgressivePlanCompileError as error:
+        if error.reason_code == "progressive_capability_gap_claim_unverified":
+            for index, item in enumerate(spec.question_requirements):
+                if error.path != f"question_requirements[{index}].gap" or item.gap is None:
+                    continue
+                facts = next(entry.facts for entry in feedback if entry.path == error.path)
+                error.easyicu_question_requirement_gap = {
+                    "requirement_id": item.id, "quote": item.quote, "kind": item.kind,
+                    "deliverable_kinds": tuple(requirement_delivery_kinds(item, ignore_gap_concept=True)),
+                    "clause_quotes": tuple(item.clauses),
+                    **({"effect_measure": item.effect_measure} if item.effect_measure else {}),
+                    "gap": item.gap.model_dump(mode="json"),
+                    "host_verdict": facts["verification"], "host_fact": facts["verified_fact"],
+                }
+                break
+        raise
 
 
 def _requirement_coordinates(spec: FamilyPlanSpec) -> set[tuple[str, str]]:
@@ -1629,7 +1654,7 @@ def run_family_spec_attempt(
                     if f"question_requirements[{index}].gap" not in contradicted_paths
                 )
                 protected_plan_claims.update(plan_claims)
-            gap_repair.check(feedback, regressions=regressions)
+            check_question_requirement_gaps(spec, gap_repair, feedback, regressions=regressions)
             return spec, draft, staged_typings
         except ValueError as exc:
             if not retryable_parse_error(exc):

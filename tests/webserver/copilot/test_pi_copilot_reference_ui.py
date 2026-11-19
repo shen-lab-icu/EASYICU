@@ -166,7 +166,7 @@ def test_planning_progress_and_run_failures_read_as_progress_and_reasons() -> No
     ):
         assert f"{code}: tr(" in error_text
     # A stopped run says its cause once (run-stop block); a job-only failure on the card.
-    assert "reason: failedRun ? '' : failureReason" in confirmation
+    assert "reason: failedRun && !repairStop ? '' : failureReason" in confirmation
     assert 'class="gpi-confirmation-reason"' in confirmation
     assert ".gpi-confirmation-reason{" in pi_css
 
@@ -213,6 +213,7 @@ def test_refused_plan_configuration_becomes_a_decision_card_not_a_banner() -> No
     shell = _read("js/screens-guided-pi.js")
     plan_actions = _read("js/screens-guided-pi-plan-actions.js")
     confirmation = _read("js/screens-guided-pi-confirmation.js")
+    confirmation_data = _read("js/screens-guided-pi-confirmation-data.js")
     cohort = _read("js/screens-guided-pi-cohort-eligibility.js")
     session_view = _read("js/screens-guided-pi-session-view.js")
     error_text = _read("js/screens-guided-pi-error-text.js")
@@ -226,7 +227,8 @@ def test_refused_plan_configuration_becomes_a_decision_card_not_a_banner() -> No
     assert "if (code === 'agent_plan_configuration_required' && !configurationError) return {" in confirmation
     assert "if (code === 'agent_plan_configuration_required' && configurationError) return {" in confirmation
     assert "|| confirmation.showPlanPreview" in confirmation
-    assert '<details class="gpi-plan-conversation-summary" open>' in confirmation
+    assert "planConversationHtml(planPreview)" in confirmation
+    assert '<details class="gpi-plan-conversation-summary" open>' in confirmation_data
     assert "const configurationRefused = actionCode === 'agent_plan_configuration_required'" in cohort
     assert "function continuationCardsHtml()" in session_view
     assert "if (refused && eligibility && confirmation) return confirmation + eligibility;" in session_view

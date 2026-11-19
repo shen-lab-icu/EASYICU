@@ -3223,6 +3223,7 @@ class ProgressivePlannerAgent:
         execution_tier: str = "article",
     ) -> tuple[AnalysisPlan, ProgressivePlanCompileReceipt]:
         from ..execution.owner_declaration import resolve_standard_executor
+        from ..planning.requirement_coverage import bind_requested_host_delivery
 
         reporting_source_keys = _article_reporting_source_keys(
             article_context=article_context,
@@ -3240,7 +3241,6 @@ class ProgressivePlannerAgent:
             resolve_executor=resolve_standard_executor,
         )
         plan = bind_plan_tier(plan, execution_tier)
-        receipt = receipt.model_copy(update={"analysis_plan_sha256": canonical_sha256(plan.model_dump(mode="json"))})
         if self.scientific_authorities is not None:
             self.scientific_authorities.check_planner_plan(plan, agent_context)
         _accept_compiled_plan(
@@ -3253,7 +3253,8 @@ class ProgressivePlannerAgent:
             enforce_article_contract=enforce_article_contract,
             llm=self.llm,
         )
-        return plan, receipt
+        plan = bind_requested_host_delivery(plan)
+        return plan, receipt.model_copy(update={"analysis_plan_sha256": canonical_sha256(plan.model_dump(mode="json"))})
 
     def _accept_materialized_plan(
         self, prefix_state: ProgressivePrefixState, *,

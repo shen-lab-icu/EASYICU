@@ -9,6 +9,7 @@
 process.env.TZ = 'UTC';
 const assert = require('node:assert/strict');
 const path = require('node:path');
+const { test } = require('node:test');
 
 require(path.resolve('tests/js/guided_pi_module_harness.cjs'));
 const files = process.argv.slice(2);
@@ -21,6 +22,9 @@ global.window = { EU_LANG: language, document: { addEventListener() {} },
 global.document = { addEventListener() {}, getElementById: () => null };
 for (const file of files) require(path.resolve(file));
 const modules = window.EasyICU.guidedPi;
+for (const name of ['target-trial-copy', 'target-trial', 'question-requirements', 'run-stop', 'plan-actions']) {
+  require(path.resolve(`src/easyicu/webserver/static/js/screens-guided-pi-${name}.js`));
+}
 // Owners this page loads elsewhere; only what the conversation asks of them.
 modules.declare('nextActions', { project: () => null, bodyText: () => '', render: () => '', renderPast: () => '' });
 const esc = window.EU_HTML.esc;
@@ -56,11 +60,15 @@ const LINES = {
 // --- the conversation (session-view with the real record, run-file and consent owners)
 
 const stub = (overrides = {}) => new Proxy(overrides, { get: (target, key) => (key in target ? target[key] : () => '') });
-function conversation(session, messages, runFiles) {
+function conversation(session, messages, runFiles, workflow) {
   const state = {
-    session, messages, workflowReceipts: [], busy: false, projectLoading: false, draft: '',
+    session, sessions: [], messages, workflow, workflowReceipts: [], busy: false, projectLoading: false, draft: '',
     regenerating: false, planStarting: null,
   };
+  const confirmation = modules.require('confirmation').create({
+    tr, esc, iconHtml: () => '', resourceButton: () => '', sessionIsStale: () => false, busy: () => false,
+    session: () => session, workflow: () => workflow,
+  });
   const view = modules.require('sessionView').create({
     state, modules, dataConsent: modules.require('dataConsent'), starters: null, ideaSource: null,
     header: stub(), regeneration: null, studyWorkspace: stub({ messageView: row => ({ text: row.text }) }),
@@ -70,12 +78,13 @@ function conversation(session, messages, runFiles) {
     }),
     runFiles: runFiles || stub({ timeline: rows => rows }),
     resourceOwner: stub(), messageActions: stub({ render: () => ({}) }),
-    transcript: stub({ latestTurnCompletedIdeaExploration: () => false }),
+    transcript: modules.require('transcript'),
     runOutcome: stub({ collection: () => [] }), aside: stub({ layoutOptions: () => ({}) }),
     cohortEligibility: stub(), tr, esc, iconHtml: () => '', projectId: () => 'project-1',
     publicAssistantText: text => text, assistantTextHtml: text => esc(text), sessionIsStale: () => false,
     agentMode: () => 'research', accessModeLabel: () => '', projectTitle: () => 'Project',
-    navigationSessionTitle: () => 'Session', workflowConfirmationHtml: () => '',
+    navigationSessionTitle: () => 'Session',
+    workflowConfirmation: confirmation.workflowConfirmation, workflowConfirmationHtml: confirmation.workflowConfirmationHtml,
     hostJobs: stub(), followUps: null, effortMenu: null,
   });
   return view.sessionPanel();
@@ -83,6 +92,117 @@ function conversation(session, messages, runFiles) {
 const recordLines = html => Array.from(html.matchAll(/<p class="gpi-decision-record[^"]*"[^>]*data-gpi-decision-actor="(\w+)"[^>]*>([^<]*)<\/p>/g))
   .map(match => [match[1], match[2].replace(/&#39;/g, "'")]);
 const order = html => Array.from(html.matchAll(/data-(?:activity|gpi-message-id|gpi-decision-record)="([^"]+)"/g)).map(match => match[1]);
+
+// A mixed literature and planning turn can end with a real study decision.
+const pendingSession = { session_id: 'session-pending', binding: {}, data_source_authorization: AUTHORIZATION };
+const researchTurn = [
+  { id: 'question', role: 'user', text: 'Compare two fluid strategies for renal recovery.' },
+  { id: 'review', role: 'activity', status: 'complete', steps: [
+    { kind: 'tool', toolName: 'easyicu_search_literature', status: 'complete' },
+  ] },
+];
+const trial = {
+  state: 'approvable', approvable: true, compile_sha256: 'd'.repeat(64), confirmation_lines: 1,
+  confirmations: [{ text: 'Assign the strategy at the start of the first shift.' }],
+};
+const pendingTrial = { next_action_code: 'target_trial_review', target_trial_card: trial };
+function pendingDecisionHtml(workflow, cardLanguage = 'en') {
+  const previousLanguage = language;
+  language = window.EU_LANG = cardLanguage;
+  try {
+    return conversation(pendingSession, researchTurn, null, workflow);
+  } finally {
+    language = window.EU_LANG = previousLanguage;
+  }
+}
+test('pending target-trial assumptions and explicit approval appear in the main log', () => {
+  const trialHtml = pendingDecisionHtml(pendingTrial);
+  assert.match(trialHtml, /data-gpi-log[^]*Assign the strategy at the start of the first shift/);
+  assert.match(trialHtml, /data-gpi-confirm-action disabled[^>]*>Approve the target trial<\/button>/);
+  assert.equal(trial.state, 'approvable');
+});
+
+test('a pending trial statement asks for free text in the main log', () => {
+  const clarification = pendingDecisionHtml({
+    next_action_code: 'target_trial_statement_needed',
+  });
+  assert.match(clarification, /data-gpi-log[^]*State the target trial this study emulates/);
+  assert.match(clarification, /data-gpi-confirm-edit[^>]*>State it in the conversation<\/button>/);
+});
+
+test('a proposed exposure landmark shows its assumptions and explicit choice in the main log', () => {
+  const proposal = { card_sha256: 'f'.repeat(64), exposure: 'early fluid', landmark_hours: 18, horizon_days: 42 };
+  const workflow = {
+    next_action_code: 'plan_scientific_changes_required', plan_decision: proposal,
+    plan_review_summary: { authorization_questions: [{
+      code: 'SURVIVAL_LANDMARK_OWNER_NOT_SEALED', requires_user_authorization: true, decision_context: proposal,
+    }] },
+  };
+  const before = JSON.stringify(workflow);
+  const exposure = pendingDecisionHtml(workflow);
+  assert.match(exposure, /data-gpi-log[^]*18-hour landmark · 42-day survival/);
+  assert.match(exposure, /Deaths before hour 18 are not part of the comparison/);
+  assert.equal((exposure.match(/data-gpi-plan-decision-option=/g) || []).length, 1);
+  assert.match(exposure, /data-gpi-plan-decision-option="fixed_landmark_survival"[^>]*><strong>Use the 18-hour landmark/);
+  assert.doesNotMatch(exposure, /data-gpi-confirm-action/);
+  assert.equal(JSON.stringify(workflow), before);
+});
+
+test('a pending exposure choice asks for an answer in the main log', () => {
+  const exposure = pendingDecisionHtml({
+    next_action_code: 'question_requirement_not_covered',
+    plan_review_summary: { run_id: 'candidate-pending', question_requirements: {
+      status: 'shown', items: [{
+        quote: 'Compare both fluid strategies against the same outcome',
+        disposition: 'not_covered',
+        exposure_choice: { primary_exposure: 'early fluid', additional_exposures: ['late fluid'] },
+      }],
+    } },
+  });
+  assert.match(exposure, /data-gpi-log[^]*Reply in the conversation before approval/);
+  assert.match(exposure, /data-gpi-confirm-edit[^>]*>Answer this question<\/button>/);
+  assert.doesNotMatch(exposure, /data-gpi-confirm-action/);
+});
+
+test('a completed literature turn ignores a stale plan summary from a failed run', () => {
+  const run = { run_id: 'earlier-candidate', run_ref: 'earlier', authoritative: true, run_status: 'failed',
+    gate_reason_code: 'research_pipeline_progressive_compile_failed' };
+  for (const code of ['failed_pipeline_requires_fresh_plan', 'failed_pipeline_execution_retry_available']) {
+    const html = pendingDecisionHtml({
+      next_action_code: code, plan_review_summary: { run_id: run.run_id }, runs: [run],
+    });
+    assert.match(html, /Compare two fluid strategies for renal recovery/);
+    assert.doesNotMatch(html, /data-gpi-run-stop|data-gpi-confirm-action/);
+  }
+});
+
+test('an open study decision is inline when the transcript has not arrived', () => {
+  const session = { ...pendingSession, binding: {} };
+  const html = conversation(session, [], null, { next_action_code: 'target_trial_statement_needed' });
+  const label = tr('State it in the conversation', '在对话里说明');
+  assert.match(html, /data-gpi-log[^]*data-gpi-confirm-edit/);
+  assert.ok(html.includes(label));
+  assert.match(html, /data-gpi-input/);
+  assert.doesNotMatch(html, /data-gpi-confirm-action/);
+});
+
+test('reading target-trial assumptions leaves approval to the explicit action', () => {
+  const owner = modules.require('targetTrial');
+  const session = { ...pendingSession, binding: { study_context_id: 'study-1', study_revision: 4 } };
+  assert.equal(owner.approvalRequest(pendingTrial, session, 'project-1'), null);
+  owner.noteTick(trial.compile_sha256, 0, true);
+  try {
+    const html = pendingDecisionHtml(pendingTrial);
+    assert.match(html, /data-gpi-log[^]*data-gpi-confirm-action>Approve the target trial<\/button>/);
+    assert.equal(trial.state, 'approvable');
+    assert.deepEqual(owner.approvalRequest(pendingTrial, session, 'project-1'), {
+      project_id: 'project-1', study_context_id: 'study-1', expected_revision: 4,
+      compile_sha256: trial.compile_sha256, n_lines_confirmed: 1,
+    });
+  } finally {
+    owner.noteTick(trial.compile_sha256, 0, false);
+  }
+});
 
 // What the page holds after a reload: the session as the host sends it, and
 // the timeline rebuilt from the persisted transcript -- no optimistic rows.
@@ -292,4 +412,268 @@ assert.match(typed, /gpi-past-decision/);
 })().catch(error => {
   console.error(error);
   process.exitCode = 1;
+});
+
+test('a first-result delivery conflict prompts for a revision inside the main log', () => {
+  const html = pendingDecisionHtml({
+    next_action_code: 'first_result_delivery_requires_article',
+    plan_review_summary: { run_id: 'shift-recovery-plan', deferred_input_scope: { verified: false } },
+  });
+  const log = html.slice(html.indexOf('data-gpi-log'), html.indexOf('data-gpi-input'));
+  assert.match(log, /data-gpi-confirm-edit[^>]*>Revise in the conversation<\/button>/);
+  assert.match(log, /separate article run/);
+  assert.doesNotMatch(log, /data-gpi-confirm-action/);
+});
+
+test('a current plan whose requirement record is unreadable can be regenerated from the main log', () => {
+  const html = pendingDecisionHtml({
+    next_action_code: 'question_requirements_unreadable',
+    plan_review_summary: { run_id: 'interrupted-shift-plan' },
+  });
+  const log = html.slice(html.indexOf('data-gpi-log'), html.indexOf('data-gpi-input'));
+  assert.match(log, /data-gpi-confirm-action[^>]*>Generate fresh plan<\/button>/);
+});
+
+test('a pending cohort-source decision from the plan stage is inline after a literature turn', () => {
+  const code = 'plan_icd_source_unverified';
+  const html = pendingDecisionHtml({
+    next_action_code: code,
+    stages: [{ id: 'plan', status: 'review_required', reason_code: code }],
+    plan_review_summary: { run_id: 'cohort-source-plan', finding_codes: ['HOST_ICD_SOURCE_UNVERIFIED'] },
+  });
+  const log = html.slice(html.indexOf('data-gpi-log'), html.indexOf('data-gpi-input'));
+  assert.match(log, /data-gpi-confirm-edit[^>]*>Change cohort<\/button>/);
+  assert.doesNotMatch(log, /data-gpi-confirm-action/);
+});
+
+test('a delivery clarification is actionable inside the main conversation even without a plan summary', () => {
+  const code = 'host_delivery_request_ambiguous';
+  for (const messages of [[], researchTurn]) {
+    const previousLanguage = language;
+    language = window.EU_LANG = 'en';
+    try {
+      const html = conversation(pendingSession, messages, null, {
+        next_action_code: code,
+        stages: [{ id: 'plan', status: 'review_required', reason_code: code }],
+      });
+      const log = html.slice(html.indexOf('data-gpi-log'), html.indexOf('data-gpi-input'));
+      assert.match(log, /data-gpi-confirm-edit[^>]*>Revise in the conversation<\/button>/);
+      assert.match(log, /which deliverables/i);
+      assert.doesNotMatch(log, /data-gpi-confirm-action/);
+    } finally {
+      language = window.EU_LANG = previousLanguage;
+    }
+  }
+});
+
+test('a pending plan action is inline when the workflow arrives before the transcript and plan summary', () => {
+  const code = 'operator_plan_approval_required';
+  const html = conversation(pendingSession, [], null, {
+    next_action_code: code,
+    stages: [{ id: 'plan', status: 'review_required', reason_code: code }],
+  });
+  const log = html.slice(html.indexOf('data-gpi-log'), html.indexOf('data-gpi-input'));
+  assert.match(log, /data-gpi-confirm-action disabled[^>]*>批准并开始分析<\/button>/);
+});
+
+test('the inline plan-review card requires a choice for each uncertain deliverable', () => {
+  for (const messages of [[], researchTurn]) {
+    const html = conversation(pendingSession, messages, null, {
+      next_action_code: 'host_delivery_request_ambiguous',
+      stages: [{ id: 'plan', status: 'review_required', reason_code: 'host_delivery_request_ambiguous' }],
+      plan_review_summary: {
+        run_id: 'ward-recovery-plan',
+        deliverables: { source: 'detector_prefill', requested: ['references'], check: ['manuscript_pdf'], confirmed: false },
+      },
+    });
+    const log = html.slice(html.indexOf('data-gpi-log'), html.indexOf('data-gpi-input'));
+    assert.equal((log.match(/aria-label="需要确认科研流程"/g) || []).length, 1);
+    assert.match(log, /交付物/);
+    assert.match(log, /<form[^>]*data-gpi-plan-deliverables[^>]*>/);
+    assert.match(log, /<select name="manuscript_pdf" required[^>]*>\s*<option value="" selected/);
+    assert.match(log, /<select name="references" required[^>]*>[\s\S]*?<option value="yes" selected/);
+    assert.match(log, /data-gpi-deliverables-apply[^>]*>重新生成计划<\/button>/);
+    assert.doesNotMatch(log, /data-gpi-confirm-action/);
+  }
+});
+
+test('a reviewable plan keeps the existing approval alongside editable deliverables', () => {
+  const html = pendingDecisionHtml({
+    next_action_code: 'operator_plan_approval_required',
+    plan_review_summary: {
+      run_id: 'morning-recovery-plan',
+      deliverables: { source: 'user_edit', requested: ['article_preview'], check: [], confirmed: true },
+    },
+  });
+  const log = html.slice(html.indexOf('data-gpi-log'), html.indexOf('data-gpi-input'));
+  assert.match(log, /<select name="article_preview" required[^>]*>[\s\S]*?<option value="yes" selected/);
+  assert.match(log, /data-gpi-confirm-action[^>]*>Approve and start analysis<\/button>/);
+});
+
+test('choosing an article output for an analysis-only review shows the composer route', () => {
+  const fields = ['manuscript_pdf', 'article_preview', 'references'].map(name => ({
+    name, value: 'no', dataset: { gpiDeliverableOriginal: 'no' },
+  }));
+  const approve = { disabled: false, dataset: {} };
+  const route = { hidden: true };
+  const forward = { disabled: true };
+  const form = {
+    querySelectorAll: () => fields,
+    querySelector: selector => selector.includes('article') ? route : forward,
+    closest: () => ({ querySelector: () => approve }),
+    hasAttribute: name => name === 'data-gpi-analysis-deliverables',
+  };
+  const owner = modules.require('planActions');
+  const html = owner.deliverablesField({
+    requested: ['manuscript_pdf'], check: [], confirmed: true, article_required: true,
+  }, { tr: en => en, esc, disabled: false });
+  assert.match(html, /separate article run/);
+  assert.match(html, /data-gpi-confirm-edit[^>]*>Revise in the conversation<\/button>/);
+  fields[0].value = 'yes';
+  assert.deepEqual(owner.deliverableSelection(form), { requested: [], deferred: ['manuscript_pdf'], excluded: [] });
+  assert.equal(route.hidden, false);
+  assert.equal(approve.disabled, true);
+  fields[0].value = 'no';
+  assert.equal(owner.deliverableSelection(form), null);
+  assert.equal(route.hidden, true);
+  assert.equal(approve.disabled, false);
+  fields[0].dataset.gpiDeliverableOriginal = '';
+  assert.deepEqual(owner.deliverableSelection(form), { requested: [], deferred: [], excluded: ['manuscript_pdf'] });
+  assert.equal(forward.disabled, false);
+  fields[0].value = 'yes';
+  assert.deepEqual(owner.deliverableSelection(form), { requested: [], deferred: ['manuscript_pdf'], excluded: [] });
+});
+
+function reviewedDeliveryForm(selection) {
+  const owner = modules.require('planActions');
+  const html = owner.deliverablesField({
+    requested: [], confirmed: true, source: 'user_edit', article_required: true, ...selection,
+  }, { tr: en => en, esc, disabled: false });
+  const fields = Object.fromEntries(Array.from(html.matchAll(/<select name="([^"]+)"([^>]*)>(.*?)<\/select>/gs),
+    ([, name, attrs, options]) => [name, {
+      name, value: options.match(/<option value="([^"]*)" selected>/)[1],
+      dataset: {
+        gpiDeliverableOriginal: attrs.match(/data-gpi-deliverable-original="([^"]*)"/)[1],
+        gpiDeliverableOmission: attrs.match(/data-gpi-deliverable-omission="([^"]*)"/)[1],
+      },
+    }]));
+  const approve = { disabled: false, dataset: {} };
+  const forward = { disabled: true };
+  const route = { hidden: true };
+  const form = {
+    querySelectorAll: () => Object.values(fields),
+    querySelector: selector => selector === '[data-gpi-deliverables-article]' ? route : forward,
+    closest: () => ({ querySelector: () => approve }),
+    hasAttribute: name => name === 'data-gpi-analysis-deliverables' && html.includes(name),
+  };
+  return { fields, approve, forward, route, readSelection: () => owner.deliverableSelection(form) };
+}
+
+test('a deferred PDF for the ward handover can be explicitly declined', () => {
+  const { fields, approve, forward, readSelection } = reviewedDeliveryForm({ deferred: ['manuscript_pdf'] });
+  const initial = fields.manuscript_pdf.value;
+  fields.manuscript_pdf.value = 'no';
+  assert.deepEqual(readSelection(), { requested: [], deferred: [], excluded: ['manuscript_pdf'] });
+  assert.equal(initial, 'deferred');
+  assert.equal(approve.disabled, true);
+  assert.equal(forward.disabled, false);
+});
+
+test('reselecting Yes for a deferred handover PDF leaves analysis approval reachable', () => {
+  const { fields, approve, forward, route, readSelection } = reviewedDeliveryForm({ deferred: ['manuscript_pdf'] });
+  fields.manuscript_pdf.value = 'yes';
+  assert.equal(readSelection(), null);
+  assert.equal(approve.disabled, false);
+  assert.equal(forward.disabled, true);
+  assert.equal(route.hidden, false);
+});
+
+test('editing a ward bibliography leaves an unanswered preview distinct from a declined item', () => {
+  const { fields, readSelection } = reviewedDeliveryForm({
+    excluded: ['article_preview'], unanswered: ['article_preview'],
+  });
+  fields.references.value = 'yes';
+  assert.deepEqual(readSelection(), {
+    requested: [], deferred: ['references'], excluded: ['article_preview'], unanswered: ['article_preview'],
+  });
+  fields.article_preview.value = 'no';
+  assert.deepEqual(readSelection(), { requested: [], deferred: ['references'], excluded: ['article_preview'] });
+});
+
+test('saving a check choice starts a new plan review and never submits approval', async () => {
+  const calls = [];
+  const session = {
+    session_id: 'session-ward',
+    binding: { study_context_id: 'study-ward', study_revision: 6, run_id: 'review-ward' },
+  };
+  let workflow = {
+    next_action_code: 'host_delivery_request_ambiguous',
+    plan_review_summary: { run_id: 'review-ward', deliverables: { confirmed: false, check: ['manuscript_pdf'] } },
+  };
+  let busy = false;
+  const owner = modules.require('planActions').create({
+    tr: en => en,
+    session: () => session,
+    sessionIsStale: () => false,
+    projectId: () => 'project-ward',
+    workflow: () => workflow,
+    busy: () => busy,
+    setBusy: value => { busy = value; },
+    setError: value => assert.equal(value, ''),
+    render: () => {},
+    refreshSession: async () => {},
+    loadWorkflow: async () => { workflow = { next_action_code: 'plan_configuration_superseded' }; },
+    appendMessage: () => {},
+    watchChildJob: id => calls.push(['watch', id]),
+    api: () => ({
+      saveStudyContext: async request => calls.push(['edit', request]),
+      loadStudyContext: async () => ({ context: { question: 'Describe shift recovery.', data_source: { path: '/synthetic/ward' } } }),
+      startAgentRun: async request => { calls.push(['generate', request]); return { job_id: 'candidate-job' }; },
+      submitAgentRunReview: () => assert.fail('Selecting a deliverable is never approval'),
+    }),
+  });
+  await owner.confirmDecision({ deliverables: { requested: [], deferred: [], excluded: ['manuscript_pdf'] } });
+  assert.deepEqual(calls[0], ['edit', {
+    id: 'study-ward', expected_revision: 6, active: false,
+    deliverables_source_run_id: 'review-ward',
+    plan_deliverables: { requested: [], deferred: [], excluded: ['manuscript_pdf'], confirmed: true, source: 'user_edit' },
+  }]);
+  assert.equal(calls[1][0], 'generate');
+  assert.equal(calls[1][1].question, 'Describe shift recovery.');
+  assert.equal(calls[1][1].planner_start_mode, 'fresh');
+  assert.deepEqual(calls[2], ['watch', 'candidate-job']);
+});
+
+test('a result-product choice outside the three fields still opens the inline composer action', () => {
+  const html = pendingDecisionHtml({
+    next_action_code: 'host_delivery_request_ambiguous',
+    plan_review_summary: {
+      run_id: 'ward-results-plan',
+      deliverables: { requested: [], check: [], confirmed: true, source: 'detector_prefill' },
+    },
+  });
+  const log = html.slice(html.indexOf('data-gpi-log'), html.indexOf('data-gpi-input'));
+  assert.match(log, /data-gpi-plan-deliverables/);
+  assert.match(log, /data-gpi-confirm-edit[^>]*>Revise in the conversation<\/button>/);
+  assert.doesNotMatch(log, /data-gpi-confirm-action/);
+});
+
+test('the pending ward transfer plan offers an inline analysis-only choice for requested article files', () => {
+  for (const [cardLanguage, description, forward] of [
+    ['en', 'Generate a fresh plan for analysis only', 'Generate fresh plan'],
+    ['zh', '重新生成仅分析计划', '重新生成计划'],
+  ]) {
+    const html = pendingDecisionHtml({
+      next_action_code: 'first_result_delivery_requires_article',
+      plan_review_summary: {
+        run_id: 'transfer-outcomes-plan',
+        deliverables: { article_required: true, source: 'user_edit', requested: ['manuscript_pdf'],
+          check: [], confirmed: true },
+      },
+    }, cardLanguage);
+    const log = html.slice(html.indexOf('data-gpi-log'), html.indexOf('data-gpi-input'));
+    assert.ok(log.includes(description));
+    assert.ok(log.includes(`data-gpi-deliverables-apply>${forward}</button>`));
+    assert.doesNotMatch(log, /data-gpi-confirm-action/);
+  }
 });

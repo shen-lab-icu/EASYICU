@@ -131,7 +131,7 @@
     REQUIRED_SENSITIVITY_IS_PROTOCOL_ONLY: '是否需要一个实际执行这些敏感性分析的新研究版本，还是缩减所要求的输出？',
     ROBUSTNESS_AXES_TOO_NARROW: '新的研究版本应增加预先设定、有来源支持的敏感性分析维度，还是让当前较窄的分析保持仅分析级？',
     STUDY_TIME_ZERO_MISMATCH: '研究应以观察窗的起点作为时间零点，还是修订研究，使观察窗从所声明的时间零点开始计时？',
-    SURVIVAL_LANDMARK_OWNER_NOT_SEALED: '本研究应采用哪个固定时限的死亡结局及其对应的随访时长、哪个 landmark 时间窗，以及哪些调整协变量？',
+    SURVIVAL_LANDMARK_OWNER_NOT_SEALED: '请确定生存随访从何时开始；本研究应采用哪个固定时限的死亡结局及其对应的随访时长，以及哪些调整协变量？',
     UNADJUSTED_ASSOCIATION_NOT_ARTICLE_GRADE: '保留描述性分析，还是授权一个采用有临床时序调整策略的新研究版本？',
   };
 

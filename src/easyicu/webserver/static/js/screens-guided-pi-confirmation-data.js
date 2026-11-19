@@ -4,6 +4,8 @@
   function create(host) {
     const tr = host.tr;
     const esc = host.esc;
+    const iconHtml = host.iconHtml;
+    const resourceButton = host.resourceButton;
     function preparedDataStatus() {
       const authorization = (host.session() && host.session().data_source_authorization) || {};
       const scope = String(authorization.extraction_scope || '');
@@ -258,10 +260,81 @@
       };
     }
 
+    // A gate offered against state that has since changed says so in place
+    // instead of offering its buttons (the strip above offers the rebind).
+    function staleConfirmationHtml(confirmation) {
+      return `<section class="gpi-confirmation is-stale" data-gpi-stale-gate aria-label="${tr('Workflow confirmation required', '需要确认科研流程')}">
+        <span class="gpi-confirmation-icon" aria-hidden="true">${iconHtml('shield', 17)}</span>
+        <div class="gpi-confirmation-body"><strong>${esc(confirmation.title)}</strong><small>${esc(tr(
+          'This decision was for an earlier state of the study and can no longer be answered here. Rebind the current state above first.',
+          '这项确认针对研究之前的状态，已不能在这里作答。请先在上方重新绑定当前状态。',
+        ))}</small></div>
+      </section>`;
+    }
+
+    function latestAttemptFailureHtml() {
+      const workflow = host.workflow() || {};
+      const failure = workflow.latest_attempt_failure;
+      const reviewedId = workflow.plan_review_summary && workflow.plan_review_summary.run_id;
+      if (!failure || !failure.run_id || failure.run_id === reviewedId
+        || !reviewedId || failure.candidate_run_id !== reviewedId) return '';
+      const attempt = (workflow.runs || []).find(run => run && run.run_id === failure.run_id) || {};
+      const providerFailure = failure.reason === 'provider_unavailable'
+        || ['research_pipeline_provider_timeout', 'research_pipeline_planner_provider_unavailable'].includes(attempt.gate_reason_code);
+      const title = providerFailure
+        ? tr('The model service did not respond; plan generation is paused', '模型服务暂时未响应，计划生成已暂停')
+        : failure.reason === 'planner_budget_exhausted'
+          ? tr('Plan generation reached its attempt limit', '计划生成已达到本次尝试上限')
+          : failure.reason === 'plan_bindings_invalid' || attempt.gate_reason_code === 'research_pipeline_plan_contract_exhausted'
+          ? tr('Plan generation did not finish', '计划生成未完成')
+          : tr('Data preparation did not finish', '数据准备未完成');
+      const detail = providerFailure ? tr(
+        'Transient timeouts are retried once automatically. If the service remains unavailable, planning pauses. Use the next action below when ready.',
+        '短暂超时会自动重试一次。服务仍未恢复时，计划生成会暂停；请按下方提示处理。',
+      ) : tr('This attempt stopped before analysis. Follow the next action below.', '本次尝试已停止，分析尚未开始。请按下方提示处理。');
+      const receipt = resourceButton({
+        kind: 'research_artifact', run_id: failure.run_id, artifact: 'source_run_manifest.json',
+        media_type: 'application/json', label: tr('View failure receipt', '查看失败回执'),
+      }, tr('View failure receipt', '查看失败回执'));
+      return `<div class="gpi-confirmation-failure" role="status"><strong>${esc(title)}</strong><small>${esc(detail)}</small>${receipt}</div>`;
+    }
+
+    function planConversationHtml(preview) {
+      const labels = window.EU_PRODUCT_LABELS;
+      if (!labels || typeof labels.clinicalPlan !== 'function') return '';
+      const summary = labels.clinicalPlan(preview && preview.clinical_summary, tr);
+      const rows = summary.lines;
+      const design = preview && preview.design && typeof preview.design === 'object' ? preview.design : {};
+      // The planner's sentences quote column ids (「按sex分层」); the prose
+      // owner names them for a Chinese reader.
+      const prose = window.AGENT_PLAN_PROSE;
+      const named = text => (prose ? prose.namedZh(String(text || ''), {}) : String(text || ''));
+      const variableName = id => (prose && prose.chineseName({}, id)) || id;
+      const designRows = [
+        [tr('Estimand', '要估计什么'), design.estimand],
+        [tr('Analysis time zero', '分析时间零点'), design.time_zero],
+        [tr('Follow-up', '随访范围'), design.observation_window],
+        [tr('Primary method', '主要方法'), design.primary_method],
+      ].filter(row => String(row[1] || '').trim());
+      const designHtml = designRows.length
+        ? `<section class="gpi-plan-exact-settings"><strong>${esc(tr('Exact settings proposed by the plan', '计划建议的具体设定'))}</strong>${designRows.map(row => `<div><b>${esc(row[0])}</b><span>${esc(named(row[1]))}</span></div>`).join('')}${Array.isArray(design.required_variables) && design.required_variables.length ? `<small>${esc(tr('Required variables: ', '需要的变量：'))}${esc(design.required_variables.map(variableName).join('、'))}</small>` : ''}</section>`
+        : '';
+      const designDisclosure = designHtml
+        ? `<details class="gpi-plan-design-disclosure"><summary>${esc(tr('View exact model and variable settings', '查看精确模型与变量设置'))}</summary>${designHtml}</details>`
+        : '';
+      const rowHtml = row => `<li><b>${esc(row.label)}</b><em>${esc(row.text)}</em></li>`;
+      const append = preview && preview.append;
+      const addition = append ? `<section class="gpi-plan-addition"><strong>${esc(tr(append.label_en, append.label_zh))}</strong><p>${esc(tr(append.source_notice, append.source_notice_zh))}</p><ul>${(append.steps || []).map(step => `<li>${esc(tr(step.intent, step.intent_zh))}</li>`).join('')}</ul><small>${esc(tr('Approve this addition to run it in the same study.', '确认后，这项追加分析会在同一研究里运行。'))}</small></section>` : '';
+      return `<article class="gpi-plan-conversation" aria-label="${esc(tr('Candidate research plan summary', '候选研究计划摘要'))}">
+        <details class="gpi-plan-conversation-summary" open><summary>${esc(append ? tr('Existing study plan', '已有研究计划') : tr('Candidate plan summary', '候选计划摘要'))}</summary><ol class="gpi-clinical-lines">${rows.map(rowHtml).join('')}</ol>${summary.timing ? `<p class="gpi-plan-timing">${esc(summary.timing)}</p>` : ''}${designDisclosure}</details>${addition}
+      </article>`;
+    }
+
     return Object.freeze({
       preparedDataStatus, validDeferredInputScope, deferredInputScopeHtml,
       reviewedPopulationSpecHtml, populationPreparationHtml, populationAcceptanceHtml,
       localizedAuthorizationQuestion, localizedDecisionEvidence, survivalLandmarkDecisionCopy,
+      staleConfirmationHtml, latestAttemptFailureHtml, planConversationHtml,
     });
   }
   window.EasyICU.guidedPi.declare('confirmationData', { create });

@@ -273,6 +273,7 @@ _ANALYSIS_STEP_CORE_SCIENTIFIC_AUTHORITY_FIELDS = frozenset(
 )
 _ANALYSIS_STEP_STRUCTURED_SCIENTIFIC_AUTHORITY_FIELDS = frozenset(
     {
+        "host_delivery_kind",
         "literature_citation_keys",
         "literature_design_bindings",
         "sensitivity_spec_ids",
@@ -372,6 +373,7 @@ _ANALYSIS_PLAN_STRUCTURED_SCIENTIFIC_AUTHORITY_FIELDS = frozenset(
         "adjustment_proposal",
     }
 )
+_ANALYSIS_PLAN_DELIVERY_AUTHORITY_FIELDS = frozenset({"deliverables"})
 _ANALYSIS_PLAN_STEP_AUTHORITY_FIELDS = frozenset({"steps"})
 _ANALYSIS_PLAN_PRESENTATION_ONLY_FIELDS = frozenset({"display_labels"})
 _ANALYSIS_PLAN_RUNTIME_ONLY_FIELDS = frozenset({"revision"})
@@ -384,6 +386,7 @@ def _classified_plan_scientific_payload(plan: AnalysisPlan) -> dict[str, Any]:
         _ANALYSIS_PLAN_CORE_SCIENTIFIC_AUTHORITY_FIELDS,
         _ANALYSIS_PLAN_STRUCTURED_SCIENTIFIC_AUTHORITY_FIELDS,
         _ANALYSIS_PLAN_STEP_AUTHORITY_FIELDS,
+        _ANALYSIS_PLAN_DELIVERY_AUTHORITY_FIELDS,
         _ANALYSIS_PLAN_PRESENTATION_ONLY_FIELDS,
         _ANALYSIS_PLAN_RUNTIME_ONLY_FIELDS,
     )
@@ -411,8 +414,9 @@ def _plan_scientific_scope_signature(plan: AnalysisPlan) -> Tuple[Optional[str],
 
     ``display_labels`` and ``revision`` are deliberately absent: presentation
     and plan history cannot change execution. ``steps`` have their own exact
-    per-step authority signature. Every remaining public field is classified
-    above so a schema addition cannot silently disappear from resume identity.
+    per-step authority signature. Deliverables bind the full review digest
+    and describe document production separate from scientific execution.
+    Every public field is classified above to prevent silent schema drift.
     """
 
     plan_payload = _classified_plan_scientific_payload(plan)

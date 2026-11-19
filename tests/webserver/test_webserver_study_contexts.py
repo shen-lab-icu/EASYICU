@@ -1839,3 +1839,39 @@ def test_context_store_and_atomic_temp_are_private() -> None:
             f".{context_store._CONFIG_PATH.name}.*.tmp"
         )
     )
+
+
+def test_a_deliverable_edit_is_bound_to_the_current_review_and_study_revision(tmp_path, monkeypatch):
+    from types import SimpleNamespace
+
+    from easyicu.research_agent.orchestration.config import PipelineConfig
+    from easyicu.webserver.pi_copilot import workflow
+
+    question = "Describe the overnight recovery measurements. Export a PDF or preview the article online."
+    original = context_store.upsert_context({"id": "study_delivery", "question": question})
+    digest = context_store.scientific_configuration_sha256(original)
+    summary = {"run_id": "ward-review", "deliverables": {"requested": [], "check": ["manuscript_pdf"]}}
+    monkeypatch.setattr(workflow, "build_project_workflow_projection", lambda **kwargs: SimpleNamespace(
+        workflow=SimpleNamespace(plan_review_summary=summary),
+    ))
+    client = TestClient(app)
+    edit = {
+        "id": original["id"], "expected_revision": original["revision"],
+        "plan_deliverables": {"requested": ["manuscript_pdf"], "confirmed": True, "source": "user_edit"},
+    }
+    assert client.post("/api/study-contexts", json=edit).status_code == 400
+    assert client.post("/api/study-contexts", json={**edit, "deliverables_source_run_id": "prior-run"}).status_code == 409
+    body = {**edit, "deliverables_source_run_id": "ward-review"}
+    result = client.post("/api/study-contexts", json=body)
+    assert result.status_code == 200, result.json()
+    changed = context_store.get_context(original["id"])
+    assert changed["question"] == question
+    assert changed["plan_deliverables"] == {**edit["plan_deliverables"], "check": []}
+    assert context_store.scientific_configuration_sha256(changed) != digest
+    config = PipelineConfig(workdir=tmp_path, require_human_plan_review=True, bound_plan_deliverables=changed["plan_deliverables"])
+    assert PipelineConfig.from_recovery_payload(
+        config.recovery_payload(), expected_digest=config.canonical_digest(),
+    ).recovery_payload()["bound_plan_deliverables"] == changed["plan_deliverables"]
+    assert client.post("/api/study-contexts", json=body).status_code == 409
+    revised = context_store.upsert_context({"id": original["id"], "question": "Summarize night admissions."})
+    assert revised.get("plan_deliverables") is None

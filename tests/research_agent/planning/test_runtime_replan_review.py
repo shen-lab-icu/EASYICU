@@ -2,6 +2,8 @@ from __future__ import annotations
 
 import inspect
 
+import pytest
+
 from easyicu.research_agent.canonical_json import canonical_sha256
 from easyicu.research_agent.execution.phase import run_execute_phase
 from easyicu.research_agent.execution import phase_support
@@ -125,3 +127,48 @@ def test_runtime_replan_rebinds_signed_science_before_contract_review() -> None:
     assert call.lstrip().startswith("revised,")
     assert "context=context" in call
     assert "replanner_scientific_runtime_rebind_failed" in source
+
+
+@pytest.mark.parametrize("has_reviewed_delivery", [False, True])
+def test_replanner_cannot_add_an_unapproved_delivery_owner(tmp_path, monkeypatch, has_reviewed_delivery):
+    from types import SimpleNamespace
+
+    current = _plan(revision=1, intent="Summarize collection shifts")
+    reviewed_deliveries = [AnalysisStep(
+        step_id="bibliography", intent="Deliver the reviewed source list", host_delivery_kind="references",
+    )] if has_reviewed_delivery else []
+    current.steps.extend(reviewed_deliveries)
+    candidate = _plan(revision=2, intent="Compare aggregate recovery across shifts")
+    candidate.steps.append(AnalysisStep(
+        step_id="new_pdf", intent="Typeset the shift summary", host_delivery_kind="manuscript_pdf",
+    ))
+    runtime = SimpleNamespace(bind_plan=lambda plan, **_: (plan, []), validate_plan=lambda _: None)
+    pipeline = SimpleNamespace(
+        _enable_replanning=True, _planner_strategy="progressive_v2", _max_total_steps=16,
+        _scientific_runtime_authorities=runtime, _max_replans=0, _max_consecutive_noop_replans=0,
+        _config=SimpleNamespace(require_human_plan_review=False),
+    )
+    monkeypatch.setattr(phase_support, "ReplannerAgent", lambda _: SimpleNamespace(run=lambda **_: candidate))
+    monkeypatch.setattr(phase_support, "robustness_specs_for_execution", lambda **_: {})
+    monkeypatch.setattr(
+        phase_support, "normalize_replan_candidate",
+        lambda **kwargs: SimpleNamespace(plan=kwargs["candidate_plan"], findings=[]),
+    )
+    monkeypatch.setattr(phase_support, "replan_candidate_contract_findings", lambda **_: [])
+    registered = []
+
+    def register(plan, *, reason):
+        registered.append(plan)
+        return tmp_path / "revised.json"
+
+    result = SimpleNamespace(agent_context=None, allowed_literature_citation_keys=[], direct_comparator_literature_keys=[])
+    revised, path = phase_support._step_maybe_replan(
+        current_plan=current, reason="aggregate_shape_changed", plan_path=tmp_path / "original.json",
+        _replan_state={"disabled": False, "noop_streak": 0, "total": 0}, context=None, findings=[],
+        pipeline=pipeline, plan_result=result, role_resolver=lambda _: None, run_dir=tmp_path, skill_obj=None,
+        flush_partial_manifest=lambda: None, resolve_cohort_definition=lambda *_args, **_kwargs: None,
+        register_plan_revision=register, force=True,
+    )
+    assert path == tmp_path / "revised.json"
+    assert registered == [revised]
+    assert revised.steps == [*candidate.execution_steps, *reviewed_deliveries]
