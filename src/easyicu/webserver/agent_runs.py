@@ -25,6 +25,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Dict, List, Mapping, Optional
 
+from easyicu.research_agent.contracts.frozen_payload import thaw_payload
 from easyicu.research_agent.contracts.product_files import (
     RUN_DELIVERY_ARTIFACT_NAMES,
     RUN_DOCUMENT_SPECS,
@@ -1564,8 +1565,10 @@ def _history_row(review: RunRecord, run_dir: Path) -> Dict[str, Any]:
         ),
         # The blocked data foundation's lower-layer cause (codes and concept
         # ids only), carried so the run record can name what the data lacked.
+        # Thawed, not copied: the frozen gate payload nests read-only mappings
+        # (a progressive-compile stop's ``plan_repair``) that JSON cannot encode.
         "gate_detail": (
-            dict(gate.payload.get("detail"))
+            thaw_payload(gate.payload.get("detail"))
             if isinstance(gate.payload.get("detail"), Mapping)
             else None
         ),
