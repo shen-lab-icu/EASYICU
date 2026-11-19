@@ -476,3 +476,35 @@ def test_after_a_run_the_choice_keeps_the_researchers_scope_and_the_workflows_of
         **choice.body, "offer_sha256": resolved.offer["offer_sha256"],
     })
     assert study_contexts.get_context(choice.study["id"])["cohort"] == choice.study["cohort"]
+
+
+def test_a_row_saved_before_nonces_keeps_its_choice_through_ordinary_writes(choice):
+    """Carbon m2d0947 F1: a legacy row is given its nonce before a receipt binds it."""
+    from easyicu.webserver.pi_copilot.demo_planning_authority import resolve_choice
+
+    raw = json.loads(sources._CONFIG_PATH.read_text())
+    for row in raw["sources"]:
+        row.pop("registration_nonce", None)
+    sources._CONFIG_PATH.write_text(json.dumps(raw))
+    choice.service.authorize_data_source(choice.record.session_id, **choice.body)
+    study = study_contexts.get_context(choice.study["id"])
+    identity = resolve_choice(study)
+    sources.save_registry({})
+    sources.rename_source(str(choice.paths.export), "Renamed demo")
+    assert resolve_choice(study) == identity
+    assert all(row.get("registration_nonce") for row in json.loads(sources._CONFIG_PATH.read_text())["sources"])
+
+
+def test_another_release_claimed_in_place_and_back_is_a_new_registration(choice):
+    """Carbon m2d0947 F2: A -> B -> A at one path never revives the receipt bound to A."""
+    from easyicu.webserver.pi_copilot.demo_planning_authority import resolve_choice
+
+    choice.service.authorize_data_source(choice.record.session_id, **choice.body)
+    study = study_contexts.get_context(choice.study["id"])
+    assert resolve_choice(study) is not None
+    sources.register_source(str(choice.paths.export), source_identity={
+        "source_id": "another-release", "version": "9.9", "archive_sha256": "0" * 64})
+    source = storage.verified_public_demo_raw(choice.paths.raw)
+    demo_source_prepare.register_export(source, choice.paths, SimpleNamespace(emit=lambda event: None))
+    with pytest.raises((ValueError, OSError, dataio.ExportCohortError)):
+        resolve_choice(study)

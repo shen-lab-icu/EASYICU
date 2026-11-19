@@ -116,6 +116,11 @@ def _read_raw() -> Dict[str, Any]:
 
 
 def _write_raw(data: Dict[str, Any]) -> None:
+    # Every saved row carries its registration nonce; a row written without
+    # one (a legacy row, an autodiscovered folder) starts its registration here.
+    for row in data.get("sources") or []:
+        if isinstance(row, dict) and not _kept_nonce(row):
+            row["registration_nonce"] = secrets.token_hex(16)
     _CONFIG_PATH.parent.mkdir(parents=True, exist_ok=True)
     tmp = _CONFIG_PATH.with_suffix(_CONFIG_PATH.suffix + ".tmp")
     tmp.write_text(json.dumps(data, indent=2, ensure_ascii=False), encoding="utf-8")
@@ -187,6 +192,11 @@ def stored_registration_sha256(identity: SourceIdentity) -> str | None:
     the folder ends its registration: registering it afterwards is new.
     """
     row = _stored_row_for_identity(identity)
+    if row is not None and not _kept_nonce(row):
+        # A row saved before nonces existed gets its nonce now, before any
+        # receipt binds it, so a later ordinary write leaves the digest alone.
+        _write_raw(_read_raw())
+        row = _stored_row_for_identity(identity)
     if row is None:
         return None
     record = {key: row.get(key) for key in (
@@ -683,12 +693,17 @@ def save_registry(
         if path:
             source = _source_from_path(str(path), label=label)
             # UI patches can edit labels/selections, never manufacture release receipts.
-            source.update(_registration_fields(existing.get(source["path"], {})))
-            source.update(_kept_nonce(existing.get(source["path"], {})))
+            previous = existing.get(source["path"], {})
+            source.update(_registration_fields(previous))
+            source.update(_kept_nonce(previous))
             if _registered_identity is not None and source["id"] == _registered_identity.registration_id:
+                registered = _registration_fields({**_registered_identity.to_dict(), "id": source["id"]})
+                if _registration_fields(previous) != registered:
+                    # Another release claim at this path is a new registration.
+                    source.pop("registration_nonce", None)
                 for key in ("version", "source_id", "archive_sha256"):
                     source.pop(key, None)
-                source.update(_registration_fields({**_registered_identity.to_dict(), "id": source["id"]}))
+                source.update(registered)
             existing[source["path"]] = source
             removed_paths.discard(source["path"])
 
