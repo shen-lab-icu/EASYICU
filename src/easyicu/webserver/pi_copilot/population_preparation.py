@@ -124,6 +124,15 @@ def study_for_first_plan(study: Mapping[str, Any]) -> Mapping[str, Any]:
     return {**study, **patch} if patch else study
 
 
+def study_for_next_plan(study: Mapping[str, Any], *, after_run: bool) -> Mapping[str, Any]:
+    """The study the next plan is drafted on: a first plan's stated scope only.
+
+    After a run the population scope is the researcher's; re-adding the
+    question's first-stay default would undo a scope they cleared.
+    """
+    return study if after_run else study_for_first_plan(study)
+
+
 def _admission_patch(criterion: Any, cohort: dict, time_zero: Any) -> str | None:
     """Intersect one inclusion with existing admission axes, or name the gap."""
     if criterion.role != "include":

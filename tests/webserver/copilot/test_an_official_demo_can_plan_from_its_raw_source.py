@@ -374,3 +374,32 @@ def test_a_stated_first_stay_is_signed_with_the_choice_so_the_launch_keeps_it(ch
     assert updated["cohort"] == {"exclude_readmissions": True}
     assert population_preparation.study_for_first_plan(updated) is updated
     assert resolve_choice(updated) == sources.registered_source_identity(str(choice.paths.export))
+
+
+def test_after_a_run_the_choice_keeps_the_researchers_scope_and_the_workflows_offer(choice, monkeypatch):
+    # The first-stay default drafts a first plan only. After a run the scope
+    # is the researcher's: choosing the raw source must not re-add it, and the
+    # offer is exactly the one the workflow projection shows.
+    from easyicu.webserver import agent_runs
+    from easyicu.webserver.pi_copilot import population_preparation
+    from easyicu.webserver.pi_copilot.workflow import build_project_workflow_projection
+
+    def first_stay(study):
+        cohort = dict(study.get("cohort") or {})
+        return None if cohort.get("exclude_readmissions") else {"cohort": {**cohort, "exclude_readmissions": True}}
+
+    monkeypatch.setattr(population_preparation, "stated_first_stay_planning_default", first_stay)
+    earlier = {"run_id": "run-earlier", "study_id": choice.study["id"], "status": "failed",
+               "project_dir": str(choice.paths.root / "no-run-dir")}
+    monkeypatch.setattr(agent_runs, "list_run_history", lambda **_: {"runs": [dict(earlier)]})
+    monkeypatch.setattr(sources, "_autodiscovered_paths", lambda **_: [])
+
+    projection = build_project_workflow_projection(study_context_id=choice.study["id"])
+    assert [(run["run_id"], run["authoritative"]) for run in projection.runs] == [("run-earlier", True)]
+    resolved = resolve_demo_planning_source(choice.study)
+    shown = (projection.workflow.bound_export_cohort_refusal or {}).get("planning_source")
+    assert shown == resolved.offer
+    choice.service.authorize_data_source(choice.record.session_id, **{
+        **choice.body, "offer_sha256": resolved.offer["offer_sha256"],
+    })
+    assert study_contexts.get_context(choice.study["id"])["cohort"] == choice.study["cohort"]
