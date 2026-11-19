@@ -187,6 +187,47 @@ def test_in_hospital_death_keeps_the_host_landmark_and_asks_nothing(monkeypatch)
     assert raised.value.code == "plan_decision_not_required_by_review"
 
 
+def test_a_timing_question_the_reviewer_asked_keeps_its_own_wording(monkeypatch) -> None:
+    """Carbon b2l1042 minor 3: the host's copy never replaces the reviewer's question."""
+    from easyicu.webserver.pi_copilot import workflow as workflow_owner
+
+    _service, projection, _current, _run = _service_and_projection(monkeypatch, "mort_28d")
+    asked = {"code": _TIMING, "question": "Reviewer: align the exposure window with follow-up?",
+             "requires_user_authorization": True}
+    snapshot = projection.workflow.model_copy(update={
+        "next_action_code": "plan_scientific_changes_required",
+        "plan_review_summary": {"finding_codes": [_TIMING], "authorization_questions": [asked]},
+    })
+    seen = []
+    real = workflow_owner.plan_decisions.landmark_unavailable_timing_question
+    monkeypatch.setattr(workflow_owner.plan_decisions, "landmark_unavailable_timing_question",
+                        lambda *a, **kw: seen.append(real(*a, **kw)) or seen[-1])
+    review = {"artifact_payloads": {"agent_plan.json": _plan("mort_28d")}}
+    enriched = workflow_owner._enrich_plan_review(snapshot, study=_study(), review=review)
+    assert seen and seen[0] is not None  # the host would have asked
+    timing = [q for q in enriched.plan_review_summary.get("authorization_questions") or [] if q.get("code") == _TIMING]
+    assert [q.get("question") for q in timing] != [seen[0]["question"]]
+
+
+@pytest.mark.parametrize("summary", [
+    {"finding_codes": _TIMING, "authorization_questions": 7},
+    {"finding_codes": 7, "authorization_questions": "not-a-list"},
+    {"finding_codes": [_TIMING], "authorization_questions": ["not-a-question", None]},
+])
+def test_a_malformed_review_summary_never_breaks_the_workflow(monkeypatch, summary) -> None:
+    """Carbon b2l1042 minor 2: odd summaries degrade to no host question."""
+    from easyicu.webserver.pi_copilot import workflow as workflow_owner
+
+    _service, projection, _current, _run = _service_and_projection(monkeypatch, "mort_28d")
+    snapshot = projection.workflow.model_copy(update={
+        "next_action_code": "plan_scientific_changes_required", "plan_review_summary": summary,
+    })
+    review = {"artifact_payloads": {"agent_plan.json": _plan("mort_28d")}}
+    enriched = workflow_owner._enrich_plan_review(snapshot, study=_study(), review=review)
+    questions = enriched.plan_review_summary.get("authorization_questions")
+    assert not isinstance(questions, list) or all(isinstance(item, dict) for item in questions)
+
+
 @pytest.mark.parametrize("case", ["another_studys_review", "stale_revision", "already_resolved"])
 def test_the_handed_timing_choice_is_refused_outside_this_studys_current_review(monkeypatch, case) -> None:
     """S1420: the route accepts the handed code only for this study's own, current, unresolved review."""

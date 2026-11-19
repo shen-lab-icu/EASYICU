@@ -1633,24 +1633,26 @@ def _enrich_plan_review(
                 },
             }
         )
+    review = snapshot.plan_review_summary if isinstance(snapshot.plan_review_summary, Mapping) else {}
+    finding_codes = review.get("finding_codes")
+    asked = review.get("authorization_questions")
+    asked = [item for item in asked if isinstance(item, Mapping)] if isinstance(asked, (list, tuple)) else []
     timing_question = (
         plan_decisions.landmark_unavailable_timing_question(
-            study, agent_plan, snapshot.plan_review_summary.get("finding_codes") or (),
+            study if isinstance(study, Mapping) else {}, agent_plan,
+            [str(code) for code in finding_codes] if isinstance(finding_codes, (list, tuple)) else (),
         )
-        if isinstance(agent_plan, Mapping)
-        and isinstance(snapshot.plan_review_summary, Mapping)
+        if isinstance(agent_plan, Mapping) and review
         and snapshot.next_action_code
         in {"plan_scientific_changes_required", "agent_plan_revision_nonconvergent"}
         else None
     )
-    if timing_question is not None:
+    if timing_question is not None and not any(item.get("code") == timing_question["code"] for item in asked):
         # B2: the host cannot close this timing gap, so the researcher chooses
         # on the timing card instead of facing a paused review with no way on.
-        summary = dict(snapshot.plan_review_summary)
-        summary["authorization_questions"] = [timing_question, *(
-            item for item in summary.get("authorization_questions") or []
-            if not (isinstance(item, Mapping) and item.get("code") == timing_question["code"])
-        )]
+        # A question the reviewer already asked keeps its own wording.
+        summary = dict(review)
+        summary["authorization_questions"] = [timing_question, *asked]
         snapshot = snapshot.model_copy(update={
             "next_action_code": "plan_scientific_changes_required", "plan_review_summary": summary,
         })
