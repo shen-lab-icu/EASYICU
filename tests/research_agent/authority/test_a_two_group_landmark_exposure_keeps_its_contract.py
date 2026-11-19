@@ -51,6 +51,18 @@ def _two_groups(authority):
     })
 
 
+def _primary_plan(levels: list[str], coding: str):
+    plan = _draft_plan().model_dump(mode="json")
+    requirement = plan["steps"][1]["model_requirements"][0]
+    exposure = requirement["model_terms"][0]
+    exposure.update({"coding": coding, "levels": levels, "reference_level": levels[0]})
+    requirement.update({
+        "exposure_levels": levels, "exposure_reference_level": levels[0],
+        "primary_contrast_level": levels[-1],
+    })
+    return AnalysisPlan.model_validate(plan)
+
+
 def _primary(levels: list[str], coding: str):
     plan = _draft_plan().model_dump(mode="json")
     requirement = plan["steps"][1]["model_requirements"][0]
@@ -72,6 +84,28 @@ def test_a_two_level_exposure_is_valid_only_as_binary_whatever_its_kind(tmp_path
         authority._validated_requirement(_primary(["1", "2"], "categorical"))
 
 
+@pytest.mark.parametrize("kind", ["ordinal", "categorical"])
+def test_the_governed_primary_step_applies_the_same_coding_rule(tmp_path, kind):
+    """Carbon b4s1144 minor 1: the second validation site, on a host-bound plan."""
+    from easyicu.research_agent.orchestration.scientific_runtime import ScientificRuntimeAuthorities
+
+    authority = _two_groups(_exact_authority(tmp_path)).model_copy(update={"exposure_kind": kind})
+    runtime = ScientificRuntimeAuthorities(trajectory=None, current_case=authority)
+    bound, _findings = runtime.bind_plan(_primary_plan(["1", "2"], "binary"))
+    primary = authority.governed_primary_step(bound)
+    (exposure,) = [t for t in primary.model_requirements[0].model_terms if t.role == "exposure"]
+    assert exposure.coding == "binary"  # what the host's own template wrote
+    authority.validate_plan(bound)
+    drifted = bound.model_dump(mode="json")
+    for step in drifted["steps"]:
+        if step["method"] == authority.primary_method:
+            for term in step["model_requirements"][0]["model_terms"]:
+                if term["role"] == "exposure":
+                    term["coding"] = "categorical"
+    with pytest.raises(CurrentCaseScientificAuthorityError, match="exposure_coding"):
+        authority.governed_primary_step(AnalysisPlan.model_validate(drifted))
+
+
 def test_the_published_contract_names_the_coding_the_host_template_writes(tmp_path):
     authority = _two_groups(_exact_authority(tmp_path))
     assert '"coding": "binary"' in authority.planning_contract_context()
@@ -89,7 +123,7 @@ def test_more_than_two_levels_stay_categorical_only(tmp_path):
     assert '"coding": "categorical"' in authority.planning_contract_context()
 
 
-def _fit(frame, coding: str):
+def _fit(frame, coding: str, reference: str = "1"):
     import numpy as np
     import statsmodels.api as sm
 
@@ -98,7 +132,7 @@ def _fit(frame, coding: str):
 
     terms = [
         ModelTermSpec(name="group", role="exposure", coding=coding, levels=["1", "2"],
-                      reference_level="1", transform="treatment_contrast"),
+                      reference_level=reference, transform="treatment_contrast"),
         ModelTermSpec(name="age", role="covariate", coding="continuous", transform="identity"),
     ]
     compiled = compile_model_terms(frame, terms=terms, exposure="group")
@@ -126,3 +160,28 @@ def test_binary_and_categorical_treatment_coding_of_two_levels_fit_identically()
     assert binary_column == categorical_column  # the contrast column for level "2" vs reference "1"
     np.testing.assert_allclose(binary, categorical, rtol=0, atol=1e-10)
     assert binary[0] > 0  # level 2 vs reference 1: the simulated harm, not its inverse
+
+
+def test_a_reversed_reference_fits_identically_and_inverts_the_sign():
+    """Carbon b4s1144 minor 3: reference level "2"; the binary focal level is the one other level."""
+    import numpy as np
+    import pandas as pd
+
+    from easyicu.research_agent.contracts.model_terms import ModelTermSpec
+
+    rng = np.random.default_rng(20261119)
+    n = 600
+    group = rng.choice(["1", "2"], size=n, p=[0.6, 0.4])
+    age = rng.normal(65, 12, size=n)
+    risk = 1 / (1 + np.exp(-(-2.0 + 0.9 * (group == "2") + 0.02 * (age - 65))))
+    frame = pd.DataFrame({"group": group, "age": age, "death": rng.binomial(1, risk)})
+    term = ModelTermSpec(name="group", role="exposure", coding="binary", levels=["1", "2"],
+                         reference_level="2", transform="treatment_contrast")
+    # The executor's binary branch takes contrast_levels[0] as the focal level.
+    assert list(term.contrast_levels) == ["1"]
+    binary_column, binary = _fit(frame, "binary", "2")
+    categorical_column, categorical = _fit(frame, "categorical", "2")
+    assert binary_column == categorical_column
+    np.testing.assert_allclose(binary, categorical, rtol=0, atol=1e-10)
+    _column, forward = _fit(frame, "binary", "1")
+    assert binary[0] < 0 and np.isclose(binary[0], -forward[0], atol=1e-10)  # level 1 vs 2: the inverse
