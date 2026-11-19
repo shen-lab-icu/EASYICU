@@ -94,7 +94,15 @@ class OutcomeDefinition(BaseModel):
     def _one_outcome(self):
         if not self.estimand.strip():
             raise ValueError("the estimand must be stated")
-        if sum((self.free_days is not None, bool(self.ordered_levels), self.count is not None)) != 1:
+        declared = sum((self.free_days is not None, bool(self.ordered_levels), self.count is not None))
+        if declared == 0:
+            # S1446: name the repair. "Declare exactly one" sent a binary step's
+            # empty definition round the retry loop; such a step takes null.
+            raise ValueError(
+                "this outcome_definition declares no free_days, ordered_levels or count definition; "
+                "set outcome_definition to null unless outcome_type is free_days, ordinal or count"
+            )
+        if declared != 1:
             raise ValueError("declare exactly one free_days, ordered_levels, or count definition")
         if self.ordered_levels and (
             len(self.ordered_levels) < 3
