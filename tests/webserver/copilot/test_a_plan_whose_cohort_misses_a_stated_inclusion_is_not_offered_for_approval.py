@@ -230,6 +230,11 @@ _NEED_NOT_NAME_THE_STOPS = {
         "it sends a reviewer's runtime gap to the host compiler; a stop that "
         "refuses approval is no such gap, and replacing its next action would hide it"
     ),
+    ("pi_copilot/workflow.py", "_enrich_plan_review", "timing_question"): (
+        "it puts the researcher's timing choice on a review that only asks for "
+        "changes; a stop that refuses approval is its own next action, so it is "
+        "never replaced and keeps its own card"
+    ),
 }
 
 
