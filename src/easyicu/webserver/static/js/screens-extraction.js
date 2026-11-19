@@ -484,7 +484,7 @@
       repaint();
       return;
     }
-    const support = runMode === 'recommended' ? { ok: true, reason: 'recommended' } : cohortExportSupport();
+    const support = (exSource === 'module' && window.EU_EXTRACTION_EXPORT_SOURCE.refusal()) || (runMode === 'recommended' ? { ok: true, reason: 'recommended' } : cohortExportSupport());
     if (!support.ok) {
       abandonExtractionContinuity();
       exportRunMode = runMode;
@@ -679,7 +679,7 @@
         ready: !!r.ready,
         size: r.size_hint || '',
         est: r.source === 'raw' ? t('one-time', '一次性') : '',
-        missing: r.missing_tables || [],
+        missing: r.missing_tables || [], sourceDataPath: r.source === 'module' ? String(r.source_data_path || '') : '',
       };
     }
     const d = DETECTED[exSource] || DETECTED.prepared;  // offline fallback
@@ -728,11 +728,11 @@
       : d.source === 'raw'
       ? t('Raw ICU files', '原始 ICU 文件')
       : t('Prepared ICU data path', '已转换 ICU 数据路径');
-    const cta = d.ready
-      ? `<button class="btn primary" data-ex-usedata>${icon('arrow', 14)} ${d.source === 'module' ? t('Use this export', '使用这个导出') : t('Continue with prepared data', '继续使用已转换数据')}</button>`
+    const sourceCta = window.EU_EXTRACTION_EXPORT_SOURCE.sourceCta(d, hostedServer()), cta = d.ready
+      ? `${sourceCta}<button class="btn ${sourceCta ? '' : 'primary'}" data-ex-usedata>${icon('arrow', 14)} ${d.source === 'module' ? t('Use this export', '使用这个导出') : t('Continue with prepared data', '继续使用已转换数据')}</button>`
       : hostedServer() ? '' : `<button class="btn primary" data-ex-startconv>${icon('refresh', 14)} ${t('Convert raw files', '转换原始文件')}${d.size ? ` · ${escHtml(d.size)}` : ''}${d.est ? ` · ${escHtml(d.est)}` : ''}</button>`;
     const note = d.ready
-      ? `<div class="note ok mt-16" style="padding:10px 12px;"><div class="ico">${icon('check', 14, 2.6)}</div><div class="body"><div class="t" style="font-size:12px;">${t('Detected', '已识别')}: ${sourceLabel}</div><div class="d" style="font-size:11px;margin:0;">${d.source === 'module' ? hostedCopy('exportNote', t('This looks like an existing EasyICU export. Register it as a reusable local source.', '这看起来是已有 EasyICU 导出。可以注册为可复用的本地来源。')) : t('Already analysis-ready — no conversion needed. You can extract straight away.', '已是可分析格式 —— 无需转换,可直接抽取。')}</div></div></div>`
+      ? `<div class="note ok mt-16" style="padding:10px 12px;"><div class="ico">${icon('check', 14, 2.6)}</div><div class="body"><div class="t" style="font-size:12px;">${t('Detected', '已识别')}: ${sourceLabel}</div><div class="d" style="font-size:11px;margin:0;">${d.source === 'module' ? hostedCopy('exportNote', t('This is an existing EasyICU export: its cohort and features are already fixed. Use it as a local source for review, or define a new cohort from the source data it was made from.', '这是已有的 EasyICU 导出：它的队列和特征已经固定。可以把它作为本地来源用于审阅；要定义新队列，请从生成它的源数据开始。')) : t('Already analysis-ready — no conversion needed. You can extract straight away.', '已是可分析格式 —— 无需转换,可直接抽取。')}</div></div></div>`
       : `<div class="note info mt-16" style="padding:10px 12px;"><div class="ico">${icon('shield', 14)}</div><div class="body"><div class="d" style="font-size:11px;margin:0;">${hostedCopy('rawNote', t(`One-time conversion to Parquet. Runs ${runsWhere()}; results are cached so a re-run is instant.`, `一次性转换为 Parquet，${runsWhere()}运行；结果会缓存，再次运行会很快。`))}</div></div></div>`;
     return `
       <div class="cfg" style="max-width:680px;">
@@ -1924,6 +1924,7 @@
         if (pathInput) exPath = pathInput.value || exPath;
         startScan(b.dataset.exSrc);
       }));
+      window.EU_EXTRACTION_EXPORT_SOURCE.bind(root, () => scanFacts().sourceDataPath, path => { exPath = path; startScan(null); });
       const useDataBtn = root.querySelector('[data-ex-usedata]'); if (useDataBtn) useDataBtn.addEventListener('click', () => {
         useDataBtn.disabled = true;
         const registered = exSource === 'module'

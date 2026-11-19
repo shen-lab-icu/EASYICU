@@ -156,6 +156,14 @@
     };
   }
 
+  // Databases where the score owner (scores/sofa2_aggregate.py) has no source
+  // for the concept by design: marked unavailable, never imputed.
+  function structuralOf(k) { return ((C().conceptCoverage || {})[k] || {}).structurally_unavailable || []; }
+  function structuralText() { return L('structurally unavailable: this database never recorded the source (no GCS), so the score is not computed and never imputed', '结构性不可得：该数据库从未记录来源（无 GCS），因此不计算，也绝不插补'); }
+  function structuralNote(k) {
+    const dbs = structuralOf(k);
+    return dbs.length ? `<p class="dict-lineage-sub" data-dict-structural>${html(`${dbs.map(dbName).join(L(', ', '、'))}${L(': ', '：')}${structuralText()}`)}</p>` : '';
+  }
   // Which supported databases the dictionary maps a concept to, by name; a
   // derived concept reads its inputs' mappings. An earlier data audit that
   // confirmed fewer of them is marked, since it records a count, not names.
@@ -175,6 +183,7 @@
       ? `<span class="cov-audit" title="${html(L(`An earlier data audit confirmed usable data in ${audited} of these ${declared.length} databases.`, `早期数据核对只在这 ${declared.length} 个库中的 ${audited} 个确认有可用数据。`))}">${L(`data ${audited}/${declared.length}`, `数据核对 ${audited}/${declared.length}`)}</span>`
       : '';
     const mark = db => {
+      if (structuralOf(meta.key).includes(db)) return `<i class="na" title="${html(`${dbName(db)}${L(': ', '：')}${structuralText()}`)}">${html(DB_NAMES().abbr(db) || dbName(db))}</i>`;
       if (!declared.includes(db)) return `<i>${html(DB_NAMES().abbr(db) || dbName(db))}</i>`;
       const note = sourceSemanticText(meta.key, db) || substituteText(meta.key, substituteOf(meta.key, db));
       return note
@@ -255,7 +264,10 @@
     const hidden = internalCount();
     const toggle = hidden ? `<button type="button" class="btn sm ghost" data-dict-internal>${dictShowInternal ? L('Hide internal fields', '隐藏内部字段') : L(`Show internal fields (${hidden})`, `显示内部字段（${hidden}）`)}</button>` : '';
     const n = rows.filter(row => !row.variantOf).length;
-    return `<div class="dict-resultline row" style="justify-content:space-between;align-items:center;"><span>${t(n + ' concept' + (n === 1 ? '' : 's'), n + ' 个概念')}${dictCat !== 'all' ? ` · ${groupNameOf(dictCat)}` : ''}${dictSearch ? ` · "${dictSearch.replace(/[&<>"]/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]))}"` : ''}</span>${toggle}</div>${tableHtml(rows)}`;
+    // The header counts every dictionary concept; say how the list reaches it.
+    const folded = Object.keys(C().dict || {}).filter(k => listed(k) && primaryOf(k)).length;
+    const reconcile = dictCat === 'all' && !dictSearch && (folded || (hidden && !dictShowInternal)) ? `<span class="dict-reconcile" data-dict-reconcile> · ${L(`${C().totalConcepts} in the dictionary: ${folded} alternative definitions open under their main entry${dictShowInternal ? '' : `, ${hidden} internal fields hidden`}`, `字典共 ${C().totalConcepts} 个：${folded} 个替代定义收在主条目下${dictShowInternal ? '' : `，${hidden} 个内部字段已隐藏`}`)}</span>` : '';
+    return `<div class="dict-resultline row" style="justify-content:space-between;align-items:center;"><span>${t(n + ' concept' + (n === 1 ? '' : 's'), n + ' 个概念')}${reconcile}${dictCat !== 'all' ? ` · ${groupNameOf(dictCat)}` : ''}${dictSearch ? ` · "${dictSearch.replace(/[&<>"]/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]))}"` : ''}</span>${toggle}</div>${tableHtml(rows)}`;
   }
   function tableHtml(rows) {
     if (!rows.length) return `<div class="dict-empty">${icon('search', 22)}<div>${L('No matching concepts.', '未找到匹配的概念。')}</div></div>`;
@@ -305,6 +317,7 @@
       return `<section class="dict-lineage" data-dict-lineage>${head}
         <p class="dict-lineage-derived">${L('Derived: computed from these variables, not read from a table.', '派生变量：由以下变量计算得到，不直接读表。')}${dictLineage.callback ? ` <span class="mono">${html(dictLineage.callback)}</span>` : ''}</p>
         ${inputChips(inputs)}
+        ${structuralNote(dictLineage.concept)}
       </section>`;
     }
     if (dictLineage.producer) {
@@ -358,6 +371,7 @@
     return `<section class="dict-lineage" data-dict-lineage>
       <div class="dict-lineage-head"><div><div class="eyebrow">${L('Feature provenance', '特征血缘')}</div><h2>${html(window.EU_LANG === 'zh' ? zhOf(dictLineage.concept) : dictLineage.name)} <span class="mono">${html(dictLineage.concept)}</span></h2><p>${L('Declared catalog mappings only. Fields marked “not declared” are left explicit instead of guessed.', '仅展示字典声明的映射；未声明的字段保持明确空缺，不做猜测。')}</p></div><span class="pill ok">${lanes.length} ${L('databases', '个数据库')}</span></div>
       ${derivedElsewhere()}
+      ${structuralNote(dictLineage.concept)}
       <div class="dict-lineage-tabs" role="tablist">${lanes.map(lane=>`<button type="button" class="${lane.database===active.database?'active':''}" data-dict-lineage-db="${html(lane.database)}">${html(lane.label)}</button>`).join('')}</div>
       <div class="dict-audit-track" data-dict-audit-track>${steps.map(([label,value],index)=>`<div class="dict-audit-step"><i>${index+1}</i><div><b>${html(label)}</b><span>${html(value)}</span></div></div>`).join('')}</div>
       <details data-dict-mapping-details><summary>${L('View complete source mappings', '查看完整来源映射')}</summary>${mappings}</details>

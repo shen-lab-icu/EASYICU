@@ -1118,7 +1118,9 @@
     state.firstQuestion = null;
     if (!queued || Date.now() - queued.at > FIRST_QUESTION_MS || projectId() !== expectedId) return;
     await startEntry();
-    if (projectId() !== expectedId || !state.session) return;
+    if (projectId() !== expectedId) return;
+    // No model yet: keep the question pending so the next conversation here opens with it.
+    if (!state.session) { try { window.sessionStorage.setItem('easyicu.skillHub.question', queued.text); } catch (_) {} render(); return; }
     state.draft = queued.text;
     render();
     await sendMessage();
