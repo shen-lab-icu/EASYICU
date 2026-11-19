@@ -827,20 +827,19 @@ class LandmarkCategoricalAssociationRuntimeAuthority(_AuthorityBase):
 
     @property
     def exposure_term_codings(self) -> tuple[str, ...]:
-        """The primary exposure term codings this contract accepts, published first.
+        """The one valid coding of the primary exposure term (S1432).
 
-        Two levels are one treatment contrast against the signed reference
-        whatever the exposure's type, and the host's own landmark family
-        template codes them ``binary`` (UX leg 3, 2026-11-19: a two-group
-        first-day lactate was refused on re-plan). ``categorical`` stays valid
-        for two levels; more levels are ``categorical`` only.
+        Exactly two levels are coded ``binary`` whatever the exposure's kind
+        (binary, ordinal or categorical): one treatment contrast against the
+        signed reference, as the host's landmark family template, the baseline
+        repair (orchestration.scientific_runtime), the model-term schema and
+        the survival and target-trial contracts already code it. More levels
+        are ``categorical``. The template, this contract's published planning
+        coordinates and its validation therefore agree (UX leg 3, 2026-11-19:
+        a two-group first-day lactate was refused on re-plan).
         """
 
-        if self.exposure_kind == "binary":
-            return ("binary",)
-        if len(self.exposure_levels) == 2:
-            return ("binary", "categorical")
-        return ("categorical",)
+        return ("binary",) if len(self.exposure_levels) == 2 else ("categorical",)
 
     @model_validator(mode="after")
     def _closed_contract(self) -> "LandmarkCategoricalAssociationRuntimeAuthority":

@@ -4,8 +4,9 @@ UX leg 3 (2026-11-19): first-day lactate grouped as <=2 / >2 mmol/L was
 signed as an ordinal two-level landmark categorical contract. The host's own
 family template codes a two-level exposure term ``binary``, and the contract
 accepted only ``categorical``, so every re-plan was refused on
-``exposure_coding``. Two levels are one treatment contrast against the signed
-reference; more levels stay ``categorical`` only. Synthetic, case-neutral data.
+``exposure_coding``. Exactly two levels are coded ``binary`` whatever the
+exposure's kind (S1432); more levels stay ``categorical``. Synthetic,
+case-neutral data.
 """
 
 from __future__ import annotations
@@ -62,10 +63,13 @@ def _primary(levels: list[str], coding: str):
     return AnalysisPlan.model_validate(plan).steps[1]
 
 
-@pytest.mark.parametrize("coding", ["binary", "categorical"])
-def test_a_two_group_exposure_accepts_one_treatment_contrast_in_either_coding(tmp_path, coding):
-    authority = _two_groups(_exact_authority(tmp_path))
-    assert authority._validated_requirement(_primary(["1", "2"], coding))
+@pytest.mark.parametrize("kind", ["ordinal", "categorical", "binary"])
+def test_a_two_level_exposure_is_valid_only_as_binary_whatever_its_kind(tmp_path, kind):
+    authority = _two_groups(_exact_authority(tmp_path)).model_copy(update={"exposure_kind": kind})
+    assert authority.exposure_term_codings == ("binary",)
+    assert authority._validated_requirement(_primary(["1", "2"], "binary"))
+    with pytest.raises(CurrentCaseScientificAuthorityError, match="exposure_coding"):
+        authority._validated_requirement(_primary(["1", "2"], "categorical"))
 
 
 def test_the_published_contract_names_the_coding_the_host_template_writes(tmp_path):
@@ -85,8 +89,40 @@ def test_more_than_two_levels_stay_categorical_only(tmp_path):
     assert '"coding": "categorical"' in authority.planning_contract_context()
 
 
-def test_a_binary_exposure_stays_binary_only(tmp_path):
-    authority = _two_groups(_exact_authority(tmp_path)).model_copy(update={"exposure_kind": "binary"})
-    assert authority._validated_requirement(_primary(["1", "2"], "binary"))
-    with pytest.raises(CurrentCaseScientificAuthorityError, match="exposure_coding"):
-        authority._validated_requirement(_primary(["1", "2"], "categorical"))
+def _fit(frame, coding: str):
+    import numpy as np
+    import statsmodels.api as sm
+
+    from easyicu.research_agent.contracts.model_terms import ModelTermSpec
+    from easyicu.research_agent.execution.model_matrix import compile_model_terms
+
+    terms = [
+        ModelTermSpec(name="group", role="exposure", coding=coding, levels=["1", "2"],
+                      reference_level="1", transform="treatment_contrast"),
+        ModelTermSpec(name="age", role="covariate", coding="continuous", transform="identity"),
+    ]
+    compiled = compile_model_terms(frame, terms=terms, exposure="group")
+    design = sm.add_constant(compiled.design, has_constant="add")
+    fit = sm.Logit(frame["death"].astype(float), design).fit(disp=0, tol=1e-14, maxiter=200)
+    column, = compiled.exposure_columns
+    return column, np.array([
+        fit.params[column], *fit.conf_int().loc[column].to_numpy(), fit.pvalues[column],
+    ])
+
+
+def test_binary_and_categorical_treatment_coding_of_two_levels_fit_identically():
+    """S1432 (2): same design column, estimate, CI and p; the signed direction is kept."""
+    import numpy as np
+    import pandas as pd
+
+    rng = np.random.default_rng(20261119)
+    n = 600
+    group = rng.choice(["1", "2"], size=n, p=[0.6, 0.4])
+    age = rng.normal(65, 12, size=n)
+    risk = 1 / (1 + np.exp(-(-2.0 + 0.9 * (group == "2") + 0.02 * (age - 65))))
+    frame = pd.DataFrame({"group": group, "age": age, "death": rng.binomial(1, risk)})
+    binary_column, binary = _fit(frame, "binary")
+    categorical_column, categorical = _fit(frame, "categorical")
+    assert binary_column == categorical_column  # the contrast column for level "2" vs reference "1"
+    np.testing.assert_allclose(binary, categorical, rtol=0, atol=1e-10)
+    assert binary[0] > 0  # level 2 vs reference 1: the simulated harm, not its inverse
