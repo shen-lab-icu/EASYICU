@@ -6,6 +6,7 @@ const test = require('node:test');
 
 const js = path.resolve('src/easyicu/webserver/static/js');
 global.window = {};
+require(path.join(js, 'screens-agent-reader-vocab.js'));
 for (const name of ['modules', 'data-consent', 'cohort-eligibility', 'confirmation-data',
   'question-requirements', 'confirmation', 'target-trial-copy', 'target-trial', 'transcript',
   'session-view', 'next-actions', 'plan-actions', 'events', 'run-readiness']) {
@@ -437,6 +438,27 @@ test('A pending scientific-review decision has one primary connection action in 
   assert.match(log, /data-gpi-confirm-edit/);
   assert.doesNotMatch(log, /data-gpi-aside-pending/);
 });
+
+for (const language of ['zh', 'en']) {
+  test(`${language}: a survival decision without a digest asks for the missing design inline`, () => {
+    const code = 'SURVIVAL_LANDMARK_OWNER_NOT_SEALED';
+    const question = 'For survival after admission, which mortality endpoint, follow-up duration, landmark and baseline variables should we use?';
+    const workflow = {
+      next_action_code: 'plan_scientific_changes_required',
+      plan_review_summary: {
+        run_id: 'synthetic-survival-review',
+        authorization_questions: [{ code, question, evidence: 'Follow-up and adjustment are unspecified.' }],
+        remediation_buckets: { study_authority_change: [code] },
+      },
+    };
+    const log = conversationLog(render(language, workflow, {}).html);
+    const expected = language === 'zh' ? window.AGENT_READER_VOCAB.question(code) : question;
+    if (language === 'zh') assert.match(expected, /哪些调整协变量/);
+    assert.equal(log.match(/class="gpi-confirmation-body">.*?<small>(.*?)<\/small>/s)?.[1], expected);
+    assert.match(log, /data-gpi-confirm-edit/);
+    assert.doesNotMatch(log, /data-gpi-plan-decision-(?:card|option)|data-gpi-aside-pending/);
+  });
+}
 
 test('A disconnected candidate-plan action shows only Check connection as primary', () => {
   const workflow = { next_action_code: 'provider_ready_to_generate_plan' };

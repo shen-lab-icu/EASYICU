@@ -1,4 +1,4 @@
-/* Read-only prepared-data, deferred-input scope and plan-population rendering. */
+/* Read-only confirmation rendering for data scope, plan population and review evidence. */
 (function () {
   'use strict';
   function create(host) {
@@ -182,9 +182,86 @@
         ${pending ? `<p><strong>${esc(tr('Current decision', '当前待确认'))}：</strong>${esc(pending.quote)}</p>` : `<p>${esc(tr('All listed omissions are recorded. Review the complete plan before approving execution.', '所列局限已逐条记录，请继续审阅完整计划后再决定是否批准执行。'))}</p>`}</div>`;
     }
 
+    function localizedAuthorizationQuestion(item) {
+      const code = String((item && item.code) || '');
+      const known = {
+        OUTCOME_DEFINITION_UNRESOLVED: tr(
+          'Which available clinical endpoint and time horizon should this study use?',
+          '这项研究应使用哪个当前数据可支持的临床结局及时间范围？',
+        ),
+        POST_BASELINE_EXPOSURE_TIMING_NOT_CLOSED: tr(
+          'Should the revised study use a prespecified landmark/time-varying design, or remain descriptive?',
+          '修订后的研究应采用预先设定的 landmark／时变设计，还是仅保留描述性分析？',
+        ),
+        ADJUSTMENT_SET_NOT_USER_CONFIRMED: tr(
+          'Do you confirm this candidate plan, including its proposed baseline adjustment set and pre-time-zero rationale?',
+          '你是否确认这份候选计划，包括建议的基线调整变量及其时间零点前的选择依据？',
+        ),
+        REPEATED_STAY_IDENTITY_UNAVAILABLE: tr(
+          'The same patient may have more than one ICU stay. Choose by study target: A. study each patient\'s first ICU stay, or B. study every ICU stay and account for repeated records in the model.',
+          '同一患者可能有多次 ICU 入院。请按研究目标选择：A. 研究每位患者首次 ICU 入住；B. 研究每次 ICU 入住，并在模型中处理同一患者的重复记录。',
+        ),
+        ROBUSTNESS_AUTHORITY_NOT_PRESPECIFIED: tr(
+          'Which executable sensitivity analyses should be prespecified for this study?',
+          '这项研究需要预先设定哪些可执行的敏感性分析？',
+        ),
+      };
+      const vocab = window.AGENT_READER_VOCAB;
+      return known[code] || (vocab ? vocab.question(code) : '') || String((item && (item.question || item.code)) || '');
+    }
+
+    // The review's evidence for a decision reads in the reader vocabulary's
+    // words when it has them; English readers keep the host's evidence.
+    function localizedDecisionEvidence(item) {
+      const vocab = window.AGENT_READER_VOCAB;
+      const finding = vocab ? vocab.finding(String((item && item.code) || '')) : null;
+      return (finding && finding.detail) || String((item && item.evidence) || localizedAuthorizationQuestion(item));
+    }
+
+    function catalogName(concept) {
+      const row = (window.EU_CATALOG && window.EU_CATALOG.dict || {})[concept];
+      return row ? tr(row[0], row[1]) : String(concept || '');
+    }
+    // A survival question stopped before planning because follow-up has no start
+    // after the exposure window. The host offers one landmark design; it is used
+    // only when the researcher picks it.
+    function survivalLandmarkDecisionCopy(item) {
+      const card = item && item.decision_context && typeof item.decision_context === 'object' ? item.decision_context : {};
+      const hours = Number(card.landmark_hours), days = Number(card.horizon_days);
+      const exposure = catalogName(card.exposure);
+      const covariates = (Array.isArray(card.covariates) ? card.covariates : []).map(catalogName).join(tr(', ', '、'));
+      const rmst = card.rmst_alternative && Number(card.rmst_alternative.tau) > 0 ? card.rmst_alternative : null;
+      const tau = rmst ? `${Number(rmst.tau)} ${rmst.time_unit === 'hours' ? tr('hours', '小时') : tr('days', '天')}` : '';
+      return {
+        cardTitle: tr('Choose when survival follow-up starts', '请确定生存随访从何时开始'),
+        evidenceLabel: tr('Design to adopt', '将采用的设计'),
+        evidenceStatus: tr(`${hours}-hour landmark · ${days}-day survival`, `第 ${hours} 小时 landmark · ${days} 天生存`),
+        evidenceDetail: [
+          covariates && tr(`Adjusted for ${covariates}.`, `调整：${covariates}。`),
+          rmst && tr(`Sensitivity: restricted mean survival time over the ${tau} from the landmark to day ${days}.`,
+            `敏感性分析：landmark 起至第 ${days} 天（${tau}）的限制性平均生存时间。`),
+        ].filter(Boolean).join(' '),
+        guidance: tr(
+          `${exposure} is known only at hour ${hours}; following from admission would count the time before it as exposed survival. The landmark follows patients alive at hour ${hours} to day ${days}.`,
+          `${exposure}要到第 ${hours} 小时才能判定；若从入 ICU 开始随访，判定前的存活时间会被算给暴露组。采用 landmark 后，只纳入第 ${hours} 小时仍存活者，从这一刻随访到第 ${days} 天。`,
+        ),
+        technicalEvidence: String((item && item.evidence) || ''),
+        technicalRemediation: String((item && item.remediation) || ''),
+        allowEdit: true,
+        cardSha256: String(card.card_sha256 || ''),
+        options: [{
+          optionId: String(card.option_id || 'fixed_landmark_survival'),
+          label: tr(`Use the ${hours}-hour landmark`, `采用第 ${hours} 小时 landmark`),
+          effect: tr('EasyICU then generates the plan again with this design.', '确认后按此设计重新生成研究计划。'),
+          requirement: tr(`Deaths before hour ${hours} are not part of the comparison.`, `第 ${hours} 小时前的死亡不进入比较。`),
+        }],
+      };
+    }
+
     return Object.freeze({
       preparedDataStatus, validDeferredInputScope, deferredInputScopeHtml,
       reviewedPopulationSpecHtml, populationPreparationHtml, populationAcceptanceHtml,
+      localizedAuthorizationQuestion, localizedDecisionEvidence, survivalLandmarkDecisionCopy,
     });
   }
   window.EasyICU.guidedPi.declare('confirmationData', { create });

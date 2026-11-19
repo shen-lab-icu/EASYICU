@@ -16,7 +16,7 @@ import shutil
 import pytest
 
 from tests.support.node import run_node
-from tests.support.review_decisions import decision_codes
+from tests.support.review_decisions import assert_review_decision_sentinels, decision_codes
 from tests.webserver.copilot.pi_copilot_static_fixtures import _read
 
 CJK = re.compile(r"[一-鿿]")
@@ -74,16 +74,7 @@ def _current_decision(html: str) -> tuple[str, str]:
 
 
 def test_the_review_owners_decisions_are_found() -> None:
-    # Both owners, a code chosen by a condition, and one whose authorization
-    # follows that condition.
-    assert {
-        "REQUESTED_DOSE_RESPONSE_NOT_ESTIMABLE",
-        "REPEATED_STAY_METHOD_NOT_DECLARED",
-        "PRIMARY_EXPOSURE_TIME_ANCHOR_MISMATCH",
-        "PRIMARY_EXPOSURE_TIME_ANCHOR_UNVERIFIED",
-        "POPULATION_SCOPE_AMENDMENT_DECLARED",
-    } <= set(DECISIONS)
-    assert "PLAN_POPULATION_REQUIREMENT_DRIFT" not in DECISIONS
+    assert_review_decision_sentinels(set(DECISIONS))
 
 
 @pytest.mark.parametrize("code", DECISIONS)
@@ -94,9 +85,10 @@ def test_a_decision_reads_in_chinese(code: str) -> None:
     assert CJK.search(question) and "Host question" not in question
 
 
-def test_english_readers_keep_the_hosts_question() -> None:
-    code = "REQUESTED_DOSE_RESPONSE_NOT_ESTIMABLE"
-
+@pytest.mark.parametrize("code", [
+    "REQUESTED_DOSE_RESPONSE_NOT_ESTIMABLE", "SURVIVAL_LANDMARK_OWNER_NOT_SEALED",
+])
+def test_english_readers_keep_the_hosts_question(code: str) -> None:
     title, question = _current_decision(render(_review(code), lang="en"))
 
     assert title == f"Host message for {code}."
