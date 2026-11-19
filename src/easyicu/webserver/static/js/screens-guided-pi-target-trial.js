@@ -105,6 +105,7 @@
     eligibility: ['Which clinical indication and eligibility criteria define this population?', '哪些临床适应证和纳入条件定义本研究人群？'],
     adjustment: ['Which factors recorded by time zero should the analysis adjust for?', '分析应调整哪些在时间零点前记录的因素？'],
     protocol: ['Which protocol details should EasyICU use?', 'EasyICU 应采用哪些试验方案细节？'],
+    unread_words: ['What do the following words mean for your trial?', '请说明以下措辞的含义，以及它们如何影响你的试验。'],
   };
 
   function proposalConfirmation(base, card, tr) {
@@ -281,7 +282,13 @@
     }).join('');
     const prompts = (Array.isArray(proposal.missing) ? proposal.missing : [])
       .filter(key => Object.hasOwn(CLARIFICATION_PROMPTS, key))
-      .map(key => `<li>${esc(tr(...CLARIFICATION_PROMPTS[key]))}</li>`).join('');
+      .map(key => {
+        const prompt = esc(tr(...CLARIFICATION_PROMPTS[key]));
+        const quotes = key === 'unread_words' && Array.isArray(proposal.unread_words)
+          ? proposal.unread_words.map(words => `<li><q style="white-space: pre-wrap">${esc(words)}</q></li>`).join('')
+          : '';
+        return `<li>${prompt}${quotes ? `<ul>${quotes}</ul>` : ''}</li>`;
+      }).join('');
     return `<div class="gpi-trial">${details ? `<dl class="gpi-trial-protocol">${details}</dl>` : ''}${prompts ? `<ul>${prompts}</ul>` : ''}</div>`;
   }
 

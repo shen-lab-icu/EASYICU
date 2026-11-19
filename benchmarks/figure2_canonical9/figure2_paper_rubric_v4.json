@@ -1578,6 +1578,7 @@
     "src/easyicu/webserver/study_replay_policy.py",
     "src/easyicu/webserver/study_scientific_configuration.py",
     "src/easyicu/webserver/target_trial_card.py",
+    "src/easyicu/webserver/target_trial_connectives.py",
     "src/easyicu/webserver/target_trial_records.py",
     "src/easyicu/webserver/target_trial_runtime_projection.py",
     "src/easyicu/webserver/target_trial_setup.py",

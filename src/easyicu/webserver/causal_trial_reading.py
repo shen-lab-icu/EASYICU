@@ -261,7 +261,7 @@ _DEFER = (
         r"(?P<ev>(?:not|never)\s+(?:start(?:ing)?|initiat(?:e|ing)|begin(?:ning)?"
         r"|receiv(?:e|ing)|giv(?:e|ing)|administer(?:ing)?)\b(?:\s+(?:it|them|treatment))?"
         rf"(?:\s+(?:within|during|in)\s+(?:th(?:at|ose|is|e\s+same)\s+)?(?:(?P<grace>{_NUMBER})"
-        r"\s*(?:h|hrs?|hours?)|window|period|grace\s+period))?"
+        r"\s*(?:hours?|hrs?|h)\b|window|period|grace\s+period))?"
         r"|defer(?:ring|red|ral\s+of)?(?:\s+(?:it|them|treatment|initiation))?"
         r"|withhold(?:ing)?(?:\s+(?:it|them|treatment))?"
         r"|delay(?:ing|ed)?\s+(?:it|them|treatment|initiation|the\s+start))",

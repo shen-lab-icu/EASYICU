@@ -44,9 +44,11 @@ def study(request, tmp_path: Path):
 
 @pytest.fixture
 def synthetic_treatment(monkeypatch):
-    monkeypatch.setattr(
-        owner, "_treatment", lambda *args: (("sample_event",), "sample_class")
-    )
+    def exact_fixture_name(question, reading, database):
+        if reading.treatment and question[slice(*reading.treatment)] in {"sample therapy", "示例治疗"}:
+            return ("sample_event",), "sample_class"
+
+    monkeypatch.setattr(owner, "_treatment", exact_fixture_name)
 
 
 @pytest.fixture
@@ -84,6 +86,8 @@ def test_question_has_an_inline_proposal_and_no_plan_offer_before_review(complet
     statement = owner.target_trial_proposal(study).statement
     assert statement.spec.time_zero.hours_after_icu_admission == 8
     assert statement.spec.grace_period.hours == 10
+    expected_defer = "这10小时内不开始" if "示例" in study["question"] else "not starting it within 10 hours"
+    assert statement.spec.strategies.defer_label == expected_defer
     assert statement.spec.confounders[0].name == "age"
 
 
@@ -119,13 +123,12 @@ def test_incomplete_causal_questions_show_a_clarification(
     # Name the causal method so the reader still runs when a trial element is removed.
     zh = "示例" in study["question"]
     study["question"] += "采用目标试验模拟。" if zh else " Use target trial emulation."
-    assert target_trial_card.target_trial_card(study, None)["state"] == "proposal"
     removed = removed_zh if zh else removed_en
     assert study["question"].count(removed) == 1
     study["question"] = study["question"].replace(removed, "", 1)
     card = target_trial_card.target_trial_card(study, None)
     assert card["state"] == "clarification"
-    assert card["proposal"]["missing"] == missing
+    assert card["proposal"]["missing"] == [*missing, "unread_words"]
     assert card["proposal"]["digest"] is None
 
 
@@ -155,7 +158,7 @@ def test_partial_reader_evidence_fails_closed_on_the_workflow_card(
     assert snapshot.next_action_code == "target_trial_statement_needed"
     card = target_trial_card.target_trial_card(study, None)
     assert card["state"] == "clarification"
-    assert card["proposal"]["missing"] == missing
+    assert card["proposal"]["missing"] == [*missing, "unread_words"]
     assert card["proposal"]["digest"] is None
     assert card["approval"] is None
 
@@ -192,7 +195,11 @@ def test_population_requires_a_bare_indication(study, synthetic_treatment, popul
     if adult is None:
         assert proposal.statement is None
         assert card["state"] == "clarification"
-        assert card["proposal"]["missing"] == ["eligibility"]
+        missing = card["proposal"]["missing"]
+        assert "unread_words" in missing
+        assert ("eligibility" in missing) == (
+            zh or not population_en.startswith(("In patients with suspected infection,", "Among patients with suspected infection,"))
+        )
         assert card["proposal"]["digest"] is None
         return
     assert card["state"] == "proposal"
@@ -247,7 +254,8 @@ def test_trial_origin_is_preserved_or_requested(complete_trial, element, en, zh,
     if not accepted:
         assert proposal.statement is None
         assert card["state"] == "clarification"
-        assert card["proposal"]["missing"] == [element]
+        assert "unread_words" in card["proposal"]["missing"]
+        assert element in {row["key"] for row in card["proposal"]["elements"]}
         assert card["proposal"]["digest"] is None
         return
     assert card["state"] == "proposal"
@@ -262,7 +270,7 @@ def test_rejected_treatment_is_absent_from_clarification_elements(complete_trial
     monkeypatch.setattr(owner, "_treatment", lambda *args: None)
     card = target_trial_card.target_trial_card(study, None)
     assert card["state"] == "clarification"
-    assert card["proposal"]["missing"] == ["treatment"]
+    assert card["proposal"]["missing"] == ["treatment", "unread_words"]
     assert card["proposal"]["digest"] is None
     assert "treatment" not in {row["key"] for row in card["proposal"]["elements"]}
 
@@ -574,10 +582,235 @@ def test_confirmed_horizon_selects_the_primary_when_two_are_mentioned():
     question = "Assess 90-day mortality and 365-day mortality."
     assert owner._fixed_outcome(question, "", "miiv") is None
     assert owner._fixed_outcome(question, "In-hospital mortality", "miiv") is None
-    endpoint, words = owner._fixed_outcome(question, "365-day mortality", "miiv")
+    endpoint, span = owner._fixed_outcome(question, "365-day mortality", "miiv")
     assert endpoint.horizon_days == 365
-    assert words == "365-day mortality"
-    assert (
-        owner._fixed_outcome("Does 90-day mortality from time zero differ?", "", "miiv")
-        is None
-    )
+    assert question[slice(*span)] == "365-day mortality"
+
+
+_REVIEW_EN = (
+    "In patients with suspected infection, with time zero at hour 8 after ICU admission, "
+    "compare starting sample therapy within 10 hours versus not starting it within 10 hours "
+    "for 90-day mortality, adjusted for age."
+)
+_REVIEW_ZH = (
+    "在疑似感染患者中，以入ICU后第8小时为时间零点，10小时内开始示例治疗，"
+    "与这10小时内不开始相比，比较90天死亡率，调整年龄。"
+)
+
+
+def _review_study(question, zh):
+    return {
+        "question": question,
+        "analysis_design": {"analysis_family": "causal_inference"},
+        "data_source": {"database": "miiv", "path": "synthetic"},
+        "stated_adjustments": [
+            {"concept": "age", "variable": "年龄" if zh else "age",
+             "source_status": "available", "words": "调整年龄" if zh else "adjusted for age"}
+        ],
+    }
+
+
+@pytest.mark.parametrize(
+    ("original", "replacement", "unread"),
+    [
+        ("90-day mortality", "90-day mortality 24 hours after ICU admission", "24 hours after ICU admission"),
+        ("90-day mortality", "90-day mortality from ICU admission at hour 8", "at hour 8"),
+        ("90天死亡率", "自入ICU后24小时起90天死亡率", "24小时起"),
+        ("90天死亡率", "插管算起90天死亡率", "插管算起"),
+        ("90天死亡率", "入院起90天死亡率", "入院起"),
+        ("10小时内开始示例治疗", "插管算起10小时内开始示例治疗", "插管算起"),
+        ("90-day mortality", "90-day mortality in patients with septic shock", "patients with septic shock"),
+        ("age.", "age, age >= 65.", "age >= 65"),
+        ("age.", "age, children excluded.", "children excluded"),
+        ("90天死亡率", "90天死亡率，在脓毒症休克患者中", "脓毒症休克患者"),
+        ("90-day mortality", "mortality after discharge, i.e. 90-day mortality", "mortality after discharge, i.e"),
+        ("starting sample", "from intubation, e.g. starting sample", "from intubation, e.g"),
+        ("90-day mortality", "90-day mortality from initiation of oxygen", "from initiation of oxygen"),
+        ("90天死亡率", "转入病房后90天死亡率", "转入病房后"),
+        ("90-day mortality", "90-day mortality in patients receiving dialysis", "patients receiving dialysis"),
+        ("90天死亡率", "90天死亡率，肾功能正常者除外", "肾功能正常者除外"),
+        ("90-day mortality", "shortly after transfer, namely 90-day mortality", "shortly after transfer"),
+        ("90-day mortality", "90-day mortality from time zero", "from time zero"),
+        ("90天死亡率", "自时间零点起90天死亡率", "自时间零点起"),
+        ("starting sample", "from ICU admission, starting sample", "from ICU admission"),
+        ("10小时内开始示例治疗", "拔管后10小时内开始示例治疗", "拔管后"),
+        ("suspected infection,", "suspected infection, excluding children,", "excluding children"),
+        ("疑似感染患者中，", "疑似感染患者中，年龄≥65岁，", "年龄≥65岁"),
+    ],
+)
+def test_review_residual_words_stop_compilation(synthetic_treatment, original, replacement, unread):
+    zh = any(ord(char) > 127 for char in original)
+    question = (_REVIEW_ZH if zh else _REVIEW_EN).replace(original, replacement, 1)
+    study = _review_study(question, zh)
+    result = owner.target_trial_proposal(study)
+    assert result is not None
+    assert result.statement is None
+    card = target_trial_card.target_trial_card(study, None)
+    assert card["state"] == "clarification"
+    assert "unread_words" in card["proposal"]["missing"]
+    assert any(unread in fragment for fragment in card["proposal"]["unread_words"])
+    assert {row["key"] for row in result.elements} >= {
+        "eligibility", "treatment", "strategies", "time_zero", "grace_period", "outcome", "adjustment",
+    }
+
+
+@pytest.mark.parametrize(
+    ("zh", "suffix"),
+    [
+        (False, "adjusted for age in patients with septic shock"),
+        (False, "adjusted for age from intubation"),
+        (False, "adjusted for age among hospital survivors"),
+        (True, "调整年龄（脓毒症休克患者中）"),
+        (True, "调整插管后年龄"),
+        (True, "校正入院前的年龄"),
+    ],
+)
+def test_adjustment_quote_cannot_cover_a_population_or_origin(synthetic_treatment, zh, suffix):
+    original = "调整年龄" if zh else "adjusted for age"
+    question = (_REVIEW_ZH if zh else _REVIEW_EN).replace(original, suffix)
+    study = _review_study(question, zh)
+    study["stated_adjustments"][0]["words"] = suffix
+    result = owner.target_trial_proposal(study)
+    assert result.statement is None
+    assert "unread_words" in result.missing
+
+
+@pytest.mark.parametrize(
+    ("zh", "before", "after"),
+    [
+        (False, "compare starting", "90-day mortality after ICU admission, compare starting"),
+        (True, "10小时内开始", "比较入住ICU后90天死亡率，10小时内开始"),
+        (True, "比较90天死亡率，调整年龄", "调整年龄后比较90天死亡率"),
+        (True, "比较90天死亡率，调整年龄", "在调整年龄后，比较90天死亡率"),
+        (True, "比较90天死亡率", "比较90天死亡率自入ICU后起算"),
+        (True, "比较90天死亡率，调整年龄", "经校正年龄后比较90天死亡率"),
+    ],
+)
+def test_outcome_and_adjustment_do_not_bleed_into_other_elements(
+    synthetic_treatment, zh, before, after,
+):
+    question = _REVIEW_ZH if zh else _REVIEW_EN
+    if "compare starting" == before or after.startswith("比较入住"):
+        question = question.replace(" for 90-day mortality" if not zh else "比较90天死亡率，", "")
+    question = question.replace(before, after, 1)
+    study = _review_study(question, zh)
+    if "校正" in question:
+        study["stated_adjustments"][0]["words"] = "经校正年龄后"
+    result = owner.target_trial_proposal(study)
+    assert result is not None
+    assert result.missing == []
+    assert result.statement.spec.grace_period.hours == 10
+    endpoint = owner.fixed_horizon_mortality_endpoint(result.statement.spec.outcome.endpoint)
+    assert (endpoint.horizon_days, endpoint.time_origin) == (90, "icu_admission")
+
+
+@pytest.mark.parametrize(
+    ("zh", "question", "terms"),
+    [
+        (False, _REVIEW_EN, (
+            "In patients with suspected infection", "time zero at hour 8 after ICU admission",
+            "starting sample therapy within 10 hours", "sample therapy",
+            "not starting it within 10 hours", "90-day mortality", "adjusted for age",
+        )),
+        (True, _REVIEW_ZH, (
+            "在疑似感染患者中", "入ICU后第8小时为时间零点", "10小时内开始示例治疗",
+            "示例治疗", "这10小时内不开始", "90天死亡率", "调整年龄",
+        )),
+    ],
+)
+def test_non_connectives_cannot_compile_at_any_element_boundary(synthetic_treatment, zh, question, terms):
+    assert owner.target_trial_proposal(_review_study(question, zh)).statement
+    for term in terms:
+        start = question.index(term)
+        for boundary in (start, start + len(term)):
+            for words in ("zzz", "5 days", "except", "除了", "转运"):
+                altered = question[:boundary] + f" {words} " + question[boundary:]
+                result = owner.target_trial_proposal(_review_study(altered, zh))
+                assert result is None or result.statement is None, (term, boundary, words)
+
+
+@pytest.mark.parametrize(
+    ("zh", "extra"),
+    [(False, "２４　 hours  after ICU admission"), (True, "插管　算起"), (False, "cafe\u0301 ﬃ")],
+)
+def test_normalized_coverage_displays_original_residual(synthetic_treatment, zh, extra):
+    base = _REVIEW_ZH if zh else _REVIEW_EN
+    study = _review_study("　" + base.replace("8", "８").replace("10", "１０"), zh)
+    assert owner.target_trial_proposal(study).statement is not None
+    term = "90天死亡率" if zh else "90-day mortality"
+    study["question"] = study["question"].replace(term, f"{term} {extra}", 1)
+    card = target_trial_card.target_trial_card(study, None)
+    assert card["state"] == "clarification"
+    assert any(extra in fragment for fragment in card["proposal"]["unread_words"])
+
+
+def test_full_span_reader_preserves_the_resolvable_indication_names():
+    from easyicu.webserver.study_intent import full_span_concepts
+
+    names = {
+        "suspected infection": "susp_inf",
+        "疑似感染": "susp_inf",
+        "Sepsis-3 (SOFA-1 based)": "sep3_sofa1",
+        "Sepsis-3诊断 (基于传统SOFA)": "sep3_sofa1",
+        "Circulatory Failure": "circ_failure",
+        "循环衰竭": "circ_failure",
+        "休克": "circ_failure",
+        "RRT": "rrt",
+        "Renal Replacement Therapy": "rrt",
+        "肾脏替代治疗": "rrt",
+        "透析": "rrt",
+        "Supplemental Oxygen": "supp_o2",
+        "辅助吸氧": "supp_o2",
+        "Ventilation Duration Windows": "vent_ind",
+        "机械通气时间窗": "vent_ind",
+        "Vasopressor Indicator": "vaso_ind",
+        "血管活性药物指示": "vaso_ind",
+        "Advanced Respiratory Support": "adv_resp",
+        "高级呼吸支持 (IMV/NIV/HFNC)": "adv_resp",
+        "ECMO in Use": "ecmo",
+        "ECMO使用中": "ecmo",
+        "Positive Blood Culture": "bld_culture_positive",
+        "血培养阳性": "bld_culture_positive",
+        "Any Positive Culture": "culture_positive",
+        "任意培养阳性": "culture_positive",
+        "ICU Readmission (same hospitalisation)": "icu_readmission",
+        "ICU 再入 (同次住院)": "icu_readmission",
+        "Persistent Critical Illness": "persistent_critical_illness",
+        "持续危重症": "persistent_critical_illness",
+        "persistent_critical_illness": "persistent_critical_illness",
+    }
+    assert {words: owner._indication_concept(words) for words in names} == names
+    assert all(full_span_concepts(words) == {concept} for words, concept in names.items())
+    for words in ("possibly suspected infection", "复苏后的疑似感染", "adult patients with RRT"):
+        assert not full_span_concepts(words)
+
+
+@pytest.mark.parametrize(
+    ("zh", "clause", "variables"),
+    [
+        (False, "after adjusting for age, sex, and BMI", ("age", "sex", "BMI")),
+        (True, "在调整年龄、性别和体重指数后", ("年龄", "性别", "体重指数")),
+    ],
+)
+def test_adjustment_accounts_for_a_closed_list_of_variables(synthetic_treatment, zh, clause, variables):
+    original = "调整年龄" if zh else "adjusted for age"
+    question = (_REVIEW_ZH if zh else _REVIEW_EN).replace(original, clause)
+    study = _review_study(question, zh)
+    study["stated_adjustments"] = [
+        {"concept": concept, "variable": variable, "words": clause, "source_status": "available"}
+        for variable, concept in zip(variables, ("age", "sex", "bmi"))
+    ]
+    proposal = owner.target_trial_proposal(study)
+    assert proposal.statement is not None, proposal.unread_words
+    assert [row.name for row in proposal.statement.spec.confounders] == ["age", "sex", "bmi"]
+    study["stated_adjustments"].pop()
+    assert owner.target_trial_proposal(study).missing == ["adjustment", "unread_words"]
+
+
+def test_reversed_strategy_order_remains_an_unread_pair(synthetic_treatment):
+    question = _REVIEW_EN.replace(
+        "starting sample therapy within 10 hours versus not starting it within 10 hours",
+        "not starting sample therapy within 10 hours versus starting it within 10 hours",
+    ).replace("90-day mortality", "90-day mortality after ICU admission")
+    assert owner.causal_trial_reading(question) is None
+    assert owner.target_trial_proposal(_review_study(question, False)) is None

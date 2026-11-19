@@ -561,3 +561,26 @@ for (const language of ['en', 'zh']) {
     assert.equal(trial.approvalRequest(review, session, 'project'), null);
   });
 }
+
+for (const language of ['en', 'zh']) {
+  test(`${language}: unread target trial wording is quoted on the inline clarification`, () => {
+    const residual = ['２４　 hours  after ICU admission', '插管 <后>'];
+    const workflow = {
+      next_action_code: 'target_trial_statement_needed',
+      target_trial_card: {
+        state: 'clarification',
+        proposal: {
+          digest: null, missing: ['unread_words'], unread_words: residual,
+          elements: [{ key: 'outcome', value: '90-day mortality', source: 'question' }],
+        },
+      },
+    };
+    const html = conversationLog(render(language, workflow, {}).html);
+    assert.match(html, /data-gpi-clarification/);
+    assert.match(html, language === 'zh' ? /请说明以下措辞的含义/ : /What do the following words mean/);
+    assert.match(html, /90-day mortality/);
+    assert.match(html, /data-gpi-confirm-edit/);
+    assert.doesNotMatch(html, /data-gpi-confirm-action/);
+    for (const fragment of residual) assert.ok(html.includes(esc(fragment)));
+  });
+}
