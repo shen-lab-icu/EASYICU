@@ -8,7 +8,7 @@ or mutates EvidenceStore state.
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 import re
 from typing import Callable, Mapping, Optional, Sequence
 
@@ -510,7 +510,19 @@ def _canonical_duplicate_claim_token(
 
 
 def _split_sentences(text: str) -> list[str]:
-    sentences = [text[sentence.start:sentence.end] for sentence in prose_sentences(text)]
+    sentences: list[str] = []
+    caption_start: int | None = None
+    for span in prose_sentences(text):
+        sentence = text[span.start:span.end]
+        if caption_start is not None:
+            sentences.append(text[caption_start:span.end])
+            caption_start = None
+        elif _CAPTION_LABEL_RE.fullmatch(sentence):
+            caption_start = span.start
+        else:
+            sentences.append(sentence)
+    if caption_start is not None:
+        sentences.append(text[caption_start:].rstrip())
     # Keep malformed syntax available to the authority check when an
     # annotation lies outside the visible prose ranges.
     if _contains_malformed_authority_placeholder(text) and not any(
@@ -530,6 +542,8 @@ def _split_markdown_structure_prefix(line: str) -> tuple[str, str]:
     # remains prose and cannot wrap a claim to smuggle in another assertion.
     if match := INLINE_SECTION_LABEL_RE.match(line, cursor):
         cursor = match.end()
+        if newline := re.match(r"\r?\n", line[cursor:]):
+            cursor += newline.end()
     return line[:cursor], line[cursor:]
 
 
@@ -820,6 +834,68 @@ _METHOD_FACT_PLACES = {
 }
 
 
+def _abstract_section_label(prefix: str, content: str) -> str:
+    match = INLINE_SECTION_LABEL_RE.search(prefix) or _ABSTRACT_LABEL_RE.match(content)
+    return match.group("label").casefold() if match else ""
+
+
+@dataclass(frozen=True)
+class _ScaffoldScope:
+    section: str = ""
+    subsection: str = ""
+    findings_depth: int | None = None
+    in_abstract: bool = False
+    abstract_findings: bool = True
+
+    def after_line(self, line: str, kind: str) -> _ScaffoldScope:
+        if kind != "heading":
+            if self.in_abstract and kind in {"prose", "structural"}:
+                label = _abstract_section_label(*_split_markdown_structure_prefix(line))
+                if label:
+                    return replace(
+                        self,
+                        abstract_findings=label not in {"background", "methods", "背景", "方法"},
+                    )
+            return self
+
+        stripped = line.strip()
+        prefix, content = _split_markdown_heading_prefix(stripped)
+        name = _normalized_heading(content)
+        depth = prefix.count("#")
+        section, subsection = self.section, self.subsection
+        if re.fullmatch(r"##\s+.+", stripped):
+            section, subsection = stripped, ""
+        elif re.fullmatch(r"###\s+.+", stripped):
+            subsection = stripped
+
+        findings_depth = self.findings_depth
+        in_abstract = self.in_abstract
+        abstract_findings = self.abstract_findings
+        if (
+            in_abstract and findings_depth is not None and depth > findings_depth
+            and name in {"background", "methods", "results", "findings", "conclusion", "conclusions"}
+        ):
+            abstract_findings = name not in {"background", "methods"}
+        elif name in _FINDINGS_HEADINGS:
+            findings_depth = depth
+            in_abstract = name in {"abstract", "摘要"}
+            abstract_findings = True
+        elif findings_depth is not None and depth <= findings_depth and name in _CONTEXT_HEADINGS:
+            findings_depth = None
+            in_abstract = False
+
+        return _ScaffoldScope(section, subsection, findings_depth, in_abstract, abstract_findings)
+
+
+def _restricted_prose(scope: _ScaffoldScope, prefix: str, content: str) -> bool:
+    return bool(
+        (scope.findings_depth is not None and (not scope.in_abstract or scope.abstract_findings))
+        or _abstract_section_label(prefix, content)
+        in {"results", "findings", "conclusion", "conclusions", "结果", "结论"}
+        or _CAPTION_LABEL_RE.match(content)
+    )
+
+
 def filter_evidence_bound_scaffold(
     scaffold: str,
     *,
@@ -837,64 +913,60 @@ def filter_evidence_bound_scaffold(
     executed_spans = frozenset(
         _hour_span(*span) for fact in method_facts for span in fact.executed_hour_spans
     )
-    section = subsection = ""
-    findings_depth: int | None = None
-    in_abstract = False
-    abstract_findings = True
+    scope = _ScaffoldScope()
+    paragraph_restriction: bool | None = None
     for region in manuscript_regions(scaffold):
         block = scaffold[region.start:region.end]
         opaque = region.kind in {"fence", "html"}
+        # Complete sentences on separate source lines can be separate logical
+        # regions while still belonging to the same Markdown paragraph.
+        if region.kind != "prose" or INLINE_SECTION_LABEL_RE.match(block.lstrip()):
+            paragraph_restriction = None
+        hard_break = region.kind == "prose" and block.endswith(("  ", "\\"))
         if not region.complete:
             unsupported_scientific_claims.append(block)
             filtered_claims.append(block)
             filtered_lines.append("")
             continue
         first_claim, first_line = len(filtered_claims), len(filtered_lines)
+        candidate_scope = scope
         for raw_line in block.splitlines() if opaque else (block,):
             line = raw_line.rstrip()
             stripped = line.strip()
-            if region.kind == "heading" and re.fullmatch(r"##\s+.+", stripped):
-                section, subsection = stripped, ""
-            elif region.kind == "heading" and re.fullmatch(r"###\s+.+", stripped):
-                subsection = stripped
-            if line in method_lines and (section, subsection) == _METHOD_FACT_PLACES[
+            if line in method_lines and (scope.section, scope.subsection) == _METHOD_FACT_PLACES[
                 method_lines[line]
             ]:
                 filtered_lines.append(line)
                 continue
+            structure_prefix, content = _split_markdown_structure_prefix(line)
+            if not opaque and paragraph_restriction is None:
+                candidate_scope = scope.after_line(line, region.kind)
+            # A top-level abstract label remains even if its entire body fails admission.
+            abstract_label_line = (
+                structure_prefix.rstrip()
+                if scope.in_abstract and region.kind == "prose"
+                and INLINE_SECTION_LABEL_RE.fullmatch(structure_prefix.strip())
+                else ""
+            )
             if is_method_fact_candidate(line):
-                unsupported_scientific_claims.append(stripped)
-                filtered_claims.append(stripped)
-                filtered_lines.append("")
+                rejected = content.strip() if abstract_label_line else stripped
+                unsupported_scientific_claims.append(rejected)
+                filtered_claims.append(rejected)
+                filtered_lines.append(abstract_label_line)
                 continue
             if stripped.startswith(("```", "~~~")) or not stripped:
                 filtered_lines.append(line)
                 continue
-            structure_prefix, content = _split_markdown_structure_prefix(line)
             heading_prefix, heading_content = _split_markdown_heading_prefix(content)
             heading_requires_claim = False
             if heading_prefix:
                 name = _normalized_heading(heading_content)
-                depth = heading_prefix.count("#")
-                if region.kind == "heading":
-                    if (
-                        in_abstract and findings_depth is not None and depth > findings_depth
-                        and name in {"background", "methods", "results", "findings", "conclusion", "conclusions"}
-                    ):
-                        abstract_findings = name not in {"background", "methods"}
-                    elif name in _FINDINGS_HEADINGS:
-                        findings_depth = depth
-                        in_abstract = name in {"abstract", "摘要"}
-                        abstract_findings = True
-                    elif (
-                        findings_depth is not None and depth <= findings_depth
-                        and name in _CONTEXT_HEADINGS
-                    ):
-                        findings_depth = None
-                        in_abstract = False
+                # A quoted context heading can survive inside the current section.
+                quoted_heading = region.kind == "structural" and ">" in structure_prefix
                 restricted_heading = (
-                    findings_depth is not None and name not in _RESULT_STRUCTURE_HEADINGS
-                    and not (in_abstract and name in _CONTEXT_HEADINGS)
+                    candidate_scope.findings_depth is not None
+                    and name not in _RESULT_STRUCTURE_HEADINGS
+                    and not ((candidate_scope.in_abstract or quoted_heading) and name in _CONTEXT_HEADINGS)
                     and _CAPTION_LABEL_RE.fullmatch(heading_content) is None
                 )
                 if not restricted_heading and not _heading_requires_evidence(heading_content):
@@ -903,22 +975,6 @@ def filter_evidence_bound_scaffold(
                 heading_requires_claim = True
                 structure_prefix += heading_prefix
                 content = heading_content
-            # Neutral labels may already have been separated from their claim/body
-            # by the Markdown owner. They still determine the findings boundary.
-            abstract_label = (
-                _ABSTRACT_LABEL_RE.match(content)
-                or INLINE_SECTION_LABEL_RE.search(structure_prefix)
-            )
-            if not opaque and in_abstract and abstract_label is not None:
-                abstract_findings = abstract_label.group("label").casefold() not in {
-                    "background", "methods", "背景", "方法"
-                }
-            restricted_line = bool(
-                (findings_depth is not None and (not in_abstract or abstract_findings))
-                or (abstract_label is not None and abstract_label.group("label").casefold()
-                    in {"results", "findings", "conclusion", "conclusions", "结果", "结论"})
-                or _CAPTION_LABEL_RE.match(content)
-            )
             if not content.strip():
                 filtered_lines.append(line)
                 continue
@@ -935,23 +991,22 @@ def filter_evidence_bound_scaffold(
                 rejected = content.strip()
                 unsupported_scientific_claims.append(rejected)
                 filtered_claims.append(rejected)
-                filtered_lines.append("")
+                filtered_lines.append(abstract_label_line)
                 continue
             sentences = _split_sentences(content)
-            if (
-                len(sentences) == 1
-                and not heading_requires_claim
-                and not _looks_result_like_sentence(sentences[0])
-                and not _looks_qualitative_scientific_assertion(sentences[0])
-                and not _contains_malformed_authority_placeholder(sentences[0])
-                and _SCIENTIFIC_CLAIM_TOKEN_RE.search(sentences[0]) is None
-                and (not restricted_line or _neutral_findings_text(sentences[0]))
-                and not _states_unexecuted_window(sentences[0], executed_spans)
-            ):
-                filtered_lines.append(line)
-                continue
+            sentence_scope = not opaque and region.kind != "heading"
             kept: list[str] = []
+            restricted_line = paragraph_restriction
             for sentence in sentences:
+                if paragraph_restriction is None and not kept:
+                    leading_content = sentence if sentence_scope else content
+                    if sentence_scope:
+                        candidate_scope = scope.after_line(
+                            structure_prefix + sentence, region.kind,
+                        )
+                    restricted_line = _restricted_prose(
+                        candidate_scope, structure_prefix, leading_content,
+                    )
                 if _states_unexecuted_window(sentence, executed_spans):
                     # An executed design states the windows the analysis ran on
                     # (exact Methods facts); any other window is not the analysis.
@@ -959,6 +1014,17 @@ def filter_evidence_bound_scaffold(
                     removed.append(rejected)
                     filtered_claims.append(rejected)
                     continue
+                if (
+                    len(sentences) == 1
+                    and not heading_requires_claim
+                    and not _looks_result_like_sentence(sentence)
+                    and not _looks_qualitative_scientific_assertion(sentence)
+                    and not _contains_malformed_authority_placeholder(sentence)
+                    and _SCIENTIFIC_CLAIM_TOKEN_RE.search(sentence) is None
+                    and (not restricted_line or _neutral_findings_text(sentence))
+                ):
+                    kept.append(content)
+                    break
                 literature_background = bool(
                     not restricted_line
                     and _has_nonnumeric_literature_context(sentence)
@@ -1007,7 +1073,7 @@ def filter_evidence_bound_scaffold(
                     filtered_claims.append(rejected)
                     continue
                 if _looks_result_like_sentence(sentence):
-                    if section == "## Methods" and _carries_numeric_value(sentence):
+                    if candidate_scope.section == "## Methods" and _carries_numeric_value(sentence):
                         # Numeric method details are admitted only through an exact
                         # host-registered ManuscriptMethodFact (handled above).
                         # A generic evidence id proves that an artifact exists; it
@@ -1038,7 +1104,7 @@ def filter_evidence_bound_scaffold(
             previous_line = filtered_lines[-1].strip() if filtered_lines else ""
             at_paragraph_start = not previous_line or bool(re.match(r"^#{1,6}\s", previous_line))
             if (
-                not opaque and section == "## Methods" and subsection == "### Variables"
+                not opaque and (scope.section, scope.subsection) == ("## Methods", "### Variables")
                 and not structure_prefix and at_paragraph_start and kept
             ):
                 # The same context rule used by explicit evidence repair also
@@ -1053,14 +1119,32 @@ def filter_evidence_bound_scaffold(
                         kept.pop(0)
                         removed.append(dependent)
                         filtered_claims.append(dependent)
-            kept_content = " ".join(part for part in kept if part).strip()
+            kept_content = " ".join(kept)
             filtered_lines.append(
-                f"{structure_prefix}{kept_content}".rstrip() if kept_content else ""
+                f"{structure_prefix}{kept_content}" if kept_content else abstract_label_line
             )
         if opaque:
             # Apply the admission checks inside the block without borrowing
             # section state or emitting a partially edited fence or HTML block.
             filtered_lines[first_line:] = [block if len(filtered_claims) == first_claim else ""]
+        elif retained_line := filtered_lines[-1]:
+            if paragraph_restriction is None:
+                # Commit the transition represented by the emitted Markdown,
+                # including when only the abstract label survives.
+                scope = (
+                    candidate_scope if retained_line == line
+                    else scope.after_line(retained_line, region.kind)
+                )
+                if region.kind == "prose":
+                    prefix, content = _split_markdown_structure_prefix(retained_line)
+                    paragraph_restriction = _restricted_prose(scope, prefix, content)
+            if hard_break and not retained_line.endswith("\\"):
+                filtered_lines[-1] = retained_line + "  "
+        elif paragraph_restriction is not None and not hard_break:
+            # A rejected continuation does not insert a new paragraph boundary.
+            filtered_lines.pop()
+        if hard_break:
+            paragraph_restriction = None
     return ScaffoldPolicyResult(
         scaffold="\n".join(filtered_lines).strip() + "\n",
         filtered_sentences=tuple(filtered_claims),
