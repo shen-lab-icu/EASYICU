@@ -13,7 +13,8 @@
     const accountReady = auth.authentication_verified === true;
     const pending = auth.account_session_status === 'codex_auth_login_pending';
     const selected = state.researchProvider === 'codex' ? 'codex' : 'api';
-    const model = state.researchModel || (models.find(row => row.is_default) || models[0] || {}).id || '';
+    const usable = models.filter(row => row.conversation_supported !== false);
+    const model = state.researchModel || (usable.find(row => row.is_default) || usable[0] || models[0] || {}).id || '';
     return `
       <section class="gpi-provider-section gpi-provider-choice" aria-labelledby="gpi-model-connection-title">
         <div class="gpi-provider-heading">
@@ -31,7 +32,7 @@
           <div class="gpi-account-box ${accountReady ? 'ready' : ''}">
             ${accountReady ? `
               <div class="gpi-account-row"><span class="gpi-dot"></span><div><strong>${tr('Codex account connected', 'Codex 账户已连接')}</strong>${[auth.account_label, auth.plan_type].filter(Boolean).length ? `<span class="gpi-account-meta">${esc([auth.account_label, auth.plan_type].filter(Boolean).join(' · '))}</span>` : ''}</div><button class="gpi-link" type="button" data-gpi-codex-logout ${state.codexBusy ? 'disabled' : ''}>${tr('Sign out', '退出')}</button></div>
-              <label class="gpi-model-field"><span>${tr('Account model', '账户模型')}</span><select data-gpi-codex-model ${state.codexBusy ? 'disabled' : ''}>${models.map(row => `<option value="${esc(row.id)}" ${row.id === model ? 'selected' : ''}>${esc(row.label || row.id)}${row.is_default ? tr(' · default', ' · 默认') : ''}</option>`).join('')}</select></label>
+              <label class="gpi-model-field"><span>${tr('Account model', '账户模型')}</span><select data-gpi-codex-model ${state.codexBusy ? 'disabled' : ''}>${models.map(row => `<option value="${esc(row.id)}" ${row.id === model ? 'selected' : ''} ${row.conversation_supported === false ? 'disabled' : ''}>${esc(row.label || row.id)}${row.is_default ? tr(' · default', ' · 默认') : ''}${row.conversation_supported === false ? tr(' · not yet available in EasyICU', ' · EasyICU 暂不支持') : ''}</option>`).join('')}</select></label>
               ${models.length ? '' : `<button class="btn sm" type="button" data-gpi-codex-models>${tr('Load available models', '读取可用模型')}</button>`}
             ` : `
               <div class="gpi-account-row"><span class="gpi-dot waiting"></span><strong>${pending ? tr('Complete sign-in in the OpenAI window', '请在 OpenAI 窗口完成登录') : tr('Connect your ChatGPT account', '连接你的 ChatGPT 账户')}</strong></div>

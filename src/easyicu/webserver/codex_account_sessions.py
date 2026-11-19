@@ -321,7 +321,7 @@ def pi_conversation_environment_for_binding(
             raise CodexAccountSessionError(exc.code) from exc
         if not isinstance(account, Mapping) or account.get("type") != "chatgpt":
             raise CodexAccountSessionError("codex_auth_login_required")
-        selected = _validated_model(managed, model)
+        selected = _validated_model(managed, model, conversation=True)
         auth_file = _private_auth_file(coordinates)
     environment = environment_for_coordinates(coordinates)
     environment.update(
@@ -613,17 +613,33 @@ def _model_rows(
         )
     if not rows:
         raise CodexAccountSessionError("codex_auth_model_catalog_empty")
+    conversation = _conversation_models()
+    for row in rows:
+        row["conversation_supported"] = conversation is None or row["id"] in conversation
     return rows, app_server_failure_code
 
 
-def _validated_model(managed: _ManagedRuntime, model: str) -> str:
+def _conversation_models() -> frozenset[str] | None:
+    from easyicu.webserver.pi_copilot.install import codex_conversation_models
+
+    return codex_conversation_models()
+
+
+def _validated_model(
+    managed: _ManagedRuntime, model: str, *, conversation: bool = False
+) -> str:
     requested = str(model or "").strip()
     rows, _app_server_failure_code = _model_rows(managed)
     if not requested:
-        default = next((row["id"] for row in rows if row["is_default"]), None)
-        return str(default or rows[0]["id"])
-    if requested not in {row["id"] for row in rows}:
+        # Prefer the account default, but only one the conversation can start.
+        usable = [row for row in rows if row["conversation_supported"]] or rows
+        default = next((row["id"] for row in usable if row["is_default"]), None)
+        return str(default or usable[0]["id"])
+    row = next((row for row in rows if row["id"] == requested), None)
+    if row is None:
         raise CodexAccountSessionError("codex_auth_model_unavailable")
+    if conversation and not row["conversation_supported"]:
+        raise CodexAccountSessionError("codex_auth_model_conversation_unsupported")
     return requested
 
 
@@ -669,7 +685,11 @@ def discovered_models_for_binding(binding_sha256: str) -> list[str]:
         rows, failure = _model_rows(managed)
         if failure:
             raise CodexAccountSessionError(failure)
-        return [row["id"] for row in rows if row["catalog_source"] == "codex_app_server"]
+        return [
+            row["id"]
+            for row in rows
+            if row["catalog_source"] == "codex_app_server" and row["conversation_supported"]
+        ]
 
 
 def validated_model_for_request(request: Request, model: str) -> str:
@@ -680,7 +700,7 @@ def validated_model_for_request(request: Request, model: str) -> str:
     with managed.lock:
         if not _status_for_managed(managed).get("authentication_verified"):
             raise CodexAccountSessionError("codex_auth_login_required")
-        return _validated_model(managed, model)
+        return _validated_model(managed, model, conversation=True)
 
 
 def status_for_coordinates(coordinates: CodexSessionCoordinates) -> dict[str, Any]:

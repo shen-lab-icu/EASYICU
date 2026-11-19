@@ -42,8 +42,10 @@
       try {
         const payload = await api().loadPiCopilotCodexModels();
         state.codexModels = Array.isArray(payload && payload.models) ? payload.models : [];
-        if (!state.researchModel || !state.codexModels.some(row => row.id === state.researchModel)) {
-          const preferred = state.codexModels.find(row => row.is_default) || state.codexModels[0];
+        // The conversation runtime can load only some account models; default to one it can start.
+        const usable = state.codexModels.filter(row => row.conversation_supported !== false);
+        if (!state.researchModel || !usable.some(row => row.id === state.researchModel)) {
+          const preferred = usable.find(row => row.is_default) || usable[0] || state.codexModels[0];
           state.researchModel = preferred ? String(preferred.id || '') : '';
         }
       } catch (error) {

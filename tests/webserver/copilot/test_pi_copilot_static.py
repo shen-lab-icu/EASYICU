@@ -90,10 +90,10 @@ def test_pi_shell_assets_are_explicitly_wired_before_guided_owner() -> None:
     assert index.index("js/screens-guided-pi-result-append.js") < index.index("js/screens-guided-pi-run-outcome.js")
     assert "js/screens-guided-pi-activity.js?v=20261030-progress3" in index
     assert (
-        "js/screens-guided-pi-provider.js?v=20261028-ux1"
+        "js/screens-guided-pi-provider.js?v=20261119-convmodel1"
         in index
     )
-    assert "js/screens-guided-pi-provider-control.js?v=20261027-dcl1-cfg1" in index
+    assert "js/screens-guided-pi-provider-control.js?v=20261119-convmodel1" in index
     assert "js/screens-guided-pi-connect.js?v=20261021-hosted1" in index
     assert index.index("js/screens-guided-pi-provider-control.js") < index.index(
         "js/screens-guided-pi-connect.js"
@@ -140,7 +140,7 @@ def test_pi_shell_assets_are_explicitly_wired_before_guided_owner() -> None:
     assert "js/screens-guided-pi-plan-actions.js?v=20261117-run2" in index
     assert "js/screens-guided-pi-quick-answers.js?v=20261117-distribution1" in index
     assert "js/screens-guided-pi-childjob.js?v=20261026-recovered1" in index
-    assert "js/screens-guided-pi-error-text.js?v=20261111-s872" in index
+    assert "js/screens-guided-pi-error-text.js?v=20261119-convmodel1" in index
     assert "js/screens-guided-pi.js?v=20261119-firstq1" in index
     assert "js/screens-guided.js?v=20261117-startup1" in index
     assert (
