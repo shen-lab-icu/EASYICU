@@ -199,7 +199,7 @@ def test_native_assistant_labels_expose_one_primary_copilot_conversation() -> (
     assert "js/app.js?v=20261117-boot1" in index_html
     assert "js/copilot-dock.js?v=20261027-old1" in index_html
     assert "js/screens-extraction-folder-picker.js?v=20261021-hosted1" in index_html
-    assert "js/screens-extraction.js?v=20261118-extraction-restore" in index_html
+    assert "js/screens-extraction.js?v=20261119-export-source1" in index_html
     assert "js/screens-agent.js?" not in index_html
     assert "js/screens-guided-pi-run-files.js?v=20261028-pend1" in index_html
     assert "js/screens-help.js?v=20261027-help3" in index_html
@@ -1470,7 +1470,7 @@ def test_native_extraction_exposes_real_cohort_gate_and_recommended_contract() -
         in extraction_js
     )
     assert (
-        "const support = runMode === 'recommended' ? { ok: true, reason: 'recommended' } : cohortExportSupport();"
+        "const support = (exSource === 'module' && window.EU_EXTRACTION_EXPORT_SOURCE.refusal()) || (runMode === 'recommended' ? { ok: true, reason: 'recommended' } : cohortExportSupport());"
         in extraction_js
     )
     assert (

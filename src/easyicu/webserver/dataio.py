@@ -558,6 +558,7 @@ def scan_path(raw_path: str, source_hint: Optional[str] = None) -> Dict[str, Any
     missing_tables = status["missing_tables"]
 
     is_module = any((path / name).exists() for name in _MODULE_MANIFESTS)
+    source_data_path = ""
 
     if is_module:
         source = "module"
@@ -578,6 +579,10 @@ def scan_path(raw_path: str, source_hint: Optional[str] = None) -> Dict[str, Any
                     "privacy": {"raw_rows_read": False, "patient_identifiers_returned": False}}
         ready = True  # Layout only; scientific execution still requires sealed intake.
         tables = parquet_count + csv_count
+        # An export cannot be extracted again: its cohort and features are
+        # fixed. Name the source folder it was made from, when that folder is
+        # still here, so a new cohort can start from the source data.
+        source_data_path = _export_source_data_path(path)
     elif parquet_count > 0:
         source = "prepared"
         layout = ["Prepared (Parquet)", "已转换 (Parquet)"]
@@ -653,6 +658,8 @@ def scan_path(raw_path: str, source_hint: Optional[str] = None) -> Dict[str, Any
     }
     if source == "raw":
         result["size_hint"] = _estimate_size(path)
+    if source == "module" and source_data_path:
+        result["source_data_path"] = source_data_path
     from easyicu.synthetic_source_provenance import source_fields
     result.update(source_fields(path))
     return result
@@ -4812,6 +4819,34 @@ def _raw_table_files(path: Path) -> List[Path]:
             if len(found) >= _RAW_SCAN_MAX_FILES:
                 return found
     return found
+
+
+def _export_source_data_path(path: Path) -> str:
+    """Return the source folder an EasyICU export manifest names, if it exists.
+
+    Only the manifest's own ``data_path`` is read; an absent, unreadable or
+    self-referencing entry yields ``""`` rather than a guessed folder.
+    """
+
+    for name in _MODULE_MANIFESTS:
+        manifest = path / name
+        if not manifest.is_file():
+            continue
+        try:
+            payload = json.loads(manifest.read_text(encoding="utf-8"))
+        except (OSError, ValueError):
+            return ""
+        raw = payload.get("data_path") if isinstance(payload, dict) else None
+        if not isinstance(raw, str) or not raw.strip():
+            return ""
+        try:
+            candidate = Path(raw).expanduser().resolve()
+            if candidate.is_dir() and candidate != path.resolve():
+                return str(candidate)
+        except OSError:
+            return ""
+        return ""
+    return ""
 
 
 def _check_data_status(path: Path, db_key: str) -> Dict[str, Any]:
