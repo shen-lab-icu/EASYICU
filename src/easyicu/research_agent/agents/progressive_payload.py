@@ -41,6 +41,16 @@ from .population_spec_transport import (
 )
 
 
+def _empty_design_decisions() -> dict[str, Any]:
+    """No design card may be decided on this run.
+
+    Strict structured outputs need an item schema even for an array that must
+    stay empty; a fresh dict keeps later in-place schema passes unshared.
+    """
+
+    return {"type": "array", "items": {"type": "string"}, "maxItems": 0}
+
+
 class ProgressiveTransportSchemaError(ValueError):
     """The run-bound progressive schema drifted from its contract model."""
 
@@ -774,17 +784,15 @@ def _bind_outline_authorities(
                     _string_enum(decision_keys)
                 )
             else:
-                candidate_properties["literature_design_decisions"] = {
-                    "type": "array",
-                    "maxItems": 0,
-                }
+                candidate_properties["literature_design_decisions"] = (
+                    _empty_design_decisions()
+                )
                 definitions.pop("CandidateLiteratureDesignDecision", None)
     else:
         candidate_citations["maxItems"] = 0
-        candidate_properties["literature_design_decisions"] = {
-            "type": "array",
-            "maxItems": 0,
-        }
+        candidate_properties["literature_design_decisions"] = (
+            _empty_design_decisions()
+        )
         definitions.pop("CandidateLiteratureDesignDecision", None)
     step_properties["module_id"] = _string_enum(
         progressive_module_ids_for_analysis_types(analysis_types)

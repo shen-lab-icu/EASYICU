@@ -101,6 +101,16 @@ def assert_closed_json_schema(node: Any, *, path: str = "$") -> None:
         raise StrictJsonSchemaError(
             f"strict schema keyword enum must be non-empty at {path}"
         )
+    node_type = node.get("type")
+    is_array = node_type == "array" or (
+        isinstance(node_type, list) and "array" in node_type
+    )
+    if is_array and not isinstance(node.get("items"), dict):
+        # Strict structured outputs reject an array without an item schema,
+        # even when maxItems is 0 (provider 400 invalid_json_schema).
+        raise StrictJsonSchemaError(
+            f"strict array schema must define items at {path}"
+        )
 
 
 def closed_pydantic_json_schema(
