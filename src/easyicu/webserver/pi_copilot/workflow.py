@@ -9,6 +9,7 @@ owners' receipts.
 from __future__ import annotations
 
 import functools
+import logging
 from pathlib import Path
 from typing import Any, Dict, List, Literal, Mapping, Optional, Sequence
 
@@ -88,6 +89,8 @@ from .workflow_attempts import (
     research_job_has_execution_progress,
     research_job_has_report_repair_progress,
 )
+
+_LOG = logging.getLogger(__name__)
 
 WorkflowStatus = Literal[
     "blocked",
@@ -1760,9 +1763,21 @@ def _enrich_plan_review(
         # reviewer attributes the remaining gap to the runtime owner.  Route
         # the next action to the Host compiler instead of asking the researcher
         # for internal method coordinates or spending another provider turn.
-        snapshot = snapshot.model_copy(
-            update={"next_action_code": "agent_plan_configuration_required"}
-        )
+        if isinstance(run, Mapping) and plan_review_progress.compile_loop_stopped(study, run):
+            # S1542 backstop: this run was compiled twice with no planning
+            # run in between. Offering a third compile would loop; the card
+            # stops and offers the plan's own next steps instead.
+            _LOG.warning(
+                "agent_plan_configuration_loop_stopped %s",
+                plan_review_progress.compile_lineage_state(study, run, review),
+            )
+            snapshot = snapshot.model_copy(
+                update={"next_action_code": "agent_plan_configuration_loop_stopped"}
+            )
+        else:
+            snapshot = snapshot.model_copy(
+                update={"next_action_code": "agent_plan_configuration_required"}
+            )
     plan_preview = project_plan_conversation_preview(
         agent_plan, study=study, review_summary=snapshot.plan_review_summary,
         exposure_groups=(snapshot.plan_review_summary or {}).get("exposure_groups"),

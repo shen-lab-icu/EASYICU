@@ -591,6 +591,7 @@ const PLAN_LIFECYCLE_WORKFLOW_CODES = new Set([
   "planner_checkpoint_resume_available",
   "plan_configuration_superseded",
   "plan_scientific_changes_required",
+  "agent_plan_configuration_loop_stopped",
   "plan_review_not_resumable",
   "scientific_plan_review_policy_stale",
   "failed_pipeline_requires_fresh_plan",

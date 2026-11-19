@@ -69,9 +69,8 @@ def compiled_source_run_id_for_launch(
             agent_runs.read_run_review(str(source["project_dir"])))
     except (OSError, KeyError, TypeError, ValueError):
         return ""
-    if plan_review_progress.planned_on_compiled_configuration(study, source, compiled_source_run_id=recorded):
-        return recorded
-    return ""
+    # The compiled run itself carries no record; its revision continues it.
+    return plan_review_progress.continued_compile_run_id(study, source, compiled_source_run_id=recorded)
 
 
 def compiled_configuration_plan_change(

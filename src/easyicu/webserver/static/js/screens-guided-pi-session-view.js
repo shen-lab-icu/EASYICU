@@ -393,6 +393,7 @@
         || (Boolean(workflow.plan_decision || workflow.plan_review_summary?.run_id) && [
           'operator_plan_approval_required', 'plan_execution_upgrade_required',
           'question_requirement_not_covered', 'question_requirement_capability_gap', 'question_requirements_unreadable',
+          'agent_plan_configuration_loop_stopped',
           'first_result_delivery_requires_article',
         ].includes(workflow.next_action_code))
         || Object.values(workflow.host_decisions || {}).some(Boolean) || [

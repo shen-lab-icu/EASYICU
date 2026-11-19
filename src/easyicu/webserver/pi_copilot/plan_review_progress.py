@@ -32,6 +32,9 @@ class ReviewChoiceProgress(BaseModel):
     current_digest: str = Field(pattern=r"^[a-f0-9]{64}$")
     revision: int = Field(ge=1)
     choices: dict[str, str] = Field(min_length=1, max_length=16)
+    # Host compiles of this run with no planning run in between (S1542).
+    # A receipt written before the count existed reads as 0.
+    compiles: int = Field(default=0, ge=0, le=1_000)
 
 
 def _path(study_id: str) -> Path:
@@ -199,20 +202,34 @@ def planned_on_compiled_configuration(
     wrote (B13). Read only.
     """
 
+    return bool(continued_compile_run_id(study, run, compiled_source_run_id=compiled_source_run_id))
+
+
+def continued_compile_run_id(
+    study: Mapping[str, Any], run: Mapping[str, Any], *, compiled_source_run_id: str
+) -> str:
+    """The compiled candidate ``run`` continues, or "" (read only).
+
+    A revision of ``run`` records this run id, not ``run``'s own record: the
+    compiled run itself carries none (Carbon b13r1).
+    """
+
     progress = _compile_receipt(study)
-    # The compiled run itself was planned before the compile wrote: its
-    # digest is not the study's.
+    # A run planned on another configuration (the compiled run before its
+    # compile wrote, or any plan after a later edit) continues nothing.
     if progress is None or run.get("scientific_configuration_sha256") != study_contexts.scientific_configuration_sha256(study):
-        return False
+        return ""
     if compiled_source_run_id and compiled_source_run_id == progress.run_id:
-        return True
+        return progress.run_id
     # B13 (UX leg 3 en, 80e0455cf): the compiled run itself. Its compile
     # changed only the reconfirmation's field (extraction_completed), so the
     # signed reconfirmation that followed gave back the digest it was planned
     # on: it read as current again and offered the same compile, whose
     # reconfirmation offered it again, with no way to a run. While the study
     # holds what that compile wrote, its own run is not compiled again.
-    return run.get("run_id") == progress.run_id and compiled_digest_holds(study, progress)
+    if run.get("run_id") == progress.run_id and compiled_digest_holds(study, progress):
+        return progress.run_id
+    return ""
 
 
 def validate_choice_source(study: Mapping[str, Any], run: Mapping[str, Any]) -> None:
@@ -256,6 +273,69 @@ def has_pending_choices(
     )
 
 
+def _compiles_after(
+    before: Mapping[str, Any],
+    run: Mapping[str, Any],
+    choice: tuple[str, str],
+    previous: ReviewChoiceProgress | None,
+) -> int:
+    """How many host compiles of ``run`` this write makes, consecutively.
+
+    A compile of the run the last compile receipt names adds one; a compile
+    of another run (a planning run came in between) starts at one. Any other
+    choice keeps the count it continues.
+    """
+
+    prior = _compile_receipt(before)
+    if choice != AGENT_PLAN_CONFIGURATION_CHOICE:
+        return previous.compiles if previous is not None else 0
+    if prior is not None and prior.run_id == run.get("run_id"):
+        return max(prior.compiles, 1) + 1
+    return 1
+
+
+COMPILE_LOOP_LIMIT = 2
+
+
+def compile_loop_stopped(study: Mapping[str, Any], run: Mapping[str, Any]) -> bool:
+    """The generic backstop (S1542): this run was compiled twice already.
+
+    Two host compiles of one reviewed run with no planning run (no provider
+    call) in between mean the compile/reconfirm chain is looping: B13 was the
+    second such retry-path loop. A researcher's input in between makes a new
+    run or changes the study (the plan is then superseded), so it restarts
+    the count. The workflow offers no third compile and the service refuses
+    one; a record broken legitimately still compiles once (S1471).
+    """
+
+    progress = _compile_receipt(study)
+    return bool(
+        progress is not None
+        and progress.run_id == run.get("run_id")
+        and progress.compiles >= COMPILE_LOOP_LIMIT
+    )
+
+
+def compile_lineage_state(study: Mapping[str, Any], run: Mapping[str, Any], review: Mapping[str, Any]) -> dict[str, Any]:
+    """Digest-only lineage facts for diagnosing a stopped compile loop."""
+
+    progress = _compile_receipt(study)
+    digest = str(run.get("scientific_configuration_sha256") or "")
+    return {
+        "study_id": str(study.get("id") or ""),
+        "run_id": str(run.get("run_id") or ""),
+        "study_revision": study.get("revision"),
+        "receipt_run_id": progress.run_id if progress else None,
+        "receipt_revision": progress.revision if progress else None,
+        "compiles": progress.compiles if progress else 0,
+        "recorded_compiled_source_run_id": recorded_compiled_source_run_id(review),
+        "run_digest16": digest[:16],
+        "study_digest16": study_contexts.scientific_configuration_sha256(study)[:16],
+        "receipt_digest16": progress.current_digest[:16] if progress else None,
+        "compiled_digest_holds": bool(progress and compiled_digest_holds(study, progress)),
+    }
+
+
 def record_choice(
     *,
     before: Mapping[str, Any],
@@ -274,6 +354,7 @@ def record_choice(
         current_digest=study_contexts.scientific_configuration_sha256(after),
         revision=int(after["revision"]),
         choices={**(previous.choices if previous else {}), decision_code: option_id},
+        compiles=_compiles_after(before, run, (decision_code, option_id), previous),
     )
     path = _path(progress.study_id)
     path.parent.mkdir(mode=0o700, parents=True, exist_ok=True)

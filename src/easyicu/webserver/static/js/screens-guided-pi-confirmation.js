@@ -672,6 +672,23 @@
           reviewResources: planStopResources.slice(0, 1),
         };
       }
+      // S1542 backstop: the plan's settings were applied twice with no new
+      // plan in between; a third apply would loop (B13 was the second such).
+      if (code === 'agent_plan_configuration_loop_stopped') return {
+        code, grants: ['provider_run', 'literature'], showPlanPreview: true,
+        message: tr(
+          'Keep the current candidate plan as review evidence. Generate a fresh candidate plan from the current study configuration, and pause again for my review before analysis.',
+          '保留当前候选计划作为审阅记录。请按当前研究配置重新生成候选计划，并在分析前再次停下让我审核。',
+        ),
+        title: tr('EasyICU stopped applying this plan\'s execution settings', 'EasyICU 已停止再次应用这份计划的执行设置'),
+        note: tr(
+          'These settings were already applied twice without a new plan, so applying them again would repeat the same step. No analysis has started. Generate a fresh plan from the current study settings, or request changes.',
+          '这些设置在没有新计划的情况下已应用过两次，再次应用只会重复同一步骤，分析尚未开始。请按当前研究设置重新生成计划，或提出修改。',
+        ),
+        approve: tr('Generate fresh plan', '重新生成计划'),
+        reviewMaterialsTitle: tr('View the plan and review evidence', '查看计划与审阅依据'),
+        reviewResources: planStopResources,
+      };
       if (code === 'question_requirement_capability_gap') return {
         code, grants: ['provider_run', 'literature'],
         message: tr(

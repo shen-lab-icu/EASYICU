@@ -779,6 +779,7 @@ def _requested_endpoint_coordinates(study: Mapping[str, Any]) -> Dict[str, Any]:
             stated_exposure=str(study.get("primary_exposure") or ""),
             stated_exposure_concept=study.get("primary_exposure_concept"),
             export_path=source.get("path"), analysis_family=study_design_family(study),
+            study=study,
         )
     except (KeyError, ValueError):
         return {}

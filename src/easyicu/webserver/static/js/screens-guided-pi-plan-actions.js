@@ -17,6 +17,8 @@
     'population_inclusion_not_applied',
     'question_requirement_not_covered',
     'question_requirement_capability_gap',
+    // S1542: a stopped compile loop continues with a fresh plan.
+    'agent_plan_configuration_loop_stopped',
     'question_requirements_unreadable',
   ]);
   const REPLAY_GRANT_INTENTS = new Set([

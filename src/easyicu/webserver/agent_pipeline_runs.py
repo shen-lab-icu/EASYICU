@@ -6379,6 +6379,7 @@ def _load_candidate_plan_materialization_authority(
         stated_exposure_concept=study.get("primary_exposure_concept"),
         declared_covariates=_configured_covariates(study),
         analysis_family=study_design_family(study),
+        study=study,
     )
     primary_exposure = _clean_text(identity.get("primary_exposure"), 160)
     target_outcome = _clean_text(identity.get("target_outcome"), 160)

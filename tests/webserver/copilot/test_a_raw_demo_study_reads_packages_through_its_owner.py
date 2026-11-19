@@ -175,6 +175,25 @@ def test_the_owner_compares_the_bound_path_as_a_path(choice, chosen, monkeypatch
     assert launch.bound_source_authority_path("   ", dot) == "   "
 
 
+def test_planning_coordinates_read_the_registered_export(choice, chosen, monkeypatch):
+    # S1540 sweep: the planning coordinates' composite column and KDIGO
+    # observability read the bound raw Demo folder, which is no package, so
+    # both degraded silently; they read the registered export.
+    from easyicu.webserver import research_launch_scientific as launch
+
+    raw = chosen["data_source"]["path"]
+    read = []
+    monkeypatch.setattr(launch, "_bound_source_column", lambda path, **_k: read.append(("column", path)) or (lambda _concept: None))
+    monkeypatch.setattr(launch, "_observability_preserving_exposure", lambda name, path: read.append(("kdigo", path)) or name)
+    launch._metadata_only_planning_coordinates(
+        question=chosen["question"], database="miiv", export_path=raw, study=chosen)
+    assert read == [("kdigo", str(choice.paths.export)), ("column", str(choice.paths.export))]
+    read.clear()
+    launch._metadata_only_planning_coordinates(
+        question=chosen["question"], database="miiv", export_path=raw, study={**chosen, "demo_planning_authority_ref": ""})
+    assert read == [("kdigo", raw), ("column", raw)]
+
+
 # Every call in src/easyicu/webserver that opens a path as an export package
 # or asks an identity authority of it, by (file, enclosing function, reader).
 # OWNER: the path comes from source_authority_export_path /
@@ -226,6 +245,7 @@ _CLASSIFIED = {
     ("research_append_source.py", "registered_source_changed", "validate_research_pipeline_source"): (1, "REGISTERED"),
     ("research_launch_resume.py", "_development_resume_launch_scope", "validate_research_pipeline_source"): (1, "REGISTERED"),
     ("research_launch_scientific.py", "_bound_source_column", "build_available_catalog"): (1, "OWNER"),
+    ("research_launch_scientific.py", "_metadata_only_planning_coordinates", "bound_source_authority_path"): (1, "OWNER"),
     ("research_launch_scientific.py", "_neutral_materialization_scope", "bound_source_authority_path"): (1, "OWNER"),
     ("research_launch_scientific.py", "_neutral_materialization_scope", "describe_source_tables"): (1, "OWNER"),
     ("research_launch_scientific.py", "_data_foundation_profile", "build_available_catalog"): (1, "OWNER"),

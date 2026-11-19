@@ -332,6 +332,7 @@
         // cannot answer, or a plan the host could not check against the question
         // (question_requirements.QUESTION_REQUIREMENT_APPROVAL_STOPS).
         question_requirement_not_covered: tr('An analysis the question asks for is not answered by any step of this plan, so it cannot be approved; generate a new plan', '题面要求的一项分析，这份计划没有任何步骤回答，此计划不能批准；请重新生成计划'),
+        agent_plan_configuration_loop_stopped: tr('This plan\'s execution settings were applied twice without a new plan; generate a fresh plan or request changes', '这份计划的执行设置在没有新计划的情况下已应用两次；请重新生成计划或提出修改'),
         question_requirement_capability_gap: tr('Planning found that this plan cannot do an analysis the question asks for, so it cannot be approved; revise that requirement or generate a new plan', '规划发现题面要求的一项分析，这份计划做不到，此计划不能批准；请修改这项要求或重新生成计划'),
         question_requirements_unreadable: tr('The record of what the question asks for could not be read or did not validate, so this plan was not checked against the question and cannot be approved; generate the plan again', '题面要求的核对记录读取或校验失败，这份计划未按题面核对，不能批准；请重新生成计划'),
         host_delivery_request_ambiguous: tr('The plan cannot be approved until you clarify the requested deliverables in the conversation', '请在对话里明确交付要求，这份计划目前不能批准'),

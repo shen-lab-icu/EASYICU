@@ -1628,6 +1628,7 @@ def _metadata_only_planning_coordinates(
     stated_adjustments: Sequence[Mapping[str, Any]] = (),
     stated_subgroups: Sequence[Mapping[str, Any]] = (),
     analysis_family: Optional[str] = None,
+    study: Optional[Mapping[str, Any]] = None,
 ) -> Dict[str, Any]:
     """Project only concepts the researcher explicitly named into planning.
 
@@ -1835,8 +1836,11 @@ def _metadata_only_planning_coordinates(
         elif not is_grouping(named_exposure):
             named_exposure = None
     named_measurement = named_concept("exposure") if descriptive and not named_exposure else None
-    primary_exposure = _observability_preserving_exposure(named_exposure, export_path)
-    source_column = _bound_source_column(export_path, database=database)
+    # The source's package answers these two (S1540 sweep): a raw official-Demo
+    # study's own folder reads its registered export, as the catalog does.
+    package_path = bound_source_authority_path(export_path, study) if export_path and study else export_path
+    primary_exposure = _observability_preserving_exposure(named_exposure, package_path)
+    source_column = _bound_source_column(package_path, database=database)
     # A host-derived window reading is already one value per stay; an
     # aggregation phrase in the question applies only to a named source concept.
     exposure_operation = (

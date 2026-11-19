@@ -87,6 +87,16 @@ def runs(choice, monkeypatch):
     return _Runs(monkeypatch)
 
 
+def _plain_columns(monkeypatch):
+    # The synthetic export has no native column metadata. The launch's
+    # planning coordinates read it (S1540 sweep), which is pinned in
+    # test_a_raw_demo_study_reads_packages_through_its_owner; here the
+    # concept names stand for their columns.
+    from easyicu.webserver import research_launch_scientific as launch
+
+    monkeypatch.setattr(launch, "_bound_source_column", lambda _path, **_kw: (lambda concept: concept))
+
+
 def _compile(choice, run):
     study = study_contexts.get_context(choice.study["id"])
     choice.record.binding = choice.service._binding_for_context(study, run_id=run["run_id"])
@@ -95,7 +105,7 @@ def _compile(choice, run):
         expected_revision=study["revision"], run_id=run["run_id"])
 
 
-def _offers_compile(study, runs, run):
+def _next_action(study, runs, run):
     # The review card's next step for this run, as the workflow projects it.
     # B10's card: the review asks for changes and names a runtime gap.
     candidate = _candidate(study, ["REPEATED_STAY_IDENTITY_UNAVAILABLE"]).model_copy(
@@ -103,7 +113,11 @@ def _offers_compile(study, runs, run):
     snapshot = workflow_owner._enrich_plan_review(
         candidate, study=study,
         review=runs.review(run["project_dir"]), run=run)
-    return snapshot.next_action_code == "agent_plan_configuration_required"
+    return snapshot.next_action_code
+
+
+def _offers_compile(study, runs, run):
+    return _next_action(study, runs, run) == "agent_plan_configuration_required"
 
 
 def _job_writes(study_id, job_id):
@@ -218,6 +232,65 @@ def test_a_launch_that_failed_after_the_reconfirmation_costs_exactly_one_more_co
     _assert_refused_without_writes(choice, third)
 
 
+def test_the_compiled_plan_stays_continued_after_job_writes_and_in_its_revision(choice, runs):
+    # Carbon b13r1: the B13 hold does not depend on the revision (a job's
+    # lifecycle writes after the reconfirmation keep it), and a revision of
+    # the compiled plan records that plan, though the plan itself carries no
+    # record: else the revision is offered the compile again.
+    first = runs.launch(study_contexts.get_context(choice.study["id"]), "run-a")
+    _compile(choice, first)
+    reconfirmed = _reconfirm(choice)
+    after_failure = _job_writes(reconfirmed["id"], "job-failed")
+    retry = runs.launch(after_failure, "run-b")
+    _job_writes(after_failure["id"], "job-b")
+    _compile(choice, retry)
+    reconfirmed = _reconfirm(choice)
+    later = _job_writes(reconfirmed["id"], "job-review")
+    assert runs.recorded(retry) == ""
+    assert compiled_source_run_id_for_launch(study=later, project_root="/synthetic") == ""
+    assert not _offers_compile(later, runs, retry)
+    _assert_refused_without_writes(choice, retry)
+    revised = runs.launch(later, "run-b-revised", revision_source_run_id="run-b")
+    assert runs.recorded(revised) == "run-b"
+    reviewed = _job_writes(later["id"], "job-revised")
+    assert not _offers_compile(reviewed, runs, revised)
+    _assert_refused_without_writes(choice, revised)
+
+
+def test_a_third_compile_of_one_plan_stops_the_loop(choice, runs, monkeypatch, caplog):
+    # S1542 backstop: whatever lets a plan be offered its compile again (B13
+    # was the second retry-path loop), two compiles of one plan with no
+    # planning run in between stop the third, with its own card and a
+    # diagnosable lineage log. Synthetic: the continuation guard is disabled
+    # so the loop B13 closed is forced open.
+    first = runs.launch(study_contexts.get_context(choice.study["id"]), "run-a")
+    _compile(choice, first)
+    reconfirmed = _reconfirm(choice)
+    after_failure = _job_writes(reconfirmed["id"], "job-failed")
+    retry = runs.launch(after_failure, "run-b")
+    _job_writes(after_failure["id"], "job-b")
+    monkeypatch.setattr(plan_review_progress, "planned_on_compiled_configuration", lambda *_a, **_k: False)
+    _compile(choice, retry)
+    assert plan_review_progress._receipt(study_contexts.get_context(choice.study["id"])).compiles == 1
+    _reconfirm(choice)
+    _compile(choice, retry)
+    assert plan_review_progress._receipt(study_contexts.get_context(choice.study["id"])).compiles == 2
+    study = _reconfirm(choice)
+    with caplog.at_level("WARNING", logger=workflow_owner.__name__):
+        assert _next_action(study, runs, retry) == "agent_plan_configuration_loop_stopped"
+    assert "agent_plan_configuration_loop_stopped" in caplog.text and "'compiles': 2" in caplog.text
+    receipt = plan_review_progress._receipt(study)
+    with pytest.raises(service_module.PiCopilotError) as raised:
+        _compile(choice, retry)
+    assert raised.value.code == "agent_plan_configuration_loop_stopped" and raised.value.status_code == 409
+    assert study_contexts.get_context(study["id"]) == study
+    assert plan_review_progress._receipt(study) == receipt
+    # A planning run in between restarts the count: its plan compiles once.
+    fresh = runs.launch(study, "run-c")
+    _job_writes(study["id"], "job-c")
+    assert _offers_compile(study_contexts.get_context(study["id"]), runs, fresh)
+
+
 def test_a_review_from_v010_is_compiled_as_before(choice, runs):
     # S1480: a run made before the record existed carries none; its review
     # offers the compile once, as v0.1.0 did, and the compile writes.
@@ -286,6 +359,7 @@ def test_the_round_two_plan_reads_the_registered_export_not_the_raw_folder(choic
     # plan's launch. Its run rebuilds the data profile for the compiled
     # groupings (agent_pipeline_runs, before the first progress step) with the
     # launch study as the source study; the catalog is the registered export's.
+    _plain_columns(monkeypatch)
     from easyicu.research_agent.acquisition import catalog as catalog_owner
     from easyicu.research_agent.intake.export_package import ExportPackageError
     from easyicu.webserver import research_launch_scientific as launch
@@ -331,6 +405,7 @@ def test_the_round_two_scope_is_the_registered_exports_modules(choice, runs, mon
     # modules, so the launch defaulted the scope from the raw folder's tables
     # and the profile found no stay-level denominator. The default scope is
     # the registered export's modules.
+    _plain_columns(monkeypatch)
     from easyicu.webserver import dataio
     from easyicu.webserver import research_launch_scientific as launch
     from easyicu.webserver import research_pipeline_run_preparation as preparation
@@ -377,6 +452,7 @@ def test_a_launch_on_an_unreadable_package_names_it_and_offers_its_reexport(choi
     # B11 card: a bound folder that is not a readable package stops with the
     # launch's typed intake stop, not the bare intake code. The card says what
     # is wrong and offers its re-export.
+    _plain_columns(monkeypatch)
     from easyicu.webserver import research_launch_scientific as launch
     from easyicu.webserver import research_pipeline_run_preparation as preparation
     from easyicu.webserver.pi_copilot.projections import project_job

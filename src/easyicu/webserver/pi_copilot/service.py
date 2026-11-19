@@ -4521,6 +4521,14 @@ class PiCopilotService(SkillAttachmentService, QuickAnswerService):
                 "This plan continues the configuration EasyICU already compiled; its remaining gaps stay with its review.",
                 status_code=409,
             )
+        if plan_review_progress.compile_loop_stopped(context, row):
+            # S1542 backstop: the workflow no longer offers this compile.
+            raise PiCopilotError(
+                "agent_plan_configuration_loop_stopped",
+                "This plan's execution settings were already applied twice without a new plan; request changes or generate a fresh plan.",
+                status_code=409,
+                details=plan_review_progress.compile_lineage_state(context, row, review),
+            )
         scientific_review = payloads.get("scientific_plan_review.json")
         facts = (
             scientific_review.get("facts")

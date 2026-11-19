@@ -59,6 +59,8 @@ _CANDIDATE_PLAN_WORKFLOW_CODES = frozenset(
         "plan_configuration_superseded",
         "plan_review_not_resumable",
         "scientific_plan_review_policy_stale",
+        # S1542: a stopped compile loop continues with a fresh candidate plan.
+        "agent_plan_configuration_loop_stopped",
         # A reviewed plan that refuses its approval.
         *PLAN_APPROVAL_STOPS,
     }

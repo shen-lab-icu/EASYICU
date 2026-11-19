@@ -366,6 +366,7 @@ def _prepare_scientific_launch(
         stated_adjustments=study.get("stated_adjustments") or (),
         stated_subgroups=study.get("stated_subgroups") or (),
         analysis_family=study_design_family(study),
+        study=study,
     )
     target = configured_target or planning_coordinates.get("target_outcome")
     primary_exposure = configured_primary_exposure or planning_coordinates.get(

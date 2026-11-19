@@ -1176,6 +1176,10 @@
           'The bound folder is a converted database, not a data package prepared for this study. Extract this study\'s data first, then generate the plan.',
           '绑定的是转换好的数据库，还不是为本研究准备的数据包。请先为本研究提取数据，再生成计划。',
         ),
+        agent_plan_configuration_loop_stopped: tr(
+          'This plan\'s execution settings were already applied twice without a new plan, so EasyICU did not apply them again. No analysis has started. Generate a fresh plan, or request changes.',
+          '这份计划的执行设置在没有新计划的情况下已应用过两次，EasyICU 没有再次应用，分析尚未开始。请重新生成计划，或提出修改。',
+        ),
         research_pipeline_stay_denominator_unavailable: tr(
           'The data selected for this study has no demographics (age or sex), which the run needs to count ICU stays, so the plan could not start. No analysis was run. Prepare the data again with demographics included, then generate the plan.',
           '本研究选用的数据不含人口学信息（年龄或性别），而运行需要用它来统计 ICU 住院，因此计划无法开始，也没有运行任何分析。请重新准备数据并包含人口学模块，再生成计划。',
