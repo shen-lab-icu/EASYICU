@@ -54,7 +54,7 @@ def test_acceptance_downloads_the_completed_runs_artifact_and_matching_sources()
     assert build["if"] == "github.event_name != 'workflow_run' && inputs.installer_run_id == ''"
     runtime = next(s for s in steps if "--runtime-only" in s.get("run", ""))
     assert runtime["if"] == download["if"]
-    install = next(s for s in steps if "Install and accept" in s.get("name", ""))
+    install = next(s for s in steps if s.get("name") == "Install and run desktop first-result acceptance")
     assert "verify_desktop_artifact.py windows" in install["run"]
     # The driver runs the app's owners in-process, in the frozen app's UTF-8 mode.
     assert "& $runtime -I -X utf8 tools/windows_laptop_acceptance.py" in install["run"]

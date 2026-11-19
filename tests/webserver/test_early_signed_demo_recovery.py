@@ -1,6 +1,7 @@
 """A signed source choice survives an early metadata-only restart."""
 
 from copy import deepcopy
+import json
 from types import SimpleNamespace
 
 import pytest
@@ -88,12 +89,21 @@ def test_changed_raw_choice_never_reaches_provider(signed_restart, monkeypatch, 
         current["data_source"]["database"] = "mimic_iv"
     elif change == "study_id":
         current["id"] = "another-study"
+    elif change == "registry":
+        # The choice binds this source's own registration (M2), so a new
+        # registration of the same folder, not any registry write, ends it.
+        registry = json.loads(sources._CONFIG_PATH.read_text(encoding="utf-8"))
+        rows = [row for row in registry["sources"] if row.get("path") == str(state.choice.paths.export)]
+        assert rows
+        for row in rows:
+            row["registration_nonce"] = "0" * 32
+        sources._CONFIG_PATH.write_text(json.dumps(registry), encoding="utf-8")
     else:
         path = (_private_directory() / f"demo-planning-{current['demo_planning_authority_ref']}.json"
                 if change == "signature" else
                 state.choice.paths.export / "_manifest.json" if change == "export_manifest" else
                 state.choice.paths.raw / "conversion_manifest.json" if change == "conversion_manifest" else
-                sources._CONFIG_PATH if change == "registry" else state.choice.paths.prepared_marker)
+                state.choice.paths.prepared_marker)
         path.write_bytes(path.read_bytes() + b" ")
     monkeypatch.setattr(study_contexts, "get_context", lambda _id: current)
     monkeypatch.setattr(provider_adapter, "build_research_agent_provider_client",

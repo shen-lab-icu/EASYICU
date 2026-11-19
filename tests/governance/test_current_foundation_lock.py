@@ -107,6 +107,13 @@ def test_every_current_profile_generation_pins_the_lock():
     assert len(refs) == 8
     for ref in refs:
         assert profiles.get_submission_profile(ref) in current, ref
-    for name in ("DESKTOP_FIRST_RESULT", "DESKTOP_FIRST_RESULT_LIVE_PUBMED", "PUBLIC_DEMO_ACCEPTANCE"):
+    for name in ("DESKTOP_FIRST_RESULT", "DESKTOP_FIRST_RESULT_LIVE_PUBMED"):
         assert getattr(profiles, name) in current, name
+    # The acceptance profile may carry its own acceptance-only version (dm1:
+    # 20261119-desktop-m1); it still derives from the current generation and
+    # pins the same LOCK digests.
+    acceptance = profiles.PUBLIC_DEMO_ACCEPTANCE
+    assert acceptance in current or profiles.PUBLIC_DEMO_ACCEPTANCE_2026_11_18_AUDIT15 in current
+    assert acceptance.expected_concept_dict_sha == lock["concept_dict_sha256"]
+    assert acceptance.expected_sofa2_dict_sha == lock["sofa2_dict_sha256"]
     assert client_trust.ACCEPTANCE_PROFILE_REF == profiles.PUBLIC_DEMO_ACCEPTANCE.ref

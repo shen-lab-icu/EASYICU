@@ -81,7 +81,8 @@ def test_every_plan_step_reader_uses_the_owner_after_it_loads():
     owner = index.index("js/screens-agent-plan-prose.js?")
     for reader in (
         "screens-agent-render.js", "screens-guided-pi-analysis-report.js",
-        "screens-guided-pi-run-answer.js", "screens-guided-pi-confirmation.js",
+        # The confirmation owner reads plan prose through its data sibling.
+        "screens-guided-pi-run-answer.js", "screens-guided-pi-confirmation-data.js",
     ):
         assert owner < index.index(f"js/{reader}?")
         assert "AGENT_PLAN_PROSE" in (STATIC / "js" / reader).read_text(encoding="utf-8")

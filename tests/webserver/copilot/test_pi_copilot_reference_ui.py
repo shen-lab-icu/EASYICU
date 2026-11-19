@@ -95,10 +95,10 @@ def test_home_reuses_empty_drafts_and_project_switcher_stays_a_switcher() -> Non
     workspace = _read("js/screens-guided-pi-study-workspace.js")
     guided = _read("js/screens-guided.js")
     desktop_css = _read("css/guided-pi-desktop.css")
-    start_entry = _read("js/screens-guided-pi-session-navigation.js").split("async function startEntry()", 1)[1].split("async function stopMessage()", 1)[0]
+    start_entry = _read("js/screens-guided-pi-session-navigation.js").split("async function startEntry(options = {})", 1)[1].split("return { createSession,", 1)[0]
     # Home and 新会话 open an existing empty draft before creating another session.
     assert "const emptyDraft = state.sessions.find(row => STUDY_WORKSPACE.isEmptyConversation(row));" in start_entry
-    assert "if (emptyDraft) { await openSession(emptyDraft.session_id); return; }" in start_entry
+    assert "if (emptyDraft) await openSession(emptyDraft.session_id);\n      else await createSession();" in start_entry
     assert "isEmptyConversation };" in workspace
     assert "if (event.target.closest('[data-gpi-new]')) {\n          clearSessionSelection();\n          render();\n          void startEntry();" in events
     # The project heading opens the in-rail switcher, whose list is capped.
