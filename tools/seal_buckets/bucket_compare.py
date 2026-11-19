@@ -156,7 +156,13 @@ def _check_derived_from(root: Path, manifest: dict) -> None:
         return
     derived = manifest["derived_from"]
     files = derived.get("files") if isinstance(derived, dict) else None
-    if not isinstance(derived, dict) or not isinstance(derived.get("table"), str):
+    table = derived.get("table") if isinstance(derived, dict) else None
+    if (
+        not isinstance(table, str)
+        or PurePosixPath(table).parts != (table,)
+        or table in {".", ".."}
+        or "\\" in table
+    ):
         raise _sie("bucket_derived_from_invalid", root)
     if not isinstance(files, list) or not files:
         raise _sie("bucket_derived_from_invalid", root)
@@ -189,22 +195,43 @@ def _verify_sources(root: Path, manifest: dict) -> None:
     install = root.resolve(strict=True).parent
     # Independent sealed port of storage_layout.resolve_derived_from_source;
     # keep the no-EasyICU-import contract and test parity through farm links.
-    recorded = derived.get("source_root")
-    if recorded is not None:
-        base = Path(recorded)
+    source_root = derived.get("source_root")
+    if source_root is not None:
+        base = Path(source_root)
         install = base if base.is_absolute() else install / base
+    recorded = {}
     for entry in derived["files"]:
         relative = PurePosixPath(entry["path"])
         if relative.is_absolute() or not relative.parts or ".." in relative.parts:
             raise _sie("bucket_derived_from_invalid", root)
-        source = install.joinpath(*relative.parts)
+        recorded[relative.as_posix()] = (install.joinpath(*relative.parts), entry)
+    stats = {}
+    for name, (source, entry) in recorded.items():
         try:
-            st = source.stat()
+            stats[name] = source.stat()
         except OSError as exc:
             raise _sie(
                 "bucket_derived_from_source_missing", root, entry["path"]
             ) from exc
-        if st.st_size != entry["size"] or st.st_mtime_ns != entry["mtime_ns"]:
+
+    # Match storage_layout.bucket_source_files, including the preference for
+    # the table's direct shards over a single-file source.
+    table = derived["table"]
+    try:
+        current = {
+            p.relative_to(install).as_posix()
+            for p in (install / table).glob("*.parquet")
+            if not p.name.startswith(".")
+        }
+        if not current and (install / f"{table}.parquet").is_file():
+            current = {f"{table}.parquet"}
+    except (OSError, ValueError) as exc:
+        raise _sie("bucket_derived_from_source_set_changed", root) from exc
+    if current != recorded.keys():
+        raise _sie("bucket_derived_from_source_set_changed", root)
+    for name, (_, entry) in recorded.items():
+        stat = stats[name]
+        if stat.st_size != entry["size"] or stat.st_mtime_ns != entry["mtime_ns"]:
             raise _sie("bucket_derived_from_source_changed", root, entry["path"])
 
 

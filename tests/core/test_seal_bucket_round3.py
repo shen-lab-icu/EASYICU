@@ -54,9 +54,18 @@ def _install(base: Path, variable=False) -> Path:
     """A valid install whose layout has EMPTY structure: an empty bucket directory (hash) or an empty
     partition and an empty bucket inside a populated partition (variable)."""
     root = base / "t_bucket"
-    source = base / "t.parquet"
-    base.mkdir(parents=True, exist_ok=True)
-    pq.write_table(pa.table({"k": [1]}), source)
+    (base / "t").mkdir(parents=True)
+    sources = []
+    for key in (1, 2):
+        source = base / "t" / f"{key}.parquet"
+        pq.write_table(pa.table({"k": [key]}), source)
+        st = source.stat()
+        sources.append({
+            "path": source.relative_to(base).as_posix(),
+            "sha256": sr.sha256_file(source),
+            "size": st.st_size,
+            "mtime_ns": st.st_mtime_ns,
+        })
     inventory = []
     if variable:
         rel = "var_id=0/bucket_id=0/part.parquet"
@@ -67,7 +76,6 @@ def _install(base: Path, variable=False) -> Path:
         rel = "bucket_id=0/part.parquet"
         inventory.append({"relative_path": rel, **_part(root / rel)})
         (root / "bucket_id=1").mkdir(parents=True)
-    st = source.stat()
     manifest = {
         "schema": sl.SCHEMA,
         "scheme": sl.VARIABLE_SCHEME if variable else "hash",
@@ -81,14 +89,7 @@ def _install(base: Path, variable=False) -> Path:
         "inventory": inventory,
         "derived_from": {
             "table": "t",
-            "files": [
-                {
-                    "path": "t.parquet",
-                    "sha256": sr.sha256_file(source),
-                    "size": st.st_size,
-                    "mtime_ns": st.st_mtime_ns,
-                }
-            ],
+            "files": sources,
         },
     }
     if variable:
@@ -192,10 +193,14 @@ MUTATIONS = {
             ),
         ),
     ),
-    "derived_from_source_missing": (False, lambda r: (r.parent / "t.parquet").unlink()),
+    "derived_from_removed_shard": (False, lambda r: (r.parent / "t/2.parquet").unlink()),
+    "derived_from_added_shard": (
+        False,
+        lambda r: pq.write_table(pa.table({"k": [3]}), r.parent / "t/3.parquet"),
+    ),
     "derived_from_source_changed": (
         False,
-        lambda r: (r.parent / "t.parquet").write_bytes(b"changed source, other size"),
+        lambda r: (r.parent / "t/1.parquet").write_bytes(b"changed source, other size"),
     ),
 }
 
@@ -222,6 +227,8 @@ def test_the_comparator_and_the_resolver_decide_every_install_alike(tmp_path):
     assert decisions["hash_missing_empty_bucket"] == "bucket_modulus_mismatch"
     assert decisions["variable_missing_empty_partition"] == "bucket_partition_missing"
     assert decisions["variable_missing_empty_bucket"] == "bucket_modulus_mismatch"
+    assert decisions["derived_from_removed_shard"] == "bucket_derived_from_source_missing"
+    assert decisions["derived_from_added_shard"] == "bucket_derived_from_source_set_changed"
     assert all(v != "ok" for k, v in decisions.items() if not k.endswith("_good"))
 
 

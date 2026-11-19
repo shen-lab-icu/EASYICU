@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 from pathlib import Path
 
 import pandas as pd
@@ -7,6 +8,7 @@ import pytest
 
 from easyicu.config import DataSourceConfig, DataSourceRegistry
 from easyicu.datasource import FilterOp, FilterSpec, ICUDataSource
+from easyicu.storage_layout import TableScanError
 
 
 @pytest.mark.parametrize("selector", [["1 OR 1=1"], ["O'Brien"], "O'Brien"])
@@ -27,8 +29,8 @@ def _repo_config(name: str):
     return DataSourceRegistry.from_json(config_path).get(name)
 
 
-def test_mimic_services_prefers_csv_over_parquet(tmp_path: Path) -> None:
-    (tmp_path / "services.parquet").write_bytes(b"not a parquet file")
+@pytest.fixture
+def mimic_services(tmp_path: Path) -> Path:
     pd.DataFrame(
         {
             "ROW_ID": [1, 2],
@@ -49,18 +51,56 @@ def test_mimic_services_prefers_csv_over_parquet(tmp_path: Path) -> None:
             "outtime": pd.to_datetime(["2100-01-03 00:00:00", "2100-01-04 00:00:00"]),
         }
     ).to_parquet(tmp_path / "icustays.parquet", index=False)
+    return tmp_path
 
+
+def _load_mimic_services(root: Path):
     config = _repo_config("mimic")
-    source = ICUDataSource(config=config, base_path=tmp_path)
-
-    table = source.load_table(
+    source = ICUDataSource(config=config, base_path=root)
+    return source.load_table(
         "services",
         columns=["hadm_id", "curr_service"],
         filters=[FilterSpec(column="hadm_id", op=FilterOp.IN, value=[100])],
-    )
+    ).data
 
-    assert table.data["hadm_id"].tolist() == [100]
-    assert table.data["curr_service"].tolist() == ["MED"]
+
+def test_mimic_services_prefers_csv_over_parquet(mimic_services: Path) -> None:
+    (mimic_services / "services.parquet").write_bytes(b"not a parquet file")
+    frame = _load_mimic_services(mimic_services)
+    assert frame["hadm_id"].tolist() == [100]
+    assert frame["curr_service"].tolist() == ["MED"]
+
+
+@pytest.mark.parametrize("corrupt", [False, True], ids=["valid", "corrupt"])
+def test_manifest_bound_mimic_services_requires_parquet(
+    mimic_services: Path, corrupt: bool,
+) -> None:
+    parquet = mimic_services / "services.parquet"
+    if corrupt:
+        parquet.write_bytes(b"not a parquet file")
+    else:
+        pd.DataFrame(
+            {
+                "subject_id": [10],
+                "hadm_id": [100],
+                "transfertime": pd.to_datetime(["2100-01-01 00:00:00"]),
+                "curr_service": ["PARQUET"],
+            }
+        ).to_parquet(parquet, index=False)
+    (mimic_services / "conversion_manifest.json").write_text(json.dumps({"tables": [
+        {"table": "services", "row_count": 1, "input": {"relative_path": "SERVICES.csv.gz"},
+         "outputs": [{"relative_path": "services.parquet"}]},
+        {"table": "icustays", "row_count": 2, "outputs": [{"relative_path": "icustays.parquet"}]},
+    ]}))
+
+    if corrupt:
+        with pytest.raises(TableScanError) as caught:
+            _load_mimic_services(mimic_services)
+        assert caught.value.reason == "table_scan_file_unreadable"
+    else:
+        frame = _load_mimic_services(mimic_services)
+        assert frame["hadm_id"].tolist() == [100]
+        assert frame["curr_service"].tolist() == ["PARQUET"]
 
 
 def test_empty_item_filter_short_circuits_partition_read(tmp_path: Path) -> None:

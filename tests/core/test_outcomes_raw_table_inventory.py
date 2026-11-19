@@ -36,14 +36,14 @@ def test_a_partitioned_table_is_read_once_in_file_order(tmp_path):
     assert _raw_table("mimic", tmp_path, "icustays")["icustay_id"].tolist() == [1, 2, 3]
 
 
-def test_a_nested_copy_is_not_concatenated_into_the_table(tmp_path):
+@pytest.mark.parametrize("manifest_bound", [True, False], ids=["manifest", "legacy"])
+def test_a_nested_copy_is_not_concatenated_into_the_table(tmp_path, manifest_bound):
     _install(tmp_path)
     nested = tmp_path / "icustays" / "rebuild"
     nested.mkdir()
     _stays([1, 2, 3]).to_parquet(nested / "1.parquet")
-    assert _raw_table("mimic", tmp_path, "icustays")["icustay_id"].tolist() == [1, 2, 3]
-    # Without a manifest the directory inventory cannot attribute the copy.
-    (tmp_path / "conversion_manifest.json").unlink()
+    if not manifest_bound:
+        (tmp_path / "conversion_manifest.json").unlink()
     with pytest.raises(StorageIntegrityError) as caught:
         _raw_table("mimic", tmp_path, "icustays")
     assert caught.value.reason == "table_scan_incomplete"
