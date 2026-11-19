@@ -446,6 +446,38 @@ def test_agent_plan_configuration_is_compiled_without_a_user_choice(
     assert seen_patch["analysis_design"]["variance_estimator"] == "cluster_robust"
     assert seen_patch["confirmations"]["agent_plan_configuration_compiled"] is True
 
+    # B10 (UX leg 3 en, 2026-11-19): the fresh plan made on this compiled
+    # configuration came back with the same runtime gaps. Compiling it again
+    # rewrote the study from that plan's wording and planned again, without
+    # end. The second compile is refused before anything is read or written.
+    fresh = {
+        "run_id": "fresh-run",
+        "scientific_configuration_sha256": study_contexts.scientific_configuration_sha256(current),
+    }
+    fresh_record = PiSessionRecord(
+        session_id="agent-plan-session",
+        project_id="agent-plan-project",
+        binding=AuthorityBinding(
+            study_context_id=before["id"], study_revision=current["revision"], run_id="fresh-run",
+        ),
+    )
+    monkeypatch.setattr(service, "_scoped_record", lambda *a, **kw: fresh_record)
+    monkeypatch.setattr(
+        service_module, "list_bound_run_history", lambda **kw: [{**fresh, "project_dir": "/test/fresh"}],
+    )
+    seen_patch.clear()
+    with pytest.raises(service_module.PiCopilotError) as raised:
+        service.apply_agent_plan_configuration(
+            "agent-plan-session", project_id="agent-plan-project",
+            expected_revision=current["revision"], run_id="fresh-run",
+        )
+    assert raised.value.code == "agent_plan_configuration_already_applied"
+    assert seen_patch == {}
+    assert owner.planned_on_compiled_configuration(current, fresh)
+    # Another configuration, or the compiled run itself, is not that fact.
+    assert not owner.planned_on_compiled_configuration(current, {**fresh, "scientific_configuration_sha256": "c" * 64})
+    assert not owner.planned_on_compiled_configuration(current, run)
+
 
 @pytest.mark.parametrize("first_stay_proven,raw_demo", [(True, False), (False, False), (True, True)])
 def test_a_clustering_plan_gets_the_first_stay_population_only_with_its_coordinate(

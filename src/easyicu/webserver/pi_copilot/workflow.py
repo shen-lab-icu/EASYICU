@@ -1591,6 +1591,7 @@ def _enrich_plan_review(
     study: Mapping[str, Any],
     review: Mapping[str, Any],
     exposure_groups: Any = None,
+    run: Mapping[str, Any] | None = None,
 ) -> ResearchWorkflowSnapshot:
     """Attach conversational Plan review fields after workflow compilation.
 
@@ -1734,6 +1735,12 @@ def _enrich_plan_review(
                 "plan_scientific_changes_required",
             }
             or source_resolvable_upgrade
+        )
+        # One host compile per configuration: a plan made on the compiled
+        # configuration that still has runtime gaps goes to its review (B10).
+        and not (
+            isinstance(run, Mapping)
+            and plan_review_progress.planned_on_compiled_configuration(study, run)
         )
         and plan_decisions.agent_plan_configuration_available(
             study=study,
@@ -1999,7 +2006,7 @@ def build_project_workflow_projection(
         )
     if latest_run:
         snapshot = _enrich_plan_review(
-            snapshot, study=study, review=review,
+            snapshot, study=study, review=review, run=latest_run,
             exposure_groups=(
                 plan_review_authority.get("exposure_group_labels")
                 if isinstance(plan_review_authority, Mapping) else None

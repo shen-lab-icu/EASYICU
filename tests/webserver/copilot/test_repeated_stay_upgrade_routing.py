@@ -121,11 +121,12 @@ def _candidate(study: dict[str, Any], runtime_codes: list[str]):
     return snapshot
 
 
-def _enriched(study: dict[str, Any], runtime_codes: list[str]):
+def _enriched(study: dict[str, Any], runtime_codes: list[str], run: dict[str, Any] | None = None):
     return workflow_owner._enrich_plan_review(
         _candidate(study, runtime_codes),
         study=study,
         review={"artifact_payloads": {"agent_plan.json": _plan()}},
+        run=run,
     )
 
 
@@ -255,3 +256,34 @@ def test_a_polled_workflow_resolves_the_source_grouping_once(
         assert enriched.next_action_code == "agent_plan_configuration_required"
 
     assert len(calls) == 1
+
+
+@pytest.mark.parametrize("planned_on_compiled", [True, False], ids=["compiled_configuration", "other_configuration"])
+def test_a_plan_made_on_the_compiled_configuration_is_not_compiled_again(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, planned_on_compiled: bool
+) -> None:
+    # B10 (UX leg 3 en, 2026-11-19): every compile rewrote the study and a
+    # fresh plan came back with the same runtime gaps, so the host compiled
+    # again without end. One compile per configuration; the next plan's gaps
+    # stay with its review.
+    from easyicu.webserver.pi_copilot import plan_review_progress
+
+    monkeypatch.setenv("EASYICU_HOME", str(tmp_path / "home"))
+    _grouping(monkeypatch, object())
+    study = _study(tmp_path)
+    earlier = {**study, "covariates": ["age"]}
+    plan_review_progress.record_choice(
+        before=earlier,
+        after=study if planned_on_compiled else {**study, "covariates": ["sex"]},
+        run={"run_id": "run-compiled-earlier",
+             "scientific_configuration_sha256": study_context_owner.scientific_configuration_sha256(earlier)},
+        decision_code="agent_plan_configuration",
+        option_id="typed_runtime_projection",
+    )
+    run = {"run_id": _RUN_ID, "scientific_configuration_sha256": study_context_owner.scientific_configuration_sha256(study)}
+
+    enriched = _enriched(study, ["REPEATED_STAY_IDENTITY_UNAVAILABLE"], run)
+
+    assert enriched.next_action_code == (
+        "plan_execution_upgrade_required" if planned_on_compiled else "agent_plan_configuration_required"
+    )

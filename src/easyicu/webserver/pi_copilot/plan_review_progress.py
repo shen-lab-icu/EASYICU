@@ -39,16 +39,22 @@ def _path(study_id: str) -> Path:
     return state_paths.state_root() / "plan-review-choices" / f"{key}.json"
 
 
-def matching_progress(
-    study: Mapping[str, Any], run: Mapping[str, Any]
-) -> ReviewChoiceProgress | None:
-    """Read only; a receipt matches one exact current revision and source run."""
+def _receipt(study: Mapping[str, Any]) -> ReviewChoiceProgress | None:
     path = _path(str(study.get("id") or ""))
     try:
         if path.stat().st_size > 16_384:
             return None
-        progress = ReviewChoiceProgress.model_validate_json(path.read_text())
+        return ReviewChoiceProgress.model_validate_json(path.read_text())
     except (OSError, ValidationError):
+        return None
+
+
+def matching_progress(
+    study: Mapping[str, Any], run: Mapping[str, Any]
+) -> ReviewChoiceProgress | None:
+    """Read only; a receipt matches one exact current revision and source run."""
+    progress = _receipt(study)
+    if progress is None:
         return None
     if (
         progress.study_id != study.get("id")
@@ -60,6 +66,33 @@ def matching_progress(
     ):
         return None
     return progress
+
+
+AGENT_PLAN_CONFIGURATION_CHOICE = ("agent_plan_configuration", "typed_runtime_projection")
+
+
+def planned_on_compiled_configuration(
+    study: Mapping[str, Any], run: Mapping[str, Any]
+) -> bool:
+    """Whether ``run`` was planned on the configuration the host compiler wrote.
+
+    The compiler projects one reviewed plan's runtime gaps into the study and
+    a fresh plan follows. When that fresh plan is reviewed with runtime gaps
+    again, compiling once more only rewrites the study from another plan's
+    wording and plans again (UX leg 3 en, 2026-11-19, B10: each round also
+    ended a signed raw-Demo choice, so the loop never converged). Such a run
+    goes to its review instead. Read only; a missing or unrelated receipt is
+    not this fact.
+    """
+    progress = _receipt(study)
+    name, option = AGENT_PLAN_CONFIGURATION_CHOICE
+    return bool(
+        progress is not None
+        and progress.study_id == study.get("id")
+        and progress.run_id != run.get("run_id")
+        and progress.choices.get(name) == option
+        and progress.current_digest == run.get("scientific_configuration_sha256")
+    )
 
 
 def validate_choice_source(study: Mapping[str, Any], run: Mapping[str, Any]) -> None:

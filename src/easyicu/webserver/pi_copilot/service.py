@@ -4510,6 +4510,12 @@ class PiCopilotService(SkillAttachmentService, QuickAnswerService):
                 "The reviewed Agent plan is no longer available for this project.",
                 status_code=409,
             )
+        if plan_review_progress.planned_on_compiled_configuration(context, row):
+            raise PiCopilotError(
+                "agent_plan_configuration_already_applied",
+                "This plan was made on the configuration EasyICU already compiled; its remaining gaps stay with its review.",
+                status_code=409,
+            )
         review = agent_runs.read_run_review(str(row.get("project_dir") or ""))
         payloads = review.get("artifact_payloads")
         payloads = payloads if isinstance(payloads, Mapping) else {}
@@ -4582,8 +4588,8 @@ class PiCopilotService(SkillAttachmentService, QuickAnswerService):
                 before=context,
                 after=updated,
                 run=row,
-                decision_code="agent_plan_configuration",
-                option_id="typed_runtime_projection",
+                decision_code=plan_review_progress.AGENT_PLAN_CONFIGURATION_CHOICE[0],
+                option_id=plan_review_progress.AGENT_PLAN_CONFIGURATION_CHOICE[1],
             )
         except plan_decisions.PlanDecisionError as exc:
             raise PiCopilotError(
