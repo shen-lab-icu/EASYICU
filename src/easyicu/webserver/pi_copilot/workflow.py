@@ -1636,7 +1636,11 @@ def _enrich_plan_review(
     review = snapshot.plan_review_summary if isinstance(snapshot.plan_review_summary, Mapping) else {}
     finding_codes = review.get("finding_codes")
     asked = review.get("authorization_questions")
-    asked = [item for item in asked if isinstance(item, Mapping)] if isinstance(asked, (list, tuple)) else []
+    # Only the host marks a researcher choice; a review artifact cannot.
+    asked = [
+        {key: value for key, value in item.items() if key != "researcher_choice"}
+        for item in asked if isinstance(item, Mapping)
+    ] if isinstance(asked, (list, tuple)) else []
     timing_question = (
         plan_decisions.landmark_unavailable_timing_question(
             study if isinstance(study, Mapping) else {}, agent_plan,
@@ -1647,15 +1651,22 @@ def _enrich_plan_review(
         in {"plan_scientific_changes_required", "agent_plan_revision_nonconvergent"}
         else None
     )
-    if timing_question is not None and not any(item.get("code") == timing_question["code"] for item in asked):
+    if timing_question is not None:
         # B2: the host cannot close this timing gap, so the researcher chooses
         # on the timing card instead of facing a paused review with no way on.
         # A question the reviewer already asked keeps its own wording.
+        marker = {"researcher_choice": timing_question["researcher_choice"]}
+        reviewer_asked = any(item.get("code") == timing_question["code"] for item in asked)
         summary = dict(review)
-        summary["authorization_questions"] = [timing_question, *asked]
+        summary["authorization_questions"] = (
+            [{**item, **marker} if item.get("code") == timing_question["code"] else item for item in asked]
+            if reviewer_asked else [timing_question, *asked]
+        )
         snapshot = snapshot.model_copy(update={
             "next_action_code": "plan_scientific_changes_required", "plan_review_summary": summary,
         })
+    elif isinstance(review.get("authorization_questions"), (list, tuple)):
+        snapshot = snapshot.model_copy(update={"plan_review_summary": {**dict(review), "authorization_questions": asked}})
     current_summary = snapshot.plan_review_summary
     remediation = (
         current_summary.get("remediation_buckets")

@@ -83,6 +83,10 @@ _SURVIVAL_OWNER_FINDING = "SURVIVAL_LANDMARK_OWNER_NOT_SEALED"
 #: The suite's landmark is the plan's timing design, so the same declaration
 #: closes the post-baseline timing gap the review reports beside it.
 _TIMING_FINDING = "POST_BASELINE_EXPOSURE_TIMING_NOT_CLOSED"
+# The host, never a review artifact, marks the timing finding as the
+# researcher's choice when no landmark can close it (B2); the card shows
+# only marked timing questions.
+RESEARCHER_CHOICE_LANDMARK_UNAVAILABLE = "landmark_unavailable"
 
 
 _AGGREGATION_SUFFIXES = ("_first", "_last", "_min", "_max", "_mean", "_sum")
@@ -394,6 +398,7 @@ def landmark_unavailable_timing_question(
             "exposure window should align with outcome follow-up."
         ),
         "decision_context": context,
+        "researcher_choice": RESEARCHER_CHOICE_LANDMARK_UNAVAILABLE,
     }
 
 

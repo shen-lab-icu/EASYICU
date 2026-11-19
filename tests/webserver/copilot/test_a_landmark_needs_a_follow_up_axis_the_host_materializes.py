@@ -166,6 +166,7 @@ def test_28_day_mortality_reaches_the_timing_card_and_its_default_choice(monkeyp
     question = workflow.plan_review_summary["authorization_questions"][0]
     assert question["code"] == _TIMING
     assert question["decision_context"]["timing_profile"] == "unspecified_post_baseline"
+    assert question["researcher_choice"] == "landmark_unavailable"  # the card shows only marked timing
 
     result = service.confirm_plan_decision(
         "b2", project_id="project", decision_code=_TIMING, option_id="descriptive_only",
@@ -206,7 +207,81 @@ def test_a_timing_question_the_reviewer_asked_keeps_its_own_wording(monkeypatch)
     enriched = workflow_owner._enrich_plan_review(snapshot, study=_study(), review=review)
     assert seen and seen[0] is not None  # the host would have asked
     timing = [q for q in enriched.plan_review_summary.get("authorization_questions") or [] if q.get("code") == _TIMING]
-    assert [q.get("question") for q in timing] != [seen[0]["question"]]
+    assert [q.get("question") for q in timing] == [asked["question"]]
+    # Leg-1 re-walk: the reviewer's own timing question is marked too, or the card hides it.
+    assert [q.get("researcher_choice") for q in timing] == ["landmark_unavailable"]
+
+
+@pytest.mark.parametrize("outcome", ["death", "mort_28d"])
+def test_a_review_artifact_cannot_mark_its_own_timing_question(monkeypatch, outcome) -> None:
+    """Only the host decides the timing finding is the researcher's; a forged marker is dropped."""
+    from easyicu.webserver.pi_copilot import workflow as workflow_owner
+
+    _service, projection, _current, _run = _service_and_projection(monkeypatch, outcome)
+    forged = {"code": _TIMING, "question": "Choose a method.", "researcher_choice": "landmark_unavailable"}
+    other = {"code": "OUTCOME_DEFINITION_UNRESOLVED", "question": "Which endpoint?", "researcher_choice": "x"}
+    snapshot = projection.workflow.model_copy(update={
+        "next_action_code": "plan_scientific_changes_required",
+        "plan_review_summary": {"finding_codes": [_TIMING], "authorization_questions": [forged, other]},
+    })
+    review = {"artifact_payloads": {"agent_plan.json": _plan(outcome)}}
+    enriched = workflow_owner._enrich_plan_review(snapshot, study=_study(), review=review)
+    marks = {q["code"]: q.get("researcher_choice") for q in enriched.plan_review_summary["authorization_questions"]}
+    # In-hospital death has a host landmark: the timing finding stays system-owned and unmarked.
+    assert marks == {_TIMING: "landmark_unavailable" if outcome == "mort_28d" else None,
+                     "OUTCOME_DEFINITION_UNRESOLVED": None}
+
+
+def _card_for(question: dict) -> dict:
+    import json
+    import shutil
+    from pathlib import Path
+
+    from tests.support.node import run_node
+
+    node = shutil.which("node")
+    if node is None:
+        pytest.skip("Node.js is unavailable")
+    import easyicu.webserver as webserver
+
+    owner = Path(webserver.__file__).parent / "static" / "js" / "screens-guided-pi-confirmation.js"
+    script = r"""
+global.window = { EU_LANG: 'zh' };
+require(require('node:path').join(require('node:path').dirname(process.argv[1]), 'screens-guided-pi-confirmation-data.js'));
+require(process.argv[1]);
+const question = JSON.parse(process.argv[2]);
+const owner = window.EU_GUIDED_PI_CONFIRMATION.create({
+  tr: (en, zh) => zh || en, esc: value => String(value), iconHtml: () => '', resourceButton: () => '',
+  sessionIsStale: () => false, busy: () => false, session: () => ({ binding: { run_id: 'run-1' } }),
+  workflow: () => ({ next_action_code: 'plan_scientific_changes_required',
+    plan_review_summary: { authorization_questions: [question] } }),
+});
+const html = owner.workflowConfirmationHtml();
+process.stdout.write(JSON.stringify({
+  options: (html.match(/data-gpi-plan-decision-option="([^"]+)"/g) || []).map(m => m.split('"')[1]),
+  paused: html.includes('候选计划修订已暂停'),
+}));
+"""
+    import os
+
+    from tests.webserver.copilot.pi_copilot_static_fixtures import NODE_MODULE_HARNESS
+
+    env = {**os.environ, "NODE_OPTIONS": f"--require={NODE_MODULE_HARNESS}"}
+    result = run_node(node, script, str(owner.resolve()), json.dumps(question), check=False, env=env)
+    assert result.returncode == 0, result.stderr or result.stdout
+    return json.loads(result.stdout)
+
+
+def test_the_hosts_timing_question_reaches_the_card_with_its_descriptive_default() -> None:
+    """Leg-1 re-walk (4b08e403d): the card's system-owned filter hid the host's question."""
+    from easyicu.webserver.pi_copilot.plan_decisions import landmark_unavailable_timing_question
+
+    question = landmark_unavailable_timing_question(_study(), _plan("mort_28d"), [_TIMING])
+    card = _card_for(question)
+    assert card["options"] == ["descriptive_only", "time_varying_reextract"]
+    assert card["paused"] is False
+    unmarked = _card_for({key: value for key, value in question.items() if key != "researcher_choice"})
+    assert unmarked["options"] == []  # an unmarked timing finding stays a system repair
 
 
 @pytest.mark.parametrize("summary", [

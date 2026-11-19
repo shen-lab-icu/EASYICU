@@ -808,7 +808,9 @@
       const decisionItems = confirmation.code === 'plan_scientific_changes_required'
         && review && Array.isArray(review.authorization_questions)
         ? review.authorization_questions
-          .filter(item => !systemOwnedPlanFindingCodes.has(String(item && item.code || '')))
+          // The host marks the one timing choice no landmark can close (B2).
+          .filter(item => !systemOwnedPlanFindingCodes.has(String(item && item.code || ''))
+            || (item.code === 'POST_BASELINE_EXPOSURE_TIMING_NOT_CLOSED' && item.researcher_choice === 'landmark_unavailable'))
           .slice(0, 4)
         : [];
       const remediationCounts = confirmation.code === 'plan_scientific_changes_required'
