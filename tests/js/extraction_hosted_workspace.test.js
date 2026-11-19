@@ -21,6 +21,8 @@ const names = fs.readFileSync(path.join(process.argv[2] ? path.dirname(path.reso
 const minuteSource = file(null, 'screens-extraction-minute.js');
 const studyContext = file(null, 'screens-extraction-study-context.js');
 const jobContinuity = file(null, 'screens-extraction-job-continuity.js');
+// index.html loads this sibling owner before screens-extraction.js (ce3e5770c).
+const exportSource = file(null, 'screens-extraction-export-source.js');
 
 function section(begin, end) {
   const a = source.indexOf(begin), b = source.indexOf(end, a + begin.length);
@@ -41,6 +43,7 @@ function page(hosted, values = {}) {
   vm.runInContext(names, ctx);
   vm.runInContext(html, ctx);
   vm.runInContext(hostedCopy, ctx);
+  vm.runInContext(exportSource, ctx);
   ctx.escHtml = ctx.window.EU_HTML.esc;
   vm.runInContext(section('  function hostedCopy(', '  const DEFAULT_OBSERVATION_WINDOW_HOURS'), ctx);
   vm.runInContext(section('  function exportDestinationLabel() {', '  // Consume the Copilot handoff config'), ctx);
@@ -52,7 +55,7 @@ function extractor(hosted, values = {}) {
   const c = page(hosted, {
     runModuleKeys: () => ['vitals'], cohortExportSupport: () => ({ ok: true }), abandonExtractionContinuity() {},
     repaint() {}, backgroundRepaint() {}, exScanResult: { db_key: 'eicu' }, selectedConceptPayload: () => ({}),
-    minuteModules: null,
+    minuteModules: null, exSource: null,
     exMaxPatients: 0, recommendedCohortContract: () => ({}), cohortContract: () => ({}), ...values,
   });
   c.window.EventSource = function EventSource() {};
@@ -273,7 +276,7 @@ function minuteScreen(getOptions = async () => coverage, storage = new Map(), st
       },
     },
   });
-  for (const script of [names, html, hostedCopy, studyContext, minuteSource, source, jobContinuity]) vm.runInContext(script, c);
+  for (const script of [names, html, hostedCopy, studyContext, minuteSource, exportSource, source, jobContinuity]) vm.runInContext(script, c);
   const screen = c.window.SCREENS.extraction;
   const render = () => screen.render();
   let markup;

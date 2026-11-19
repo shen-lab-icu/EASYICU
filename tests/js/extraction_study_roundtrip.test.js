@@ -84,7 +84,7 @@ const page = vm.createContext({
   location: { hash: '#extraction' },
 });
 page.window.EU_STUDY_CONTEXT = { registerSource(_route, callback) { page.supplier = callback; } };
-for (const file of ['database-names.js', 'html-escape.js', 'screens-extraction.js', 'screens-extraction-study-context.js']) {
+for (const file of ['database-names.js', 'html-escape.js', 'screens-extraction-export-source.js', 'screens-extraction.js', 'screens-extraction-study-context.js']) {
   vm.runInContext(fs.readFileSync(path.join(root, file), 'utf8'), page, { filename: file });
 }
 const copy = value => JSON.parse(JSON.stringify(value));
@@ -223,7 +223,7 @@ function runningOwnerPage(study) {
     document: { querySelector: () => null }, location: { hash: '#extraction' },
   });
   current.window.EU_STUDY_CONTEXT = { registerSource(_route, callback) { current.supplier = callback; } };
-  for (const file of ['database-names.js', 'html-escape.js', 'screens-extraction.js', 'screens-extraction-study-context.js', 'screens-extraction-embedded.js']) {
+  for (const file of ['database-names.js', 'html-escape.js', 'screens-extraction-export-source.js', 'screens-extraction.js', 'screens-extraction-study-context.js', 'screens-extraction-embedded.js']) {
     vm.runInContext(fs.readFileSync(path.join(root, file), 'utf8'), current, { filename: file });
   }
   current.running = false;
