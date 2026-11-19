@@ -3404,6 +3404,14 @@ class PiCopilotService(SkillAttachmentService, QuickAnswerService):
                 details={"session_id": record.session_id},
             )
 
+    def host_action_research_provider(
+        self, session_id: str, *, project_id: str, study_context_id: str
+    ) -> ResearchProviderBinding:
+        """The research model a host decision of this conversation runs on."""
+
+        self.host_action_session(session_id, project_id=project_id, study_context_id=study_context_id)
+        return self._scoped_record(session_id, project_id=project_id).research_provider
+
     @property
     def result_followup_database_owner(self):
         from easyicu.webserver.research_multi_followup import RegisteredDatabaseOwner

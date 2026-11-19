@@ -497,6 +497,34 @@ def jobs_agent_run(body: Dict[str, Any], request: Request) -> dict:
         raise logged_refusal(exc, body) from exc
 
 
+def _account_environment(
+    request: Request, host_action: Optional[HostActionRequest], body: Mapping[str, Any]
+) -> Mapping[str, str]:
+    """The browser's account; a Copilot decision runs on its conversation's research model.
+
+    The conversation owner holds the model the researcher selected, so a run
+    started from it uses that one selection.  Without a conversation, or with
+    another account bound to it, the account default stays.
+    """
+
+    environment = codex_account_sessions.environment_for_request(request)
+    if host_action is None:
+        return environment
+    from easyicu.webserver.pi_copilot.contracts import PiCopilotError
+
+    try:
+        selected = host_action_jobs.get_pi_copilot_service().host_action_research_provider(
+            host_action.session_id, project_id=host_action.project_id,
+            study_context_id=str(body.get("study_context_id") or "").strip(),
+        )
+    except PiCopilotError as exc:
+        raise HTTPException(status_code=exc.status_code, detail=exc.detail) from exc
+    binding = environment.get("EASYICU_CODEX_SESSION_SHA256")
+    if selected.credential_source != "codex_user_auth" or not binding or selected.account_session_sha256 != binding:
+        return environment
+    return codex_account_sessions.environment_for_binding(binding, model=selected.model)
+
+
 def _jobs_agent_run(body: Dict[str, Any], request: Request) -> dict:
     """HTTP adapter that resolves only the current browser's account authority."""
 
@@ -510,9 +538,7 @@ def _jobs_agent_run(body: Dict[str, Any], request: Request) -> dict:
     account_environment: Optional[Mapping[str, str]] = None
     if provider_adapter.is_user_account_provider(llm_provider):
         try:
-            account_environment = codex_account_sessions.environment_for_request(
-                request
-            )
+            account_environment = _account_environment(request, host_action, body)
         except codex_account_sessions.CodexAccountSessionError as exc:
             raise HTTPException(
                 status_code=400,
@@ -839,9 +865,7 @@ def jobs_agent_run_review(body: Dict[str, Any], request: Request) -> dict:
         str(pending.get("provider") or "")
     ):
         try:
-            account_environment = codex_account_sessions.environment_for_request(
-                request
-            )
+            account_environment = _account_environment(request, host_action, body)
         except codex_account_sessions.CodexAccountSessionError as exc:
             raise HTTPException(
                 status_code=400,
