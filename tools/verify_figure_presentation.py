@@ -1,12 +1,11 @@
 """Deterministic export QA using synthetic sealed tables, never a research run.
 
-Usage: PYTHONPATH=/absolute/checkout/src python tools/verify_figure_presentation.py --output /absolute/output
+Usage: python -m tools.verify_figure_presentation --output /absolute/output
 """
 
 from __future__ import annotations
 
 import argparse
-import hashlib
 import json
 from pathlib import Path
 
@@ -38,10 +37,10 @@ from easyicu.research_agent.schema import (
     CohortDescriptor,
     ResearchContext,
 )
-
-
-def sha(path):
-    return hashlib.sha256(path.read_bytes()).hexdigest()
+if __package__:
+    from ._figure_presentation_files import csv_hashes, export_hashes, sha
+else:
+    from _figure_presentation_files import csv_hashes, export_hashes, sha
 
 
 def panel(panel_id, role, chart, product, output, style):
@@ -182,7 +181,7 @@ def verify(output: Path):
             pd.DataFrame(distribution, columns=EXPOSURE_OUTCOME_DISTRIBUTION_COLUMNS),
         ),
     }
-    source_sha = {path.name: sha(path) for path in sources.glob("*.csv")}
+    source_sha = csv_hashes(sources)
     styles = {
         "paper": FigurePresentationSpec(
             layout="row",
@@ -330,21 +329,14 @@ def verify(output: Path):
     assert projections["paper"] == projections["presentation"], (
         "numeric projections or source data changed with presentation"
     )
-    assert source_sha == {path.name: sha(path) for path in sources.glob("*.csv")}, (
-        "sealed input bytes changed"
-    )
+    assert source_sha == csv_hashes(sources), "sealed input bytes changed"
     report = {
         "schema_version": "easyicu.figure_presentation_engineering_qa/1",
         "scope": "synthetic deterministic export QA; no research run or publication authority",
         "source_sha256": source_sha,
         "projection_sha256": projections,
         "layout_qa": qa,
-        "export_sha256": {
-            str(path.relative_to(output)): sha(path)
-            for name in styles
-            for path in (output / name).iterdir()
-            if path.suffix in {".svg", ".pdf", ".png"}
-        },
+        "export_sha256": export_hashes(output, styles),
     }
     (output / "verification.json").write_text(json.dumps(report, indent=2) + "\n")
     errors = [

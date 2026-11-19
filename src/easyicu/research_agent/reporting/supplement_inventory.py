@@ -13,6 +13,7 @@ from pathlib import Path
 from typing import Any, Mapping, Sequence
 
 from ..authority.evidence_store import EvidenceStore
+from ..authority.run_artifact_io import write_artifact_aliases
 from ..contracts.runtime import ValidationFinding
 
 
@@ -380,13 +381,13 @@ def write_supplement_inventory(
         generation_mode="system",
         on_sha_change="new_id",
     )
-    for record, alias in (
-        (json_record, "supplement_inventory.json"),
-        (md_record, "supplement_inventory.md"),
-    ):
-        source = Path(run_dir) / record.relative_path
-        destination = Path(run_dir) / alias
-        destination.write_bytes(source.read_bytes())
+    write_artifact_aliases(
+        Path(run_dir),
+        {
+            "supplement_inventory.json": json_record.relative_path,
+            "supplement_inventory.md": md_record.relative_path,
+        },
+    )
 
     findings: list[ValidationFinding] = []
     if missing_top_journal:

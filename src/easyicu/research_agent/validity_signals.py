@@ -35,18 +35,15 @@ weighted estimand) gate. Defensible analytical choices are never failed.
 
 from __future__ import annotations
 
-import csv
 import json
 import re
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Callable, Dict, List, Mapping, Optional, Sequence
 
-from .authority.runtime_artifacts import (
-    current_run_evidence_paths,
-    current_successful_step_records,
-    load_run_artifact_authority,
-)
+from .authority.run_artifact_io import find_artifacts as _find_artifacts
+from .authority.run_artifact_io import iter_step_summaries as _iter_step_summaries
+from .authority.run_artifact_io import read_csv_rows as _read_csv_rows
 
 __all__ = [
     "ValiditySignal",
@@ -73,56 +70,12 @@ class ValiditySignal:
 # ---------------------------------------------------------------------------
 
 
-def _iter_step_summaries(run_dir: Path) -> List[Mapping[str, object]]:
-    authority = load_run_artifact_authority(run_dir)
-    if authority is not None:
-        records = authority.get("per_step_records")
-        records = records if isinstance(records, list) else []
-        return [
-            summary
-            for record in current_successful_step_records(records)
-            if isinstance((summary := record.get("step_summary")), Mapping)
-        ]
-    out: List[Mapping[str, object]] = []
-    for pat in ("steps/*/outputs/step_summary.json", "steps/*/step_summary.json"):
-        for p in run_dir.glob(pat):
-            try:
-                doc = json.loads(p.read_text(encoding="utf-8"))
-            except Exception:
-                continue
-            if isinstance(doc, dict):
-                out.append(doc)
-    return out
-
-
 def _summary_get(summaries: Sequence[Mapping[str, object]], *keys: str) -> object:
     for doc in summaries:
         for k in keys:
             if k in doc and doc[k] is not None:
                 return doc[k]
     return None
-
-
-def _find_artifacts(run_dir: Path, *substrings: str) -> List[Path]:
-    subs = tuple(s.lower() for s in substrings)
-    hits: List[Path] = []
-    current_paths = current_run_evidence_paths(run_dir)
-    candidates = current_paths if current_paths is not None else run_dir.rglob("*")
-    for p in candidates:
-        if not p.is_file() or p.suffix.lower() not in {".csv", ".json"}:
-            continue
-        name = p.name.lower()
-        if any(s in name for s in subs):
-            hits.append(p)
-    return hits
-
-
-def _read_csv_rows(path: Path) -> List[Dict[str, str]]:
-    try:
-        with path.open(newline="", encoding="utf-8") as fh:
-            return list(csv.DictReader(fh))
-    except (OSError, ValueError):
-        return []
 
 
 def _floats(rows: Sequence[Mapping[str, str]], *col_aliases: str) -> List[float]:
