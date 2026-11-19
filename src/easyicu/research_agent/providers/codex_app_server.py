@@ -44,6 +44,74 @@ class CodexAppServerError(RuntimeError):
         super().__init__(message or self.code)
 
 
+#: Codex ``codexErrorInfo`` kinds that name a model-service or network fault,
+#: not a request the service rejected; the same ephemeral turn may be retried.
+_CODEX_TRANSIENT_TURN_KINDS = frozenset(
+    {
+        "httpConnectionFailed",
+        "internalServerError",
+        "responseStreamConnectionFailed",
+        "responseStreamDisconnected",
+        "serverOverloaded",
+    }
+)
+#: App Server boundary failures that recur on a fresh process when the account
+#: service or the network is briefly unavailable.
+_CODEX_TRANSIENT_REASONS = frozenset(
+    {"codex_auth_app_server_exited", "codex_auth_app_server_request_failed"}
+)
+CODEX_TRANSIENT_BACKOFF_SECONDS = (2.0, 6.0)
+_SAFE_CODEX_TOKEN_RE = re.compile(r"[A-Za-z][A-Za-z0-9_]{0,63}")
+
+
+def codex_turn_failure(error: Any, status: str) -> Exception:
+    """Type one failed turn with its closed kind, never its free text."""
+
+    info = error.get("codexErrorInfo") if isinstance(error, Mapping) else None
+    if isinstance(info, Mapping) and len(info) == 1:
+        info = next(iter(info))
+    kind = str(info or status or "unknown")
+    diagnostic: dict[str, Any] = {
+        "error_kind": kind if _SAFE_CODEX_TOKEN_RE.fullmatch(kind) else "unknown"
+    }
+    message = error.get("message") if isinstance(error, Mapping) else None
+    try:
+        body = json.loads(message) if isinstance(message, str) else None
+    except ValueError:
+        body = None
+    if isinstance(body, Mapping):
+        provider_error = body.get("error")
+        code = provider_error.get("code") if isinstance(provider_error, Mapping) else None
+        if isinstance(code, str) and _SAFE_CODEX_TOKEN_RE.fullmatch(code):
+            diagnostic["provider_error_code"] = code
+        http_status = body.get("status")
+        if type(http_status) is int and 100 <= http_status <= 599:
+            diagnostic["http_status"] = http_status
+    failure = CodexAppServerError(
+        "codex_app_server_turn_failed",
+        "codex_app_server_turn_failed:" + diagnostic["error_kind"],
+    )
+    failure.easyicu_safe_diagnostic.update(diagnostic)
+    return failure
+
+
+def codex_diagnostic_is_transient(diagnostic: Mapping[str, Any]) -> bool:
+    """Whether a typed App Server diagnostic names a retryable service fault."""
+
+    reason = diagnostic.get("reason_code")
+    if reason in _CODEX_TRANSIENT_REASONS:
+        return True
+    return (
+        reason == "codex_app_server_turn_failed"
+        and diagnostic.get("error_kind") in _CODEX_TRANSIENT_TURN_KINDS
+    )
+
+
+def codex_failure_is_transient(exc: BaseException) -> bool:
+    diagnostic = getattr(exc, "easyicu_safe_diagnostic", None)
+    return isinstance(diagnostic, Mapping) and codex_diagnostic_is_transient(diagnostic)
+
+
 def _resolved_executable(path: Path, *, error_code: str) -> str:
     try:
         resolved = path.resolve(strict=True)

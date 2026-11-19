@@ -9,6 +9,7 @@ artifacts; it never computes a scientific result itself.
 
 from __future__ import annotations
 
+from easyicu.research_agent.providers.codex_app_server import codex_diagnostic_is_transient
 from easyicu.runtime.platform_compat import SecureDirectory
 
 import base64
@@ -811,6 +812,12 @@ def _pipeline_failure_code(
         "codex_auth_notification_timeout",
     }:
         return "research_pipeline_provider_timeout"
+    if typed_failure.get(
+        "owner"
+    ) == "easyicu.providers.codex_app_server_v1" and codex_diagnostic_is_transient(typed_failure):
+        # Retries were exhausted on a model-service or network fault: the
+        # clinician can retry, there is nothing to send to support.
+        return "research_pipeline_planner_provider_unavailable"
     if typed_failure.get("owner") in {
         "easyicu.planning.progressive_compiler_v1",
         _TARGET_TRIAL_CONFIRMATION_OWNER,
@@ -1084,6 +1091,7 @@ _SAFE_PLANNER_BUDGET_REASONS = frozenset(
 )
 _SAFE_CODEX_APP_SERVER_REASONS = frozenset(
     {
+        "codex_app_server_turn_failed",
         "codex_auth_app_server_exited",
         "codex_auth_app_server_request_failed",
         "codex_auth_app_server_timeout",
@@ -1376,10 +1384,20 @@ def _safe_pipeline_typed_failure(exc: BaseException) -> Dict[str, Any]:
         if owner == "easyicu.providers.codex_app_server_v1":
             reason_code = raw.get("reason_code")
             if reason_code in _SAFE_CODEX_APP_SERVER_REASONS:
-                return {
+                projected = {
                     "owner": owner,
                     "reason_code": reason_code,
                 }
+                # The service's closed error kind and code stay readable in
+                # the receipt; its free-text message never crosses here.
+                for key in ("error_kind", "provider_error_code"):
+                    value = raw.get(key)
+                    if isinstance(value, str) and re.fullmatch(r"[A-Za-z][A-Za-z0-9_]{0,63}", value):
+                        projected[key] = value
+                http_status = raw.get("http_status")
+                if type(http_status) is int and 100 <= http_status <= 599:
+                    projected["http_status"] = http_status
+                return projected
         if owner == _EXECUTION_RUNTIME_DIAGNOSTIC_OWNER:
             reason_code = raw.get("reason_code")
             runner_kind = raw.get("runner_kind")

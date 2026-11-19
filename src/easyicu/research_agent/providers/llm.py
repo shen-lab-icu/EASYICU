@@ -938,6 +938,7 @@ class CodexAppServerLLMClient:
         self.last_usage: Optional[Dict[str, int]] = None
         self.last_finish_reason: Optional[str] = None
         self.last_model: Optional[str] = None
+        self.last_transport_retries = 0
         self.name = "codex-app-server"
         from .client_trust import _mark_reviewed_transport_constructed
 
@@ -985,10 +986,54 @@ class CodexAppServerLLMClient:
         structured_output: Optional[StructuredOutputRequest] = None,
         **_ignored: Any,
     ) -> tuple[str, Optional[Dict[str, int]]]:
+        """Run one ask, retrying only transient model-service failures.
+
+        Each turn is an ephemeral thread with no tools, so a retry repeats the
+        same idempotent request; every attempt that reaches ``turn/start`` is
+        charged to the hard stop-loss by the attempt itself.
+        """
+
+        from .codex_app_server import (
+            CODEX_TRANSIENT_BACKOFF_SECONDS,
+            CodexAppServerError,
+            codex_failure_is_transient,
+        )
+
+        for attempt, delay in enumerate((*CODEX_TRANSIENT_BACKOFF_SECONDS, None)):
+            try:
+                return self._complete_with_usage_once(
+                    messages,
+                    max_tokens=max_tokens,
+                    temperature=temperature,
+                    seed=seed,
+                    top_p=top_p,
+                    structured_output=structured_output,
+                )
+            except CodexAppServerError as exc:
+                if delay is None or not codex_failure_is_transient(exc):
+                    raise
+                self.last_transport_retries = attempt + 1
+                time.sleep(delay)
+        raise AssertionError("unreachable")
+
+    def _complete_with_usage_once(
+        self,
+        messages: Sequence[LLMMessage],
+        *,
+        max_tokens: int = 2048,
+        temperature: float = 0.2,
+        seed: Optional[int] = None,
+        top_p: Optional[float] = None,
+        structured_output: Optional[StructuredOutputRequest] = None,
+    ) -> tuple[str, Optional[Dict[str, int]]]:
         del max_tokens, temperature, seed, top_p
         import tempfile
 
-        from .codex_app_server import CodexAppServerError, CodexAppServerRuntime
+        from .codex_app_server import (
+            CodexAppServerError,
+            CodexAppServerRuntime,
+            codex_turn_failure,
+        )
 
         self._require_outbound_authorization()
         if structured_output is not None and not isinstance(
@@ -1104,13 +1149,8 @@ class CodexAppServerLLMClient:
                 completed_turn = (completed.get("params") or {}).get("turn") or {}
                 status = str(completed_turn.get("status") or "")
                 if status != "completed":
-                    error = completed_turn.get("error") or {}
-                    error_kind = error.get("codexErrorInfo") if isinstance(error, Mapping) else None
                     self.last_finish_reason = "error"
-                    raise RuntimeError(
-                        "codex_app_server_turn_failed:"
-                        + str(error_kind or status or "unknown")[:120]
-                    )
+                    raise codex_turn_failure(completed_turn.get("error"), status)
                 text = ""
                 for item in completed_turn.get("items") or []:
                     if isinstance(item, Mapping) and item.get("type") == "agentMessage":
