@@ -1053,6 +1053,40 @@ def _one_resolver_per_call(function):
 
 
 @_one_resolver_per_call
+
+def _memory_policy_isolates_batches(total_patients: Optional[int], *, platform: Optional[str] = None) -> bool:
+    """Whether the RAM-based rule runs patient batches in worker processes.
+
+    Explicit ``EASYICU_FORCE_INPROCESS_BATCH`` / ``EASYICU_FORCE_SUBPROCESS_BATCH``
+    win. On macOS the rule keeps batches in-process: a forked worker inherits
+    DuckDB without its scheduler threads and spins forever (v0.1.3 RC, S1458),
+    and the frozen desktop app cannot start a fresh interpreter instead.
+    """
+    import sys
+
+    if os.environ.get("EASYICU_FORCE_INPROCESS_BATCH"):
+        return False
+    if os.environ.get("EASYICU_FORCE_SUBPROCESS_BATCH"):
+        return True
+    if (sys.platform if platform is None else platform) == "darwin":
+        return False
+    try:
+        import psutil
+
+        total_mb = psutil.virtual_memory().total / (1024 * 1024)
+    except Exception:
+        from ..runtime.memory_manager import get_available_memory_mb
+
+        total_mb = get_available_memory_mb()  # 降级
+    if total_mb < 12 * 1024:
+        return True
+    if total_patients is None:
+        return False
+    if total_mb < 32 * 1024:
+        return total_patients > 60000
+    return total_patients > 120000
+
+
 def load_concepts(
     concepts: Union[str, List[str]],
     patient_ids: Optional[Union[List, Dict]] = None,
@@ -1528,7 +1562,6 @@ def load_concepts(
     from ..runtime.memory_manager import (
         auto_batch_size,
         estimate_memory_mb,
-        get_available_memory_mb,
         inprocess_batch_load,
         inprocess_batch_load_streaming,
         subprocess_batch_load,
@@ -1703,27 +1736,7 @@ def load_concepts(
     # These overrides apply to the RAM-based decision. The one-shot budget
     # above and special-concept routing below can require subprocesses.
     if not use_subprocess and effective_batch_size is not None:
-        if os.environ.get("EASYICU_FORCE_INPROCESS_BATCH"):
-            pass
-        elif os.environ.get("EASYICU_FORCE_SUBPROCESS_BATCH"):
-            use_subprocess = True
-        else:
-            try:
-                import psutil
-
-                _total_mb = psutil.virtual_memory().total / (1024 * 1024)
-            except Exception:
-                _total_mb = get_available_memory_mb()  # 降级
-            if _total_mb < 12 * 1024:
-                use_subprocess = True
-            elif (
-                _total_mb < 32 * 1024
-                and _total_patients is not None
-                and _total_patients > 60000
-            ):
-                use_subprocess = True
-            elif _total_patients is not None and _total_patients > 120000:
-                use_subprocess = True
+        use_subprocess = _memory_policy_isolates_batches(_total_patients)
 
     # 🔧 FIX Bug 54/63: daemon 子进程的分批隔离
     # Webapp 用 daemon=True 启动模块子进程以隔离内存碎片。

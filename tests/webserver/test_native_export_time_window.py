@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import os
+import sys
 from contextlib import nullcontext
 from pathlib import Path
 from types import SimpleNamespace
@@ -21,12 +22,22 @@ class ExportJob:
         pass
 
 
-@pytest.mark.skipif(not hasattr(os, "fork"), reason="needs a forked worker to inject an exit")
-@pytest.mark.parametrize("worker_exit", [0, 9], ids=["clean", "exit-9"])
-def test_hosted_web_export_requires_complete_nested_los_batches(tmp_path, monkeypatch, worker_exit):
+# A forked worker is how the exit is injected. macOS keeps these batches
+# in-process (S1458: a forked worker spun in DuckDB); the macos case checks
+# that the same export completes there without a worker.
+_LINUX_FORK = pytest.mark.skipif(not hasattr(os, "fork") or sys.platform == "darwin",
+                                 reason="isolated nested batches fork on Linux only")
+
+
+@pytest.mark.parametrize("worker_exit,platform", [
+    pytest.param(0, "linux", id="clean", marks=_LINUX_FORK), pytest.param(9, "linux", id="exit-9", marks=_LINUX_FORK),
+    pytest.param(0, "darwin", id="macos"),
+])
+def test_hosted_web_export_requires_complete_nested_los_batches(tmp_path, monkeypatch, worker_exit, platform):
     import psutil
 
     from easyicu import api
+    from easyicu.api import concepts as concept_api
     from easyicu.api import extraction
     from easyicu.concept.errors import ConceptExtractionUnavailable
     from easyicu.runtime import memory_manager
@@ -69,6 +80,10 @@ def test_hosted_web_export_requires_complete_nested_los_batches(tmp_path, monkey
     monkeypatch.delenv("EASYICU_FORCE_SUBPROCESS_BATCH", raising=False)
     memory = psutil.virtual_memory()._replace(total=8 * 1024**3, available=3 * 1024**3)
     monkeypatch.setattr(psutil, "virtual_memory", lambda: memory)
+    if platform == "darwin":
+        policy = concept_api._memory_policy_isolates_batches
+        monkeypatch.setattr(concept_api, "_memory_policy_isolates_batches",
+                            lambda total, **_: policy(total, platform="darwin"))
     assert api.plan_extraction_resources("miiv", ["demographics"], cohort_size).mode == "one_shot"
     plan = api.plan_extraction_resources("miiv", ["vitals"], cohort_size)
     assert plan.reason_code == "measured_profile_insufficient_memory"
@@ -154,10 +169,10 @@ def test_hosted_web_export_requires_complete_nested_los_batches(tmp_path, monkey
         ]
     else:
         assert job.status == "done", job.error
-        assert attempts == [
+        assert attempts == ([] if platform == "darwin" else [
             (["los_icu"], 1, batch_size, 0), (["los_icu"], batch_size + 1, cohort_size, 0),
             (["hr"], 1, batch_size, 0), (["hr"], batch_size + 1, cohort_size, 0),
-        ]
+        ])
         assert bound_calls == [expected]
         demographics = pd.read_parquet(out / "demographics.parquet").set_index("stay_id")
         assert len(demographics) == cohort_size
