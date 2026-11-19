@@ -41,13 +41,15 @@ function conversation(ideaExplorationOpen) {
   const card = modules.require('confirmation').create({ tr, esc: window.EU_HTML.esc, iconHtml: () => '',
     resourceButton: () => '', sessionIsStale: () => false, workflow: () => workflow,
     session: () => session, busy: () => busy });
-  return { actions, card, started };
+  return { actions, card, started, busy: () => busy };
 }
 
 test('mined ideas awaiting a choice hold the automatic plan and keep its button', async () => {
-  const { actions, card, started } = conversation(true);
+  const { actions, card, started, busy } = conversation(true);
   assert.equal(await actions.continueSystemOwnedPlanProgression(), false);
   assert.equal(started.length, 0);
+  // The held conversation stays usable: the composer is not locked as busy.
+  assert.equal(busy(), false);
   const html = card.workflowConfirmationHtml();
   assert.match(html, /data-gpi-confirm-action>生成候选计划</);
   await actions.confirmWorkflow({ code: 'provider_ready_to_generate_plan' });
@@ -55,7 +57,7 @@ test('mined ideas awaiting a choice hold the automatic plan and keep its button'
   assert.equal(started[0].study_context_id, 'study-synthetic');
 });
 
-test('a study question with an outcome still starts its plan automatically', async () => {
+test('an accepted handoff or a named outcome (flag false) resumes the automatic plan', async () => {
   const { actions, started } = conversation(false);
   assert.equal(await actions.continueSystemOwnedPlanProgression(), true);
   assert.equal(started.length, 1);

@@ -1100,6 +1100,18 @@ class PiCopilotService(SkillAttachmentService, QuickAnswerService):
             )
         )
 
+    def _idea_exploration_open(self, record: PiSessionRecord, turns: Any) -> bool:
+        """Whether mined ideas in a research conversation still await a choice."""
+
+        context_id = str(record.binding.study_context_id or "").strip()
+        if record.agent_mode != "research" or not context_id:
+            return False
+        try:
+            context = study_contexts.get_context(context_id)
+        except study_contexts.StudyContextError:
+            context = None
+        return exploration_open(turns, context)
+
     def _cohort_eligibility_selection_projection(
         self,
         record: PiSessionRecord,
@@ -5713,9 +5725,7 @@ class PiCopilotService(SkillAttachmentService, QuickAnswerService):
             ),
             "quick_answers": self._quick_attachments(record, replay_turns) if include_replay else [],
             # Mined ideas await the researcher's choice: no automatic plan.
-            "idea_exploration_open": include_replay and exploration_open(
-                replay_turns, study_contexts.get_context(str(record.binding.study_context_id or "")),
-            ),
+            "idea_exploration_open": include_replay and self._idea_exploration_open(record, replay_turns),
             "transcript_page": (
                 dict(state.get("transcript_page") or {})
                 if isinstance(state.get("transcript_page"), Mapping)
