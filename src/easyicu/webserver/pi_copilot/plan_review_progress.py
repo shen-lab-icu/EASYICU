@@ -74,9 +74,12 @@ AGENT_PLAN_CONFIGURATION_CHOICE = ("agent_plan_configuration", "typed_runtime_pr
 # What a raw official-Demo reconfirmation writes besides the signed choice
 # (demo_planning_source.bind_demo_planning_source): the raw source is to be
 # prepared again, so extraction is no longer complete. It carries no exposure
-# group, plan revision or analysis coordinate. Anything else it changes (a
-# drafted cohort scope, another source) is outside this allowance.
-_RECONFIRMATION_CONFIRMATIONS = {"extraction_completed": (True, False)}
+# group, plan revision or analysis coordinate. A compile left the flag True
+# (the association and survival routes), as it was, or absent (the trajectory
+# route keeps it). Anything else the reconfirmation changes (a drafted cohort
+# scope, another source) is outside this allowance.
+_RECONFIRMATION_FIELD = "extraction_completed"
+_ABSENT = object()
 
 
 def _one_reconfirmation_after(
@@ -87,7 +90,7 @@ def _one_reconfirmation_after(
     The study keeps no per-revision field history, so this accepts one case
     only: the study is one revision after the receipt, its current choice
     resolves and was signed at exactly that revision, and undoing the
-    reconfirmation's allowed fields gives back the digest the compile wrote.
+    reconfirmation's allowed field gives back the digest the compile wrote.
     """
 
     from .demo_planning_authority import signed_choice_revision
@@ -98,22 +101,19 @@ def _one_reconfirmation_after(
     if signed_choice_revision(study) != revision:
         return False
     confirmations = study.get("confirmations")
-    if not isinstance(confirmations, Mapping):
+    if not isinstance(confirmations, Mapping) or confirmations.get(_RECONFIRMATION_FIELD) is not False:
         return False
-    before = dict(confirmations)
-    for key, (compiled, reconfirmed) in _RECONFIRMATION_CONFIRMATIONS.items():
-        if confirmations.get(key) is not reconfirmed:
-            return False
-        before[key] = compiled
-    compiled_study = {
-        **{key: value for key, value in study.items() if key != "demo_planning_authority_ref"},
-        "confirmations": before,
-        "revision": progress.revision,
-    }
-    return (
-        study_contexts.scientific_configuration_sha256(compiled_study)
-        == progress.current_digest
-    )
+    rest = {key: value for key, value in study.items() if key != "demo_planning_authority_ref"}
+    for compiled in (True, False, _ABSENT):
+        before = {key: value for key, value in confirmations.items() if key != _RECONFIRMATION_FIELD}
+        if compiled is not _ABSENT:
+            before[_RECONFIRMATION_FIELD] = compiled
+        digest = study_contexts.scientific_configuration_sha256(
+            {**rest, "confirmations": before, "revision": progress.revision}
+        )
+        if digest == progress.current_digest:
+            return True
+    return False
 
 
 def _compile_receipt(study: Mapping[str, Any]) -> ReviewChoiceProgress | None:
@@ -148,28 +148,46 @@ def compiled_configuration_progress(
     return None
 
 
+def recorded_compiled_source_run_id(review: Mapping[str, Any]) -> str:
+    """The compiled candidate a reviewed run's launch recorded it continues.
+
+    Read from the review's run_context.json; a run made before the record
+    existed (v0.1.0 and earlier), or any value that is not a string, reads as
+    none, so that review is not treated as a continuation.
+    """
+
+    payloads = review.get("artifact_payloads") if isinstance(review, Mapping) else None
+    context = payloads.get("run_context.json") if isinstance(payloads, Mapping) else None
+    value = context.get("compiled_configuration_source_run_id") if isinstance(context, Mapping) else None
+    return value if isinstance(value, str) else ""
+
+
 def planned_on_compiled_configuration(
-    study: Mapping[str, Any], run: Mapping[str, Any]
+    study: Mapping[str, Any], run: Mapping[str, Any], *, compiled_source_run_id: str
 ) -> bool:
-    """Whether ``run`` was planned on the configuration the host compiler wrote.
+    """Whether ``run`` continues the candidate the host compiler last projected.
 
     The compiler projects one reviewed plan's runtime gaps into the study and
     a fresh plan follows. When that fresh plan is reviewed with runtime gaps
     again, compiling once more only rewrites the study from another plan's
-    wording and plans again (UX leg 3 en/zh, 2026-11-19, B10: each round also
-    ended a signed raw-Demo choice, so the loop never converged). Such a run
-    goes to its review instead. A run planned after exactly one signed
-    reconfirmation of that configuration is the same lineage. Read only; a
-    missing or unrelated receipt is not this fact.
+    wording and plans again (UX leg 3 en/zh, 2026-11-19, B10). The fresh
+    plan's launch records the compiled candidate it continued
+    (``compiled_source_run_id``, from run_context.json) only when
+    ``compiled_configuration_progress`` held then; job lifecycle writes since
+    then do not matter, a changed configuration does. A plan launched
+    without that record (its lineage was broken) may be compiled once more.
+    Read only.
     """
 
     progress = _compile_receipt(study)
-    if progress is None or progress.run_id == run.get("run_id"):
-        return False
-    digest = run.get("scientific_configuration_sha256")
-    return digest == progress.current_digest or (
-        _one_reconfirmation_after(study, progress)
-        and digest == study_contexts.scientific_configuration_sha256(study)
+    return bool(
+        progress is not None
+        and compiled_source_run_id
+        and compiled_source_run_id == progress.run_id
+        # The compiled run itself was planned before the compile wrote: its
+        # digest is not the study's.
+        and run.get("scientific_configuration_sha256")
+        == study_contexts.scientific_configuration_sha256(study)
     )
 
 

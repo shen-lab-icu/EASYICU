@@ -1740,7 +1740,9 @@ def _enrich_plan_review(
         # configuration that still has runtime gaps goes to its review (B10).
         and not (
             isinstance(run, Mapping)
-            and plan_review_progress.planned_on_compiled_configuration(study, run)
+            and plan_review_progress.planned_on_compiled_configuration(
+                study, run, compiled_source_run_id=plan_review_progress.recorded_compiled_source_run_id(review),
+            )
         )
         and plan_decisions.agent_plan_configuration_available(
             study=study,

@@ -199,6 +199,9 @@ class PreparedLaunchExecution:
     plan_change_request: Optional[PlanChangeRequest] = None
     development_resume_scope: Optional[_DevelopmentResumeLaunchScope] = None
     runner_kind: str = "docker"
+    # The compiled candidate this fresh plan continues (B10): recorded in the
+    # run's context so its review does not offer the same compile again.
+    compiled_configuration_source_run_id: str = ""
 
 
 @dataclass(frozen=True)
@@ -724,6 +727,7 @@ def _prepare_launch_execution(
             "New plan amendments require fresh candidate planning, not analysis or checkpoint reuse.",
         )
     bound_change_request = request.plan_change_request
+    compiled_source_run_id = ""
     if (
         bound_change_request is None and scientific.metadata_only_planning
         and not selected_resume_source and not request.plan_revision_source_run_id
@@ -734,6 +738,8 @@ def _prepare_launch_execution(
         bound_change_request = compiled_configuration_plan_change(
             study=scientific.study, project_root=project_root,
         )
+        if bound_change_request is not None:
+            compiled_source_run_id = bound_change_request.source_run_id
     if bound_change_request is not None:
         from easyicu.webserver.plan_change_requirements import bind_plan_change_requirements
 
@@ -911,6 +917,7 @@ def _prepare_launch_execution(
             runner_kind=selected_runner_kind,
             plan_change_request=bound_change_request,
             development_resume_scope=development_resume_scope,
+            compiled_configuration_source_run_id=compiled_source_run_id,
         ),
     )
 

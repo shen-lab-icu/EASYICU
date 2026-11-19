@@ -404,6 +404,8 @@ def test_agent_plan_configuration_is_compiled_without_a_user_choice(
         lambda *a: {
             "artifact_payloads": {
                 "agent_plan.json": plan,
+                # The fresh plan's launch recorded the compiled candidate it continues.
+                "run_context.json": {"compiled_configuration_source_run_id": "review-run"},
                 "scientific_plan_review.json": {
                     "facts": {
                         "remediation_buckets": {
@@ -473,10 +475,13 @@ def test_agent_plan_configuration_is_compiled_without_a_user_choice(
         )
     assert raised.value.code == "agent_plan_configuration_already_applied"
     assert seen_patch == {}
-    assert owner.planned_on_compiled_configuration(current, fresh)
-    # Another configuration, or the compiled run itself, is not that fact.
-    assert not owner.planned_on_compiled_configuration(current, {**fresh, "scientific_configuration_sha256": "c" * 64})
-    assert not owner.planned_on_compiled_configuration(current, run)
+    assert owner.planned_on_compiled_configuration(current, fresh, compiled_source_run_id="review-run")
+    # Without that launch record, on another configuration, or for the compiled
+    # run itself, the compile stays available (Carbon b10 F1).
+    assert not owner.planned_on_compiled_configuration(current, fresh, compiled_source_run_id="")
+    assert not owner.planned_on_compiled_configuration(
+        current, {**fresh, "scientific_configuration_sha256": "c" * 64}, compiled_source_run_id="review-run")
+    assert not owner.planned_on_compiled_configuration(current, run, compiled_source_run_id="review-run")
 
 
 @pytest.mark.parametrize("first_stay_proven,raw_demo", [(True, False), (False, False), (True, True)])
@@ -593,3 +598,27 @@ def test_a_clustering_plan_gets_the_first_stay_population_only_with_its_coordina
     assert written[0]["cohort"] == {"preset": "all_icu", "exclude_readmissions": True}
     assert written[0]["analysis_design"] == {"analysis_unit": "icu_stay", "variance_estimator": "model_based"}
     assert current["question"] == before["question"]
+
+
+@pytest.mark.parametrize("compiled_extraction", [True, False, None], ids=["marked", "kept_false", "absent"])
+@pytest.mark.parametrize("also_changed", [False, True], ids=["reconfirmation_only", "another_confirmation"])
+def test_one_signed_reconfirmation_is_recognised_whatever_the_compile_left(
+    states, monkeypatch, compiled_extraction, also_changed
+):
+    # Carbon b10 F2: the association route marks extraction complete, the
+    # trajectory route keeps what the study had. The reconfirmation sets it
+    # False either way; only that one field may differ from the compile.
+    from easyicu.webserver.pi_copilot import demo_planning_authority
+
+    before, after, run = states
+    confirmations = {"agent_plan_configuration_compiled": True}
+    if compiled_extraction is not None:
+        confirmations["extraction_completed"] = compiled_extraction
+    after = {**after, "confirmations": confirmations}
+    owner.record_choice(before=before, after=after, run=run,
+                        decision_code="agent_plan_configuration", option_id="typed_runtime_projection")
+    reconfirmed = {**after, "revision": after["revision"] + 1, "demo_planning_authority_ref": "d" * 64,
+                   "confirmations": {**confirmations, "extraction_completed": False,
+                                     **({"outcome": True} if also_changed else {})}}
+    monkeypatch.setattr(demo_planning_authority, "signed_choice_revision", lambda study: reconfirmed["revision"])
+    assert (owner.compiled_configuration_progress(reconfirmed, run) is not None) is (not also_changed)

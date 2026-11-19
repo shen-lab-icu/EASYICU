@@ -459,8 +459,11 @@ def test_public_preparation_interface_does_not_expose_primitive_operations() -> 
     assert signature.parameters["_deferred_stage"].default is None
     assert len(inspect.signature(PreparedScientificLaunch).parameters) < 22
     assert len(inspect.signature(PreparedLaunchAuthority).parameters) == 6
-    assert len(inspect.signature(PreparedLaunchExecution).parameters) == 12
+    assert len(inspect.signature(PreparedLaunchExecution).parameters) == 13
     assert "runner_kind" in inspect.signature(PreparedLaunchExecution).parameters
+    # B10 (S1480): the compiled candidate a fresh plan continues is decided by
+    # preparation and recorded by the runner, never chosen by the adapter.
+    assert "compiled_configuration_source_run_id" in inspect.signature(PreparedLaunchExecution).parameters
     # Restored mode and planning constraint travel as one immutable owner value,
     # not additional adapter-controlled primitive arguments.
     assert "development_resume_scope" in inspect.signature(PreparedLaunchExecution).parameters

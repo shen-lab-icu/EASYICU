@@ -140,7 +140,7 @@ for (const [after, starts] of [[CODE, false], ['plan_configuration_superseded', 
 // fresh plan repeated without end. The host compiles a configuration once;
 // the plan made on it is reviewed with its own action, which starts nothing
 // without new planner repairs. Counted from the compile: one fresh plan.
-test('after one compile and its fresh plan, the same runtime gaps start no further plan', async () => {
+for (const review of ['plan_scientific_changes_required', 'plan_execution_upgrade_required']) test(`after one compile and its fresh plan, ${review} starts no further plan`, async () => {
   const ui = screen();
   ui.state.session.binding.run_id = 'run-1';
   ui.state.workflow = { next_action_code: 'agent_plan_configuration_required' };
@@ -149,7 +149,7 @@ test('after one compile and its fresh plan, the same runtime gaps start no furth
   // The fresh plan's review keeps the runtime gaps (the host does not
   // compile its own configuration again) and asks for no planner repair.
   ui.state.session.binding.run_id = 'run-2';
-  ui.state.workflow = { next_action_code: 'plan_scientific_changes_required', plan_review_summary: {
+  ui.state.workflow = { next_action_code: review, plan_review_summary: {
     authorization_questions: [], remediation_buckets: { agent_plan_revision: [],
       runtime_capability: ['POST_BASELINE_EXPOSURE_TIMING_NOT_CLOSED'] } } };
   for (let poll = 0; poll < 3; poll++) await ui.actions.continueSystemOwnedPlanProgression();
@@ -161,7 +161,7 @@ test('after one compile and its fresh plan, the same runtime gaps start no furth
 // S1474: the raw-Demo sequence counted end to end. The compile is automatic,
 // the reconfirmation is the researcher's click and starts one plan, and that
 // plan's review with the same runtime gaps starts nothing more.
-test('compile, reconfirm click, one plan, then nothing more', async () => {
+for (const review of ['plan_scientific_changes_required', 'plan_execution_upgrade_required']) test(`compile, reconfirm click, one plan, then ${review} starts nothing more`, async () => {
   const ui = screen();
   ui.state.session.binding.run_id = 'run-1';
   ui.state.workflow = { next_action_code: 'agent_plan_configuration_required' };
@@ -176,7 +176,7 @@ test('compile, reconfirm click, one plan, then nothing more', async () => {
   await ui.actions.confirmWorkflow(ui.confirmation.workflowConfirmation());
   assert.equal(count('plan'), 1);
   ui.state.session.binding.run_id = 'run-2';
-  ui.state.workflow = { next_action_code: 'plan_scientific_changes_required', plan_review_summary: {
+  ui.state.workflow = { next_action_code: review, plan_review_summary: {
     authorization_questions: [], remediation_buckets: { agent_plan_revision: [],
       runtime_capability: ['POST_BASELINE_EXPOSURE_TIMING_NOT_CLOSED'] } } };
   for (let poll = 0; poll < 3; poll++) await ui.actions.continueSystemOwnedPlanProgression();

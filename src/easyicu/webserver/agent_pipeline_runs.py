@@ -5042,6 +5042,7 @@ def _write_projection(
     blocked_reason: Optional[str] = None,
     plan_revision_source_run_id: str = "",
     plan_repair: Mapping[str, Any] | None = None,
+    compiled_configuration_source_run_id: str = "",
 ) -> Dict[str, Any]:
     wrapper_dir.mkdir(parents=True, exist_ok=True)
     run_id = str(
@@ -5116,6 +5117,8 @@ def _write_projection(
         "plan_revision_source_run_id": _clean_text(
             plan_revision_source_run_id, 160
         ),
+        **({"compiled_configuration_source_run_id": _clean_text(compiled_configuration_source_run_id, 160)}
+           if compiled_configuration_source_run_id else {}),
     }
     cohort_summary = {
         "summary": run_context["summary"],
@@ -8040,6 +8043,7 @@ def make_research_pipeline_run_runner(
                     run_dir=None,
                     blocked_reason="data_foundation_blocked",
                     plan_revision_source_run_id=source_run_id,
+                    compiled_configuration_source_run_id=execution.compiled_configuration_source_run_id,
                 )
             resolved_primary_exposure = primary_exposure
             if grouped_continuation is not None:
@@ -8813,6 +8817,7 @@ def make_research_pipeline_run_runner(
                     run_dir=run_dir,
                     pending=outcome,
                     plan_revision_source_run_id=source_run_id,
+                    compiled_configuration_source_run_id=execution.compiled_configuration_source_run_id,
                     **({"plan_repair": plan_repair} if plan_repair is not None else {}),
                 )
             projection = _write_terminal_projection(
@@ -8824,6 +8829,7 @@ def make_research_pipeline_run_runner(
                 acquisition=acquisition,
                 run_dir=Path(outcome.manifest_path).parent,
                 plan_revision_source_run_id=source_run_id,
+                compiled_configuration_source_run_id=execution.compiled_configuration_source_run_id,
             )
             _cleanup_recovery_after_projection(
                 wrapper_dir=wrapper_dir,

@@ -130,13 +130,46 @@ def test_one_reconfirmation_after_a_compile_keeps_the_compiled_lineage(choice, c
     assert workflow.next_action_code in {"provider_ready_to_generate_plan", "plan_configuration_superseded"}
     assert {stage.id: stage.status for stage in workflow.stages}["extraction"] == "blocked"
     assert study_contexts.scientific_configuration_sha256(study) != study_contexts.scientific_configuration_sha256(compiled)
-    fresh = {"run_id": "run-fresh", "scientific_configuration_sha256": study_contexts.scientific_configuration_sha256(study)}
+    # The fresh plan's launch reads the lineage here and records it.
     assert plan_review_progress.compiled_configuration_progress(study, reviewed) is not None
-    assert plan_review_progress.planned_on_compiled_configuration(study, fresh)
+    fresh = {"run_id": "run-fresh", "scientific_configuration_sha256": study_contexts.scientific_configuration_sha256(study)}
 
+    # Its job then marks the study twice (start and finish); the review comes after.
+    study_contexts.upsert_context({"id": chosen["id"], "active_job_id": "job-fresh"}, lifecycle_write=True)
+    study_contexts.clear_active_job_if(chosen["id"], "job-fresh", current_stage="review", last_route="agent")
+    reviewed_study = study_contexts.get_context(chosen["id"])
+    assert reviewed_study["revision"] == study["revision"] + 2
+    assert plan_review_progress.planned_on_compiled_configuration(
+        reviewed_study, fresh, compiled_source_run_id="run-compiled")
+    _assert_compile_refused(choice, reviewed_study, fresh)
+
+    # A write before the launch that the allowance does not cover breaks the
+    # lineage: that launch records nothing and the compile stays available.
     renamed = study_contexts.upsert_context({"id": chosen["id"], "title": "Renamed project"})
     assert plan_review_progress.compiled_configuration_progress(renamed, reviewed) is None
-    assert not plan_review_progress.planned_on_compiled_configuration(renamed, fresh)
+    assert not plan_review_progress.planned_on_compiled_configuration(renamed, fresh, compiled_source_run_id="")
+
+
+def _assert_compile_refused(choice, study, fresh):
+    # Carbon b10 F2: the service itself refuses, before any source read or write.
+    from easyicu.webserver.pi_copilot import service as service_module
+
+    choice.record.binding = choice.service._binding_for_context(study, run_id=fresh["run_id"])
+    patch = pytest.MonkeyPatch()
+    try:
+        patch.setattr(service_module, "list_bound_run_history", lambda **_: [{**fresh, "project_dir": "/synthetic/fresh"}])
+        patch.setattr(service_module.agent_runs, "read_run_review", lambda *_: {"artifact_payloads": {
+            "run_context.json": {"compiled_configuration_source_run_id": "run-compiled"}}})
+        patch.setattr(service_module.source_identity_authority, "resolve_study_patient_grouping",
+                      lambda **_: pytest.fail("refused before reading the source"))
+        with pytest.raises(service_module.PiCopilotError) as raised:
+            choice.service.apply_agent_plan_configuration(
+                choice.record.session_id, project_id=choice.body["project_id"],
+                expected_revision=study["revision"], run_id=fresh["run_id"])
+    finally:
+        patch.undo()
+    assert raised.value.code == "agent_plan_configuration_already_applied"
+    assert study_contexts.get_context(study["id"])["revision"] == study["revision"]
 
 
 def test_preparing_the_raw_source_after_the_plan_leaves_the_compiled_lineage(choice, chosen):
@@ -158,11 +191,16 @@ def test_preparing_the_raw_source_after_the_plan_leaves_the_compiled_lineage(cho
         **choice.body, "expected_revision": compiled["revision"], "offer_sha256": offer["offer_sha256"]})
     reconfirmed = study_contexts.get_context(chosen["id"])
     planned = {"run_id": "run-fresh", "scientific_configuration_sha256": study_contexts.scientific_configuration_sha256(reconfirmed)}
-    assert plan_review_progress.planned_on_compiled_configuration(reconfirmed, planned)
+    assert plan_review_progress.planned_on_compiled_configuration(
+        reconfirmed, planned, compiled_source_run_id="run-compiled")
     prepared = study_contexts.upsert_context({"id": chosen["id"], "data_source": {
         **reconfirmed["data_source"], "path": str(choice.paths.export)}, "confirmations": {
         **reconfirmed["confirmations"], "extraction_completed": True}})
     assert prepared["revision"] == compiled["revision"] + 2
     assert plan_review_progress.compiled_configuration_progress(prepared, reviewed) is None
     after = {"run_id": "run-after", "scientific_configuration_sha256": study_contexts.scientific_configuration_sha256(prepared)}
-    assert not plan_review_progress.planned_on_compiled_configuration(prepared, after)
+    # A plan launched now records no compiled candidate; the earlier plan's
+    # review no longer matches the prepared configuration.
+    assert not plan_review_progress.planned_on_compiled_configuration(prepared, after, compiled_source_run_id="")
+    assert not plan_review_progress.planned_on_compiled_configuration(
+        prepared, planned, compiled_source_run_id="run-compiled")

@@ -141,6 +141,8 @@ def test_fresh_runtime_replan_launch_recovers_host_source_without_browser_fields
     _, execution = preparation._prepare_launch_execution(request, scientific, provider)
     assert execution.plan_change_request is not None
     assert execution.plan_change_request.source_run_id == f.request.source_run_id
+    # B10: the launch records the compiled candidate this plan continues.
+    assert execution.compiled_configuration_source_run_id == f.request.source_run_id
     assert execution.plan_change_request.baseline_requirements() == bind(f).baseline_requirements()
     assert execution.development_resume_binding is None
     assert execution.plan_revision_source_run_id == execution.execution_resume_source_run_id == ''
@@ -188,7 +190,7 @@ def test_runtime_continuity_survives_only_one_signed_reconfirmation(source, monk
     # plan stayed a revision of the compiled candidate only at the exact
     # revision; losing it planned from scratch and looped. Exactly that one
     # signed write is allowed (S1471); anything else falls back to the exact match.
-    from easyicu.webserver.pi_copilot import demo_planning_authority, plan_review_progress
+    from easyicu.webserver.pi_copilot import demo_planning_authority
 
     f = source()
     changed = compiled_study(f, monkeypatch, tmp_path)
@@ -212,16 +214,11 @@ def test_runtime_continuity_survives_only_one_signed_reconfirmation(source, monk
         reconfirmed['confirmations']['extraction_completed'] = True
     monkeypatch.setattr(demo_planning_authority, 'signed_choice_revision', lambda study: signed)
     bound = owner.compiled_configuration_plan_change(study=reconfirmed, project_root=f.root)
-    fresh = {'run_id': 'run-fresh', 'scientific_configuration_sha256': study_contexts.scientific_configuration_sha256(reconfirmed)}
     if variant == 'reconfirmed':
         assert bound is not None and bound.source_run_id == f.request.source_run_id
         assert bind(f, bound, study=reconfirmed).baseline_requirements() == bind(f).baseline_requirements()
-        assert plan_review_progress.planned_on_compiled_configuration(reconfirmed, fresh)
     else:
         assert bound is None
-        # The same digest as the compile wrote is that configuration (B10 part 1).
-        assert plan_review_progress.planned_on_compiled_configuration(reconfirmed, fresh) is (
-            variant == 'extraction_kept')
 
 
 @pytest.mark.parametrize('names', [

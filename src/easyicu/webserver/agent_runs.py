@@ -1631,6 +1631,10 @@ def _public_review_payloads(
             "source": row.get("source"),
             "context_binding": row.get("context_binding"),
         }
+        # The compiled candidate this plan continues (B10), as its launch recorded it.
+        compiled_source = row.get("compiled_configuration_source_run_id")
+        if isinstance(compiled_source, str) and compiled_source:
+            public["run_context.json"]["compiled_configuration_source_run_id"] = compiled_source[:160]
         # The run's groupings, as the host projected them for its readers
         # (pi_copilot/exposure_group_notes): labels and codes, never a path.
         if row.get("exposure_groups") is not None:

@@ -121,11 +121,15 @@ def _candidate(study: dict[str, Any], runtime_codes: list[str]):
     return snapshot
 
 
-def _enriched(study: dict[str, Any], runtime_codes: list[str], run: dict[str, Any] | None = None):
+def _enriched(study: dict[str, Any], runtime_codes: list[str], run: dict[str, Any] | None = None,
+              compiled_source_run_id: str | None = None):
+    payloads: dict[str, Any] = {"agent_plan.json": _plan()}
+    if compiled_source_run_id is not None:
+        payloads["run_context.json"] = {"compiled_configuration_source_run_id": compiled_source_run_id}
     return workflow_owner._enrich_plan_review(
         _candidate(study, runtime_codes),
         study=study,
-        review={"artifact_payloads": {"agent_plan.json": _plan()}},
+        review={"artifact_payloads": payloads},
         run=run,
     )
 
@@ -258,14 +262,16 @@ def test_a_polled_workflow_resolves_the_source_grouping_once(
     assert len(calls) == 1
 
 
-@pytest.mark.parametrize("planned_on_compiled", [True, False], ids=["compiled_configuration", "other_configuration"])
-def test_a_plan_made_on_the_compiled_configuration_is_not_compiled_again(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, planned_on_compiled: bool
+@pytest.mark.parametrize("recorded", ["run-compiled-earlier", "", "another-run"],
+                         ids=["continues_the_compiled_candidate", "lineage_broken", "another_candidate"])
+def test_a_plan_that_continues_the_compiled_candidate_is_not_compiled_again(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, recorded: str
 ) -> None:
-    # B10 (UX leg 3 en, 2026-11-19): every compile rewrote the study and a
+    # B10 (UX leg 3 en/zh, 2026-11-19): every compile rewrote the study and a
     # fresh plan came back with the same runtime gaps, so the host compiled
-    # again without end. One compile per configuration; the next plan's gaps
-    # stay with its review.
+    # again without end. A plan whose launch recorded that it continues the
+    # compiled candidate keeps its review's own action; without that record
+    # (its lineage was broken) the compile stays available (Carbon b10 F1).
     from easyicu.webserver.pi_copilot import plan_review_progress
 
     monkeypatch.setenv("EASYICU_HOME", str(tmp_path / "home"))
@@ -273,17 +279,18 @@ def test_a_plan_made_on_the_compiled_configuration_is_not_compiled_again(
     study = _study(tmp_path)
     earlier = {**study, "covariates": ["age"]}
     plan_review_progress.record_choice(
-        before=earlier,
-        after=study if planned_on_compiled else {**study, "covariates": ["sex"]},
+        before=earlier, after=study,
         run={"run_id": "run-compiled-earlier",
              "scientific_configuration_sha256": study_context_owner.scientific_configuration_sha256(earlier)},
         decision_code="agent_plan_configuration",
         option_id="typed_runtime_projection",
     )
+    # Two job lifecycle writes since then keep the configuration.
+    study = {**study, "revision": int(study.get("revision") or 1) + 2}
     run = {"run_id": _RUN_ID, "scientific_configuration_sha256": study_context_owner.scientific_configuration_sha256(study)}
 
-    enriched = _enriched(study, ["REPEATED_STAY_IDENTITY_UNAVAILABLE"], run)
+    enriched = _enriched(study, ["REPEATED_STAY_IDENTITY_UNAVAILABLE"], run, recorded)
 
     assert enriched.next_action_code == (
-        "plan_execution_upgrade_required" if planned_on_compiled else "agent_plan_configuration_required"
+        "plan_execution_upgrade_required" if recorded == "run-compiled-earlier" else "agent_plan_configuration_required"
     )
