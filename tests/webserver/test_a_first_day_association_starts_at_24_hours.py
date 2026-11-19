@@ -1,74 +1,49 @@
 """First-day exposure timing is closed before planning, from synthetic metadata."""
 
+import json
 from copy import deepcopy
 from dataclasses import replace
-import json
 
 import pytest
 
 from easyicu.research_agent.contracts.endpoint import EndpointSpec
-from easyicu.research_agent.contracts.exposure_group_rules import EXPOSURE_GROUP_TRANSFORM_ID
+from easyicu.research_agent.contracts.exposure_group_rules import (
+    EXPOSURE_GROUP_TRANSFORM_ID,
+)
 from easyicu.research_agent.planning.family_spec import family_template_id_for_context
-from easyicu.research_agent.planning.progressive_contract import ProgressivePlanCompileError
-from easyicu.research_agent.planning.scientific_review import build_plan_scientific_review
+from easyicu.research_agent.planning.progressive_contract import (
+    ProgressivePlanCompileError,
+)
+from easyicu.research_agent.planning.scientific_review import (
+    build_plan_scientific_review,
+)
 from easyicu.research_agent.schema import (
-    AnalysisPlan, AnalysisStep, CohortDescriptor, ConceptDescriptor, ResearchContext,
-    UserPreferences, VariableRole,
+    AnalysisPlan,
+    AnalysisStep,
+    CohortDescriptor,
+    ConceptDescriptor,
+    ResearchContext,
+    UserPreferences,
+    VariableRole,
 )
 from easyicu.webserver import agent_pipeline_runs, study_contexts
 from easyicu.webserver import research_pipeline_run_preparation as preparation
 from easyicu.webserver.pi_copilot.decision_records import project_decision_records
 from easyicu.webserver.pi_copilot.plan_decisions import (
-    landmark_timing_specification, post_baseline_landmark_configuration,
+    landmark_timing_specification,
+    post_baseline_landmark_configuration,
 )
-from easyicu.webserver.research_pipeline_run_preparation import ResearchPipelineLaunchRequest
+from easyicu.webserver.research_pipeline_run_preparation import (
+    ResearchPipelineLaunchRequest,
+)
+from tests.support.first_day_association_launch import _study, prepare_first_day_launch
 
 
 @pytest.fixture
 def launch(monkeypatch, tmp_path):
-    monkeypatch.setattr(study_contexts, "_CONFIG_PATH", tmp_path / "studies.json")
-    monkeypatch.setattr(study_contexts, "_now", lambda: "2026-10-23T01:00:00Z")
-    monkeypatch.setattr(preparation, "_require_export_holds_study_cohort", lambda *_: None)
-    monkeypatch.setattr(preparation, "_validate_primary_concept_selection", lambda *_: None)
-    monkeypatch.setattr(preparation, "_patient_grouping_for_analysis_design", lambda *_: None)
-    coordinates = {
-        "primary_exposure": "synthetic_assay",
-        "primary_exposure_aggregation": "max",
-        "target_outcome": "death",
-        "endpoint": EndpointSpec(
-            name="death", kind="binary", absence_semantics="no_absent_rows", levels=[0, 1],
-        ),
-    }
-    monkeypatch.setattr(preparation, "_metadata_only_planning_coordinates", lambda **_: coordinates)
-
-    def prepare(study, **overrides):
-        request = ResearchPipelineLaunchRequest(
-            export_path=str(tmp_path / "synthetic-source"), study_context=study,
-            project_root=str(tmp_path), provider={}, provider_environment={},
-            credential_source="pi_verified", literature_search_authorized=False,
-            plan_revision_source_run_id="", execution_resume_source_run_id="",
-            development_resume_source_job_id="", budget_mode="planner_canary", runner_image=None,
-        )
-        return preparation._prepare_scientific_launch(replace(request, **overrides))
-
-    return prepare, coordinates
+    return prepare_first_day_launch(monkeypatch, tmp_path)
 
 
-def _study():
-    return {
-        "id": "synthetic-first-day", "question": "Estimate the stated association.",
-        "data_source": {"database": "eicu"}, "modules": ["labevents"],
-        "time_window": {"anchor": "icu_admission", "hours": 24},
-        "analysis_design": {
-            "analysis_family": "association_study", "analysis_unit": "icu_stay",
-            "variance_estimator": "model_based",
-        },
-        "execution_concepts": {
-            "primary_exposure": "synthetic_assay", "primary_exposure_aggregation": "max",
-            "outcome": "death", "covariates": [],
-        },
-        "sensitivity_specs": [], "confirmations": {"feature_time_window": True},
-    }
 
 
 @pytest.mark.parametrize("binding", ["study_setup", "plan_card", "metadata_coordinates"])
@@ -348,7 +323,9 @@ def test_an_unbound_exposure_does_not_get_a_landmark(launch):
 
 
 def test_an_exposure_defined_at_another_clinical_anchor_keeps_the_review_route():
-    from easyicu.research_agent.research_context.clinical_definition import ClinicalDefinitionReference
+    from easyicu.research_agent.research_context.clinical_definition import (
+        ClinicalDefinitionReference,
+    )
 
     exposure = _context().variables[0].model_copy(update={
         "clinical_definition": ClinicalDefinitionReference(

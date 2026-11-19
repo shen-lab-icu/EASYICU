@@ -20,11 +20,34 @@ from easyicu.research_agent.agents.progressive_payload import (
     parse_progressive_step_materialization,
 )
 from easyicu.research_agent.contracts.model_terms import OutcomeDefinition
-from easyicu.research_agent.providers.structured_diagnostics import safe_validation_issues
-from easyicu.research_agent.providers.structured_retry import render_parse_failure
-from tests.research_agent.planning.test_step_materialization_feedback_names_the_allowed_fields import (
-    _corrected,
+from easyicu.research_agent.providers.structured_diagnostics import (
+    safe_validation_issues,
 )
+from easyicu.research_agent.providers.structured_retry import render_parse_failure
+
+
+def _corrected():
+    # A valid visualization step; synthetic values only.
+    return {
+        "schema_version": "easyicu.progressive_step_materialization/1",
+        "outline_step_sha256": "a" * 64, "foundation": None,
+        "step": {
+            "step_id": "display_summary", "planned_analysis_role": "auxiliary",
+            "module_id": "visualization", "objective": "Display the prespecified upstream summaries.",
+            "depends_on": ["preceding_model"], "raw_inputs": [],
+            "product_inputs": [{"producer_step_id": "preceding_model", "product_id": "table:summary"}],
+            "outputs": [{"product_id": "figure:summary_plot", "semantic_role": "figure"}],
+            "scientific_action_id": None, "custom_method": None,
+            "table_one_group_by": None, "table_one_mode": None, "table_one_variables": [],
+            "primary_exposure": None, "outcome": None, "outcome_type": None,
+            "model_terms": [], "event_level_index": None,
+            "reference_exposure_level_index": None, "comparison_exposure_level_index": None,
+            "primary_contrast_level_index": None, "denominator_policy": None,
+            "missing_exposure_policy": None, "missing_outcome_policy": None,
+            "confidence_level": None, "sensitivity_spec_ids": [], "literature_bindings": [],
+        },
+    }
+
 
 _EMPTY = {"estimand": "Risk of death by day 28 after ICU admission.", "free_days": None,
           "ordered_levels": [], "count": None}

@@ -21,8 +21,10 @@ from easyicu.research_agent.planning.family_spec.landmark_categorical_template i
     __file__ as _template_file,
 )
 from easyicu.research_agent.schema import AnalysisPlan
-from easyicu.webserver.scientific_runtime_projection import compile_web_scientific_runtime_projection
-from tests.research_agent.authority.test_landmark_categorical_plan_bound_roster import (
+from easyicu.webserver.scientific_runtime_projection import (
+    compile_web_scientific_runtime_projection,
+)
+from tests.support.landmark_categorical_fixtures import (
     _dependence,
     _draft_plan,
     _frame,
@@ -87,7 +89,9 @@ def test_a_two_level_exposure_is_valid_only_as_binary_whatever_its_kind(tmp_path
 @pytest.mark.parametrize("kind", ["ordinal", "categorical"])
 def test_the_governed_primary_step_applies_the_same_coding_rule(tmp_path, kind):
     """Carbon b4s1144 minor 1: the second validation site, on a host-bound plan."""
-    from easyicu.research_agent.orchestration.scientific_runtime import ScientificRuntimeAuthorities
+    from easyicu.research_agent.orchestration.scientific_runtime import (
+        ScientificRuntimeAuthorities,
+    )
 
     authority = _two_groups(_exact_authority(tmp_path)).model_copy(update={"exposure_kind": kind})
     runtime = ScientificRuntimeAuthorities(trajectory=None, current_case=authority)

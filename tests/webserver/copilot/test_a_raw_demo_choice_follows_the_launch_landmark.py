@@ -13,10 +13,15 @@ import pytest
 
 from easyicu.webserver import launch_study_updates, study_contexts
 from easyicu.webserver.pi_copilot import plan_decisions
-from easyicu.webserver.pi_copilot.demo_planning_authority import follow_launch_timing, resolve_choice
-from easyicu.webserver.pi_copilot.demo_planning_source import resolve_demo_planning_source
-from tests.support.official_demo_raw import official_raw as official_raw
+from easyicu.webserver.pi_copilot.demo_planning_authority import (
+    follow_launch_timing,
+    resolve_choice,
+)
+from easyicu.webserver.pi_copilot.demo_planning_source import (
+    resolve_demo_planning_source,
+)
 from tests.support.official_demo_choice import choice as choice
+from tests.support.official_demo_raw import official_raw as official_raw
 
 
 def _landmark_patch(study):
@@ -145,9 +150,12 @@ def test_a_damaged_receipt_at_launch_is_the_typed_stale_refusal(monkeypatch, tmp
     """Carbon b31107 minor 1: a receipt that cannot be read refuses launch, never crashes it."""
     from easyicu.webserver import research_pipeline_run_preparation as preparation
     from easyicu.webserver.pi_copilot import demo_planning_authority
-    from tests.webserver.test_a_first_day_association_starts_at_24_hours import _study, launch as _launch
+    from tests.support.first_day_association_launch import (
+        _study,
+        prepare_first_day_launch,
+    )
 
-    prepare, _coordinates = _launch.__wrapped__(monkeypatch, tmp_path)
+    prepare, _coordinates = prepare_first_day_launch(monkeypatch, tmp_path)
     study = {**_study(), "revision": 1, "demo_planning_authority_ref": "a" * 64,
              "data_source": {"database": "eicu", "path": str(tmp_path / "synthetic-source")}}
 

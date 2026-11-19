@@ -12,8 +12,8 @@ import json
 from pathlib import Path
 
 from easyicu.webserver import dataio
+from tests.support.native_demo_export import _native_demo
 from tests.support.published_export import record_member_digests
-from tests.webserver.test_a_native_demo_manifest_owns_its_scan_identity import _native_demo
 
 STATIC_JS = Path(__file__).resolve().parents[2] / "src/easyicu/webserver/static/js"
 
