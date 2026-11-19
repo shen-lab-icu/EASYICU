@@ -1684,19 +1684,35 @@ class AnalysisStep(RuntimeDependencePlanFields):
 
     model_config = ConfigDict(extra="forbid")
 
-    # Digest-verified categorical labels must stay out of provider prompts.
+    # Local execution authority is deliberately absent from model_dump/json.
+    # It may contain digest-verified categorical labels that must never return
+    # to Planner, Replanner, Coder, or repair prompts.
     _table_one_execution_binding: Any = PrivateAttr(default=None)
+    # Same rule, for every other level set the Planner declared in the host's
+    # own opaque placeholders (see authority/declared_levels.py).
     _declared_level_binding: Any = PrivateAttr(default=None)
 
     step_id: str
     host_delivery_kind: HostDeliveryKind | None = Field(default=None, exclude_if=lambda value: value is None)
     planned_analysis_role: PlannedAnalysisRole = Field(
         default="auxiliary",
-        description="Scientific role. Planner responses declare this explicitly. At most one step may be primary.",
+        description=(
+            "Planner-owned scientific role of this step. Exactly one step may "
+            "be 'primary'; plans may also have no primary step. Host/internal "
+            "construction defaults to 'auxiliary', while Planner LLM responses "
+            "must explicitly declare the role for every step."
+        ),
     )
-    intent: str = Field(..., description="One-sentence description of what this step does.")
-    inputs: List[str] = Field(default_factory=list, description="Variable names or evidence ids consumed.")
-    expected_outputs: List[str] = Field(default_factory=list, description="Logical scientific outputs.")
+    intent: str = Field(
+        ..., description="One-sentence description of what this step does."
+    )
+    inputs: List[str] = Field(
+        default_factory=list, description="Variable names or evidence ids consumed."
+    )
+    expected_outputs: List[str] = Field(
+        default_factory=list,
+        description="Logical outputs — table_name, figure_name, statistic_name.",
+    )
     method: Optional[str] = None
     scientific_action_id: Optional[str] = Field(
         default=None,
