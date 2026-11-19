@@ -1376,6 +1376,7 @@
     "src/easyicu/webserver/pi_copilot/followup_queue.py",
     "src/easyicu/webserver/pi_copilot/gateway.py",
     "src/easyicu/webserver/pi_copilot/host_tool_dispatcher.py",
+    "src/easyicu/webserver/pi_copilot/idea_exploration.py",
     "src/easyicu/webserver/pi_copilot/install.py",
     "src/easyicu/webserver/pi_copilot/literature_tool_projection.py",
     "src/easyicu/webserver/pi_copilot/locking.py",
@@ -1602,7 +1603,7 @@
     "src/easyicu/webserver/zotero_probe.py"
   ],
   "scorer_tree_root": "benchmarks/figure2_canonical9/successor_v4",
-  "scorer_tree_sha256": "7f9dd81e3c2c0722fa7b2fff6b0974e163b5bb93bb9f43f510e5cc76d214becb",
+  "scorer_tree_sha256": "357181cfb43afb8f8b8fdc6bb5d7288f645a1ce0d351bcab4b4d34fc8af12d0e",
   "suite_projection_sha256": "11c39afac69c9a0b560c6aa92be19f05725f04c66b9d2c499cfdb353c40295ab",
   "suite_ref": "easyicu_evaluation_protocol_suite/v2",
   "tasks": [
