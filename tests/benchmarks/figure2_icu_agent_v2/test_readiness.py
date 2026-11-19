@@ -8,6 +8,10 @@ import pyarrow.parquet as pq
 
 from benchmarks.figure2_icu_agent_v2.protocol import load_heldout_taskbank
 from benchmarks.figure2_icu_agent_v2.readiness import build_development_readiness
+from tests.support.benchmark_integrity import (
+    assert_integrity_contains,
+    redact_integrity_errors,
+)
 
 
 def _development_full6(
@@ -40,6 +44,7 @@ def _development_full6(
     return root
 
 
+@redact_integrity_errors()
 def test_all_tasks_are_development_reachable_but_never_formal_ready(
     tmp_path: Path,
 ) -> None:
@@ -58,6 +63,7 @@ def test_all_tasks_are_development_reachable_but_never_formal_ready(
     )
 
 
+@redact_integrity_errors()
 def test_missing_development_column_is_attributed_to_the_affected_task(
     tmp_path: Path,
 ) -> None:
@@ -69,6 +75,10 @@ def test_missing_development_column_is_attributed_to_the_affected_task(
     row = next(item for item in receipt.tasks if item.task_id == first.task_id)
 
     assert row.development_full6_schema_observed is False
-    assert missing in row.missing_development_schema_concepts
+    assert_integrity_contains(
+        missing,
+        row.missing_development_schema_concepts,
+        "The omitted concept was not attributed to the affected task.",
+    )
     assert "DEVELOPMENT_SCHEMA_CONCEPT_MISSING" in row.blocking_reason_codes
     assert row.development_ready is False
