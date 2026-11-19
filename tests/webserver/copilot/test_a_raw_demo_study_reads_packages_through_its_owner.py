@@ -104,8 +104,15 @@ def test_exact_columns_bind_against_the_official_export_or_wait_for_a_package(ch
         study_context_update._execution_catalog(chosen, {}, chosen["data_source"])
 
 
-@pytest.mark.parametrize("execution", [{}, {"primary_exposure": None}, {"outcome": None, "covariates": []}])
-def test_clearing_exact_columns_reads_no_catalog(monkeypatch, execution):
+@pytest.mark.parametrize(
+    ("prior", "execution"),
+    [
+        ({}, {}),
+        ({"primary_exposure": "lactate"}, {"primary_exposure": None}),
+        ({"outcome": "death", "covariates": ["age"]}, {"outcome": None, "covariates": []}),
+    ],
+)
+def test_clearing_exact_columns_reads_no_catalog(monkeypatch, prior, execution):
     # Carbon b11r1/b11r2: only an update that binds a concept reads the
     # package; clearing columns on a broken package still saves.
     from easyicu.webserver.pi_copilot import tools as tool_module
@@ -116,9 +123,9 @@ def test_clearing_exact_columns_reads_no_catalog(monkeypatch, execution):
         "question": "Is lactate associated with mortality?", "active_job_id": None,
         "data_source": {"path": "/private/full-export", "database": "miiv"},
         "modules": ["demographics", "outcome"],
-        # Retained columns are merged into the update and bound again, so
-        # they read the catalog as before; a clear that leaves none does not.
-        "execution_concepts": {},
+        # Each case clears every column it had bound; retained columns would
+        # be merged and bound again, so a clear that leaves none reads nothing.
+        "execution_concepts": dict(prior),
     }
 
     def unreadable(_path):
@@ -140,6 +147,8 @@ def test_clearing_exact_columns_reads_no_catalog(monkeypatch, execution):
     result = tool_module.execute_tool("easyicu_update_study_context", {"execution_concepts": execution}, context())
     assert result["code"] == "study_context_updated", result
     assert writes and "execution_concepts" in writes[0]
+    # The saved mapping is cleared, not the prior binding kept.
+    assert not study_context_update._execution_binds_columns(writes[0]["execution_concepts"])
     # Binding a concept on that package still refuses with the package error.
     with pytest.raises(ExportPackageError):
         tool_module.execute_tool("easyicu_update_study_context", {"execution_concepts": {"outcome": "death"}}, context())
