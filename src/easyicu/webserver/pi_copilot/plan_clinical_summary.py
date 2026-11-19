@@ -48,13 +48,23 @@ def _number(value: Any) -> bool:
 
 
 def _timing(plan: Mapping, study: Mapping, steps: list[Mapping]) -> dict | None:
+    from easyicu.research_agent.execution.runners.landmark_categorical_association_executor import (
+        LANDMARK_CATEGORICAL_COHORT_ANALYSIS_KIND,
+    )
+
     bound = {key for step in steps for key in _rows(step.get("sensitivity_spec_ids"))}
     if _map(study.get("confirmations")).get("plan_timing_landmark_24h") is True:
-        for spec in _rows(study.get("sensitivity_specs")):
-            spec = _map(spec)
-            hours = spec.get("landmark_hours")
-            if spec.get("spec_id") in bound and spec.get("strategy") == "landmark" and _number(hours) and hours > 0:
-                return {"anchor": "icu_admit", "hours": hours, "risk_set": spec.get("require_alive_at_landmark") is True}
+        landmarks = [spec for spec in map(_map, _rows(study.get("sensitivity_specs")))
+                     if spec.get("strategy") == "landmark" and _number(spec.get("landmark_hours"))
+                     and spec["landmark_hours"] > 0]
+        # The signed landmark cohort applies the study's one landmark itself; a
+        # prepared plan may keep no other step naming it (UX leg 3, m31b).
+        held = len(landmarks) == 1 and any(
+            step.get("method") == LANDMARK_CATEGORICAL_COHORT_ANALYSIS_KIND for step in steps)
+        for spec in landmarks:
+            if spec.get("spec_id") in bound or held:
+                return {"anchor": "icu_admit", "hours": spec["landmark_hours"],
+                        "risk_set": spec.get("require_alive_at_landmark") is True}
     origin = _map(plan.get("endpoint")).get("time_origin")
     if origin in {"icu_admit", "hospital_admit"}:
         return {"anchor": origin, "hours": 0, "risk_set": False}

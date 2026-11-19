@@ -91,6 +91,39 @@ def test_timing_is_present_only_when_declared_and_never_borrowed_from_prose():
     assert summary(plan, study=study)["timing"] == {"unresolved": True}
 
 
+_LANDMARK_STUDY = {"confirmations": {"plan_timing_landmark_24h": True}, "sensitivity_specs": [
+    {"spec_id": "synthetic_landmark", "strategy": "landmark", "landmark_hours": 24, "require_alive_at_landmark": True}]}
+
+
+@pytest.mark.parametrize("language", ["zh", "en"])
+def test_the_signed_landmark_cohort_holds_the_one_landmark_on_the_approval_card(language):
+    """UX leg 3 (m31b): the prepared plan kept no step naming the landmark, so the
+    approval card said the follow-up start was unresolved although the signed
+    landmark cohort applied it (n = 136 at 24 h)."""
+    plan = example_plan()
+    plan["endpoint"]["time_origin"] = "unsupported_column_id"
+    plan["steps"].insert(0, {"step_id": "cohort_definition", "method": "signed_landmark_analysis_cohort"})
+    timing = summary(plan, study=_LANDMARK_STUDY)["timing"]
+    assert timing == {"anchor": "icu_admit", "hours": 24, "risk_set": True}
+    owner = Path(__file__).parents[3] / "src/easyicu/webserver/static/js/product-labels.js"
+    script = f"""
+global.window = {{}};
+require({json.dumps(str(owner.with_name('data-catalog.js')))});
+require({json.dumps(str(owner))});
+const tr = (en, zh) => {json.dumps(language)} === 'zh' ? zh : en;
+process.stdout.write(JSON.stringify(window.EU_PRODUCT_LABELS.clinicalPlan({json.dumps(summary(plan, study=_LANDMARK_STUDY))}, tr)));
+"""
+    rendered = json.loads(run_node("node", script, check=True).stdout)
+    assert rendered["timing"] == ("从入 ICU 后第 24 小时开始随访，只纳入此时仍在院的患者。" if language == "zh"
+                                  else "Follow-up starts 24 hours after ICU admission and includes only patients still in hospital then.")
+    # Two landmarks name no single start; another cohort method holds none.
+    two = {**_LANDMARK_STUDY, "sensitivity_specs": [*_LANDMARK_STUDY["sensitivity_specs"],
+                                                   {"spec_id": "other", "strategy": "landmark", "landmark_hours": 48}]}
+    assert summary(plan, study=two)["timing"] == {"unresolved": True}
+    plan["steps"][0]["method"] = "cohort_definition_and_attrition"
+    assert summary(plan, study=_LANDMARK_STUDY)["timing"] == {"unresolved": True}
+
+
 def test_uncertainty_stays_on_its_line_and_unknown_identity_never_becomes_a_name():
     plan = example_plan()
     plan["cohort"]["unapplied_population_criteria"] = ["private_internal_column"]
