@@ -382,21 +382,25 @@ for (const [step, workflow, method] of [
   ['Approve', trialReview, 'approvePiCopilotTargetTrial'],
 ]) {
   for (const exit of ['current error', 'stale success', 'stale error', 'stale after reload']) {
-    test(`${step} releases the action on ${exit}`, async () => {
+    test(`${step} updates busy state only for its own selection on ${exit}`, async () => {
       const { state, api, click } = trialActions();
       state.workflow = workflow;
       let loads = 0;
+      const switchSelection = () => {
+        state.selection += 1;
+        state.busy = true; // The newly selected conversation has work in flight.
+      };
       state.onLoad = () => {
         loads += 1;
-        if (exit === 'stale after reload') state.selection += 1;
+        if (exit === 'stale after reload') switchSelection();
       };
       api[method] = async () => {
-        if (['stale success', 'stale error'].includes(exit)) state.selection += 1;
+        if (['stale success', 'stale error'].includes(exit)) switchSelection();
         if (exit !== 'stale success') throw new Error('Synthetic transport failure');
         return { job_id: 'old-job' };
       };
       await click();
-      assert.equal(state.busy, false);
+      assert.equal(state.busy, exit !== 'current error');
       assert.deepEqual(state.watched, []);
       assert.equal(loads, ['current error', 'stale after reload'].includes(exit) ? 1 : 0);
       assert.equal(state.error, exit === 'current error' ? 'Synthetic transport failure' : '');
@@ -577,5 +581,28 @@ for (const language of ['en', 'zh']) {
     assert.equal(trial.approvalRequest(review, session, 'project').n_lines_confirmed, 1);
     review.target_trial_card.confirm_all_on_approval = false;
     assert.equal(trial.approvalRequest(review, session, 'project'), null);
+  });
+}
+
+for (const language of ['en', 'zh']) {
+  test(`${language}: unread target trial wording is quoted on the inline clarification`, () => {
+    const residual = ['２４　 hours  after ICU admission', '插管 <后>'];
+    const workflow = {
+      next_action_code: 'target_trial_statement_needed',
+      target_trial_card: {
+        state: 'clarification',
+        proposal: {
+          digest: null, missing: ['unread_words'], unread_words: residual,
+          elements: [{ key: 'outcome', value: '90-day mortality', source: 'question' }],
+        },
+      },
+    };
+    const html = conversationLog(render(language, workflow, {}).html);
+    assert.match(html, /data-gpi-clarification/);
+    assert.match(html, language === 'zh' ? /请说明以下措辞的含义/ : /What do the following words mean/);
+    assert.match(html, /90-day mortality/);
+    assert.match(html, /data-gpi-confirm-edit/);
+    assert.doesNotMatch(html, /data-gpi-confirm-action/);
+    for (const fragment of residual) assert.ok(html.includes(esc(fragment)));
   });
 }

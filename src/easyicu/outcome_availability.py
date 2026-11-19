@@ -486,7 +486,36 @@ def _match_mentions(match: re.Match[str]) -> tuple[StatedHorizonMention, ...]:
     )
 
 
-def stated_mortality_horizon_mentions(text: str) -> tuple[StatedHorizonMention, ...]:
+_MORTALITY_AFTER_HORIZON = re.compile(
+    r"[\s-]+(?:all[\s-]+cause[\s-]+)?(?:mortality|deaths?)"
+    r"|\s*(?:以内|内)?\s*的?\s*(?:全因\s*)?(?:死亡|病死)",
+    re.IGNORECASE,
+)
+_MORTALITY_BEFORE_HORIZON = re.compile(
+    rf"(?:mortality|deaths?)[\s-]+(?:rates?[\s-]+)?{_RELATION}",
+    re.IGNORECASE,
+)
+
+
+def _exact_mortality_match(match: re.Match[str]) -> bool:
+    groups = match.groupdict()
+    if (
+        groups.get("members")
+        or groups.get("tail")
+        or _MORTALITY_SETTING_PREFIX.search(match.string, 0, match.start())
+    ):
+        return False
+    head_start, head_end = match.span("head")
+    if match.start() == head_start:
+        return _MORTALITY_AFTER_HORIZON.fullmatch(match.string[head_end:match.end()]) is not None
+    return match.end() == head_end and _MORTALITY_BEFORE_HORIZON.fullmatch(
+        match.string[match.start():head_start]
+    ) is not None
+
+
+def stated_mortality_horizon_mentions(
+    text: str, *, exact_mortality: bool = False,
+) -> tuple[StatedHorizonMention, ...]:
     """Every place ``text`` states a horizon for death or survival, in text order.
 
     A horizon is read only next to its endpoint word: "28-day mortality",
@@ -499,6 +528,10 @@ def stated_mortality_horizon_mentions(text: str) -> tuple[StatedHorizonMention, 
     a landmark ("alive at 24 hours"), nor a horizon an exclusion names
     ("deaths within 24 hours were excluded", "Exclusion criteria: death
     within 24 hours").
+
+    With ``exact_mortality``, each mention must name its own mortality endpoint.
+    Lists that share an endpoint word, survival, follow-up, and deaths in a
+    specific care setting require a separate interpretation.
     """
 
     source = str(text or "")
@@ -525,6 +558,7 @@ def stated_mortality_horizon_mentions(text: str) -> tuple[StatedHorizonMention, 
         mention
         for match, floor in zip(matches, floors)
         if not _excluded(source, match.start(), match.end(), floor, sections)
+        and (not exact_mortality or _exact_mortality_match(match))
         for mention in _match_mentions(match)
     )
     return tuple(sorted(mentions, key=lambda mention: (mention.start, mention.end)))
@@ -665,10 +699,11 @@ ICU_DEATH = "icu_death"
 HOSPITAL_DEATH = "hospital_death"
 # "ICU", a unit's own ICU ("MICU", "SICU", "CVICU", "neuro-ICU"), or the
 # spelled-out unit.
-_ICU_PLACE = (
-    r"(?:(?:m|s|c|cv|ct|n|p|t|neuro[\s-]*)?icu"
-    r"|intensive[\s-]+care(?:[\s-]+units?)?|critical[\s-]+care(?:[\s-]+units?)?)"
+_ICU_PLACE_PATTERN = (
+    r"(?:(?:m|s|c|cv|ct|n|p|t|neuro(?:{gap})?)?icu"
+    r"|(?:intensive|critical){gap}care(?:{gap}units?)?)"
 )
+_ICU_PLACE = _ICU_PLACE_PATTERN.format(gap=r"[\s-]+")
 # "the medical ICU", "a surgical intensive care unit".
 _ICU_KIND = (
     r"(?:(?:medical|surgical|cardiac|cardiothoracic|cardiovascular|coronary|neuro(?:logical)?|"
@@ -766,6 +801,18 @@ _NOT_A_DESTINATION = (
     r"(?<!into a )(?<!from )(?<!from the )(?<!from an )(?<!from a )"
 )
 _HOSPITAL_PLACE_ZH = r"(?:医?院内|住院(?:期间)?)"
+# The broad horizon reader can start inside a care-setting endpoint, e.g.
+# "ICU 90-day mortality" or "院内90天死亡". Check the adjacent prefix before
+# accepting the match as all-location mortality. Clause breaks and explicit
+# admission origins such as "入住ICU后" end that adjacency.
+_SETTING_PREFIX_GAP = r"(?:[ \t]+|-)"
+_MORTALITY_SETTING_PREFIX = re.compile(
+    rf"\b(?:hospital|ward|inpatient|{_ICU_PLACE_PATTERN.format(gap=_SETTING_PREFIX_GAP)})"
+    rf"{_SETTING_PREFIX_GAP}(?:all{_SETTING_PREFIX_GAP}cause{_SETTING_PREFIX_GAP})?\Z"
+    rf"|(?:{_HOSPITAL_PLACE_ZH}|(?:{_ICU_PLACE_ZH}|病房|医院)(?:[ \t]*(?:内|中|期间))?)"
+    r"[ \t]*的?[ \t]*(?:全因[ \t]*)?\Z",
+    re.IGNORECASE,
+)
 _ELIDED_ICU_PATTERNS = (
     re.compile(
         rf"{_NOT_A_DESTINATION}\b{_ICU_PLACE}-?(?={_SETTING_JOIN}(?:in[\s-]+)?hospital[\s-]+"

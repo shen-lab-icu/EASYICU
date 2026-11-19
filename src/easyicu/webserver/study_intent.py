@@ -61,6 +61,7 @@ __all__ = [
     "explicit_outcome_concepts",
     "explicit_exposure_aggregation",
     "explicit_landmark_hours",
+    "full_span_concepts",
     "stated_comparison_groupings",
     "stated_treatment_uses",
     "StatedTreatmentUse",
@@ -1859,6 +1860,16 @@ def catalog_named_concepts(text: str) -> Tuple[str, ...]:
         if read not in found:
             found.append(read)
     return tuple(found)
+
+
+def full_span_concepts(name: str) -> frozenset[str]:
+    """Return only concept readings that account for the entire clinical name."""
+
+    text = name.lower().replace("_", " ")
+    return frozenset(
+        concept for concept, start, end in _catalog_name_readings(text)
+        if start == 0 and end == len(text)
+    ) | frozenset(concept for concept, _ in _match_concept(text, full_span_only=True))
 
 
 def concept_named_by(name: str, *, include_catalog_labels: bool = False) -> Optional[str]:

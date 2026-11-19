@@ -6,6 +6,8 @@ import pytest
 
 from easyicu.outcome_availability import (
     OUTCOME_CONCEPT_SUPPORTED_DATABASES,
+    StatedHorizon,
+    stated_mortality_horizon_mentions,
     structural_outcome_unavailability,
 )
 
@@ -51,6 +53,59 @@ def test_database_specific_outcome_support_is_directional() -> None:
 
 def test_non_outcome_concepts_are_not_reclassified() -> None:
     assert structural_outcome_unavailability("hr", "miiv") is None
+
+
+@pytest.mark.parametrize(
+    ("qualifier", "outcome"),
+    [
+        ("院内", "90天死亡率"),
+        ("住院期间", "90日全因死亡率"),
+        ("ICU内", "90天死亡率"),
+        ("病房内", "90天死亡率"),
+        ("ICU", "90天死亡率"),
+        ("重症监护室", "90天死亡率"),
+        ("病房", "90天死亡率"),
+        ("医院", "90天死亡率"),
+        ("院内全因", "90天死亡率"),
+        ("inpatient ", "90-day mortality"),
+        ("inpatient-all-cause-", "deaths within 90 days"),
+        ("in-hospital ", "90-day mortality"),
+        ("in-hospital ", "mortality at 90 days"),
+        ("hospital ", "mortality at day 90"),
+        ("ICU ", "90-day all-cause mortality"),
+        ("intensive care unit ", "all-cause mortality at 90 days"),
+        ("ward ", "deaths within 90 days"),
+    ],
+)
+def test_exact_mortality_horizon_requires_an_all_location_outcome(qualifier, outcome):
+    matches = stated_mortality_horizon_mentions(outcome, exact_mortality=True)
+    assert [item.horizon for item in matches] == [StatedHorizon(90, "day")]
+    assert stated_mortality_horizon_mentions(qualifier + outcome, exact_mortality=True) == ()
+
+
+@pytest.mark.parametrize(
+    ("prefix", "outcome"),
+    [
+        ("in the ICU - ", "90-day mortality"),
+        ("in the hospital\n", "90-day mortality"),
+        ("critical care unit\r\n", "28-day mortality"),
+        ("critical care - unit ", "mortality at 28 days"),
+        ("intensive\ncare unit ", "28-day mortality"),
+        ("hospital; ", "mortality at 28 days"),
+        ("重症监护室\n", "90天死亡率"),
+        ("住院期间\n", "28天死亡率"),
+        ("病房，", "28天死亡率"),
+        ("入住ICU后", "90天死亡率"),
+        ("转入重症监护室后", "28天死亡率"),
+        ("收入重症监护病房后", "28天死亡率"),
+    ],
+)
+def test_only_adjacent_care_settings_qualify_a_mortality_horizon(prefix, outcome):
+    matches = stated_mortality_horizon_mentions(prefix + outcome, exact_mortality=True)
+    assert [(item.start, item.horizon) for item in matches] == [
+        (item.start + len(prefix), item.horizon)
+        for item in stated_mortality_horizon_mentions(outcome, exact_mortality=True)
+    ]
 
 
 def test_outcome_availability_contract_is_frozen() -> None:

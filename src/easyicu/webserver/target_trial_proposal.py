@@ -3,15 +3,17 @@
 from __future__ import annotations
 
 import re
+import unicodedata
 from dataclasses import dataclass
 from itertools import combinations
-from typing import Any, Mapping
+from typing import Any, Literal, Mapping
 
 from easyicu.concept.export_metadata import concept_declares_event_status
 from easyicu.databases import normalize_database_key
 from easyicu.outcome_availability import (
     OUTCOME_CONCEPT_SUPPORTED_DATABASES,
     FixedHorizonMortalityEndpoint,
+    StatedHorizonMention,
     fixed_horizon_mortality_endpoint,
     fixed_horizon_mortality_endpoint_stated_by,
     stated_mortality_horizon_mentions,
@@ -37,56 +39,157 @@ from easyicu.webserver.causal_trial_reading import (
     time_zero_spans,
 )
 from easyicu.webserver.primary_cohort import ADULT_AGE_FLOOR_YEARS
-from easyicu.webserver.study_intent import concept_named_by
+from easyicu.webserver.study_intent import (
+    concept_named_by,
+    full_span_concepts,
+)
+from easyicu.webserver.target_trial_connectives import (
+    EN_CONNECTIVES,
+    ZH_CONNECTIVES,
+)
 from easyicu.webserver.target_trial_setup import (
     TargetTrialSetupError,
     TargetTrialStatement,
     read_target_trial_statement,
 )
 
-# Restrict the automatic population reading to one explicit clinical indication.
-_INDICATION = re.compile(
-    r"(?:patients?|adults?|stays)\s+with\s+(?P<en>[^,.;?]{2,100})(?=[,.;?])"
-    r"|(?:在)?(?:成人|成年)?(?P<zh>[^，。；、？]{2,100})患者(?:中|人群)(?=[，。；？])",
+# A Chinese population topic may also use 患者中 without its opening 在.
+_POPULATION = re.compile(
+    r"(?:(?:in|among)\s+(?:(?P<en_qualifier>adult)\s+patients?|(?P<en_noun>adults?)|patients?|stays)"
+    r"\s+with\s+(?P<en>[^,，.;；。?!？！]{2,100})"
+    r"|(?:在\s*)?(?P<zh_adult>成人|成年)?\s*(?P<zh>[^,，.;；。?!？！、]{2,100}?)患者(?:中|人群))"
+    r"\s*[,，.;；。?!？！]",
     re.IGNORECASE,
 )
-_ADULTS = re.compile(r"\badults?\b|成人|成年", re.IGNORECASE)
-_EXTRA_ELIGIBILITY = re.compile(
-    r"\b(?:exclude|excluding|paediatric|pediatric|first\s+(?:icu\s+)?(?:stay|admission)|"
-    r"readmission|include|including|aged|eligibility)\b|排除|不纳入|仅纳入|儿童|首次|再入|年龄[≥>≤<]",
+_TIME_ZERO_DIRECTIVE = re.compile(r"\b(?:set|define) $", re.IGNORECASE)
+_OUTCOME_ORIGIN = re.compile(
+    r"\b(?:from|after|since|following|post|starting at|as of)[ \-‐–—]+"
+    r"(?:the )?ICU[ \-‐–—]+admission\b"
+    r"|(?P<zh>(?:自|从)\s*入(?:住)?\s*ICU\s*(?:[后後]\s*(?:起算|算起|起)?|起算|算起|起)"
+    r"|入(?:住)?\s*ICU\s*[后後])",
     re.IGNORECASE,
 )
-_COMPOUND_INDICATION = re.compile(
-    r"\b(?:and|or|without|who|before|after)\b|以及|伴有|合并|或|并且|无", re.I
+_CLAUSE_END = ",.。;?!"
+_OUTCOME_PREFIX_BOUNDARY = re.compile(
+    rf"(?:[{re.escape(_CLAUSE_END)}]|\b(?:for|compare)|比较|对比)$", re.IGNORECASE,
 )
-_OUTCOME_OTHER_ORIGIN = re.compile(
-    r"^\s*(?:from|after|since)\s+(?:time[- ]?zero|treatment|hospital admission)\b"
-    r"|^\s*(?:自|从)(?:时间零点|开始治疗|入院)",
+_OUTCOME_JOIN = re.compile(r"\s+and\s+|\s*[和及与]\s*", re.IGNORECASE)
+_TRIAL_METHOD_SENTENCE = re.compile(
+    r"(?:^|(?<=[.。?!]))\s*(?:"
+    r"(?:use|apply)\s+(?P<en>target[\s-]+trial\s+emulation)"
+    r"|(?:采用|使用)\s*(?P<zh>目标试验模拟))(?=[.。?!]?$)",
     re.IGNORECASE,
 )
-_GRACE_OTHER_ORIGIN = re.compile(
-    r"^\s*(?:from|after|since)\s+(?:(?:icu|hospital)\s+)?admission\b"
-    r"|^\s*(?:自|从)入(?:住\s*ICU|\s*ICU|院)",
+_PUNCTUATION = "".join(
+    sorted({
+        unicodedata.normalize("NFKC", token)
+        for token in (*EN_CONNECTIVES, *ZH_CONNECTIVES) if not token.isalpha()
+    })
+)
+_CONNECTIVES = re.compile(
+    "|".join([
+        rf"(?<!\w)(?:{'|'.join(word for word in EN_CONNECTIVES if word.isalpha())})(?!\w)",
+        *(word for word in ZH_CONNECTIVES if word.isalpha()),
+        rf"[{re.escape(_PUNCTUATION)}]",
+    ]),
     re.IGNORECASE,
 )
-# An explicit continued-use or titration rule is outside the two fixed strategies.
-_OTHER_STRATEGY = re.compile(
-    r"\b(?:titrate|titrated|infusion rate|mg|mcg|mg/kg|continue treatment|never start|never starting)\b"
-    r"|剂量|滴定|持续(?:给药|使用)|从未开始|始终不(?:用|使用)",
-    re.IGNORECASE,
-)
+_LINE_BREAK = re.compile(r"[\n\r\v\f\x1c-\x1e\x85\u2028\u2029]")
+
+_Span = tuple[int, int]
+MissingTrialKey = Literal[
+    "treatment", "strategies", "time_zero", "grace_period", "outcome",
+    "eligibility", "adjustment", "protocol", "unread_words",
+]
+
+
+@dataclass(frozen=True)
+class _Question:
+    original: str
+    text: str
+    offsets: list[_Span]
+
+    @classmethod
+    def read(cls, original: str) -> _Question:
+        folded = unicodedata.normalize("NFKC", original)
+        pieces = [unicodedata.normalize("NFKC", char) for char in original]
+        offsets = [
+            (index, index + 1)
+            for index, piece in enumerate(pieces)
+            for _ in piece
+        ]
+        if "".join(pieces) != folded:
+            # Composition or combining-mark reordering can cross character boundaries.
+            # Attribute the rewritten suffix to the whole original range it came from.
+            offsets = []
+            previous = ""
+            for end in range(1, len(original) + 1):
+                current = unicodedata.normalize("NFKC", original[:end])
+                shared = 0
+                while shared < min(len(previous), len(current)) and previous[shared] == current[shared]:
+                    shared += 1
+                start = offsets[shared][0] if shared < len(offsets) else end - 1
+                offsets[shared:] = [(start, end)] * (len(current) - shared)
+                previous = current
+        characters = []
+        collapsed = []
+        for match in re.finditer(r"\s+|\S", folded):
+            start, end = match.span()
+            if match.group().isspace():
+                if start == 0 or end == len(folded):
+                    continue
+                characters.append(" ")
+            else:
+                characters.append(match.group())
+            collapsed.append((offsets[start][0], offsets[end - 1][1]))
+        return cls(original, "".join(characters), collapsed)
+
+    def quote(self, start: int, end: int) -> str:
+        return self.original[self.offsets[start][0]:self.offsets[end - 1][1]]
+
+    def text_with_line_breaks(self) -> str:
+        """Restore clause breaks while keeping the normalized span offsets."""
+        return "".join(
+            "\n" if char == " " and _LINE_BREAK.search(self.original, start, end) else char
+            for char, (start, end) in zip(self.text, self.offsets)
+        )
+
+    def unread(self, spans: list[_Span]) -> list[str]:
+        """Quote gaps with residual content, keeping connective words between residues."""
+        connective = [False] * len(self.text)
+        for match in _CONNECTIVES.finditer(self.text):
+            start, end = match.span()
+            connective[start:end] = [True] * (end - start)
+        residual = []
+        previous = 0
+        for start, end in [*sorted(spans), (len(self.text), len(self.text))]:
+            if any(
+                not connective[index] and not self.text[index].isspace()
+                for index in range(previous, start)
+            ):
+                left, right = previous, start
+                trim = _PUNCTUATION.replace(".", "") + " "
+                while self.text[left] in trim:
+                    left += 1
+                while self.text[right - 1] in trim:
+                    right -= 1
+                residual.append(self.quote(left, right))
+            previous = max(previous, end)
+        return residual
 
 
 @dataclass(frozen=True)
 class TargetTrialProposal:
     elements: list[dict[str, str]]
-    missing: list[str]
+    missing: list[MissingTrialKey]
     statement: TargetTrialStatement | None
+    unread_words: list[str]
 
     def public(self, revision: int) -> dict[str, Any]:
         return {
             "elements": self.elements,
             "missing": self.missing,
+            "unread_words": self.unread_words,
             "expected_revision": revision,
             "digest": self.statement.request()["request_sha256"]
             if self.statement
@@ -95,10 +198,9 @@ class TargetTrialProposal:
 
 
 def _indication_concept(words: str) -> str | None:
-    if _COMPOUND_INDICATION.search(words):
-        return None
-    concept = concept_named_by(words, include_catalog_labels=True)
-    return concept if concept and concept_declares_event_status(concept) else None
+    concepts = full_span_concepts(words)
+    concept = next(iter(concepts)) if len(concepts) == 1 else None
+    return concept if isinstance(concept, str) and concept_declares_event_status(concept) else None
 
 
 def _treatment(
@@ -138,6 +240,7 @@ def _treatment(
                 return (covers[0], name) if len(covers) == 1 else None
         return None
     # A named drug must not expand to a wider class or to a broader capture.
+    names = full_span_concepts(words)
     concepts = question_treatment_concepts(question, reading)
     selected = [entry for entry in entries if entry.concept in concepts]
     agents = frozenset(agent for entry in selected for agent in entry.agents)
@@ -147,7 +250,8 @@ def _treatment(
         if registry.class_agents(name) == agents
     ]
     if (
-        set(concepts) != {entry.concept for entry in selected}
+        set(concepts) != names
+        or set(concepts) != {entry.concept for entry in selected}
         or len(exact_classes) != 1
     ):
         return None
@@ -155,44 +259,94 @@ def _treatment(
 
 
 def _proposal_adjustments(
-    study: Mapping[str, Any], question: str
-) -> list[dict[str, str]]:
+    study: Mapping[str, Any], question: _Question,
+) -> tuple[list[dict[str, str]], list[_Span]]:
     rows = study.get("stated_adjustments") or ()
     if any(
         isinstance(row, Mapping) and row.get("field") == "stated_adjustments"
         for row in study.get("stated_variables_unread") or ()
     ):
-        return []
+        return [], []
     if not rows or any(
         not isinstance(row, Mapping)
         or row.get("source_status") != "available"
         or not row.get("concept")
         or not row.get("words")
-        or str(row["words"]) not in question
+        or not row.get("variable")
+        or str(row["words"]) not in question.original
         for row in rows
     ):
-        return []
-    return [
-        {
-            "name": str(row["concept"]),
-            "clinical_rationale": str(row["words"])
-            if len(str(row["words"])) >= 16
-            else "Baseline adjustment requested by the researcher.",
-            "source": "question",
-        }
-        for row in rows
+        return [], []
+    by_quote: dict[str, set[str]] = {}
+    for row in rows:
+        words = _Question.read(str(row["words"])).text
+        by_quote.setdefault(words, set()).add(str(row["concept"]))
+
+    spans = []
+    for words, concepts in by_quote.items():
+        span = _adjustment_span(question.text, words, concepts)
+        if span is None:
+            return [], []
+        spans.append(span)
+    return (
+        [
+            {
+                "name": str(row["concept"]),
+                "clinical_rationale": str(row["words"])
+                if len(str(row["words"])) >= 16
+                else "Baseline adjustment requested by the researcher.",
+                "source": "question",
+            }
+            for row in rows
+        ],
+        spans,
+    )
+
+
+def _adjustment_span(question: str, words: str, concepts: set[str]) -> _Span | None:
+    """Read a stated list of exact variable names and its adjustment syntax."""
+    # The two clause forms permit timing connectors only with an adjustment verb.
+    prefix = (
+        r"(?:(?:在|经)\s*)?(?:调整|校正|矫正|控制)\s*"
+        r"|(?<!\w)(?:after\s+)?(?:adjust(?:ed|ing|ment)?\s+(?:for|by)|"
+        r"controll?(?:ed|ing)\s+for|accounting\s+for)\s+"
+    )
+    join = r"(?:\s*[,、]\s*(?:and\s+)?|\s+and\s+|\s*[和与及]\s*)"
+    end = r"(?:\s*[后後](?=\s*(?:[,。;!?]|比较|对比|$)))?(?![a-z0-9_])"
+    cue = re.match(prefix, words, re.IGNORECASE)
+    if cue is None:
+        return None
+    body = re.sub(r"\s*[后後]$", "", words[cue.end():])
+    readings = [full_span_concepts(name) for name in re.split(join, body, flags=re.IGNORECASE)]
+    if any(len(names) != 1 for names in readings) or set().union(*readings) != concepts:
+        return None
+    body = re.escape(body)
+    pattern = re.compile(rf"(?:{prefix}){body}{end}", re.IGNORECASE)
+    matches = [
+        match.span() for match in pattern.finditer(question) if words in match.group()
     ]
+    return matches[0] if len(matches) == 1 else None
 
 
 def _fixed_outcome(
-    question: str, confirmed_label: Any, database: str
-) -> tuple[FixedHorizonMortalityEndpoint, str] | None:
+    wording: _Question,
+    confirmed_label: Any,
+    database: str,
+    other_spans: list[_Span],
+) -> tuple[
+    FixedHorizonMortalityEndpoint,
+    StatedHorizonMention,
+    list[tuple[FixedHorizonMortalityEndpoint | None, StatedHorizonMention]],
+] | None:
     # Read the primary from its confirmation when the question states more
     # than one horizon. Its proof remains the exact words of the question.
-    label = str(confirmed_label or "").strip()
+    label_wording = _Question.read(str(confirmed_label or ""))
+    label = label_wording.text
     confirmed = {
         fixed_horizon_mortality_endpoint_stated_by(item.horizon)
-        for item in stated_mortality_horizon_mentions(label)
+        for item in stated_mortality_horizon_mentions(
+            label_wording.text_with_line_breaks(), exact_mortality=True,
+        )
     }
     registered = fixed_horizon_mortality_endpoint(label)
     if registered is not None:
@@ -206,9 +360,10 @@ def _fixed_outcome(
         )
     ):
         return None
+    outcome_text = wording.text_with_line_breaks()
     mentions = [
         (fixed_horizon_mortality_endpoint_stated_by(item.horizon), item)
-        for item in stated_mortality_horizon_mentions(question)
+        for item in stated_mortality_horizon_mentions(outcome_text)
     ]
     candidates = {endpoint for endpoint, _ in mentions}
     if confirmed:
@@ -220,15 +375,96 @@ def _fixed_outcome(
         endpoint.event_concept, ()
     ):
         return None
-    selected = [item for candidate, item in mentions if candidate == endpoint]
-    if any(_OUTCOME_OTHER_ORIGIN.match(question[item.end :]) for item in selected):
+    exact_mentions = set(stated_mortality_horizon_mentions(outcome_text, exact_mortality=True))
+    exact_candidates = [item for candidate, item in mentions if candidate == endpoint and item in exact_mentions]
+    if not exact_candidates:
         return None
-    match = selected[0]
-    return endpoint, question[match.start : match.end]
+    primary = exact_candidates[0]
+    cover_all = all(item in exact_mentions for _, item in mentions)
+    if len(mentions) > 1 and registered != endpoint:
+        question = wording.text
+        folded_label = label.casefold()
+        for item in exact_candidates:
+            span = _mortality_span(question, item)
+            adjacent = tuple(
+                _mortality_span(question, neighbor) for _, neighbor in mentions if neighbor != item
+            ) if cover_all else ()
+            attached = _outcome_span(question, endpoint, span, other_spans, adjacent)
+            if folded_label in {question[slice(*part)].casefold() for part in (span, attached)}:
+                primary = item
+                break
+        else:
+            return None
+    return endpoint, primary, mentions if cover_all else [(endpoint, primary)]
+
+
+def _mortality_span(question: str, mention: StatedHorizonMention) -> _Span:
+    end = mention.end
+    if question[end:end + 1] == "率" and question[end - 1] in "亡死":
+        end += 1
+    return mention.start, end
+
+
+def _outcome_span(
+    question: str,
+    endpoint: FixedHorizonMortalityEndpoint | None,
+    span: _Span,
+    other_spans: list[_Span],
+    adjacent: tuple[_Span, ...] = (),
+    *,
+    cover_join: bool = False,
+) -> _Span:
+    """Read the endpoint with an immediately attached, encoded ICU origin."""
+    start, end = span
+    if endpoint is None or endpoint.time_origin != "icu_admission":
+        return start, end
+
+    def independent(begin: int, stop: int) -> bool:
+        return all(stop <= left or begin >= right for left, right in (*other_spans, *adjacent))
+
+    def joined_right(stop: int) -> int | None:
+        return next(
+            (left for left, _ in adjacent if _OUTCOME_JOIN.fullmatch(question, stop, left)),
+            None,
+        )
+
+    prefixes = [
+        (match.start(), previous)
+        for match in _OUTCOME_ORIGIN.finditer(question, 0, start)
+        if question[match.end():start].strip() in (("", "的") if match["zh"] else ("",))
+        and independent(match.start(), start)
+        and (
+            (previous := next(
+                (right for _, right in adjacent if _OUTCOME_JOIN.fullmatch(question, right, match.start())),
+                None,
+            )) is not None
+            or not (before := question[:match.start()].rstrip())
+            or _OUTCOME_PREFIX_BOUNDARY.search(before)
+        )
+    ]
+    suffix = _OUTCOME_ORIGIN.match(question, end + int(question[end:end + 1] == " "))
+    if suffix and (
+        (
+            (after := question[suffix.end():].lstrip())
+            and after[0] not in _CLAUSE_END
+            and joined_right(suffix.end()) is None
+        )
+        or not independent(end, suffix.end())
+    ):
+        suffix = None
+    if prefixes and suffix is None:
+        origin_start, previous = prefixes[-1]
+        start = previous if cover_join and previous is not None else origin_start
+    if suffix and not prefixes:
+        end = suffix.end()
+    if cover_join and (following := joined_right(end)) is not None:
+        end = following
+    return start, end
 
 
 def target_trial_proposal(study: Mapping[str, Any]) -> TargetTrialProposal | None:
-    question = str(study.get("question") or "").strip()
+    wording = _Question.read(str(study.get("question") or ""))
+    question = wording.text
     reading = causal_trial_reading(question)
     source = study.get("data_source")
     if (
@@ -243,9 +479,10 @@ def target_trial_proposal(study: Mapping[str, Any]) -> TargetTrialProposal | Non
     except KeyError:
         return None
 
-    evidence = {item.element: item.evidence for item in reading.elements}
+    evidence = {item.element: wording.quote(item.start, item.end) for item in reading.elements}
     elements: list[dict[str, str]] = []
-    missing: list[str] = []
+    missing: list[MissingTrialKey] = []
+    covered: list[_Span] = []
 
     def add(key: str, quote: str, *, default: bool = False) -> dict[str, str]:
         origin = "design_choice" if default else "question"
@@ -254,13 +491,11 @@ def target_trial_proposal(study: Mapping[str, Any]) -> TargetTrialProposal | Non
 
     spec: dict[str, Any] = {}
     treatment = _treatment(question, reading, database)
-    treatment_words = None
-    if reading.treatment:
+    if treatment and reading.treatment:
         start, end = reading.treatment
-        treatment_words = add("treatment", question[start:end])
-    if treatment and treatment_words:
+        covered.append((start, end))
         spec["treatment"] = {
-            **treatment_words,
+            **add("treatment", wording.quote(start, end)),
             "concepts": treatment[0],
             "treatment_class": treatment[1],
         }
@@ -268,8 +503,20 @@ def target_trial_proposal(study: Mapping[str, Any]) -> TargetTrialProposal | Non
     else:
         missing.append("treatment")
 
+    strategy_spans = {
+        item.element: (item.start, item.end)
+        for item in reading.elements
+        if item.element in {"initiate_strategy", "defer_strategy"}
+    }
     initiate, defer = evidence.get("initiate_strategy"), evidence.get("defer_strategy")
-    if initiate and defer and not _OTHER_STRATEGY.search(question):
+    initiation = strategy_spans.get("initiate_strategy")
+    deferral = strategy_spans.get("defer_strategy")
+    if initiation and reading.treatment:
+        # The strategy reader locates the treatment. Its own reader must account for the name.
+        covered.extend([(initiation[0], reading.treatment[0]), (reading.treatment[1], initiation[1])])
+    # The shape reader can spot "never" as causal. A lifelong ban is a different strategy.
+    if initiate and defer and deferral and not question[slice(*deferral)].lower().startswith("never "):
+        covered.append(deferral)
         spec["strategies"] = {
             **add("strategies", f"{initiate} / {defer}"),
             # Labels are descriptive. The executable definitions are fixed by the trial contract.
@@ -280,6 +527,8 @@ def target_trial_proposal(study: Mapping[str, Any]) -> TargetTrialProposal | Non
     else:
         missing.append("strategies")
 
+    population = _POPULATION.match(question)
+    zero_spans = time_zero_spans(question)
     zero, grace = reading.time_zero_hours, reading.grace_period_hours
     zero_words = evidence.get("time_zero")
     if (
@@ -287,71 +536,86 @@ def target_trial_proposal(study: Mapping[str, Any]) -> TargetTrialProposal | Non
         and zero is not None
         and zero.is_integer()
         and MIN_TIME_ZERO_HOURS <= zero <= MAX_TIME_ZERO_HOURS
-        and len(time_zero_spans(question)) == 1
+        and len(zero_spans) == 1
     ):
+        start, end = zero_spans[0]
+        directive = _TIME_ZERO_DIRECTIVE.search(question[:start])
+        covered.append((directive.start() if directive else start, end))
         spec["time_zero"] = {
             **add("time_zero", zero_words),
             "hours_after_icu_admission": int(zero),
         }
     else:
         missing.append("time_zero")
-    initiation = next(
-        (item for item in reading.elements if item.element == "initiate_strategy"), None
-    )
     if (
         grace is not None
         and grace.is_integer()
         and 1 <= grace <= MAX_GRACE_PERIOD_HOURS
-        and initiation is not None
-        and not _GRACE_OTHER_ORIGIN.match(question[initiation.end :])
+        and initiate
     ):
         spec["grace_period"] = {
-            **add("grace_period", initiation.evidence),
+            **add("grace_period", initiate),
             "hours": int(grace),
         }
     else:
         missing.append("grace_period")
 
-    outcome = _fixed_outcome(question, study.get("outcome"), database)
+    indication = None
+    if population:
+        indication = _indication_concept((population["en"] or population["zh"]).strip())
+    confounders, adjustment_spans = _proposal_adjustments(study, wording)
+
+    neighbors = [*covered, *adjustment_spans, *((item.start, item.end) for item in reading.elements)]
+    if population:
+        neighbors.append(population.span())
+    outcome = _fixed_outcome(wording, study.get("outcome"), database, neighbors)
     if outcome:
-        endpoint, words = outcome
-        spec["outcome"] = {**add("outcome", words), "endpoint": endpoint.event_concept}
+        endpoint, primary, mentions = outcome
+        for candidate, mention in mentions:
+            covered.append(_outcome_span(
+                question, candidate, _mortality_span(question, mention),
+                neighbors,
+                tuple(_mortality_span(question, item) for _, item in mentions if item != mention),
+                cover_join=True,
+            ))
+        spec["outcome"] = {
+            **add("outcome", wording.quote(*_mortality_span(question, primary))),
+            "endpoint": endpoint.event_concept,
+        }
         add("outcome_origin", endpoint.time_origin, default=True)
     else:
         missing.append("outcome")
 
-    indication_matches = list(_INDICATION.finditer(question))
-    match = indication_matches[0] if len(indication_matches) == 1 else None
-    words = (match["en"] or match["zh"]).strip() if match else ""
-    indication = _indication_concept(words) if words else None
     criteria = []
-    if (
-        indication
-        and zero is not None
-        and "time_zero" in spec
-        and not _EXTRA_ELIGIBILITY.search(question)
-    ):
+    if population and indication:
+        start, end = population.span()
+        covered.append((start, end))
+        population_words = wording.quote(start, end - 1).rstrip()
+    if population and indication and "time_zero" in spec:
         criteria.append(
             {
                 "id": "c1",
                 "role": "include",
                 "kind": "condition_present",
-                "quote": match[0],
+                "quote": population_words,
                 "source": "question",
                 "concepts_all_of": [indication],
                 "window": {"start_hours": 0, "end_hours": int(zero)},
             }
         )
-        spec["indication"] = {**add("eligibility", match[0]), "criterion_ids": ["c1"]}
+        spec["indication"] = {**add("eligibility", population_words), "criterion_ids": ["c1"]}
         add("eligibility_at_zero", indication, default=True)
-        adult = _ADULTS.search(question)
-        if adult is not None:
+        adult_group = next(
+            (name for name in ("en_qualifier", "en_noun", "zh_adult") if population[name]),
+            None,
+        )
+        if adult_group:
             criteria.append(
                 {
                     "id": "c2",
                     "role": "include",
                     "kind": "age_years",
-                    "quote": adult[0] if len(adult[0]) > 1 else match[0],
+                    "quote": wording.quote(*population.span(adult_group)),
                     "source": "question",
                     "min_years": ADULT_AGE_FLOOR_YEARS,
                 }
@@ -360,12 +624,24 @@ def target_trial_proposal(study: Mapping[str, Any]) -> TargetTrialProposal | Non
     else:
         missing.append("eligibility")
 
-    confounders = _proposal_adjustments(study, question)
     if confounders:
+        covered.extend(adjustment_spans)
         add("adjustment", ", ".join(row["name"] for row in confounders))
         spec["confounders"] = confounders
     else:
         missing.append("adjustment")
+
+    method = _TRIAL_METHOD_SENTENCE.search(question)
+    if method and any(
+        item.element == "causal_method"
+        and (item.start, item.end) == method.span(method.lastgroup)
+        for item in reading.elements
+    ):
+        covered.append(method.span())
+
+    unread_words = wording.unread(covered)
+    if unread_words:
+        missing.append("unread_words")
 
     statement = None
     if not missing:
@@ -375,4 +651,4 @@ def target_trial_proposal(study: Mapping[str, Any]) -> TargetTrialProposal | Non
             )
         except TargetTrialSetupError:
             missing.append("protocol")
-    return TargetTrialProposal(elements, missing, statement)
+    return TargetTrialProposal(elements, missing, statement, unread_words)
