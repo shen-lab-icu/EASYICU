@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from os import PathLike
-from pathlib import PurePath
+from pathlib import Path, PurePath
 
 ALLOWED_QUESTION_SOURCES = frozenset(
     {
@@ -15,7 +15,8 @@ ALLOWED_QUESTION_SOURCES = frozenset(
 )
 
 _REPO_ROOT = PurePath(__file__).parents[1]
-_HELD_OUT_PREFIXES = ("heldout", "ho30")
+_RESOLVED_REPO_ROOT = Path(__file__).resolve().parents[1]
+_HELD_OUT_MARKERS = ("heldout", "ho30")
 
 
 class HeldOutSourceRefused(ValueError):
@@ -29,16 +30,24 @@ class HeldOutSourceRefused(ValueError):
 def require_allowed_question_source(path: str | PathLike[str]) -> None:
     """Check a repository-relative or absolute source path without filesystem I/O."""
     source = PurePath(path)
-    if any(part.casefold().startswith(_HELD_OUT_PREFIXES) for part in source.parts):
-        raise HeldOutSourceRefused("held_out_source_refused")
+    for root in (_REPO_ROOT, _RESOLVED_REPO_ROOT):
+        if source.is_relative_to(root):
+            source = source.relative_to(root)
+            break
 
-    if source.is_absolute() and source.is_relative_to(_REPO_ROOT):
-        source = source.relative_to(_REPO_ROOT)
+    if any(
+        marker in part.casefold()
+        for part in source.parts
+        for marker in _HELD_OUT_MARKERS
+    ):
+        raise HeldOutSourceRefused("held_out_source_refused")
 
     if ".." not in source.parts:
         relative = source.as_posix()
         for allowed in ALLOWED_QUESTION_SOURCES:
-            if relative == allowed or (allowed.endswith("/") and relative.startswith(allowed)):
+            if relative == allowed or (
+                allowed.endswith("/") and relative.startswith(allowed)
+            ):
                 return
 
     raise HeldOutSourceRefused("question_source_not_allow_listed")
