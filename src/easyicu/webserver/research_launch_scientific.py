@@ -188,6 +188,33 @@ def _runtime_projection_sensitivity_specs(
     return (*sensitivity_specs, automatic)
 
 
+def source_authority_export_path(study: Mapping[str, Any]) -> str:
+    """The export whose raw source answers a study's identity questions.
+
+    A raw official-Demo study plans from the raw folder, which is not an
+    export package. Its signed choice binds that folder to the registered
+    official export of the same raw source (B9, 2026-11-19: a first-stay
+    raw Demo study could neither compile nor launch). Without a choice that
+    resolves, the bound path stays, so the authorities refuse as before.
+    """
+
+    source = study.get("data_source")
+    source = source if isinstance(source, Mapping) else {}
+    path = _clean_text(source.get("path"), 2_000)
+    if not path or not study.get("demo_planning_authority_ref"):
+        return path
+    from easyicu.research_agent.authority.filesystem import AuthorityFilesystemError
+    from easyicu.webserver import dataio, sources
+    from easyicu.webserver.pi_copilot.demo_planning_authority import resolve_choice
+
+    try:
+        identity = resolve_choice(study)
+    except (ValueError, OSError, KeyError, TypeError, dataio.ExportCohortError, AuthorityFilesystemError):
+        return path
+    registered = sources.stored_source_path_for_identity(identity) if identity is not None else None
+    return _clean_text(registered, 2_000) if registered else path
+
+
 def verified_patient_grouping(
     study: Mapping[str, Any],
 ) -> Optional[PatientGroupingBinding]:
@@ -199,7 +226,7 @@ def verified_patient_grouping(
 
     source = study.get("data_source")
     source = source if isinstance(source, Mapping) else {}
-    export_path = _clean_text(source.get("path"), 2_000)
+    export_path = source_authority_export_path(study)
     database = _clean_text(source.get("database"), 80)
     if not export_path or not database:
         return None
@@ -287,7 +314,7 @@ def _first_icu_stay_for_cohort(
         return None
     source = study.get("data_source")
     source = source if isinstance(source, Mapping) else {}
-    export_path = _clean_text(source.get("path"), 2_000)
+    export_path = source_authority_export_path(study)
     database = _clean_text(source.get("database"), 80)
     binding: Optional[FirstIcuStayBinding] = None
     reason_code = "first_icu_stay_authority_unavailable"
@@ -342,7 +369,7 @@ def _first_icu_stay_per_hospitalization_for_cohort(study: Mapping[str, Any]):
     source = source if isinstance(source, Mapping) else {}
     try:
         binding = source_identity_authority.resolve_study_first_icu_stay_per_hospitalization(
-            export_path=_clean_text(source.get("path"), 2_000),
+            export_path=source_authority_export_path(study),
             database=_clean_text(source.get("database"), 80),
         )
     except source_identity_authority.PatientGroupingAuthorityError as exc:

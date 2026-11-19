@@ -447,9 +447,9 @@ def test_agent_plan_configuration_is_compiled_without_a_user_choice(
     assert seen_patch["confirmations"]["agent_plan_configuration_compiled"] is True
 
 
-@pytest.mark.parametrize("first_stay_proven", [True, False])
+@pytest.mark.parametrize("first_stay_proven,raw_demo", [(True, False), (False, False), (True, True)])
 def test_a_clustering_plan_gets_the_first_stay_population_only_with_its_coordinate(
-    states, monkeypatch, first_stay_proven
+    states, monkeypatch, first_stay_proven, raw_demo
 ):
     """Dev9 M3: the host, not another Planner turn, closes repeated stays.
 
@@ -498,15 +498,21 @@ def test_a_clustering_plan_gets_the_first_stay_population_only_with_its_coordina
         service_module, "list_bound_run_history", lambda **kw: [{**run, "project_dir": "/test/clustering"}]
     )
     monkeypatch.setattr(service_module, "research_pipeline_project_root", lambda *a: "/test")
+    asked = []
+    if raw_demo:
+        # B9: a signed raw Demo study asks its registered official export; the
+        # study keeps its raw source.
+        monkeypatch.setattr(service_module, "source_authority_export_path", lambda study: "/registered/official-export")
     monkeypatch.setattr(
         service_module.source_identity_authority,
         "resolve_study_patient_grouping",
-        lambda **kw: SimpleNamespace(group_source="opaque_patient"),
+        lambda **kw: asked.append(kw["export_path"]) or SimpleNamespace(group_source="opaque_patient"),
     )
     monkeypatch.setattr(
         service_module.source_identity_authority,
         "resolve_study_first_icu_stay",
-        lambda **kw: SimpleNamespace(coordinate_sha256="f" * 64) if first_stay_proven else None,
+        lambda **kw: asked.append(kw["export_path"]) or (
+            SimpleNamespace(coordinate_sha256="f" * 64) if first_stay_proven else None),
     )
     monkeypatch.setattr(
         service_module.agent_runs,
@@ -546,6 +552,10 @@ def test_a_clustering_plan_gets_the_first_stay_population_only_with_its_coordina
         assert written == []
         return
     result = apply()
+    if raw_demo:
+        assert asked and set(asked) == {"/registered/official-export"}
+        assert all("data_source" not in patch for patch in written)
+        assert current["data_source"] == before["data_source"]
     assert result["next_action"] == "fresh_plan"
     assert result["runtime_finding_codes"] == ["REPEATED_STAY_METHOD_NOT_DECLARED"]
     assert written[0]["cohort"] == {"preset": "all_icu", "exclude_readmissions": True}

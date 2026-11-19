@@ -1180,6 +1180,10 @@
           'The plan analyses every ICU stay, which needs source-owned patient grouping (linking repeated stays of one patient); this data package does not provide it. Choose an admission rule below, or request a plan change.',
           '计划按全部 ICU 住院分析，这需要数据源提供患者分组（把同一患者的多次住院归并），当前数据包没有提供。请在下方选择入住规则，或提出修改。',
         ),
+        agent_plan_first_stay_coordinate_unavailable: tr(
+          'The study keeps each patient\'s first ICU stay, but this data source cannot show which of a patient\'s stays came first, so the plan cannot apply that rule. Choose a data source that records admission order, or start a new project that keeps every ICU stay.',
+          '研究只保留每位患者的首次 ICU 入住，但当前数据源无法确认同一患者哪次入住在先，因此计划无法执行这条规则。请改用能确认入住先后的数据源，或新建一个保留全部 ICU 入住的项目。',
+        ),
         // A step that cannot run without patient groups (run_patient_grouping).
         research_pipeline_patient_grouping_required: tr(
           'A step of this plan needs to know which ICU stays belong to the same patient (for example, a prediction model keeps all of a patient\'s stays on one side of its development and validation split), and the data this run uses has no verified patient grouping, so analysis stopped before any step ran. If the selected data source cannot provide patient grouping, choose one that can, or ask a question that does not need it; otherwise generate the plan again.',

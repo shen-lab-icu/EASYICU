@@ -39,6 +39,7 @@ from easyicu.webserver.data_package_review import DataPackageReviewSnapshotStore
 from easyicu.webserver.host_action_contracts import host_action_id
 from easyicu.webserver.personal_preferences import PersonalPreferencesStore
 from easyicu.webserver.target_trial_setup import TARGET_TRIAL_COMPILE_SUBMITTED, TargetTrialSetupError
+from easyicu.webserver.research_launch_scientific import source_authority_export_path
 from easyicu.webserver.copilot_data_workbench import (
     CopilotDataWorkbenchError,
     CopilotDataWorkbenchSnapshotStore,
@@ -4536,7 +4537,7 @@ class PiCopilotService(SkillAttachmentService, QuickAnswerService):
         source = source if isinstance(source, Mapping) else {}
         try:
             grouping = source_identity_authority.resolve_study_patient_grouping(
-                export_path=str(source.get("path") or ""),
+                export_path=source_authority_export_path(context),
                 database=str(source.get("database") or ""),
             )
         except source_identity_authority.PatientGroupingAuthorityError:
@@ -4549,7 +4550,7 @@ class PiCopilotService(SkillAttachmentService, QuickAnswerService):
         ):
             try:
                 first_stay = source_identity_authority.resolve_study_first_icu_stay(
-                    export_path=str(source.get("path") or ""),
+                    export_path=source_authority_export_path(context),
                     database=str(source.get("database") or ""),
                 )
             except source_identity_authority.PatientGroupingAuthorityError:

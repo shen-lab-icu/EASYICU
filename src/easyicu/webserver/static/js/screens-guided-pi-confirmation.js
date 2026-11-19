@@ -565,7 +565,11 @@
         title: tr('The candidate plan is ready; one execution setting needs your decision', '候选研究计划已生成，执行前还需要你确认一项设置'),
         reason: typeof host.runFailureText === 'function'
           ? String(host.runFailureText(configurationError) || '') : configurationError,
-        note: tr(
+        // B9: a first-stay rule the source cannot order offers no choice below.
+        note: configurationError === 'agent_plan_first_stay_coordinate_unavailable' ? tr(
+          'The plan and its scientific review are saved; analysis has not started.',
+          '计划及其科学审阅已保存，分析尚未开始。',
+        ) : tr(
           'The plan and its scientific review are saved; analysis has not started. Your choice below updates the study and EasyICU revises the plan accordingly.',
           '计划及其科学审阅已保存，分析尚未开始。下方的选择会更新研究配置，EasyICU 会据此修订计划。',
         ),
