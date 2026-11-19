@@ -87,16 +87,6 @@ def runs(choice, monkeypatch):
     return _Runs(monkeypatch)
 
 
-def _plain_columns(monkeypatch):
-    # The synthetic export has no native column metadata. The launch's
-    # planning coordinates read it (S1540 sweep), which is pinned in
-    # test_a_raw_demo_study_reads_packages_through_its_owner; here the
-    # concept names stand for their columns.
-    from easyicu.webserver import research_launch_scientific as launch
-
-    monkeypatch.setattr(launch, "_bound_source_column", lambda _path, **_kw: (lambda concept: concept))
-
-
 def _compile(choice, run):
     study = study_contexts.get_context(choice.study["id"])
     choice.record.binding = choice.service._binding_for_context(study, run_id=run["run_id"])
@@ -257,6 +247,27 @@ def test_the_compiled_plan_stays_continued_after_job_writes_and_in_its_revision(
     _assert_refused_without_writes(choice, revised)
 
 
+def test_another_choice_on_the_compiled_plan_keeps_its_compile(choice, runs):
+    # Carbon b14r1: a host choice recorded on the compiled plan after its
+    # reconfirmation kept only itself, erasing the compile receipt (B13's
+    # hold) and its count (S1542).
+    first = runs.launch(study_contexts.get_context(choice.study["id"]), "run-a")
+    _compile(choice, first)
+    reconfirmed = _reconfirm(choice)
+    after_failure = _job_writes(reconfirmed["id"], "job-failed")
+    retry = runs.launch(after_failure, "run-b")
+    _job_writes(after_failure["id"], "job-b")
+    _compile(choice, retry)
+    reconfirmed = _reconfirm(choice)
+    after = study_contexts.upsert_context({"id": reconfirmed["id"], "title": "Renamed"})
+    plan_review_progress.record_choice(before=reconfirmed, after=after, run=retry,
+                                       decision_code="plan_timing", option_id="landmark_24h")
+    receipt = plan_review_progress._receipt(after)
+    assert receipt.run_id == "run-b" and receipt.compiles == 1
+    assert receipt.choices[plan_review_progress.AGENT_PLAN_CONFIGURATION_CHOICE[0]] == plan_review_progress.AGENT_PLAN_CONFIGURATION_CHOICE[1]
+    assert not _offers_compile(study_contexts.get_context(after["id"]), runs, retry)
+
+
 def test_a_third_compile_of_one_plan_stops_the_loop(choice, runs, monkeypatch, caplog):
     # S1542 backstop: whatever lets a plan be offered its compile again (B13
     # was the second retry-path loop), two compiles of one plan with no
@@ -359,7 +370,6 @@ def test_the_round_two_plan_reads_the_registered_export_not_the_raw_folder(choic
     # plan's launch. Its run rebuilds the data profile for the compiled
     # groupings (agent_pipeline_runs, before the first progress step) with the
     # launch study as the source study; the catalog is the registered export's.
-    _plain_columns(monkeypatch)
     from easyicu.research_agent.acquisition import catalog as catalog_owner
     from easyicu.research_agent.intake.export_package import ExportPackageError
     from easyicu.webserver import research_launch_scientific as launch
@@ -440,7 +450,6 @@ def test_the_round_two_scope_is_the_registered_exports_modules(choice, runs, mon
     from easyicu.webserver import research_launch_scientific as launch
     from easyicu.webserver import research_pipeline_run_preparation as preparation
 
-    _plain_columns(monkeypatch)
     _native_export(choice.paths.export)
     first = runs.launch(study_contexts.get_context(choice.study["id"]), "run-a")
     _compile(choice, first)
@@ -483,7 +492,6 @@ def test_a_launch_on_an_unreadable_package_names_it_and_offers_its_reexport(choi
     # B11 card: a bound folder that is not a readable package stops with the
     # launch's typed intake stop, not the bare intake code. The card says what
     # is wrong and offers its re-export.
-    _plain_columns(monkeypatch)
     from easyicu.webserver import research_launch_scientific as launch
     from easyicu.webserver import research_pipeline_run_preparation as preparation
     from easyicu.webserver.pi_copilot.projections import project_job

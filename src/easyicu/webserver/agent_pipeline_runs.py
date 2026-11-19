@@ -9078,13 +9078,17 @@ def resume_research_pipeline(
             # Report which remedy applies by reading the staged cohort's
             # schema: the receipts either exist and the strict exposure can be
             # materialized from them, or the renal module must be re-extracted.
+            from easyicu.webserver.research_launch_scientific import (
+                source_authority_export_path,
+            )
             from easyicu.webserver.scientific_runtime_projection import (
                 export_kdigo_strict_derivation_available,
             )
 
-            source = entry.study.get("data_source")
+            # A raw official-Demo study's receipts live in its registered
+            # export, not the raw folder (S1540 sweep, Carbon b14r1).
             derivable = export_kdigo_strict_derivation_available(
-                (source or {}).get("path") if isinstance(source, Mapping) else None
+                source_authority_export_path(entry.study) or None
             )
             raise ResearchPipelineRunError(
                 "research_pipeline_kdigo_observability_authority_missing",

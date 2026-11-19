@@ -1136,8 +1136,15 @@ def _bound_source_column(export_path: Optional[str], *, database: str | None = N
     available: frozenset[str] = frozenset()
     if export_path:
         path = Path(export_path).expanduser()
+        from easyicu.webserver.dataio import ExportCohortError
         from easyicu.webserver.raw_preparation_dependencies import native_planning_metadata
-        native = native_planning_metadata(export_path=path, database=database)
+        try:
+            native = native_planning_metadata(export_path=path, database=database)
+        except (ResearchPipelineRunError, ExportCohortError, OSError, ValueError):
+            # A package that cannot be read leaves the name as is (Carbon
+            # b14r1): this is proposal context, and the launch's package
+            # check refuses that package with its typed stop.
+            native = None
         if native is not None:
             available = frozenset(item.concept_id for item in native["catalog"].concepts)
         else:

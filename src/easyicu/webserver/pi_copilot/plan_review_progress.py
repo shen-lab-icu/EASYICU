@@ -288,7 +288,9 @@ def _compiles_after(
 
     prior = _compile_receipt(before)
     if choice != AGENT_PLAN_CONFIGURATION_CHOICE:
-        return previous.compiles if previous is not None else 0
+        if previous is not None:
+            return previous.compiles
+        return prior.compiles if prior is not None and prior.run_id == run.get("run_id") else 0
     if prior is not None and prior.run_id == run.get("run_id"):
         return max(prior.compiles, 1) + 1
     return 1
@@ -347,6 +349,11 @@ def record_choice(
     """Called only after the typed host selection succeeds at its CAS boundary."""
     validate_choice_source(before, run)
     previous = matching_progress(before, run)
+    compiled = _compile_receipt(before)
+    if previous is None and compiled is not None and compiled.run_id == run.get("run_id") and compiled_digest_holds(before, compiled):
+        # Carbon b14r1: another choice on the compiled plan keeps its compile
+        # receipt and count, else B13's hold and the S1542 count were erased.
+        previous = compiled
     progress = ReviewChoiceProgress(
         study_id=str(after["id"]),
         run_id=str(run["run_id"]),

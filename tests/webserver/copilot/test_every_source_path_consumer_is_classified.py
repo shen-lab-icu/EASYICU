@@ -47,7 +47,11 @@ PATH_NAMES = frozenset({
     "export_root", "source_root", "raw_dir", "raw_folder", "source_folder", "export_folder", "package_dir",
 })
 SOURCE_MAPS = frozenset({"source", "data_source", "bound_source", "effective_source"})
-WRAPS = frozenset({"str", "Path", "fspath", "_clean_text", "expanduser", "resolve", "strip", "normpath", "abspath", "realpath"})
+WRAPS = frozenset({
+    "str", "Path", "fspath", "_clean_text", "expanduser", "resolve", "strip", "normpath", "abspath", "realpath",
+    # A member path built from the source path (Carbon b14r1).
+    "join", "joinpath",
+})
 PURE = WRAPS | frozenset({
     "len", "bool", "isinstance", "int", "dict", "list", "set", "tuple", "frozenset", "sorted", "append", "extend", "update",
     "add", "join", "format", "replace", "startswith", "endswith", "lower", "upper", "split", "rstrip", "lstrip", "get",
@@ -57,9 +61,13 @@ PURE = WRAPS | frozenset({
 })
 
 
-def _source_map(node: ast.AST) -> bool:
+def _source_map(node: ast.AST, maps: frozenset[str] | set[str] = frozenset()) -> bool:
     if isinstance(node, ast.Name):
-        return node.id in SOURCE_MAPS
+        return node.id in SOURCE_MAPS or node.id in maps
+    if isinstance(node, ast.BoolOp):
+        return any(_source_map(value, maps) for value in node.values)
+    if isinstance(node, ast.IfExp):
+        return _source_map(node.body, maps) or _source_map(node.orelse, maps)
     if isinstance(node, ast.Attribute):
         return node.attr in SOURCE_MAPS
     if isinstance(node, ast.Subscript):
@@ -68,26 +76,29 @@ def _source_map(node: ast.AST) -> bool:
             and bool(node.args) and isinstance(node.args[0], ast.Constant) and node.args[0].value == "data_source")
 
 
-def _path_value(node: ast.AST, tainted: set[str]) -> bool:
+def _path_value(node: ast.AST, tainted: set[str], maps: frozenset[str] | set[str] = frozenset()) -> bool:
     if isinstance(node, ast.Name):
         return node.id in PATH_NAMES or node.id in tainted
     if isinstance(node, ast.Attribute):
         return node.attr in PATH_NAMES
     if isinstance(node, ast.Subscript):
-        return isinstance(node.slice, ast.Constant) and node.slice.value == "path" and _source_map(node.value)
+        return isinstance(node.slice, ast.Constant) and node.slice.value == "path" and _source_map(node.value, maps)
     if isinstance(node, ast.BoolOp):
-        return any(_path_value(value, tainted) for value in node.values)
+        return any(_path_value(value, tainted, maps) for value in node.values)
     if isinstance(node, ast.IfExp):
-        return _path_value(node.body, tainted) or _path_value(node.orelse, tainted)
+        return _path_value(node.body, tainted, maps) or _path_value(node.orelse, tainted, maps)
+    if isinstance(node, ast.BinOp) and isinstance(node.op, ast.Div):
+        # ``Path(export_path) / "member.parquet"`` (Carbon b14r1).
+        return _path_value(node.left, tainted, maps)
     if isinstance(node, ast.Call):
         func = node.func
         if (isinstance(func, ast.Attribute) and func.attr == "get" and node.args
                 and isinstance(node.args[0], ast.Constant) and node.args[0].value == "path"):
-            return _source_map(func.value)
+            return _source_map(func.value, maps)
         name = func.id if isinstance(func, ast.Name) else func.attr if isinstance(func, ast.Attribute) else ""
         if name in WRAPS:
-            return bool(node.args and _path_value(node.args[0], tainted)) or (
-                isinstance(func, ast.Attribute) and _path_value(func.value, tainted))
+            return any(_path_value(arg, tainted, maps) for arg in node.args) or (
+                isinstance(func, ast.Attribute) and _path_value(func.value, tainted, maps))
     return False
 
 
@@ -98,14 +109,17 @@ def _callee(node: ast.Call) -> str:
 
 class _Sites(ast.NodeVisitor):
     def __init__(self, rel: str, sites: Counter) -> None:
-        self.rel, self.sites, self.scope, self.tainted = rel, sites, [], [set()]
+        self.rel, self.sites, self.scope, self.tainted, self.maps = rel, sites, [], [set()], [set()]
 
     def _function(self, node) -> None:
         self.scope.append(node.name)
-        self.tainted.append(set())
+        # A nested function sees its enclosing function's locals (Carbon b14r1).
+        self.tainted.append(set(self.tainted[-1]) if len(self.scope) > 1 else set())
+        self.maps.append(set(self.maps[-1]) if len(self.scope) > 1 else set())
         self.generic_visit(node)
         self.scope.pop()
         self.tainted.pop()
+        self.maps.pop()
 
     visit_FunctionDef = visit_AsyncFunctionDef = _function
 
@@ -114,20 +128,28 @@ class _Sites(ast.NodeVisitor):
         self.generic_visit(node)
         self.scope.pop()
 
+    def _bind(self, name: str, value: ast.AST) -> None:
+        if _path_value(value, self.tainted[-1], self.maps[-1]):
+            self.tainted[-1].add(name)
+        if _source_map(value, self.maps[-1]):
+            # ``source = study.get("data_source") or {}`` (Carbon b14r1).
+            self.maps[-1].add(name)
+
     def visit_Assign(self, node) -> None:
-        if _path_value(node.value, self.tainted[-1]):
-            self.tainted[-1].update(target.id for target in node.targets if isinstance(target, ast.Name))
+        for target in node.targets:
+            if isinstance(target, ast.Name):
+                self._bind(target.id, node.value)
         self.generic_visit(node)
 
     def visit_AnnAssign(self, node) -> None:
-        if node.value is not None and isinstance(node.target, ast.Name) and _path_value(node.value, self.tainted[-1]):
-            self.tainted[-1].add(node.target.id)
+        if node.value is not None and isinstance(node.target, ast.Name):
+            self._bind(node.target.id, node.value)
         self.generic_visit(node)
 
     def visit_Call(self, node) -> None:
         callee = _callee(node)
         values = [*node.args, *(keyword.value for keyword in node.keywords)]
-        if callee not in PURE and any(_path_value(value, self.tainted[-1]) for value in values):
+        if callee not in PURE and any(_path_value(value, self.tainted[-1], self.maps[-1]) for value in values):
             self.sites[(self.rel, ".".join(self.scope) or "<module>", callee)] += 1
         self.generic_visit(node)
 
@@ -242,7 +264,7 @@ _CLASSIFIED = {
     ('dataio.py', 'preview_registered_export_icd_cohort', 'preview_export_cohort'): (1, 'REGISTERED'),
     ('dataio.py', 'create_dir', 'require_path'): (1, 'FOLDER'),
     ('dataio.py', 'create_dir', '_safe_dir'): (1, 'FOLDER'),
-    ('dataio.py', 'summarize_export_workspace', 'require_path'): (1, 'FOLDER'),
+    ('dataio.py', 'summarize_export_workspace', 'require_path'): (2, 'FOLDER'),
     ('dataio.py', 'summarize_export_workspace', '_safe_dir'): (1, 'FOLDER'),
     ('dataio.py', 'summarize_export_workspace', '_unpublished_export_error'): (1, 'FOLDER'),
     ('dataio.py', 'summarize_export_workspace', '_export_file_inventory'): (1, 'FOLDER'),
@@ -293,7 +315,7 @@ _CLASSIFIED = {
     ('demo_source_storage.py', 'public_demo_egress_scope', 'synthetic_source_scope'): (1, 'FOLDER'),
     ('eicu_first_observed_source.py', 'derive_from_verified_eicu_demo', 'resolve_raw_source_identity_binding'): (1, 'OWNER'),
     ('eicu_first_observed_source.py', 'derive_from_registered_eicu_export', 'resolve_raw_source_identity_binding'): (1, 'PASS'),
-    ('export_download.py', 'prepare_registered_export_bundle', 'require_path'): (1, 'FOLDER'),
+    ('export_download.py', 'prepare_registered_export_bundle', 'require_path'): (2, 'FOLDER'),
     ('export_download.py', 'prepare_registered_export_bundle', 'require_published_native_export'): (1, 'REGISTERED'),
     ('export_download.py', 'prepare_registered_export_bundle', '_manifest_files'): (1, 'REGISTERED'),
     ('export_download.py', 'prepare_registered_export_bundle', 'require_listed_members_present'): (1, 'REGISTERED'),
@@ -391,7 +413,7 @@ _CLASSIFIED = {
     ('quick_answer/preparation.py', '_verified_identity', 'resolve_study_first_icu_stay'): (1, 'PASS'),
     ('quick_answer/preparation.py', '_first_stays_orderable', 'resolve_raw_source_identity_binding'): (1, 'PASS'),
     ('quick_answer/preparation.py', 'prepare_registered_question', 'registered_source_identity'): (1, 'FOLDER'),
-    ('raw_case_snapshot.py', 'stage_reviewed_source_files', 'open'): (1, 'REGISTERED'),
+    ('raw_case_snapshot.py', 'stage_reviewed_source_files', 'open'): (3, 'REGISTERED'),
     ('raw_preparation_candidate.py', 'create_candidate_for_review', 'candidate_from_scientific_review'): (1, 'REGISTERED'),
     ('raw_preparation_dependencies.py', 'declared_native_export_inventory', 'require_no_in_progress_marker'): (1, 'REGISTERED'),
     ('raw_preparation_dependencies.py', 'declared_native_export_inventory', 'open'): (1, 'REGISTERED'),
@@ -481,7 +503,7 @@ _CLASSIFIED = {
     ('run_population_proof.py', 'verified_first_stay_applied', 'open_export_package'): (1, 'REGISTERED'),
     ('scientific_runtime_projection.py', 'export_kdigo_strict_derivation_available', 'is_export_package'): (1, 'REFUSES'),
     ('scientific_runtime_projection.py', 'export_kdigo_strict_derivation_available', 'open_export_package'): (1, 'REFUSES'),
-    ('sic_raw_preparation_grant.py', 'sic_preparation_schema_sha256', 'open'): (1, 'REGISTERED'),
+    ('sic_raw_preparation_grant.py', 'sic_preparation_schema_sha256', 'open'): (2, 'REGISTERED'),
     ('sic_raw_preparation_grant.py', 'verify_sic_raw_preparation_grant', 'registered_source_identity'): (1, 'FOLDER'),
     ('sic_raw_preparation_grant.py', 'verify_sic_raw_preparation_grant', 'prepare_case_duration_metadata_plan'): (1, 'REGISTERED'),
     ('sic_raw_preparation_grant.py', 'verify_sic_raw_preparation_grant', 'sic_preparation_schema_sha256'): (1, 'FOLDER'),
@@ -506,6 +528,35 @@ _CLASSIFIED = {
     ('time_varying_runtime_projection.py', 'materialize_web_time_varying_input', 'resolve_raw_hospital_source_binding'): (1, 'REGISTERED'),
     ('time_varying_runtime_projection.py', 'materialize_web_hospital_followup', 'materialize_web_hospital_status'): (1, 'PASS'),
     ('time_varying_runtime_projection.py', 'materialize_web_hospital_followup', 'resolve_raw_hospital_source_binding'): (1, 'REGISTERED'),
+    # Carbon b14r1 collector gaps (source map behind `or`, `/` and os.path.join
+    # members, closures). Two KDIGO remedy reads of the raw folder were BUG and
+    # now read source_authority_export_path, so they left the sweep.
+    ('agent_outputs.py', '_load_context', '_read_columns'): (1, 'REFUSES'),
+    ('agent_outputs.py', '_load_context', '_read_export_frame'): (1, 'REFUSES'),
+    ('agent_outputs.py', '_load_context', 'member_unreadable'): (2, 'REFUSES'),
+    ('agent_pipeline_runs.py', '_execution_retry_source_cohort', 'load_verified_materialized_cohort_authority'): (1, 'REGISTERED'),
+    ('agent_pipeline_runs.py', '_execution_retry_source_trajectory', 'load_verified_materialized_trajectory_authority'): (1, 'REGISTERED'),
+    ('cohort_review.py', 'cohort_review_summary', 'source_file_identity'): (2, 'FOLDER'),
+    ('data_package_review.py', 'build_registered_data_package_review', '_normalized_path'): (1, 'FOLDER'),
+    ('dataio.py', 'summarize_export_workspace', '_quality_row'): (1, 'REFUSES'),
+    ('dataio.py', 'summarize_export_workspace', '_read_export_frame'): (1, 'REFUSES'),
+    ('dataio.py', 'summarize_export_workspace', '_read_stay_id_frame'): (1, 'REFUSES'),
+    ('patient_drilldown/feature_detail.py', 'load_feature_detail', 'read_export_projection'): (1, 'REGISTERED'),
+    ('pi_copilot/install.py', 'install_runtime', 'copytree'): (1, 'FOLDER'),
+    ('pi_copilot/quick_answers.py', 'QuickAnswerService._transition_quick_question', 'registered_source_identity'): (1, 'REFUSES'),
+    ('pi_copilot/session_storage.py', 'SessionStorageMaintenance.restore', 'require_instance_path'): (1, 'FOLDER'),
+    ('pi_copilot/tools.py', '_accept_idea_handoff', 'idea_execution_readiness_binding'): (1, 'FOLDER'),
+    ('quick_answer/preparation.py', '_preparation_budget', 'ParquetFile'): (1, 'REGISTERED'),
+    ('raw_source_authority.py', 'resolve_raw_mimic_iv_source_binding', '_sha256_file'): (1, 'FOLDER'),
+    ('research_append_source.py', 'registered_source_changed', 'resolve_registered_export'): (1, 'REFUSES'),
+    ('research_append_source.py', 'registered_source_changed', 'validate_research_pipeline_source'): (1, 'REFUSES'),
+    ('research_auto_resume.py', 'recover_runner', 'make_research_pipeline_run_runner'): (1, 'PASS'),
+    ('research_multi_extraction.py', 'prepare_source', 'validate_research_pipeline_source'): (1, 'REGISTERED'),
+    ('research_multi_pipeline.py', 'PipelineDatabaseOwner.reference_target', 'registered_source_identity'): (1, 'REFUSES'),
+    ('source_identity_authority.py', 'resolve_patient_grouping_authority', '_regular_file'): (1, 'REGISTERED'),
+    ('source_partition_candidates.py', 'discover_source_partition_candidates', 'listdir'): (1, 'REGISTERED'),
+    ('source_partition_candidates.py', 'discover_source_partition_candidates', 'open'): (2, 'REGISTERED'),
+    ('time_origin_source_authority.py', 'prepare_case_duration_metadata_plan', 'read_schema'): (1, 'REGISTERED'),
 }
 
 
@@ -526,6 +577,31 @@ def test_the_sweep_finds_an_unrouted_reader_by_its_value_not_its_name():
     })
 
 
+def test_the_sweep_follows_wrapped_maps_member_paths_and_closures():
+    # Carbon b14r1: a source map behind ``or``, a source-map local, a member
+    # path built with ``/`` or ``os.path.join``, and an enclosing function's
+    # local read inside a closure all still reach the sweep.
+    sites = path_consumer_sites({"synthetic.py": (
+        "def outer(study, export_path):\n"
+        "    reader_a((study.get('data_source') or {}).get('path'))\n"
+        "    bound = study.get('data_source') or {}\n"
+        "    reader_b(bound['path'])\n"
+        "    reader_c(Path(export_path) / 'cohort.parquet')\n"
+        "    reader_d(os.path.join(export_path, 'cohort.parquet'))\n"
+        "    folder = str(export_path)\n"
+        "    def inner():\n"
+        "        return reader_e(folder)\n"
+        "    return inner\n"
+    )})
+    assert sites == Counter({
+        ("synthetic.py", "outer", "reader_a"): 1,
+        ("synthetic.py", "outer", "reader_b"): 1,
+        ("synthetic.py", "outer", "reader_c"): 1,
+        ("synthetic.py", "outer", "reader_d"): 1,
+        ("synthetic.py", "outer.inner", "reader_e"): 1,
+    })
+
+
 def test_every_source_path_consumer_is_classified():
     sites = path_consumer_sites(_webserver_sources())
     expected = {key: count for key, (count, _cls) in _CLASSIFIED.items()}
@@ -536,6 +612,33 @@ def test_every_source_path_consumer_is_classified():
     )
     assert not sorted(expected.keys() - sites.keys()), "a classified call is gone; drop its row"
     assert {cls for _count, cls in _CLASSIFIED.values()} <= _CLASSES
+
+
+def path_parameter_owners(sources: dict[str, str]) -> set[str]:
+    """Webserver functions (or record classes) with a parameter in ``PATH_NAMES``."""
+
+    owners: set[str] = set()
+    for text in sources.values():
+        for node in ast.walk(ast.parse(text)):
+            if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
+                arguments = node.args
+                names = [arg.arg for arg in (*arguments.posonlyargs, *arguments.args, *arguments.kwonlyargs)]
+                if any(name in PATH_NAMES for name in names):
+                    owners.add(node.name)
+            elif isinstance(node, ast.ClassDef) and any(
+                    isinstance(item, ast.AnnAssign) and isinstance(item.target, ast.Name)
+                    and item.target.id in PATH_NAMES for item in node.body):
+                owners.add(node.name)
+    return owners
+
+
+def test_every_pass_row_forwards_into_a_classified_webserver_parameter():
+    # A PASS row is only sound when its callee's own body is swept here
+    # (Carbon b14r1): the callee is a webserver function whose path
+    # parameter is in PATH_NAMES, so its sites carry their own rows.
+    owners = path_parameter_owners(_webserver_sources())
+    unresolved = sorted(key for key, (_count, cls) in _CLASSIFIED.items() if cls == "PASS" and key[2] not in owners)
+    assert not unresolved, f"classify these by what the callee does with the path: {unresolved}"
 
 
 def test_no_source_path_consumer_reads_the_raw_folder_for_its_registered_export():

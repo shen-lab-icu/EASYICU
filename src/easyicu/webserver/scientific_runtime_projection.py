@@ -924,9 +924,14 @@ def compile_landmark_categorical_runtime_projection(
     if kdigo_observability_authority_missing(
         primary_exposure_source, primary_exposure
     ):
-        source = study.get("data_source") if isinstance(study, Mapping) else None
+        from easyicu.webserver.research_launch_scientific import (
+            source_authority_export_path,
+        )
+
+        # A raw official-Demo study's receipts live in its registered export,
+        # not the raw folder (S1540 sweep, Carbon b14r1).
         derivable = export_kdigo_strict_derivation_available(
-            (source or {}).get("path") if isinstance(source, Mapping) else None
+            source_authority_export_path(study) or None if isinstance(study, Mapping) else None
         )
         raise WebScientificRuntimeProjectionError(
             "web_kdigo_observability_authority_missing",
