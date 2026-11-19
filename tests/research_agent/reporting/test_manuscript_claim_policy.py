@@ -282,18 +282,67 @@ def test_first_retained_sentence_determines_region_scope(
     assert filtered.filtered_sentences == ((rejected,) if retains_next else (rejected, following))
 
 
-def test_first_retained_sentence_locks_scope_for_the_rest_of_the_region() -> None:
-    scaffold = (
+@pytest.mark.parametrize(
+    ("separator", "discarded"),
+    [(" ", ""), ("\n", ""), ("\n", "The scanner copied 23 field notes.")],
+    ids=["same-line", "soft-wrap", "soft-wrap-with-deletion"],
+)
+def test_first_retained_sentence_locks_scope_for_the_rest_of_the_region(separator, discarded) -> None:
+    opener = (
         "## Abstract\n\n**Results:**\n\n"
-        "Methods: The archivist reviewed the staging directory. "
-        "Results: The migration tool shuffled archived records [@migration_review].\n"
+        f"Methods: The archivist reviewed the staging directory.{separator}"
     )
+    followup = "Results: The migration tool shuffled archived records [@migration_review].\n"
+    scaffold = opener + (discarded + "\n" if discarded else "") + followup
     filtered = filter_evidence_bound_scaffold(scaffold, resolve_claim=_resolver)
 
     assert filter_evidence_bound_scaffold(
         filtered.scaffold, resolve_claim=_resolver,
+    ).scaffold == filtered.scaffold == opener + followup
+    assert filtered.filtered_sentences == ((discarded,) if discarded else ())
+
+
+@pytest.mark.parametrize(
+    ("retained_line", "discarded_body"),
+    [
+        ("Results: The cohort included 18 observations {evidence:cohort_log}.", ""),
+        ("Table 1: The cohort included 18 observations {evidence:cohort_log}.", ""),
+        ("**Results:**", " Storage volume fell by 37% (p = 0.002)."),
+    ],
+    ids=["results", "table-caption", "retained-abstract-label"],
+)
+@pytest.mark.parametrize("citation", ["{evidence:archive_log}", "[@archive_review]"])
+def test_soft_wrapped_findings_keep_the_first_retained_scope(retained_line, discarded_body, citation):
+    prefix = "## Abstract\n\n**Methods:**\n\n"
+    unsupported = f"The scanner copied field notes to the catalog {citation}."
+    resolve_evidence = {"cohort_log", "archive_log"}.__contains__
+    filtered = filter_evidence_bound_scaffold(
+        f"{prefix}{retained_line}{discarded_body}\n{unsupported}\n",
+        resolve_claim=_resolver, resolve_evidence=resolve_evidence,
+    )
+
+    assert filter_evidence_bound_scaffold(
+        filtered.scaffold, resolve_claim=_resolver, resolve_evidence=resolve_evidence,
+    ).scaffold == filtered.scaffold
+    assert filtered.scaffold == f"{prefix}{retained_line}\n"
+    assert unsupported in filtered.unsupported_scientific_claim_sentences
+
+
+@pytest.mark.parametrize("break_marker", ["\n", "  "], ids=["paragraph-break", "hard-line-break"])
+def test_caption_restriction_ends_at_a_markdown_break(break_marker):
+    scaffold = (
+        "## Abstract\n\n**Methods:**\n\n"
+        f"Table 1: The cohort included 18 observations {{evidence:cohort_log}}.{break_marker}\n"
+        "The scanner copied field notes to the catalog.\n"
+    )
+    resolve_evidence = {"cohort_log"}.__contains__
+    filtered = filter_evidence_bound_scaffold(
+        scaffold, resolve_claim=_resolver, resolve_evidence=resolve_evidence,
+    )
+
+    assert filter_evidence_bound_scaffold(
+        filtered.scaffold, resolve_claim=_resolver, resolve_evidence=resolve_evidence,
     ).scaffold == filtered.scaffold == scaffold
-    assert filtered.filtered_sentences == ()
 
 
 def test_exposed_caption_is_restricted_after_an_outer_methods_label() -> None:

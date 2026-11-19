@@ -887,6 +887,15 @@ class _ScaffoldScope:
         return _ScaffoldScope(section, subsection, findings_depth, in_abstract, abstract_findings)
 
 
+def _restricted_prose(scope: _ScaffoldScope, prefix: str, content: str) -> bool:
+    return bool(
+        (scope.findings_depth is not None and (not scope.in_abstract or scope.abstract_findings))
+        or _abstract_section_label(prefix, content)
+        in {"results", "findings", "conclusion", "conclusions", "结果", "结论"}
+        or _CAPTION_LABEL_RE.match(content)
+    )
+
+
 def filter_evidence_bound_scaffold(
     scaffold: str,
     *,
@@ -905,9 +914,15 @@ def filter_evidence_bound_scaffold(
         _hour_span(*span) for fact in method_facts for span in fact.executed_hour_spans
     )
     scope = _ScaffoldScope()
+    paragraph_restriction: bool | None = None
     for region in manuscript_regions(scaffold):
         block = scaffold[region.start:region.end]
         opaque = region.kind in {"fence", "html"}
+        # Complete sentences on separate source lines can be separate logical
+        # regions while still belonging to the same Markdown paragraph.
+        if region.kind != "prose" or INLINE_SECTION_LABEL_RE.match(block.lstrip()):
+            paragraph_restriction = None
+        hard_break = region.kind == "prose" and block.endswith(("  ", "\\"))
         if not region.complete:
             unsupported_scientific_claims.append(block)
             filtered_claims.append(block)
@@ -924,7 +939,7 @@ def filter_evidence_bound_scaffold(
                 filtered_lines.append(line)
                 continue
             structure_prefix, content = _split_markdown_structure_prefix(line)
-            if not opaque:
+            if not opaque and paragraph_restriction is None:
                 candidate_scope = scope.after_line(line, region.kind)
             # A top-level abstract label remains even if its entire body fails admission.
             abstract_label_line = (
@@ -981,21 +996,16 @@ def filter_evidence_bound_scaffold(
             sentences = _split_sentences(content)
             sentence_scope = not opaque and region.kind != "heading"
             kept: list[str] = []
+            restricted_line = paragraph_restriction
             for sentence in sentences:
-                if not kept:
+                if paragraph_restriction is None and not kept:
                     leading_content = sentence if sentence_scope else content
                     if sentence_scope:
                         candidate_scope = scope.after_line(
                             structure_prefix + sentence, region.kind,
                         )
-                    abstract_label = _abstract_section_label(structure_prefix, leading_content)
-                    restricted_line = bool(
-                        (
-                            candidate_scope.findings_depth is not None
-                            and (not candidate_scope.in_abstract or candidate_scope.abstract_findings)
-                        )
-                        or abstract_label in {"results", "findings", "conclusion", "conclusions", "结果", "结论"}
-                        or _CAPTION_LABEL_RE.match(leading_content)
+                    restricted_line = _restricted_prose(
+                        candidate_scope, structure_prefix, leading_content,
                     )
                 if _states_unexecuted_window(sentence, executed_spans):
                     # An executed design states the windows the analysis ran on
@@ -1118,12 +1128,23 @@ def filter_evidence_bound_scaffold(
             # section state or emitting a partially edited fence or HTML block.
             filtered_lines[first_line:] = [block if len(filtered_claims) == first_claim else ""]
         elif retained_line := filtered_lines[-1]:
-            # Edited lines can keep only a label or lose it with the rejected body.
-            # Commit the transition represented by the emitted Markdown.
-            scope = (
-                candidate_scope if retained_line == line
-                else scope.after_line(retained_line, region.kind)
-            )
+            if paragraph_restriction is None:
+                # Commit the transition represented by the emitted Markdown,
+                # including when only the abstract label survives.
+                scope = (
+                    candidate_scope if retained_line == line
+                    else scope.after_line(retained_line, region.kind)
+                )
+                if region.kind == "prose":
+                    prefix, content = _split_markdown_structure_prefix(retained_line)
+                    paragraph_restriction = _restricted_prose(scope, prefix, content)
+            if hard_break and not retained_line.endswith("\\"):
+                filtered_lines[-1] = retained_line + "  "
+        elif paragraph_restriction is not None and not hard_break:
+            # A rejected continuation does not insert a new paragraph boundary.
+            filtered_lines.pop()
+        if hard_break:
+            paragraph_restriction = None
     return ScaffoldPolicyResult(
         scaffold="\n".join(filtered_lines).strip() + "\n",
         filtered_sentences=tuple(filtered_claims),
