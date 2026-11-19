@@ -62,6 +62,7 @@ from .contracts import (
 )
 from .skill_attachments import SkillAttachmentService
 from .quick_answers import QuickAnswerService
+from .idea_exploration import exploration_open
 from .codex_gateway import CodexPiGatewayPool
 from .conversation_status import (
     later_research_job,
@@ -5711,6 +5712,10 @@ class PiCopilotService(SkillAttachmentService, QuickAnswerService):
                 if include_replay and record.agent_mode == "workspace" else []
             ),
             "quick_answers": self._quick_attachments(record, replay_turns) if include_replay else [],
+            # Mined ideas await the researcher's choice: no automatic plan.
+            "idea_exploration_open": include_replay and exploration_open(
+                replay_turns, study_contexts.get_context(str(record.binding.study_context_id or "")),
+            ),
             "transcript_page": (
                 dict(state.get("transcript_page") or {})
                 if isinstance(state.get("transcript_page"), Mapping)

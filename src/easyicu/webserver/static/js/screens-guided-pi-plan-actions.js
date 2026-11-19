@@ -673,6 +673,8 @@
         const quick = modules && typeof modules.optional === 'function' ? modules.optional('quickAnswers') : null;
         if (quick && typeof quick.holdsAutomaticPlan === 'function'
           && quick.holdsAutomaticPlan(host.session(), host.workflow())) return false;
+        // Mined ideas await a choice; the plan card's button starts the plan.
+        if ((host.session() || {}).idea_exploration_open === true) return false;
         return startFormalPlanGeneration(actionCode, {automatic: true});
       }
       if (actionCode === 'plan_execution_upgrade_required') {
