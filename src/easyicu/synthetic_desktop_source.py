@@ -17,6 +17,7 @@ DATABASE = "eicu_demo"
 PROVENANCE_DATABASE = "synthetic_eicu_demo"
 QUESTION = "In the synthetic eICU cohort, is age associated with hospital mortality after adjustment for sex?"
 ANALYSIS_INPUTS = {"question": QUESTION, "primary_exposure": "age", "target_outcome": "death", "covariates": ("sex",)}
+FIRST_STAY_COORDINATE_FILENAME = "synthetic_first_stay.parquet"
 SEED = 731
 STAYS = 128
 
@@ -101,7 +102,7 @@ def first_stay_materializer_options(work_dir: Path, archive_sha256: str) -> dict
         pd.DataFrame(_patient_rows()), stay_column="patientunitstayid", patient_column="uniquepid",
         order_column="unitvisitnumber", first_order_value=1, identity_table_name="synthetic_patient",
     )
-    coordinate = work_dir / "synthetic_first_stay.parquet"
+    coordinate = work_dir / FIRST_STAY_COORDINATE_FILENAME
     with coordinate.open("xb") as output:
         derived.frame.to_parquet(output, index=False)
     return FirstIcuStayBinding(

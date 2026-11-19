@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 import socket
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 
@@ -12,7 +13,7 @@ from easyicu.research_agent.canonical_json import canonical_json
 from easyicu.research_agent.orchestration.profiles import PUBLIC_DEMO_ACCEPTANCE
 from easyicu.research_agent.providers.clients import ReplayLLMClient
 from easyicu.research_agent.providers.protocol import ReplayCassette, ReplayError
-from easyicu.synthetic_desktop_source import PROVENANCE_DATABASE, source_spec
+from easyicu.synthetic_desktop_source import ANALYSIS_INPUTS, PROVENANCE_DATABASE, source_spec
 from tools import windows_laptop_acceptance as acceptance
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -209,3 +210,167 @@ def test_scripted_replay_refuses_a_live_provider_identity(tmp_path, monkeypatch)
                                           profile_ref=PUBLIC_DEMO_ACCEPTANCE.ref, synthetic_source=True):
         with pytest.raises(ReplayError, match="model_replay_provider_mismatch"):
             ReplayLLMClient(relabeled)
+
+
+@pytest.fixture
+def scripted_source(tmp_path, monkeypatch):
+    from easyicu.webserver import demo_source_storage as storage
+
+    export = tmp_path / "invented-stays"
+    export.mkdir()
+    monkeypatch.setenv("EASYICU_DEPLOYMENT", "desktop")
+    monkeypatch.setattr(storage, "_verified_synthetic_replay_source", lambda path, database: source_spec())
+    monkeypatch.setattr(storage, "egress_source_database", lambda path, database: database)
+    return {"export_path": export, "database": source_spec().database}
+
+
+def test_blocked_replay_refuses_to_reuse_its_first_stay_coordinate(tmp_path, monkeypatch, scripted_source):
+    from easyicu.research_agent import facade
+    from easyicu.research_agent.acquisition import catalog
+    from easyicu.research_agent.cohort import materializer
+    from easyicu.webserver.demo_source_storage import public_demo_replay_scope
+
+    work = tmp_path / "interrupted-acceptance"
+    options = {**scripted_source, **ANALYSIS_INPUTS, "work_dir": work}
+    monkeypatch.setattr(materializer, "materialize_to_parquet", lambda output, **kwargs: {
+        "parquet": output / "cohort.parquet",
+    })
+    monkeypatch.setattr(catalog, "build_available_catalog", lambda path: SimpleNamespace(concepts=[]))
+    first = facade.replay_public_demo(cassette_path=CASSETTE, synthetic_source=True, **options)
+    assert first["reason_code"] == "model_replay_baseline_endpoint_missing"
+    coordinate = work / "synthetic_first_stay.parquet"
+    original = coordinate.read_bytes()
+    assert not (work / "runs").exists()
+
+    with public_demo_replay_scope(**scripted_source, profile_ref=PUBLIC_DEMO_ACCEPTANCE.ref, synthetic_source=True):
+        client = ReplayLLMClient(ReplayCassette.read(CASSETTE))
+        with pytest.raises(ReplayError, match="model_replay_workdir_not_empty"):
+            facade.run_public_demo(client=client, review=None, **options)
+    receipt_path = work / "model_replay_receipt.json"
+    direct = json.loads(receipt_path.read_text(encoding="utf-8"))
+    assert direct["status"] == "blocked" and direct["reason_code"] == "model_replay_workdir_not_empty"
+
+    second = facade.replay_public_demo(cassette_path=CASSETTE, synthetic_source=True, **options)
+    assert second["status"] == "blocked" and second["reason_code"] == "model_replay_workdir_not_empty"
+    assert second == json.loads(receipt_path.read_text(encoding="utf-8"))
+    assert second["model_mode"] == "scripted_replay"
+    assert second["model_disclosure"] == DISCLOSURE
+    assert coordinate.read_bytes() == original
+
+
+@pytest.mark.parametrize("artifact", ["materialized", "runs"])
+def test_replay_refuses_each_preexisting_output_directory(tmp_path, scripted_source, artifact):
+    from easyicu.research_agent.facade import replay_public_demo
+
+    work = tmp_path / "interrupted-analysis"
+    (work / artifact).mkdir(parents=True)
+    note = work / artifact / "invented-progress.txt"
+    note.write_text("The synthetic export was interrupted.", encoding="utf-8")
+    result = replay_public_demo(
+        cassette_path=CASSETTE, work_dir=work, synthetic_source=True, **scripted_source, **ANALYSIS_INPUTS,
+    )
+    assert result["status"] == "blocked" and result["reason_code"] == "model_replay_workdir_not_empty"
+    assert not (work / "synthetic_first_stay.parquet").exists()
+    assert note.read_text(encoding="utf-8") == "The synthetic export was interrupted."
+
+
+@pytest.mark.parametrize(("field", "value"), [
+    ("question", "Is admission weight related to the length of an invented hospital stay?"),
+    ("primary_exposure", "admissionweight"),
+    ("target_outcome", "dischargeweight"),
+    ("covariates", ()),
+    ("covariates", ("admissionweight",)),
+])
+def test_scripted_replay_refuses_other_analysis_inputs_before_materialization(
+    tmp_path, monkeypatch, scripted_source, field, value,
+):
+    from easyicu.research_agent import facade
+    from easyicu.research_agent.cohort import materializer
+    from easyicu.webserver.demo_source_storage import public_demo_replay_scope
+
+    def materialize(*args, **kwargs):
+        raise AssertionError("unexpected materialization for an unreviewed synthetic analysis")
+
+    monkeypatch.setattr(materializer, "materialize_to_parquet", materialize)
+    work = tmp_path / "different-analysis"
+    options = {**scripted_source, **ANALYSIS_INPUTS, field: value, "work_dir": work}
+    reason = "model_replay_scripted_inputs_mismatch"
+    with public_demo_replay_scope(**scripted_source, profile_ref=PUBLIC_DEMO_ACCEPTANCE.ref, synthetic_source=True):
+        client = ReplayLLMClient(ReplayCassette.read(CASSETTE))
+        with pytest.raises(ReplayError, match=reason):
+            facade.run_public_demo(client=client, review=None, **options)
+    result = facade.replay_public_demo(cassette_path=CASSETTE, synthetic_source=True, **options)
+    assert result["status"] == "blocked" and result["reason_code"] == reason
+    receipt = work / "model_replay_receipt.json"
+    assert list(work.iterdir()) == [receipt]
+    assert json.loads(receipt.read_text(encoding="utf-8")) == result
+
+
+def test_scripted_run_resolves_scope_through_a_registered_wrapper(tmp_path, monkeypatch, scripted_source):
+    from easyicu.research_agent import facade
+    from easyicu.research_agent.acquisition import catalog
+    from easyicu.research_agent.cohort import materializer
+    from easyicu.research_agent.providers.llm import FallbackLLMClient
+    from easyicu.webserver.demo_source_storage import public_demo_replay_scope
+
+    work = tmp_path / "wrapped-acceptance"
+    options = {**scripted_source, **ANALYSIS_INPUTS, "work_dir": work}
+    monkeypatch.setattr(materializer, "materialize_to_parquet", lambda output, **kwargs: {
+        "parquet": output / "cohort.parquet",
+    })
+    monkeypatch.setattr(catalog, "build_available_catalog", lambda path: SimpleNamespace(concepts=[]))
+    with public_demo_replay_scope(**scripted_source, profile_ref=PUBLIC_DEMO_ACCEPTANCE.ref, synthetic_source=True):
+        client = FallbackLLMClient(ReplayLLMClient(ReplayCassette.read(CASSETTE)), name="invented transport wrapper")
+        with pytest.raises(ReplayError, match="model_replay_source_mismatch"):
+            facade.run_public_demo(client=client, review=None, **{**options, "export_path": tmp_path})
+        assert not work.exists()
+        with pytest.raises(ReplayError, match="model_replay_baseline_endpoint_missing"):
+            facade.run_public_demo(client=client, review=None, **options)
+        assert (work / "synthetic_first_stay.parquet").is_file()
+    with pytest.raises(ReplayError, match="model_replay_scope_required"):
+        facade.run_public_demo(client=client, review=None, **options)
+
+
+@pytest.mark.parametrize("kind", ["offline", "live"])
+def test_public_demo_run_accepts_non_replay_clients(tmp_path, monkeypatch, kind):
+    from easyicu.research_agent import facade, pipeline
+    from easyicu.research_agent.cohort import materializer
+    from easyicu.research_agent.providers.clients import OpenAIClient
+    from easyicu.research_agent.providers.mocks import ScriptedMockLLMClient
+    from easyicu.webserver import demo_source_storage as storage
+
+    if kind == "offline":
+        client = ScriptedMockLLMClient(["Count the invented squares."])
+    else:
+        client = OpenAIClient(model="invented-model", api_key="unused", base_url="http://127.0.0.1:8000/v1")
+    export = tmp_path / "invented-export"
+    work = tmp_path / "ordinary-acceptance"
+    question = "Does admission weight vary with the duration of invented stays?"
+    monkeypatch.setattr(storage, "_verified_public_demo", lambda path: SimpleNamespace(database="eicu_demo"))
+
+    def materialize(output, **kwargs):
+        assert kwargs == {
+            "data_path": export, "database": "eicu_demo", "static_concepts": ("admissionweight",),
+            "feature_concepts": (), "outcome_concepts": ("dischargelength",),
+        }
+        return {"parquet": output / "cohort.parquet"}
+
+    class StubPipeline:
+        def __init__(self, *, config, services):
+            assert services.llm is client
+
+        def run(self, **kwargs):
+            assert kwargs["question"] == question
+            assert "user_preferences" not in kwargs
+            return SimpleNamespace(manifest_path=work / "runs" / "invented" / "manifest.json")
+
+    monkeypatch.setattr(materializer, "materialize_to_parquet", materialize)
+    monkeypatch.setattr(pipeline, "ResearchAgentPipeline", StubPipeline)
+    monkeypatch.setattr(facade, "verify_first_result", lambda path: 1)
+    with storage.public_demo_egress_scope(str(export)):
+        result = facade.run_public_demo(
+            export_path=export, database="eicu_demo", work_dir=work, client=client, question=question,
+            primary_exposure="admissionweight", target_outcome="dischargelength", covariates=(), review=None,
+        )
+    assert result["status"] == "passed"
+    assert not (work / "synthetic_first_stay.parquet").exists()

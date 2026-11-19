@@ -132,10 +132,11 @@ def require_data_handling(source: str, data_handling: DataHandling | str) -> Non
     DataHandling(data_handling)
 
 
-def require_credentialed_data_clearance(client: Any, source: str) -> None:
-    """Check a replayed client's source and the source identity before deriving a prompt."""
-    _require_replay_source(client, source)
+def require_credentialed_data_clearance(client: Any, source: str) -> ReplayScope | None:
+    """Validate the data source and return any active replay scope bound to the client graph."""
+    scope = _require_replay_source(client, source)
     source_requires_clearance(source)
+    return scope
 
 
 def require_run_clearance(database: str, additional_sources: Sequence[str] | None, *clients: Any) -> None:
@@ -151,7 +152,8 @@ def require_run_clearance(database: str, additional_sources: Sequence[str] | Non
                 require_credentialed_data_clearance(client, source)
 
 
-def _require_replay_source(client: Any, source: str) -> None:
+def _require_replay_source(client: Any, source: str) -> ReplayScope | None:
+    scope = None
     stack, seen = [client], set()
     while stack:
         item = stack.pop()
@@ -160,11 +162,13 @@ def _require_replay_source(client: Any, source: str) -> None:
         seen.add(id(item))
         record = _trusted_client_record(item)
         if record is not None and record.replay_scope is not None:
-            require_replay_scope(record.replay_scope)
-            if source != record.replay_scope.database:
+            scope = record.replay_scope
+            require_replay_scope(scope)
+            if source != scope.database:
                 raise ReplayError("model_replay_source_forbidden")
         if record is not None and record.kind == "wrapper" and record.children_getter:
             stack.extend(record.children_getter())
+    return scope
 
 
 def require_context_clearance(context: Any, *clients: Any) -> None:
