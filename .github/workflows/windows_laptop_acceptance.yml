@@ -24,6 +24,10 @@ on:
         default: ""
   workflow_dispatch:
     inputs:
+      installer_run_id:
+        description: Completed desktop build run ID (required for synthetic scripted replay)
+        type: string
+        default: ""
       memory_pressure_gb:
         description: GiB allocated by a resident helper (0 disables pressure)
         type: number
@@ -36,6 +40,10 @@ on:
         description: Optional reviewed public-demo model cassette path in the repository
         type: string
         default: ""
+      synthetic_source:
+        description: Generate the invented eICU source for scripted desktop replay
+        type: boolean
+        default: false
 
 permissions:
   contents: read
@@ -73,15 +81,34 @@ jobs:
           persist-credentials: false
 
       - name: Initialize aggregate receipts for setup failures
+        env:
+          SYNTHETIC_SOURCE: ${{ inputs.synthetic_source }}
         run: |
           $receipts = "$env:GITHUB_WORKSPACE\acceptance-results"
           New-Item -ItemType Directory -Force $receipts | Out-Null
-          @{
+          $report = @{
             schema_version = "easyicu_laptop_acceptance_v1"
             status = "failed"
             failures = @(@{reason_code = "acceptance_driver_not_started"; exception_type = "WorkflowStepFailed"})
-          } | ConvertTo-Json -Depth 4 | Set-Content -Encoding utf8 "$receipts\acceptance.json"
-          "Windows laptop acceptance: driver did not start; inspect the setup step." | Set-Content -Encoding utf8 "$receipts\summary.md"
+          }
+          $summary = @("Windows laptop acceptance: driver did not start; inspect the setup step.")
+          if ($env:SYNTHETIC_SOURCE -eq 'true') {
+            $report.model_mode = 'scripted_replay'
+            $report.model_disclosure = 'desktop first-result acceptance used scripted model responses, not a live model'
+            $summary += $report.model_disclosure, '`model_mode=scripted_replay`'
+          }
+          $report | ConvertTo-Json -Depth 4 | Set-Content -Encoding utf8 "$receipts\acceptance.json"
+          $summary | Set-Content -Encoding utf8 "$receipts\summary.md"
+
+      - name: Validate the scripted release-candidate inputs
+        if: inputs.synthetic_source == true
+        env:
+          INSTALLER_RUN_ID: ${{ inputs.installer_run_id }}
+          MODEL_CASSETTE_PATH: ${{ inputs.model_cassette }}
+        run: |
+          if ($env:INSTALLER_RUN_ID -notmatch '^\d+$' -or [string]::IsNullOrWhiteSpace($env:MODEL_CASSETTE_PATH)) {
+            throw 'Synthetic replay requires installer_run_id and model_cassette.'
+          }
 
       - name: Record the candidate commit and select build directories
         id: candidate
@@ -135,6 +162,7 @@ jobs:
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 
       - name: Read official demo versions and checksums from their owner
+        if: inputs.synthetic_source != true
         id: demo-cache
         run: |
           $runtime = "$env:EASYICU_DESKTOP_BUILD_DIR\venv\Scripts\python.exe"
@@ -144,15 +172,17 @@ jobs:
           "key=$key" >> $env:GITHUB_OUTPUT
 
       - name: Cache only pinned public demo archives
+        if: inputs.synthetic_source != true
         uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
         with:
           path: ${{ runner.temp }}/EasyICU 数据/demo-cache/*/*.zip
           key: public-demo-${{ steps.demo-cache.outputs.key }}
 
-      - name: Install and accept the public demos through the desktop M1 boundary
+      - name: Install and run desktop first-result acceptance
         env:
           MEMORY_PRESSURE_GB: ${{ github.event_name == 'workflow_run' && 8 || inputs.memory_pressure_gb }}
           MODEL_CASSETTE_PATH: ${{ inputs.model_cassette }}
+          SYNTHETIC_SOURCE: ${{ inputs.synthetic_source }}
           SOURCE_COMMIT: ${{ steps.candidate.outputs.sha }}
         run: |
           $ErrorActionPreference = 'Stop'
@@ -170,13 +200,16 @@ jobs:
           if ($install.ExitCode -ne 0) { throw "Installer failed with exit code $($install.ExitCode)" }
           $result = 1
           try {
-            # Only loopback reads and the owner's pinned public-demo downloads
-            # occur during acceptance. No provider configuration or Docker.
+            # Web reads use loopback. Only the public-demo lane downloads
+            # archives. No provider configuration or Docker is used.
             $env:PATH = "$env:SystemRoot\System32;$env:SystemRoot"
             Remove-Item Env:PYTHONPATH, Env:PYTHONHOME -ErrorAction SilentlyContinue
             $replayArgs = @()
             if (-not [string]::IsNullOrWhiteSpace($env:MODEL_CASSETTE_PATH)) {
               $replayArgs = @('--model-cassette', $env:MODEL_CASSETTE_PATH)
+            }
+            if ($env:SYNTHETIC_SOURCE -eq 'true') {
+              $replayArgs += '--synthetic-source'
             }
             Write-Host 'Acceptance startup: launching the driver'
             & $runtime -I -X utf8 tools/windows_laptop_acceptance.py `

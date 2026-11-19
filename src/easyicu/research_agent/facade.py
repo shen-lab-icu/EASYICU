@@ -15,7 +15,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Callable, Optional, Sequence, Union
 
-from .canonical_json import sha256_file
+from .canonical_json import canonical_sha256, sha256_file
 from .orchestration.profiles import PUBLIC_DEMO_ACCEPTANCE
 from .orchestration.workflow import HumanReviewDecision, HumanReviewPending
 from .pipeline import ResearchAgentPipeline
@@ -126,7 +126,7 @@ def resume_human_review(
     )
 
 
-def verified_review_coordinates(pending, request) -> tuple[str, str]:
+def verified_review_coordinates(pending, request, *, scripted: bool = False) -> tuple[str, str]:
     """Verify the fresh complete plan packet and every evidence digest it binds."""
     from .authority.evidence_store import EvidenceStore
     from .authority.plan_review import PlanReviewAuthority
@@ -143,19 +143,29 @@ def verified_review_coordinates(pending, request) -> tuple[str, str]:
     # The local capsule and the complete local evidence set are checked again
     # by resume_human_review. Portable approval binds the actual cohort bytes,
     # not a timestamp, work directory or an old run's runtime authority.
-    cohort_sha = sha256_file(root / "cohort.parquet")
+    cohort = root / "cohort.parquet"
+    cohort_sha = sha256_file(cohort)
     if cohort_sha != capsule["cohort_sha256"]:
         raise ReplayError("model_replay_review_evidence_mismatch")
+    if scripted:
+        # Parquet encoder versions and metadata can differ on the Windows
+        # release runtime. Keep the local byte seal above and bind every row,
+        # including order and column names, for the portable scripted grant.
+        from pyarrow.parquet import read_table
+
+        table = read_table(cohort)
+        cohort_sha = canonical_sha256({"columns": table.column_names, "rows": table.to_pylist()})
     return authority.plan_sha256, cohort_sha
 
 
-def replay_review_decisions(pending, approvals: Sequence[RecordedApproval]):
+def replay_review_decisions(pending, approvals: Sequence[RecordedApproval], *, scripted: bool = False):
     decisions = []
     for request in pending.requests:
-        approval = next((item for item in approvals if item.review_id == request.review_id
-                         and item.authority_sha256 == request.authority_sha256), None)
+        approval = None if scripted else next((item for item in approvals if item.review_id == request.review_id
+                                              and item.authority_sha256 == request.authority_sha256), None)
         if approval is None and getattr(request, "payload", {}).get("reason") == "operator_plan_approval_required":
-            plan_sha, cohort_sha = verified_review_coordinates(pending, request)
+            options = {"scripted": True} if scripted else {}
+            plan_sha, cohort_sha = verified_review_coordinates(pending, request, **options)
             approval = next((item for item in approvals if item.acceptance_reuse_authorized
                 and item.plan_sha256 == plan_sha and item.cohort_sha256 == cohort_sha), None)
         if approval is None:
@@ -229,14 +239,41 @@ def run_public_demo(*, export_path: Path, database: str, work_dir: Path, client,
     if (work_dir / "runs").exists():
         raise ReplayError("model_replay_workdir_not_empty")
     work_dir.mkdir(parents=True, exist_ok=True)
+    materializer_options = {}
+    if client._scope.scripted:
+        from easyicu.synthetic_desktop_source import first_stay_materializer_options
+
+        materializer_options = first_stay_materializer_options(work_dir, client._scope.source.archive_sha256)
     paths = materialize_to_parquet(work_dir / "materialized", data_path=export_path,
         database=database, static_concepts=tuple(dict.fromkeys((primary_exposure, *covariates))),
-        feature_concepts=(), outcome_concepts=(target_outcome,))
+        feature_concepts=(), outcome_concepts=(target_outcome,), **materializer_options)
+    runtime_options, run_options = {}, {}
+    if client._scope.scripted:
+        from .acquisition.catalog import build_available_catalog, catalog_endpoint
+        from .schema import UserPreferences
+
+        catalog = build_available_catalog(export_path)
+        outcome_concept = next((item for item in catalog.concepts if item.concept_id == target_outcome), None)
+        endpoint = catalog_endpoint(outcome_concept, column=target_outcome) if outcome_concept else None
+        if endpoint is None or endpoint.kind != "binary":
+            raise ReplayError("model_replay_baseline_endpoint_missing")
+        runtime_options = _scripted_baseline_options(
+            paths["parquet"], question=question, exposure=primary_exposure, outcome=target_outcome,
+            covariates=covariates, archive_sha256=client._scope.source.archive_sha256,
+        )
+        run_options.update(
+            endpoint=endpoint,
+            user_preferences=UserPreferences(
+                covariate_selection="exact", covariates=list(covariates),
+                covariate_rationales={"sex": "Recorded sex is the prespecified demographic adjustment for this age and mortality analysis."},
+                covariate_temporal_roles={"sex": "baseline_static"},
+            ),
+        )
     config = PipelineConfig(workdir=work_dir / "runs", runner_kind="host", host_runner_authorized=True,
-        development_diagnostic=True, **PUBLIC_DEMO_ACCEPTANCE.pipeline_options())
+        development_diagnostic=True, **PUBLIC_DEMO_ACCEPTANCE.pipeline_options(), **runtime_options)
     pipeline = ResearchAgentPipeline(config=config, services=PipelineServices(llm=client))
     outcome = pipeline.run(question=question, cohort=paths["parquet"], database=database,
-        primary_exposure=primary_exposure, target_outcome=target_outcome)
+        primary_exposure=primary_exposure, target_outcome=target_outcome, **run_options)
     while isinstance(outcome, HumanReviewPending):
         decisions = review(outcome)
         outcome = pipeline.resume_human_review(decisions, run_id=outcome.run_id)
@@ -247,13 +284,35 @@ def run_public_demo(*, export_path: Path, database: str, work_dir: Path, client,
             "reportable": False, "publishable": False, "analysis_executed": True}
 
 
+def _scripted_baseline_options(cohort: Path, *, question: str, exposure: str, outcome: str,
+                               covariates: Sequence[str], archive_sha256: str) -> dict:
+    from easyicu.webserver.baseline_association_runtime_projection import compile_baseline_association_runtime_projection
+
+    study = {
+        "research_question": question, "analysis_design": {"analysis_family": "association_study"},
+        "covariate_selection": "exact",
+    }
+    configuration = {**study, "exposure": exposure, "outcome": outcome, "covariates": list(covariates),
+                     "archive_sha256": archive_sha256}
+    projection = compile_baseline_association_runtime_projection(
+        study=study, sensitivity_specs=(), primary_exposure=exposure, primary_exposure_source=exposure,
+        target_outcome=outcome, declared_covariates=covariates, covariate_operationalizations={},
+        target_is_event_status=True, universe_path=cohort, scientific_configuration_sha256=canonical_sha256(configuration),
+    )
+    if projection is None:
+        raise ReplayError("model_replay_baseline_projection_missing")
+    return {"current_case_scientific_runtime_authority": projection.authority,
+            "scientific_runtime_projection_sha256": projection.projection_sha256}
+
+
 def replay_public_demo(*, cassette_path: Path, export_path: Path, database: str, work_dir: Path,
                        question: str, primary_exposure: str, target_outcome: str,
-                       covariates: Sequence[str]):
+                       covariates: Sequence[str], synthetic_source: bool = False):
     from easyicu.webserver.demo_source_storage import public_demo_replay_scope
 
     cassette = ReplayCassette.read(cassette_path)
-    with public_demo_replay_scope(export_path=export_path, database=database, profile_ref=PUBLIC_DEMO_ACCEPTANCE.ref):
+    with public_demo_replay_scope(export_path=export_path, database=database,
+                                  profile_ref=PUBLIC_DEMO_ACCEPTANCE.ref, synthetic_source=synthetic_source):
         client = ReplayLLMClient(cassette)
         receipt = client.receipt()
         work_dir.mkdir(parents=True, exist_ok=True)
@@ -262,7 +321,8 @@ def replay_public_demo(*, cassette_path: Path, export_path: Path, database: str,
         try:
             result = run_public_demo(export_path=export_path, database=database, work_dir=work_dir,
                 client=client, question=question, primary_exposure=primary_exposure, target_outcome=target_outcome,
-                covariates=covariates, review=lambda pending: replay_review_decisions(pending, cassette.approvals))
+                covariates=covariates,
+                review=lambda pending: replay_review_decisions(pending, cassette.approvals, scripted=synthetic_source))
         except ReplayError as exc:
             result = {"status": "blocked", "reason_code": exc.reason_code, "evidence_bound_result": False,
                       "missing_request_sha256": exc.request_sha256, "analysis_executed": False}
@@ -274,13 +334,15 @@ def replay_public_demo(*, cassette_path: Path, export_path: Path, database: str,
         return {**receipt, **result}
 
 
-def record_review(pending, recorder: RecordingLLMClient, *, ask: Callable[[str], str] = input):
+def record_review(pending, recorder: RecordingLLMClient, *, ask: Callable[[str], str] = input,
+                  scripted: bool = False):
     """An explicit operator grant for this exact plan/input in acceptance only."""
     decisions = []
     for request in pending.requests:
         if request.payload.get("reason") != "operator_plan_approval_required":
             raise ReplayError("model_replay_scientific_review_required")
-        plan_sha, cohort_sha = verified_review_coordinates(pending, request)
+        options = {"scripted": True} if scripted else {}
+        plan_sha, cohort_sha = verified_review_coordinates(pending, request, **options)
         print(json.dumps(request.model_dump(mode="json"), indent=2, ensure_ascii=False))
         answer = ask("Approve this complete plan and cohort for public-demo acceptance replay only? [approve/reject]: ")
         if answer.strip().lower() != "approve":

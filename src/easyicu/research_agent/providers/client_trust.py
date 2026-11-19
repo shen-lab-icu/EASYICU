@@ -161,7 +161,7 @@ def _require_replay_source(client: Any, source: str) -> None:
         record = _trusted_client_record(item)
         if record is not None and record.replay_scope is not None:
             require_replay_scope(record.replay_scope)
-            if source != record.replay_scope.source.database:
+            if source != record.replay_scope.database:
                 raise ReplayError("model_replay_source_forbidden")
         if record is not None and record.kind == "wrapper" and record.children_getter:
             stack.extend(record.children_getter())
@@ -1474,7 +1474,7 @@ def _register_provider_wrapper(
         )
     return wrapper
 
-ACCEPTANCE_PROFILE_REF = "public_demo_acceptance_dev/20261118-audit15"
+ACCEPTANCE_PROFILE_REF = "public_demo_acceptance_dev/20261119-desktop-m1"
 TEST_PROFILE_REF = "public_demo_replay_test/1"
 
 
@@ -1483,6 +1483,8 @@ class ReplayScope:
     source: PublicDemoIdentity
     profile_ref: str
     export_path: Path
+    database: str
+    scripted: bool = False
 
 
 _SCOPE: ContextVar[ReplayScope | None] = ContextVar("public_demo_replay", default=None)

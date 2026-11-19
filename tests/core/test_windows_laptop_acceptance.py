@@ -30,9 +30,11 @@ def test_windows_workflow_uses_the_desktop_build_and_only_publishes_aggregates()
     triggers = workflow.get("on", workflow.get(True))
     assert set(triggers) == {"workflow_dispatch", "workflow_run", "workflow_call"}
     inputs = triggers["workflow_dispatch"]["inputs"]
-    assert set(inputs) == {"memory_pressure_gb", "ref", "model_cassette"}
+    assert set(inputs) == {"installer_run_id", "memory_pressure_gb", "ref", "model_cassette", "synthetic_source"}
     assert inputs["model_cassette"]["default"] == ""
     assert inputs["memory_pressure_gb"]["default"] == 8
+    assert inputs["synthetic_source"]["type"] == "boolean"
+    assert inputs["synthetic_source"]["default"] is False
     job = workflow["jobs"]["acceptance"]
     assert job["runs-on"] == "windows-latest"
     steps = job["steps"]
@@ -41,13 +43,15 @@ def test_windows_workflow_uses_the_desktop_build_and_only_publishes_aggregates()
     setup = next(step for step in steps if "actions/setup-python@" in step.get("uses", ""))
     assert setup["with"]["python-version"] == "3.11"
     commands = "\n".join(step.get("run", "") for step in steps)
-    install_step = next(step for step in steps if "Install and accept" in step.get("name", ""))
+    install_step = next(step for step in steps if "Install and run" in step.get("name", ""))
     assert install_step["env"]["MODEL_CASSETTE_PATH"] == "${{ inputs.model_cassette }}"
+    assert install_step["env"]["SYNTHETIC_SOURCE"] == "${{ inputs.synthetic_source }}"
     assert "python desktop/scripts/build_windows.py" in commands
     assert "pip install" not in commands
     assert "--desktop-backend" in commands
     assert "--desktop-first-result" in commands
     assert "--model-cassette" in commands
+    assert "--synthetic-source" in install_step["run"]
     assert "${{ inputs.model_cassette }}" not in commands
     assert "$env:MODEL_CASSETTE_PATH" in commands
     assert "-I -X utf8 tools/windows_laptop_acceptance.py --cache-key" in commands
@@ -60,6 +64,9 @@ def test_windows_workflow_uses_the_desktop_build_and_only_publishes_aggregates()
     assert "${{ inputs.memory_pressure_gb }}" not in commands
     cache = next(step for step in steps if "actions/cache@" in step.get("uses", ""))
     assert "steps.demo-cache.outputs.key" in cache["with"]["key"]
+    assert cache["if"] == "inputs.synthetic_source != true"
+    download = next(step for step in steps if "actions/download-artifact@" in step.get("uses", ""))
+    assert download["with"]["run-id"] == "${{ github.event.workflow_run.id || inputs.installer_run_id }}"
     upload = next(step for step in steps if "actions/upload-artifact@" in step.get("uses", ""))
     assert upload["if"] == "${{ always() }}"
     assert upload["with"]["path"].splitlines() == [
