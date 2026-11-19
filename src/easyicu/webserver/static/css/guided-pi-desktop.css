@@ -378,6 +378,9 @@
 /* A researcher can reveal the progress panel without leaving the empty entry. */
 @media(min-width:1181px){
  .gd-main.gpi-empty-session-focus:not(.gpi-empty-aside-open):not(.gpi-preview-open):not(.gpi-source-open)>.gd-aside-restore{display:grid}
+ /* The restore button sits at the top right; the header's "More" menu stays clear of it (UX 11-19). */
+ .gd-main.gd-context-aside-collapsed:not(.gpi-preview-open) .gpi-head,
+ .gd-main.gpi-empty-session-focus:not(.gpi-empty-aside-open):not(.gpi-preview-open):not(.gpi-source-open) .gpi-head{padding-right:56px}
  .gd-main.threecol.gpi-workspace.gpi-empty-session-focus.gpi-empty-aside-open:not(.gpi-preview-open):not(.gpi-source-open):not(.gd-project-rail-collapsed){grid-template-columns:var(--gd-project-rail-width) minmax(0,1fr) var(--gd-context-aside-width)}
  .gd-main.threecol.gpi-workspace.gpi-empty-session-focus.gpi-empty-aside-open:not(.gpi-preview-open):not(.gpi-source-open).gd-project-rail-collapsed{grid-template-columns:59px minmax(0,1fr) var(--gd-context-aside-width)}
  .gd-main.gpi-workspace.gpi-empty-session-focus.gpi-empty-aside-open:not(.gpi-preview-open):not(.gpi-source-open)>.gd-aside{display:flex}
