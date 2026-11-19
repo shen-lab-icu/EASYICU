@@ -49,4 +49,11 @@ for (const language of ['zh', 'en']) {
       if (language === 'zh') assert.match(text, /[一-鿿]/, code);
     }
   });
+
+  // UX M5 (2026-11-19): the same code is an expired sign-in mid-study.
+  test(`${language}: a missing or expired ChatGPT sign-in says to sign in again`, () => {
+    assert.equal(errorText({ code: 'codex_auth_login_required' }), tr(
+      'Your ChatGPT sign-in is missing or has expired. Sign in again to continue; completed records are kept.',
+      'ChatGPT 账户未登录或登录已过期。请重新登录后继续；已完成的记录会保留。'));
+  });
 }

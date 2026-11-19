@@ -257,8 +257,9 @@
       if (error.code === 'pi_project_initialization_required') {
         return tr('Confirm this project’s study setup before starting Copilot.', '请先确认当前项目的研究配置，再启动研究助手。');
       }
+      // Also an expired sign-in mid-study, so the copy covers both (UX M5).
       if (error.code === 'codex_auth_login_required') {
-        return tr('Sign in with your ChatGPT account before starting this conversation.', '请先登录你的 ChatGPT 账户，再开始这段对话。');
+        return tr('Your ChatGPT sign-in is missing or has expired. Sign in again to continue; completed records are kept.', 'ChatGPT 账户未登录或登录已过期。请重新登录后继续；已完成的记录会保留。');
       }
       // A refused run start or a job whose Codex account request failed is the
       // transient model-service fault the turn copy names. A job may already have
