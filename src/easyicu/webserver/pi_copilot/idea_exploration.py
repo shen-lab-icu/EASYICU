@@ -4,9 +4,14 @@ Idea Mining runs inside a research conversation whose study question is the
 mining request and whose outcome is still empty.  Confirming a data source
 then made the workflow ready for a plan, and the conversation started one on
 the mining request itself: no direction chosen, no outcome, and feasibility
-and handoff skipped.  While this conversation has mined ideas, none has been
-accepted, and the study names no outcome, the plan waits for the
-researcher's own "generate plan" click instead (screens-guided-pi-plan-actions).
+and handoff skipped.  While this conversation has mined ideas and none has
+been accepted, the plan waits for the researcher's own "generate plan" or
+freeze click instead (screens-guided-pi-plan-actions, session-view).
+
+Only an accepted handoff ends the exploration (S1442).  An outcome written
+into the study is not a choice: in the UX mining walk (11-19) the agent
+saved one while assessing a direction, which released the hold and started
+the automatic plan on the mining request without the researcher's choice.
 """
 
 from __future__ import annotations
@@ -17,11 +22,9 @@ IDEAS_MINED = "easyicu_idea_mined"
 IDEA_ACCEPTED = "easyicu_idea_handoff_accepted"
 
 
-def exploration_open(turns: Iterable[Any], study: Mapping[str, Any] | None) -> bool:
+def exploration_open(turns: Iterable[Any]) -> bool:
     """Whether the newest idea result of these turns still awaits a choice."""
 
-    if str((study or {}).get("outcome") or "").strip():
-        return False
     state = False
     for turn in turns or ():
         events = turn.get("events") if isinstance(turn, Mapping) else None

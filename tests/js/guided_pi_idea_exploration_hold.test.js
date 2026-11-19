@@ -57,7 +57,7 @@ test('mined ideas awaiting a choice hold the automatic plan and keep its button'
   assert.equal(started[0].study_context_id, 'study-synthetic');
 });
 
-test('an accepted handoff or a named outcome (flag false) resumes the automatic plan', async () => {
+test('S1421: a direct question with an outcome and a confirmed source (never explored, flag false) starts the automatic plan', async () => {
   const { actions, started } = conversation(false);
   assert.equal(await actions.continueSystemOwnedPlanProgression(), true);
   assert.equal(started.length, 1);

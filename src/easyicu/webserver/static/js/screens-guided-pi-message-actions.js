@@ -87,7 +87,7 @@
                 ? tr('The Host has not confirmed a safe retry for this attempt. Refresh the conversation and review its execution record.', '本次尝试尚未确认可安全重试。请刷新对话并查看执行记录。')
                 : options && options.mutationState === 'unconfirmed'
                   ? tr('The operation state is unconfirmed. Review the execution record and file state before retrying.', '执行状态尚未核实。请先查看执行记录并核对文件状态，暂不重复执行。')
-                : tr('Recovery is not available for this attempt. Refresh the conversation and review the retained execution record for its cause.', '本次尝试暂无可用的恢复操作。请刷新对话，并查看保留的执行记录了解原因。');
+                : tr('This attempt has no automatic recovery. You can type "continue" to have the assistant pick up from the current state; completed operations and their execution records are kept.', '本次尝试没有自动恢复操作。可直接输入“继续”，让助手从当前状态接着回答；已完成的操作及其执行记录会保留。');
       const blockedNote = blockedCode
         ? `<small class="gpi-message-continuation-note">${esc(blockedReason)}</small>`
         : continueReply ? `<small class="gpi-message-continuation-note">${esc(recoveryNote)}</small>` : '';

@@ -55,8 +55,8 @@ def test_pi_shell_assets_are_explicitly_wired_before_guided_owner() -> None:
 
     assert "js/screens-guided-pi-literature.js?v=20261026-funnel1" in index
     assert "js/screens-guided-pi-markdown.js?v=20261029-opt1" in index
-    assert "js/screens-guided-pi-next-actions.js?v=20261119-b2l3" in index
-    assert "js/screens-guided-pi-message-actions.js?v=20261029-opt2" in index
+    assert "js/screens-guided-pi-next-actions.js?v=20261119-m23b" in index
+    assert "js/screens-guided-pi-message-actions.js?v=20261119-m23b" in index
     assert "js/screens-guided-pi-regeneration.js?v=20261029-freshfix6" in index
     assert "js/screens-guided-pi-starters.js?v=20261102-ui1" in index
     assert "js/screens-guided-pi-idea-source.js?v=20261030-video2" in index
@@ -104,7 +104,7 @@ def test_pi_shell_assets_are_explicitly_wired_before_guided_owner() -> None:
     assert "js/screens-guided-pi-data-consent.js?v=20261102-demo2" in index
     assert "js/screens-guided-pi-data-binding.js?v=20261029-journey3" in index
     assert "js/screens-guided-pi-session-navigation.js?v=20261119-firstq2" in index
-    assert "js/screens-guided-pi-session-view.js?v=20261119-b2l3" in index
+    assert "js/screens-guided-pi-session-view.js?v=20261119-m23b" in index
     assert index.index("js/screens-guided-pi-session-view.js") < index.index(
         "js/screens-guided-pi.js"
     )

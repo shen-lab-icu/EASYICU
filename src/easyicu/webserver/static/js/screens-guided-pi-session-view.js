@@ -234,9 +234,7 @@
           dataSourceAuthorization: DATA_CONSENT && DATA_CONSENT.authorization(state.session),
           namedDatabase: HOST_JOBS && typeof HOST_JOBS.namedDatabase === 'function' ? HOST_JOBS.namedDatabase() : null,
           workflowActionCode: String((state.workflow && state.workflow.next_action_code) || ''),
-          ideaExploration: state.session && state.session.idea_exploration_open === true ? {
-            open: true, question: String(MODULES.optional('researchDraft')?.current(state.messages)?.draft?.question || ''),
-          } : null,
+          ideaExploration: heldPlanOffersFreeze() ? null : ideaExploration(),
           suppressFallback: String((state.workflow && state.workflow.next_action_code) || '') === 'provider_ready_to_generate_plan',
         }) : '';
       const messageActions = MESSAGE_ACTIONS.render(publicRow, {
@@ -301,9 +299,25 @@
     // A refused automatic plan configuration shows the plan card and the
     // cohort decision together; otherwise the cohort decision, when the plan
     // needs one, replaces the confirmation card.
+    function ideaExploration() {
+      return state.session && state.session.idea_exploration_open === true ? {
+        open: true, question: String(MODULES.optional('researchDraft')?.current(state.messages)?.draft?.question || ''),
+      } : null;
+    }
+
+    // m23: the plan held for mined ideas offers the freeze on its own card,
+    // so it is the one freeze in view (the reply's next step then omits it).
+    function heldPlanOffersFreeze() {
+      return Boolean(ideaExploration()) && String((state.workflow && state.workflow.next_action_code) || '') === 'provider_ready_to_generate_plan';
+    }
+
     function continuationCardsHtml() {
       const eligibility = COHORT_ELIGIBILITY.render();
-      const confirmation = workflowConfirmationHtml();
+      const nextOwner = MODULES.optional('nextActions');
+      const freeze = heldPlanOffersFreeze() && nextOwner && typeof nextOwner.renderIdeaFreeze === 'function'
+        ? nextOwner.renderIdeaFreeze(ideaExploration(), window.EU_LANG, state.busy || sessionIsStale()) : '';
+      const card = workflowConfirmationHtml();
+      const confirmation = card ? card + freeze : '';
       const refused = String((state.workflow && state.workflow.next_action_code) || '') === 'agent_plan_configuration_required'
         && Boolean(state.planConfigurationError);
       if (refused && eligibility && confirmation) return confirmation + eligibility;

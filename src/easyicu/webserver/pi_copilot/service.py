@@ -1106,11 +1106,7 @@ class PiCopilotService(SkillAttachmentService, QuickAnswerService):
         context_id = str(record.binding.study_context_id or "").strip()
         if record.agent_mode != "research" or not context_id:
             return False
-        try:
-            context = study_contexts.get_context(context_id)
-        except study_contexts.StudyContextError:
-            context = None
-        return exploration_open(turns, context)
+        return exploration_open(turns)
 
     def _cohort_eligibility_selection_projection(
         self,

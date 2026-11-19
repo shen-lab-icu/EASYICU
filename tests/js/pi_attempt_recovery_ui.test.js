@@ -74,6 +74,12 @@ test('Host recovery kind selects an explicit bounded action and rejects stale ge
       budgetState: 'exhausted', continuationReasonCode: 'pi_shell_message_provider_call_budget_exhausted' }).actionsHtml;
     assert.match(budget, language === 'zh' ? /预算已用尽/ : /no remaining budget/);
     assert.doesNotMatch(budget, /新的任务预算|新对话|new conversation|reset|重置/i);
+    // S1442 item 3 (copy only): with no recovery button the note says what to do next.
+    const generic = actions.render(rows[1], { ...options, canContinueReply: false, recoveryKind: 'blocked',
+      mutationState: 'completed', continuationReasonCode: 'pi_reply_continuation_not_offered' }).actionsHtml;
+    assert.match(generic, language === 'zh' ? /可直接输入“继续”/ : /type &quot;continue&quot;/);
+    assert.match(generic, language === 'zh' ? /已完成的操作及其执行记录会保留/ : /completed operations and their execution records are kept/);
+    assert.doesNotMatch(generic, /data-gpi-message-retry|data-gpi-message-continue/);
     const missing = actions.render(rows[1], { workspaceMode: true, canRetry: true, retryUserEntryId: 'u' }).actionsHtml;
     assert.doesNotMatch(missing, /data-gpi-message-retry/);
     const lateStop = actions.render({ ...rows[1], errorCode: '' }, { workspaceMode: true,
