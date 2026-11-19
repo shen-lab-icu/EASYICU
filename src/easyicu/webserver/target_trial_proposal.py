@@ -94,6 +94,7 @@ _CONNECTIVES = re.compile(
     ]),
     re.IGNORECASE,
 )
+_LINE_BREAK = re.compile(r"[\n\r\v\f\x1c-\x1e\x85\u2028\u2029]")
 
 _Span = tuple[int, int]
 MissingTrialKey = Literal[
@@ -145,6 +146,13 @@ class _Question:
 
     def quote(self, start: int, end: int) -> str:
         return self.original[self.offsets[start][0]:self.offsets[end - 1][1]]
+
+    def text_with_line_breaks(self) -> str:
+        """Restore clause breaks while keeping the normalized span offsets."""
+        return "".join(
+            "\n" if char == " " and _LINE_BREAK.search(self.original, start, end) else char
+            for char, (start, end) in zip(self.text, self.offsets)
+        )
 
     def unread(self, spans: list[_Span]) -> list[str]:
         """Quote gaps with residual content, keeping connective words between residues."""
@@ -321,7 +329,7 @@ def _adjustment_span(question: str, words: str, concepts: set[str]) -> _Span | N
 
 
 def _fixed_outcome(
-    question: str,
+    wording: _Question,
     confirmed_label: Any,
     database: str,
     other_spans: list[_Span],
@@ -332,10 +340,13 @@ def _fixed_outcome(
 ] | None:
     # Read the primary from its confirmation when the question states more
     # than one horizon. Its proof remains the exact words of the question.
-    label = _Question.read(str(confirmed_label or "")).text
+    label_wording = _Question.read(str(confirmed_label or ""))
+    label = label_wording.text
     confirmed = {
         fixed_horizon_mortality_endpoint_stated_by(item.horizon)
-        for item in stated_mortality_horizon_mentions(label, exact_mortality=True)
+        for item in stated_mortality_horizon_mentions(
+            label_wording.text_with_line_breaks(), exact_mortality=True,
+        )
     }
     registered = fixed_horizon_mortality_endpoint(label)
     if registered is not None:
@@ -349,9 +360,10 @@ def _fixed_outcome(
         )
     ):
         return None
+    outcome_text = wording.text_with_line_breaks()
     mentions = [
         (fixed_horizon_mortality_endpoint_stated_by(item.horizon), item)
-        for item in stated_mortality_horizon_mentions(question)
+        for item in stated_mortality_horizon_mentions(outcome_text)
     ]
     candidates = {endpoint for endpoint, _ in mentions}
     if confirmed:
@@ -363,23 +375,27 @@ def _fixed_outcome(
         endpoint.event_concept, ()
     ):
         return None
-    primary = next(item for candidate, item in mentions if candidate == endpoint)
-    exact_mentions = set(stated_mortality_horizon_mentions(question, exact_mortality=True))
-    if primary not in exact_mentions:
+    exact_mentions = set(stated_mortality_horizon_mentions(outcome_text, exact_mortality=True))
+    exact_candidates = [item for candidate, item in mentions if candidate == endpoint and item in exact_mentions]
+    if not exact_candidates:
         return None
-    if len(mentions) > 1:
-        cover_all = all(item in exact_mentions for _, item in mentions)
-        if registered != endpoint:
-            span = _mortality_span(question, primary)
+    primary = exact_candidates[0]
+    cover_all = all(item in exact_mentions for _, item in mentions)
+    if len(mentions) > 1 and registered != endpoint:
+        question = wording.text
+        folded_label = label.casefold()
+        for item in exact_candidates:
+            span = _mortality_span(question, item)
             adjacent = tuple(
-                _mortality_span(question, item) for _, item in mentions if item != primary
+                _mortality_span(question, neighbor) for _, neighbor in mentions if neighbor != item
             ) if cover_all else ()
             attached = _outcome_span(question, endpoint, span, other_spans, adjacent)
-            if label.casefold() not in {question[slice(*part)].casefold() for part in (span, attached)}:
-                return None
-        if cover_all:
-            return endpoint, primary, mentions
-    return endpoint, primary, [(endpoint, primary)]
+            if folded_label in {question[slice(*part)].casefold() for part in (span, attached)}:
+                primary = item
+                break
+        else:
+            return None
+    return endpoint, primary, mentions if cover_all else [(endpoint, primary)]
 
 
 def _mortality_span(question: str, mention: StatedHorizonMention) -> _Span:
@@ -552,7 +568,7 @@ def target_trial_proposal(study: Mapping[str, Any]) -> TargetTrialProposal | Non
     neighbors = [*covered, *adjustment_spans, *((item.start, item.end) for item in reading.elements)]
     if population:
         neighbors.append(population.span())
-    outcome = _fixed_outcome(question, study.get("outcome"), database, neighbors)
+    outcome = _fixed_outcome(wording, study.get("outcome"), database, neighbors)
     if outcome:
         endpoint, primary, mentions = outcome
         for candidate, mention in mentions:

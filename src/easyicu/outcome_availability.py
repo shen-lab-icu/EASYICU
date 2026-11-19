@@ -699,10 +699,11 @@ ICU_DEATH = "icu_death"
 HOSPITAL_DEATH = "hospital_death"
 # "ICU", a unit's own ICU ("MICU", "SICU", "CVICU", "neuro-ICU"), or the
 # spelled-out unit.
-_ICU_PLACE = (
-    r"(?:(?:m|s|c|cv|ct|n|p|t|neuro[\s-]*)?icu"
-    r"|intensive[\s-]+care(?:[\s-]+units?)?|critical[\s-]+care(?:[\s-]+units?)?)"
+_ICU_PLACE_PATTERN = (
+    r"(?:(?:m|s|c|cv|ct|n|p|t|neuro(?:{gap})?)?icu"
+    r"|(?:intensive|critical){gap}care(?:{gap}units?)?)"
 )
+_ICU_PLACE = _ICU_PLACE_PATTERN.format(gap=r"[\s-]+")
 # "the medical ICU", "a surgical intensive care unit".
 _ICU_KIND = (
     r"(?:(?:medical|surgical|cardiac|cardiothoracic|cardiovascular|coronary|neuro(?:logical)?|"
@@ -802,10 +803,14 @@ _NOT_A_DESTINATION = (
 _HOSPITAL_PLACE_ZH = r"(?:医?院内|住院(?:期间)?)"
 # The broad horizon reader can start inside a care-setting endpoint, e.g.
 # "ICU 90-day mortality" or "院内90天死亡". Check the adjacent prefix before
-# accepting the match as all-location mortality.
+# accepting the match as all-location mortality. Clause breaks and explicit
+# admission origins such as "入住ICU后" end that adjacency.
+_SETTING_PREFIX_GAP = r"(?:[ \t]+|-)"
 _MORTALITY_SETTING_PREFIX = re.compile(
-    rf"\b(?:hospital|ward|{_ICU_PLACE})[\s-]+(?:all[\s-]+cause[\s-]+)?\Z"
-    rf"|(?:{_HOSPITAL_PLACE_ZH}|{_ICU_PLACE_ZH}\s*(?:内|中|期间)|病房(?:内|中))\s*的?\s*\Z",
+    rf"\b(?:hospital|ward|inpatient|{_ICU_PLACE_PATTERN.format(gap=_SETTING_PREFIX_GAP)})"
+    rf"{_SETTING_PREFIX_GAP}(?:all{_SETTING_PREFIX_GAP}cause{_SETTING_PREFIX_GAP})?\Z"
+    rf"|(?:{_HOSPITAL_PLACE_ZH}|(?:{_ICU_PLACE_ZH}|病房|医院)(?:[ \t]*(?:内|中|期间))?)"
+    r"[ \t]*的?[ \t]*(?:全因[ \t]*)?\Z",
     re.IGNORECASE,
 )
 _ELIDED_ICU_PATTERNS = (

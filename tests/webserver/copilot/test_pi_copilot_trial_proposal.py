@@ -635,6 +635,32 @@ def test_confirmed_horizon_selects_the_primary_when_two_are_mentioned(complete_t
     assert next(row["value"] for row in proposal.elements if row["key"] == "outcome") == primary
 
 
+def test_horizon_in_a_confirmation_label_is_not_enough(complete_trial):
+    study = complete_trial
+    zh = "示例" in study["question"]
+    first, primary, join = (
+        ("90天死亡率", "365天死亡率", "和") if zh
+        else ("90-day mortality", "365-day mortality", " and ")
+    )
+    study["question"] = study["question"].replace(first, first + join + primary, 1)
+    label = "Primary: 365-day mortality"
+    assert owner.fixed_horizon_mortality_endpoint(label) is None
+    assert {
+        owner.fixed_horizon_mortality_endpoint_stated_by(item.horizon).event_concept
+        for item in owner.stated_mortality_horizon_mentions(label, exact_mortality=True)
+    } == {"mort_365d"}
+    study["outcome"] = label
+    card = target_trial_card.target_trial_card(study, None)
+    assert card["state"] == "clarification"
+    assert "outcome" in card["proposal"]["missing"]
+
+    study["outcome"] = primary
+    card = target_trial_card.target_trial_card(study, None)
+    assert card["state"] == "proposal"
+    assert card["approval"] is None
+    assert owner.target_trial_proposal(study).statement.spec.outcome.endpoint == "mort_365d"
+
+
 def test_confirmation_can_name_the_stated_icu_admission_origin(complete_trial):
     study = complete_trial
     zh = "示例" in study["question"]
@@ -665,6 +691,117 @@ def test_a_care_setting_outcome_stays_unresolved_on_the_card(complete_trial):
     assert card["state"] == "clarification"
     assert "outcome" in card["proposal"]["missing"]
     assert all(row["key"] != "outcome" for row in card["proposal"]["elements"])
+
+
+def test_setting_prefixes_require_a_separately_stated_all_location_outcome(complete_trial):
+    study = complete_trial
+    zh = "示例" in study["question"]
+    question = study["question"]
+    outcome, join, qualified_phrases = (
+        ("90天死亡率", "和", [
+            "ICU90天死亡率", "重症监护室90天死亡率", "病房90天死亡率",
+            "医院90天死亡率", "院内全因90天死亡率", "监护病房90日病死率",
+        ]) if zh else ("90-day mortality", " and ", [
+            "inpatient 90-day mortality", "inpatient all-cause deaths within 90 days",
+        ])
+    )
+    for qualified in qualified_phrases:
+        study["question"] = question.replace(outcome, qualified, 1)
+        for label in ("", qualified, "mort_90d"):
+            study["outcome"] = label
+            card = target_trial_card.target_trial_card(study, None)
+            assert card["state"] == "clarification", (qualified, label)
+            assert "outcome" in card["proposal"]["missing"], (qualified, label)
+            assert all(row["key"] != "outcome" for row in card["proposal"]["elements"])
+
+        study["question"] = question.replace(outcome, qualified + join + outcome, 1)
+        study["outcome"] = qualified
+        card = target_trial_card.target_trial_card(study, None)
+        assert "outcome" in card["proposal"]["missing"], qualified
+        for label in (outcome, "mort_90d"):
+            study["outcome"] = label
+            card = target_trial_card.target_trial_card(study, None)
+            assert card["proposal"]["missing"] == ["unread_words"], (qualified, label)
+            assert any(qualified in words for words in card["proposal"]["unread_words"])
+            assert next(row["value"] for row in card["proposal"]["elements"] if row["key"] == "outcome") == outcome
+
+        study["question"] = question
+        card = target_trial_card.target_trial_card(study, None)
+        assert card["state"] == "proposal"
+        assert card["approval"] is None
+
+
+@pytest.mark.parametrize("separator", [" - ", "\n", "; "], ids=["dash", "newline", "semicolon"])
+def test_a_setting_in_an_earlier_clause_does_not_block_confirming_the_outcome(complete_trial, separator):
+    study = complete_trial
+    zh = "示例" in study["question"]
+    outcome, context, wrong_label = (
+        ("90天死亡率", "医院", "院内死亡率") if zh
+        else ("90-day mortality", "in the hospital", "hospital mortality")
+    )
+    study["question"] = study["question"].replace(outcome, context + separator + outcome, 1)
+    study["outcome"] = wrong_label
+    card = target_trial_card.target_trial_card(study, None)
+    assert card["state"] == "clarification"
+    assert "outcome" in card["proposal"]["missing"]
+
+    for label in (outcome, "mort_90d"):
+        study["outcome"] = label
+        card = target_trial_card.target_trial_card(study, None)
+        assert card["proposal"]["missing"] == ["unread_words"]
+        assert next(row["value"] for row in card["proposal"]["elements"] if row["key"] == "outcome") == outcome
+
+
+@pytest.mark.parametrize("inexact_first", [True, False], ids=["inexact-first", "exact-first"])
+@pytest.mark.parametrize("qualified", [True, False], ids=["setting", "follow-up"])
+def test_confirming_an_exact_outcome_ignores_same_horizon_inexact_mentions(
+    complete_trial, inexact_first, qualified,
+):
+    study = complete_trial
+    zh = "示例" in study["question"]
+    outcome, secondary, join = (
+        ("90天死亡率", "院内90天死亡率" if qualified else "随访至第90天", "和") if zh
+        else ("90-day mortality", "in-hospital mortality at 90 days" if qualified else "90 days of follow-up", " and ")
+    )
+    mentions = (secondary, outcome) if inexact_first else (outcome, secondary)
+    study["question"] = study["question"].replace(outcome, join.join(mentions), 1)
+    card = target_trial_card.target_trial_card(study, None)
+    assert card["state"] == "clarification"
+    assert "outcome" in card["proposal"]["missing"]
+
+    for label in (outcome, "mort_90d"):
+        study["outcome"] = label
+        card = target_trial_card.target_trial_card(study, None)
+        assert card["proposal"]["missing"] == ["unread_words"]
+        assert any(secondary in words for words in card["proposal"]["unread_words"])
+        assert next(row["value"] for row in card["proposal"]["elements"] if row["key"] == "outcome") == outcome
+
+
+@pytest.mark.parametrize("origin_first", [True, False], ids=["origin-first", "origin-second"])
+@pytest.mark.parametrize("same_wording", [True, False], ids=["same-wording", "distinct-wording"])
+def test_confirming_the_attached_origin_selects_among_exact_mentions(
+    complete_trial, origin_first, same_wording,
+):
+    study = complete_trial
+    zh = "示例" in study["question"]
+    outcome, alternative, join = (
+        ("90天死亡率", "90日全因死亡率", "和") if zh
+        else ("90-day mortality", "mortality at 90 days", " and ")
+    )
+    primary = outcome if same_wording else alternative
+    attached = f"入住ICU后{primary}" if zh else f"{primary} following ICU admission"
+    mentions = (attached, outcome) if origin_first else (outcome, attached)
+    study["question"] = study["question"].replace(outcome, join.join(mentions), 1)
+    card = target_trial_card.target_trial_card(study, None)
+    assert card["state"] == "clarification"
+    assert "outcome" in card["proposal"]["missing"]
+
+    study["outcome"] = attached
+    card = target_trial_card.target_trial_card(study, None)
+    assert card["state"] == "proposal"
+    assert card["approval"] is None
+    assert next(row["value"] for row in card["proposal"]["elements"] if row["key"] == "outcome") == primary
+    assert owner.target_trial_proposal(study).statement.spec.outcome.endpoint == "mort_90d"
 
 
 def test_coordinator_attaches_icu_origin_between_outcomes(complete_trial):
