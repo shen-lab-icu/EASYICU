@@ -73,6 +73,7 @@ _CLAUSE_END = ",.。;?!"
 _OUTCOME_PREFIX_BOUNDARY = re.compile(
     rf"(?:[{re.escape(_CLAUSE_END)}]|\b(?:for|compare)|比较|对比)$", re.IGNORECASE,
 )
+_OUTCOME_JOIN = re.compile(r"\s+and\s+|\s*[和及与]\s*", re.IGNORECASE)
 _TRIAL_METHOD_SENTENCE = re.compile(
     r"(?:^|(?<=[.。?!]))\s*(?:"
     r"(?:use|apply)\s+(?P<en>target[\s-]+trial\s+emulation)"
@@ -323,6 +324,7 @@ def _fixed_outcome(
     question: str,
     confirmed_label: Any,
     database: str,
+    other_spans: list[_Span],
 ) -> tuple[
     FixedHorizonMortalityEndpoint,
     StatedHorizonMention,
@@ -330,10 +332,10 @@ def _fixed_outcome(
 ] | None:
     # Read the primary from its confirmation when the question states more
     # than one horizon. Its proof remains the exact words of the question.
-    label = str(confirmed_label or "").strip()
+    label = _Question.read(str(confirmed_label or "")).text
     confirmed = {
         fixed_horizon_mortality_endpoint_stated_by(item.horizon)
-        for item in stated_mortality_horizon_mentions(label)
+        for item in stated_mortality_horizon_mentions(label, exact_mortality=True)
     }
     registered = fixed_horizon_mortality_endpoint(label)
     if registered is not None:
@@ -362,15 +364,20 @@ def _fixed_outcome(
     ):
         return None
     primary = next(item for candidate, item in mentions if candidate == endpoint)
-    if confirmed and len(mentions) > 1:
-        exact_label = any(
-            _mortality_span(label, item) == (0, len(label))
-            for item in stated_mortality_horizon_mentions(label, exact_mortality=True)
-        )
-        exact_mentions = set(stated_mortality_horizon_mentions(question, exact_mortality=True))
-        if (registered == endpoint or exact_label) and all(
-            item in exact_mentions for _, item in mentions
-        ):
+    exact_mentions = set(stated_mortality_horizon_mentions(question, exact_mortality=True))
+    if primary not in exact_mentions:
+        return None
+    if len(mentions) > 1:
+        cover_all = all(item in exact_mentions for _, item in mentions)
+        if registered != endpoint:
+            span = _mortality_span(question, primary)
+            adjacent = tuple(
+                _mortality_span(question, item) for _, item in mentions if item != primary
+            ) if cover_all else ()
+            attached = _outcome_span(question, endpoint, span, other_spans, adjacent)
+            if label.casefold() not in {question[slice(*part)].casefold() for part in (span, attached)}:
+                return None
+        if cover_all:
             return endpoint, primary, mentions
     return endpoint, primary, [(endpoint, primary)]
 
@@ -387,6 +394,9 @@ def _outcome_span(
     endpoint: FixedHorizonMortalityEndpoint | None,
     span: _Span,
     other_spans: list[_Span],
+    adjacent: tuple[_Span, ...] = (),
+    *,
+    cover_join: bool = False,
 ) -> _Span:
     """Read the endpoint with an immediately attached, encoded ICU origin."""
     start, end = span
@@ -394,27 +404,45 @@ def _outcome_span(
         return start, end
 
     def independent(begin: int, stop: int) -> bool:
-        return all(stop <= left or begin >= right for left, right in other_spans)
+        return all(stop <= left or begin >= right for left, right in (*other_spans, *adjacent))
+
+    def joined_right(stop: int) -> int | None:
+        return next(
+            (left for left, _ in adjacent if _OUTCOME_JOIN.fullmatch(question, stop, left)),
+            None,
+        )
 
     prefixes = [
-        match for match in _OUTCOME_ORIGIN.finditer(question, 0, start)
+        (match.start(), previous)
+        for match in _OUTCOME_ORIGIN.finditer(question, 0, start)
         if question[match.end():start].strip() in (("", "的") if match["zh"] else ("",))
+        and independent(match.start(), start)
         and (
-            not (before := question[:match.start()].rstrip())
+            (previous := next(
+                (right for _, right in adjacent if _OUTCOME_JOIN.fullmatch(question, right, match.start())),
+                None,
+            )) is not None
+            or not (before := question[:match.start()].rstrip())
             or _OUTCOME_PREFIX_BOUNDARY.search(before)
         )
-        and independent(match.start(), start)
     ]
     suffix = _OUTCOME_ORIGIN.match(question, end + int(question[end:end + 1] == " "))
     if suffix and (
-        ((after := question[suffix.end():].lstrip()) and after[0] not in _CLAUSE_END)
+        (
+            (after := question[suffix.end():].lstrip())
+            and after[0] not in _CLAUSE_END
+            and joined_right(suffix.end()) is None
+        )
         or not independent(end, suffix.end())
     ):
         suffix = None
     if prefixes and suffix is None:
-        return prefixes[-1].start(), end
+        origin_start, previous = prefixes[-1]
+        start = previous if cover_join and previous is not None else origin_start
     if suffix and not prefixes:
-        return start, suffix.end()
+        end = suffix.end()
+    if cover_join and (following := joined_right(end)) is not None:
+        end = following
     return start, end
 
 
@@ -521,16 +549,18 @@ def target_trial_proposal(study: Mapping[str, Any]) -> TargetTrialProposal | Non
         indication = _indication_concept((population["en"] or population["zh"]).strip())
     confounders, adjustment_spans = _proposal_adjustments(study, wording)
 
-    outcome = _fixed_outcome(question, study.get("outcome"), database)
+    neighbors = [*covered, *adjustment_spans, *((item.start, item.end) for item in reading.elements)]
+    if population:
+        neighbors.append(population.span())
+    outcome = _fixed_outcome(question, study.get("outcome"), database, neighbors)
     if outcome:
         endpoint, primary, mentions = outcome
-        neighbors = [*covered, *adjustment_spans, *((item.start, item.end) for item in reading.elements)]
-        if population:
-            neighbors.append(population.span())
         for candidate, mention in mentions:
             covered.append(_outcome_span(
                 question, candidate, _mortality_span(question, mention),
-                [*neighbors, *(_mortality_span(question, item) for _, item in mentions if item != mention)],
+                neighbors,
+                tuple(_mortality_span(question, item) for _, item in mentions if item != mention),
+                cover_join=True,
             ))
         spec["outcome"] = {
             **add("outcome", wording.quote(*_mortality_span(question, primary))),

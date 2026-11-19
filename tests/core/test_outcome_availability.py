@@ -6,6 +6,8 @@ import pytest
 
 from easyicu.outcome_availability import (
     OUTCOME_CONCEPT_SUPPORTED_DATABASES,
+    StatedHorizon,
+    stated_mortality_horizon_mentions,
     structural_outcome_unavailability,
 )
 
@@ -51,6 +53,27 @@ def test_database_specific_outcome_support_is_directional() -> None:
 
 def test_non_outcome_concepts_are_not_reclassified() -> None:
     assert structural_outcome_unavailability("hr", "miiv") is None
+
+
+@pytest.mark.parametrize(
+    ("qualifier", "outcome"),
+    [
+        ("院内", "90天死亡率"),
+        ("住院期间", "90日全因死亡率"),
+        ("ICU内", "90天死亡率"),
+        ("病房内", "90天死亡率"),
+        ("in-hospital ", "90-day mortality"),
+        ("in-hospital ", "mortality at 90 days"),
+        ("hospital ", "mortality at day 90"),
+        ("ICU ", "90-day all-cause mortality"),
+        ("intensive care unit ", "all-cause mortality at 90 days"),
+        ("ward ", "deaths within 90 days"),
+    ],
+)
+def test_exact_mortality_horizon_requires_an_all_location_outcome(qualifier, outcome):
+    matches = stated_mortality_horizon_mentions(outcome, exact_mortality=True)
+    assert [item.horizon for item in matches] == [StatedHorizon(90, "day")]
+    assert stated_mortality_horizon_mentions(qualifier + outcome, exact_mortality=True) == ()
 
 
 def test_outcome_availability_contract_is_frozen() -> None:

@@ -618,11 +618,15 @@ def test_confirmed_horizon_selects_the_primary_when_two_are_mentioned(complete_t
     question = study["question"]
     join = "和" if zh else " and "
     study["question"] = question.replace(first, first + join + primary, 1)
-    assert owner.target_trial_proposal(study).statement is None
-    study["outcome"] = "In-hospital mortality"
-    assert owner.target_trial_proposal(study).statement is None
-    study["outcome"] = "365-day survival"
-    assert owner.target_trial_proposal(study).statement is None
+    for incompatible in ("", "In-hospital mortality", "365-day survival", "365-day in-hospital mortality"):
+        study["outcome"] = incompatible
+        proposal = owner.target_trial_proposal(study)
+        assert proposal.statement is None
+        assert "outcome" in proposal.missing, incompatible
+        assert all(row["key"] != "outcome" for row in proposal.elements)
+        card = target_trial_card.target_trial_card(study, None)
+        assert card["state"] == "clarification"
+        assert "outcome" in card["proposal"]["missing"]
     study["outcome"] = primary
     proposal = owner.target_trial_proposal(study)
     assert proposal.statement is not None
@@ -631,11 +635,78 @@ def test_confirmed_horizon_selects_the_primary_when_two_are_mentioned(complete_t
     assert next(row["value"] for row in proposal.elements if row["key"] == "outcome") == primary
 
 
+def test_confirmation_can_name_the_stated_icu_admission_origin(complete_trial):
+    study = complete_trial
+    zh = "示例" in study["question"]
+    if zh:
+        first, primary, phrase, endpoint = (
+            "90天死亡率", "入住ICU后90天死亡率", "入住ICU后90天死亡率和一年全因死亡率", "mort_90d",
+        )
+    else:
+        primary = "one-year mortality following ICU admission"
+        first, phrase, endpoint = "90-day mortality", f"90-day mortality and {primary}", "mort_365d"
+    study["question"] = study["question"].replace(first, phrase, 1)
+    study["outcome"] = primary
+    proposal = owner.target_trial_proposal(study)
+    assert proposal.missing == []
+    assert proposal.statement is not None
+    assert proposal.statement.spec.outcome.endpoint == endpoint
+
+
+def test_a_care_setting_outcome_stays_unresolved_on_the_card(complete_trial):
+    study = complete_trial
+    zh = "示例" in study["question"]
+    first, qualified = (
+        ("90天死亡率", "病房内90天死亡率") if zh else ("90-day mortality", "90-day ICU mortality")
+    )
+    study["question"] = study["question"].replace(first, qualified, 1)
+    study["outcome"] = qualified
+    card = target_trial_card.target_trial_card(study, None)
+    assert card["state"] == "clarification"
+    assert "outcome" in card["proposal"]["missing"]
+    assert all(row["key"] != "outcome" for row in card["proposal"]["elements"])
+
+
+def test_coordinator_attaches_icu_origin_between_outcomes(complete_trial):
+    study = complete_trial
+    zh = "示例" in study["question"]
+    question = study["question"]
+    first, primary = ("90天死亡率", "365天死亡率") if zh else ("90-day mortality", "365-day mortality")
+    phrases = (
+        [f"90天死亡率{join}入住ICU后365天死亡率" for join in ("和", "及", "与")]
+        if zh else ["90-day mortality since ICU admission and 365-day mortality"]
+    )
+    study["outcome"] = primary
+    for phrase in phrases:
+        study["question"] = question.replace(first, phrase, 1)
+        proposal = owner.target_trial_proposal(study)
+        assert proposal.missing == [], phrase
+        assert proposal.statement is not None
+        assert proposal.statement.spec.outcome.endpoint == "mort_365d"
+
+
+def test_coordinator_cannot_attach_an_origin_across_other_text(complete_trial):
+    study = complete_trial
+    zh = "示例" in study["question"]
+    first, primary, phrase, origin = (
+        ("90天死亡率", "365天死亡率", "90天死亡率及出院人数和入住ICU后365天死亡率", "入住ICU后")
+        if zh else ("90-day mortality", "365-day mortality",
+                    "90-day mortality since ICU admission and discharge counts and 365-day mortality",
+                    "since ICU admission")
+    )
+    study["question"] = study["question"].replace(first, phrase, 1)
+    study["outcome"] = primary
+    proposal = owner.target_trial_proposal(study)
+    assert proposal.statement is None
+    assert any(origin in words for words in proposal.unread_words)
+
+
 @pytest.mark.parametrize(
     ("secondary_en", "secondary_zh"),
     [
         ("90-day survival", "90天生存"),
         ("90-day in-hospital mortality", "90天院内死亡率"),
+        ("in-hospital mortality at 90 days", "院内90天死亡率"),
         ("90-day mortality from intubation", "90天死亡率自插管后起算"),
         ("90-day", "90天"),
     ],

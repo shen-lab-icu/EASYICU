@@ -499,7 +499,11 @@ _MORTALITY_BEFORE_HORIZON = re.compile(
 
 def _exact_mortality_match(match: re.Match[str]) -> bool:
     groups = match.groupdict()
-    if groups.get("members") or groups.get("tail"):
+    if (
+        groups.get("members")
+        or groups.get("tail")
+        or _MORTALITY_SETTING_PREFIX.search(match.string, 0, match.start())
+    ):
         return False
     head_start, head_end = match.span("head")
     if match.start() == head_start:
@@ -796,6 +800,14 @@ _NOT_A_DESTINATION = (
     r"(?<!into a )(?<!from )(?<!from the )(?<!from an )(?<!from a )"
 )
 _HOSPITAL_PLACE_ZH = r"(?:医?院内|住院(?:期间)?)"
+# The broad horizon reader can start inside a care-setting endpoint, e.g.
+# "ICU 90-day mortality" or "院内90天死亡". Check the adjacent prefix before
+# accepting the match as all-location mortality.
+_MORTALITY_SETTING_PREFIX = re.compile(
+    rf"\b(?:hospital|ward|{_ICU_PLACE})[\s-]+(?:all[\s-]+cause[\s-]+)?\Z"
+    rf"|(?:{_HOSPITAL_PLACE_ZH}|{_ICU_PLACE_ZH}\s*(?:内|中|期间)|病房(?:内|中))\s*的?\s*\Z",
+    re.IGNORECASE,
+)
 _ELIDED_ICU_PATTERNS = (
     re.compile(
         rf"{_NOT_A_DESTINATION}\b{_ICU_PLACE}-?(?={_SETTING_JOIN}(?:in[\s-]+)?hospital[\s-]+"
