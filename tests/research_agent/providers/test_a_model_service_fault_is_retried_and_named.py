@@ -50,7 +50,8 @@ def _ask(client: Any) -> tuple[str, Any]:
 def test_a_dropped_model_stream_is_retried_on_a_fresh_turn(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     _FakeRuntime.instances.clear()
     monkeypatch.setattr(codex_app_server, "CodexAppServerRuntime", _scripted_runtime([_STREAM_DROPPED]))
-    monkeypatch.setattr(llm.time, "sleep", lambda _seconds: None)
+    slept: list[float] = []
+    monkeypatch.setattr(llm.time, "sleep", slept.append)
     client = _authorized_client(tmp_path)
 
     text, _usage = _ask(client)
@@ -58,12 +59,16 @@ def test_a_dropped_model_stream_is_retried_on_a_fresh_turn(tmp_path: Path, monke
     assert json.loads(text) == {"answer": "ok"}
     assert len(_FakeRuntime.instances) == 2
     assert client.last_transport_retries == 1
+    assert slept == [2.0]
+    _ask(client)
+    assert client.last_transport_retries == 0
 
 
 def test_a_persistent_model_service_fault_stops_after_bounded_retries(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     _FakeRuntime.instances.clear()
     monkeypatch.setattr(codex_app_server, "CodexAppServerRuntime", _scripted_runtime([_STREAM_DROPPED] * 5))
-    monkeypatch.setattr(llm.time, "sleep", lambda _seconds: None)
+    slept: list[float] = []
+    monkeypatch.setattr(llm.time, "sleep", slept.append)
 
     with pytest.raises(CodexAppServerError) as raised:
         _ask(_authorized_client(tmp_path))
@@ -71,6 +76,24 @@ def test_a_persistent_model_service_fault_stops_after_bounded_retries(tmp_path: 
     assert len(_FakeRuntime.instances) == 1 + len(codex_app_server.CODEX_TRANSIENT_BACKOFF_SECONDS)
     assert raised.value.easyicu_safe_diagnostic["error_kind"] == "responseStreamDisconnected"
     assert codex_app_server.codex_failure_is_transient(raised.value)
+    assert slept == [2.0, 6.0]
+
+
+@pytest.mark.parametrize(
+    ("error", "transient"),
+    [
+        ({"message": "denied", "codexErrorInfo": {"httpConnectionFailed": {"httpStatusCode": 401}}}, False),
+        ({"message": json.dumps({"error": {"code": "forbidden"}, "status": 403}),
+          "codexErrorInfo": {"responseStreamConnectionFailed": {"httpStatusCode": None}}}, False),
+        ({"message": json.dumps({"error": {"code": "server_error"}, "status": 502}), "codexErrorInfo": "other"}, True),
+        ({"message": "gave up", "codexErrorInfo": {"responseTooManyFailedAttempts": {"httpStatusCode": 503}}}, True),
+    ],
+)
+def test_the_service_status_decides_whether_a_turn_failure_is_retried(error: dict[str, Any], transient: bool) -> None:
+    failure = codex_app_server.codex_turn_failure(error, "failed")
+
+    assert failure.easyicu_safe_diagnostic["http_status"] in {401, 403, 502, 503}
+    assert codex_app_server.codex_failure_is_transient(failure) is transient
 
 
 def test_a_rejected_request_is_not_retried_and_keeps_its_code(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:

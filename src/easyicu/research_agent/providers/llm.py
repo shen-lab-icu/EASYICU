@@ -999,6 +999,7 @@ class CodexAppServerLLMClient:
             codex_failure_is_transient,
         )
 
+        self.last_transport_retries = 0
         for attempt, delay in enumerate((*CODEX_TRANSIENT_BACKOFF_SECONDS, None)):
             try:
                 return self._complete_with_usage_once(

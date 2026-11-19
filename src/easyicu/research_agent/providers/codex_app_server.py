@@ -68,12 +68,16 @@ def codex_turn_failure(error: Any, status: str) -> Exception:
     """Type one failed turn with its closed kind, never its free text."""
 
     info = error.get("codexErrorInfo") if isinstance(error, Mapping) else None
+    kind_meta: Any = None
     if isinstance(info, Mapping) and len(info) == 1:
-        info = next(iter(info))
+        info, kind_meta = next(iter(info.items()))
     kind = str(info or status or "unknown")
     diagnostic: dict[str, Any] = {
         "error_kind": kind if _SAFE_CODEX_TOKEN_RE.fullmatch(kind) else "unknown"
     }
+    wire_status = kind_meta.get("httpStatusCode") if isinstance(kind_meta, Mapping) else None
+    if type(wire_status) is int and 100 <= wire_status <= 599:
+        diagnostic["http_status"] = wire_status
     message = error.get("message") if isinstance(error, Mapping) else None
     try:
         body = json.loads(message) if isinstance(message, str) else None
@@ -101,10 +105,17 @@ def codex_diagnostic_is_transient(diagnostic: Mapping[str, Any]) -> bool:
     reason = diagnostic.get("reason_code")
     if reason in _CODEX_TRANSIENT_REASONS:
         return True
-    return (
-        reason == "codex_app_server_turn_failed"
-        and diagnostic.get("error_kind") in _CODEX_TRANSIENT_TURN_KINDS
-    )
+    if reason != "codex_app_server_turn_failed":
+        return False
+    http_status = diagnostic.get("http_status")
+    if type(http_status) is int:
+        # The service's own status outranks the transport kind: a rejected
+        # request (4xx other than a timeout) recurs, a 5xx may not.
+        if 500 <= http_status <= 599 or http_status == 408:
+            return True
+        if 400 <= http_status <= 499:
+            return False
+    return diagnostic.get("error_kind") in _CODEX_TRANSIENT_TURN_KINDS
 
 
 def codex_failure_is_transient(exc: BaseException) -> bool:
