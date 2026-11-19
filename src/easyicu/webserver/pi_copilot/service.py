@@ -1025,15 +1025,26 @@ class PiCopilotService(SkillAttachmentService, QuickAnswerService):
         legacy_official_demo = bool(
             profile is not None and profile.is_public and sources.is_official_demo_source(source)
         )
+        # Release facts come from the registration: a bound official demo is
+        # named as its release, never as the family's reference release.
+        demo_release = ""
+        if profile is not None and profile.is_public and not legacy_official_demo:
+            registered = sources.registered_source_identity(str(source.get("path") or ""))
+            row = registered.to_dict() if registered is not None else {}
+            if row and sources.is_official_demo_source(row):
+                demo_release = sources.source_reader_label(row)
         return PiSessionDataSourceReference(
             source_id=str(source.get("source_id") or source.get("id") or "").strip()
             or None,
             label=str(
-                profile.display_name if profile is not None and not legacy_official_demo else source.get("label") or ""
+                demo_release or (
+                    profile.display_name if profile is not None and not legacy_official_demo
+                    else source.get("label") or ""
+                )
             ).strip()[:160]
             or None,
             database=database[:80] or None,
-            reference_release=None if legacy_official_demo else str(
+            reference_release=None if legacy_official_demo or demo_release else str(
                 source.get("reference_release")
                 or (profile.reference_release if profile is not None else "")
             ).strip()[:80]

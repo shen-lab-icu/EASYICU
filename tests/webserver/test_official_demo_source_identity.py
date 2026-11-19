@@ -163,3 +163,23 @@ def test_a_study_bound_to_a_renamed_demo_records_the_demo_release(registry, tmp_
     # The demo, never the full release the database key also names.
     assert (reference.database, reference.label, reference.reference_release) == (
         "miiv", f"{demo.title} v{demo.version}", None)
+
+
+def test_a_demo_picked_in_the_data_panel_is_never_named_as_the_full_release(registry):
+    # The data panel binds {path, label: family name, database}; the session
+    # still names the registered release, not "MIMIC-IV v3.1".
+    from easyicu.webserver.pi_copilot.service import PiCopilotService
+
+    path, _ = registry
+    sources.register_source(str(path), label="Official release", source_identity=receipt())
+    demo = demo_sources.get_source(receipt()["source_id"])
+    bound = {"data_source": {"path": str(path), "label": "MIMIC-IV", "database": "miiv"}, "revision": 2}
+    reference = PiCopilotService._session_source_reference(bound)
+    assert (reference.label, reference.reference_release) == (f"{demo.title} v{demo.version}", None)
+
+    # An own export of the same family keeps the family name and its release.
+    other = path.parent / "own-export"
+    sources.register_source(str(other), label="My export")
+    own = PiCopilotService._session_source_reference(
+        {"data_source": {"path": str(other), "label": "MIMIC-IV", "database": "miiv"}, "revision": 2})
+    assert (own.label, own.reference_release) == ("MIMIC-IV", "3.1")
