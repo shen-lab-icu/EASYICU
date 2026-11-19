@@ -8,8 +8,10 @@ import posixpath
 import re
 import runpy
 import subprocess
-from collections import defaultdict
+from collections import Counter, defaultdict
 from collections.abc import Iterator
+from dataclasses import dataclass, field
+from importlib.util import resolve_name
 from os import fsdecode
 from pathlib import Path, PurePosixPath
 
@@ -67,19 +69,23 @@ _REVIEWED_OWNERS = frozenset(
     }
 )
 _EXPECTED_VOCABULARY = {
-    "benchmarks/figure2_icu_agent_v2/data_platform_validation_protocol_v1.json": "preregistration_text",
-    "benchmarks/figure2_icu_agent_v2/statistical_analysis_plan_v1.json": "preregistration_text",
-    "docs/INDEPENDENT_EVAL_PROTOCOL.md": "heldout_item_type",
-    "docs/evidence/authority_followup_20260904/figure_exports/synthetic_sources/model_performance.csv": "synthetic_split_label",
-    "src/easyicu/research_agent/__init__.py": "heldout_item_type",
-    "src/easyicu/research_agent/evaluation/independent_eval_harness.py": "heldout_item_type",
-    "src/easyicu/research_agent/figures/prediction.py": "ml_split_vocabulary",
-    "src/easyicu/research_agent/reporting/supplement_inventory.py": "ml_split_vocabulary",
-    "src/easyicu/research_agent/validity_signals.py": "ml_split_vocabulary",
-    "tools/arch_baselines/execution_phase.json": "branch_name_note",
-    "tools/verify_figure_presentation.py": "ml_split_vocabulary",
+    "benchmarks/figure2_icu_agent_v2/data_platform_validation_protocol_v1.json": "VOCAB_ONLY",
+    "benchmarks/figure2_icu_agent_v2/statistical_analysis_plan_v1.json": "VOCAB_ONLY",
+    "docs/INDEPENDENT_EVAL_PROTOCOL.md": "VOCAB_ONLY",
+    "docs/evidence/authority_followup_20260904/figure_exports/synthetic_sources/model_performance.csv": "VOCAB_ONLY",
+    "src/easyicu/research_agent/__init__.py": "VOCAB_ONLY",
+    "src/easyicu/research_agent/evaluation/independent_eval_harness.py": "VOCAB_ONLY",
+    "src/easyicu/research_agent/figures/prediction.py": "ORDINARY_IO_NO_HO",
+    "src/easyicu/research_agent/reporting/supplement_inventory.py": "ORDINARY_IO_NO_HO",
+    "src/easyicu/research_agent/validity_signals.py": "ORDINARY_IO_NO_HO",
+    "tools/arch_baselines/execution_phase.json": "VOCAB_ONLY",
+    "tools/verify_figure_presentation.py": "ORDINARY_IO_NO_HO",
 }
 _PREREGISTRATION_BASE = "ef3472d8e1f4f32ed1c76a73eacf591d442ceb09"
+_PREREGISTRATION_PATHS = (
+    "benchmarks/figure2_icu_agent_v2/data_platform_validation_protocol_v1.json",
+    "benchmarks/figure2_icu_agent_v2/statistical_analysis_plan_v1.json",
+)
 _BENCHMARK_DIRECTORY = "figure2_icu_agent_v2"
 _DATA_FILENAMES = {PurePosixPath(path).name for path in _REVIEWED_DATA_PATHS}
 _TEXT_TOKEN = re.compile(r"""[^\s"'`<>{}\[\](),;]+""")
@@ -95,6 +101,33 @@ _PATH_TYPES = {
 _IO_METHODS = {"open", "read_text", "read_bytes", "glob", "rglob", "iterdir"}
 _IO_FUNCTIONS = {"os.listdir", "os.scandir", "json.load", "json.loads"}
 _FUNCTION_SCOPES = (ast.FunctionDef, ast.AsyncFunctionDef, ast.Lambda)
+_COMPREHENSIONS = (ast.DictComp, ast.GeneratorExp, ast.ListComp, ast.SetComp)
+_VALUE_TRANSFORMS = {
+    "absolute",
+    "as_posix",
+    "casefold",
+    "expanduser",
+    "format",
+    "fspath",
+    "join",
+    "lower",
+    "lstrip",
+    "normpath",
+    "replace",
+    "resolve",
+    "rstrip",
+    "strip",
+    "upper",
+    "with_name",
+    "with_suffix",
+}
+
+
+@dataclass(frozen=True)
+class _VocabularyReview:
+    reason: str
+    constants: dict[str, object] = field(default_factory=dict)
+    literals: dict[str, int] = field(default_factory=dict)
 
 
 @pytest.mark.parametrize(
@@ -282,19 +315,25 @@ def _read_source(path: str) -> str:
     return source.read_text(encoding="utf-8")
 
 
-def _read_vocabulary_review() -> dict[str, str]:
+def _read_vocabulary_review() -> dict[str, _VocabularyReview]:
     entries = {}
     for line in _read_source(_VOCABULARY_MANIFEST).splitlines():
         if line and not line.startswith("#"):
-            reason, path = line.split("\t")
+            reason, path, *vocabulary = line.split("\t")
             assert path not in entries, f"Duplicate vocabulary review entry: {path}"
-            entries[path] = reason
+            assert reason in {"VOCAB_ONLY", "ORDINARY_IO_NO_HO"}
+            assert len(vocabulary) <= 1
+            entries[path] = _VocabularyReview(
+                reason, **(ast.literal_eval(vocabulary[0]) if vocabulary else {})
+            )
     return entries
 
 
 def test_vocabulary_review_is_frozen() -> None:
     entries = _read_vocabulary_review()
-    assert entries == _EXPECTED_VOCABULARY
+    assert {
+        path: entry.reason for path, entry in entries.items()
+    } == _EXPECTED_VOCABULARY
     assert _REVIEWED_OWNERS.isdisjoint(entries)
 
 
@@ -341,45 +380,315 @@ def _path_tokens(text: str) -> list[str]:
     return [token for token in tokens if "/" in token or _FILE_EXTENSION.search(token)]
 
 
-def _string_literal(node: ast.AST) -> str:
-    if isinstance(node, ast.Constant) and isinstance(node.value, str):
-        return node.value
-    if isinstance(node, ast.JoinedStr):
-        return "".join(_string_literal(value) or "{value}" for value in node.values)
-    if isinstance(node, ast.BinOp) and isinstance(node.op, ast.Add):
-        left, right = _string_literal(node.left), _string_literal(node.right)
-        if left and right:
-            return left + right
-    return ""
-
-
-def _is_path_expression(node: ast.AST, aliases: dict[str, str]) -> bool:
+def _path_components(node: ast.expr, aliases: dict[str, str]) -> list[ast.expr]:
+    if isinstance(node, ast.BinOp) and isinstance(node.op, ast.Div):
+        return [node.left, node.right]
     if isinstance(node, ast.Call):
-        return _qualified_name(node.func, aliases).rsplit(".", 1)[-1] in _PATH_TYPES
+        name = _qualified_name(node.func, aliases)
+        if (
+            name.rsplit(".", 1)[-1] in _PATH_TYPES | {"joinpath"}
+            or name == "os.path.join"
+        ):
+            return [*node.args, *(keyword.value for keyword in node.keywords)]
+    return []
+
+
+def _assignments(node: ast.AST) -> Iterator[tuple[ast.AST, ast.expr]]:
+    if isinstance(node, ast.Assign):
+        for target in node.targets:
+            yield target, node.value
+    elif isinstance(node, (ast.AnnAssign, ast.AugAssign, ast.NamedExpr)):
+        if node.value is not None:
+            yield node.target, node.value
+    elif isinstance(node, (ast.For, ast.AsyncFor, ast.comprehension)):
+        yield node.target, node.iter
+    elif isinstance(node, ast.withitem) and node.optional_vars is not None:
+        yield node.optional_vars, node.context_expr
+
+
+def _parameters(args: ast.arguments) -> Iterator[tuple[str, list[ast.expr]]]:
+    positional = [*args.posonlyargs, *args.args]
+    defaults = [None] * (len(positional) - len(args.defaults)) + args.defaults
+    for arg, default in zip(
+        positional + args.kwonlyargs, defaults + args.kw_defaults, strict=True
+    ):
+        yield arg.arg, [] if default is None else [default]
+    for arg in (args.vararg, args.kwarg):
+        if arg is not None:
+            yield arg.arg, []
+
+
+def _subscript_value(container: ast.expr, key: object) -> ast.expr | None:
+    if isinstance(container, (ast.Tuple, ast.List)) and isinstance(key, int):
+        if -len(container.elts) <= key < len(container.elts):
+            return container.elts[key]
+    if isinstance(container, ast.Dict):
+        for entry, value in zip(container.keys, container.values, strict=True):
+            if isinstance(entry, ast.Constant) and entry.value == key:
+                return value
+    return None
+
+
+def _value_inputs(node: ast.AST, aliases: dict[str, str]) -> Iterator[ast.AST]:
+    if isinstance(node, ast.Call):
+        name = _qualified_name(node.func, aliases)
+        member = name.rsplit(".", 1)[-1]
+        # Opaque calls may accept vocabulary as data while returning a value
+        # unrelated to that argument, such as a record for a fixed filename.
+        if (
+            _path_components(node, aliases)
+            or member in _VALUE_TRANSFORMS
+            or name == "str"
+        ):
+            yield from node.args
+            yield from (keyword.value for keyword in node.keywords)
+            if isinstance(node.func, ast.Attribute):
+                yield node.func.value
+    elif isinstance(node, ast.IfExp):
+        yield node.body
+        yield node.orelse
+    elif not isinstance(node, ast.Compare):
+        yield from ast.iter_child_nodes(node)
+
+
+def _documented_vocabulary(
+    review: _VocabularyReview,
+    expressions: list[ast.expr],
+    module_values: dict[str, list[ast.expr]],
+) -> set[ast.AST]:
+    documented: set[ast.AST] = set()
+    for selector, expected in review.constants.items():
+        name, _, key = selector.partition(".")
+        values = module_values.get(name, [])
+        assert len(values) == 1, (
+            f"Expected one assignment for vocabulary constant {name}"
+        )
+        value = values[0]
+        if key:
+            assert isinstance(value, ast.Dict), (
+                f"Expected literal dictionary for {name}"
+            )
+            matches = [
+                child
+                for entry, child in zip(value.keys, value.values, strict=True)
+                if isinstance(entry, ast.Constant) and entry.value == key
+            ]
+            assert len(matches) == 1, f"Expected one vocabulary entry for {selector}"
+            value = matches[0]
+        actual = ast.literal_eval(value)
+        assert type(actual) is type(expected) and actual == expected, (
+            f"Vocabulary constant changed: {selector}"
+        )
+        documented.update(
+            node for node in ast.walk(value) if isinstance(node, ast.expr)
+        )
+
+    inline = {
+        node
+        for node in expressions
+        if isinstance(node, ast.Constant)
+        and isinstance(node.value, str)
+        and node.value in review.literals
+        and node not in documented
+    }
+    assert Counter(node.value for node in inline) == review.literals, (
+        "Documented inline vocabulary changed"
+    )
+    return documented | inline
+
+
+def _module_name(path: str) -> str:
     return (
-        isinstance(node, ast.BinOp)
-        and isinstance(node.op, ast.Div)
-        and _is_path_expression(node.left, aliases)
+        path.removeprefix("src/")
+        .removesuffix(".py")
+        .removesuffix("/__init__")
+        .replace("/", ".")
     )
 
 
-def _python_vocabulary_violations(source: str) -> list[str]:
+_OWNER_MODULES = frozenset(
+    _module_name(path) for path in _REVIEWED_OWNERS if path.endswith(".py")
+)
+_QUESTION_SOURCE_MODULES = {
+    "tools.benchmark_question_sources",
+    "benchmark_question_sources",
+}
+_PATH_ONLY_GUARD_API = {
+    "ALLOWED_QUESTION_SOURCES",
+    "HeldOutSourceRefused",
+    "require_allowed_question_source",
+}
+
+
+def _imports_source_loader(node: ast.Import | ast.ImportFrom, path: str) -> bool:
+    if isinstance(node, ast.Import):
+        modules = [item.name for item in node.names]
+    else:
+        base = node.module or ""
+        if node.level:
+            package = _module_name(path)
+            if not path.endswith("/__init__.py"):
+                package = package.rpartition(".")[0]
+            base = resolve_name("." * node.level + base, package)
+        if base in _QUESTION_SOURCE_MODULES:
+            return any(item.name not in _PATH_ONLY_GUARD_API for item in node.names)
+        modules = [base, *(f"{base}.{item.name}" for item in node.names)]
+    forbidden = _OWNER_MODULES | _QUESTION_SOURCE_MODULES
+    return any(
+        module == owner or module.startswith(f"{owner}.")
+        for module in modules
+        for owner in forbidden
+    )
+
+
+def _is_bare_marker(value: str) -> bool:
+    return _has_source_marker(value) and not any(char.isspace() for char in value)
+
+
+def _names_benchmark(value: str) -> bool:
+    candidates = [value, *_path_tokens(value)]
+    return any(
+        _BENCHMARK_DIRECTORY
+        in PurePosixPath(candidate.casefold().replace("\\", "/")).parts
+        for candidate in candidates
+    )
+
+
+def _python_vocabulary_violations(
+    source: str, path: str, review: _VocabularyReview
+) -> list[str]:
     tree = ast.parse(source)
+    nodes = list(ast.walk(tree))
+    expressions = [node for node in nodes if isinstance(node, ast.expr)]
+    parents = {child: node for node in nodes for child in ast.iter_child_nodes(node)}
+    scopes = {
+        node: _enclosing_scope(node, parents, include_comprehensions=True)
+        for node in expressions
+    }
     aliases = _import_aliases(tree)
-    violations = []
-    for node in ast.walk(tree):
+    bindings: dict[ast.AST, dict[str, list[ast.expr]]] = defaultdict(
+        lambda: defaultdict(list)
+    )
+    for node in nodes:
+        if isinstance(node, _FUNCTION_SCOPES):
+            bindings[node].update(_parameters(node.args))
+        for target, value in _assignments(node):
+            for name in ast.walk(target):
+                if isinstance(name, ast.Name) and isinstance(name.ctx, ast.Store):
+                    bindings[scopes[name]][name.id].append(value)
+
+    def binding_scope(name: ast.Name) -> ast.AST:
+        scope = scopes[name]
+        while scope is not tree and name.id not in bindings[scope]:
+            scope = _enclosing_scope(scope, parents, include_comprehensions=True)
+        return scope
+
+    def assigned_value(name: ast.Name) -> ast.expr | None:
+        values = bindings[binding_scope(name)].get(name.id, [])
+        return values[0] if len(values) == 1 else None
+
+    def string_value(node: ast.expr, active: frozenset[ast.AST] = frozenset()) -> str:
+        if isinstance(node, ast.Constant) and isinstance(node.value, str):
+            return node.value
+        if isinstance(node, ast.Subscript) and isinstance(node.slice, ast.Constant):
+            container = node.value
+            while isinstance(container, ast.Name):
+                binding = assigned_value(container)
+                if binding is None or binding in active:
+                    return ""
+                active = active | {binding}
+                container = binding
+            value = _subscript_value(container, node.slice.value)
+            return string_value(value, active) if value is not None else ""
+        if isinstance(node, ast.Name):
+            value = assigned_value(node)
+            if value is not None and value not in active:
+                return string_value(value, active | {value})
+        if isinstance(node, ast.JoinedStr):
+            return "".join(
+                (string_value(value.value, active) or "{value}")
+                if isinstance(value, ast.FormattedValue)
+                else string_value(value, active)
+                for value in node.values
+            )
+        if isinstance(node, ast.BinOp) and isinstance(node.op, ast.Add):
+            left = string_value(node.left, active)
+            right = string_value(node.right, active)
+            if left and right:
+                return left + right
+        return ""
+
+    documented = _documented_vocabulary(review, expressions, bindings[tree])
+    literals = {node: string_value(node) for node in expressions}
+    path_literals = {
+        node
+        for node, value in literals.items()
+        if any(_has_source_marker(token) for token in _path_tokens(value))
+    }
+    for node, value in literals.items():
+        if (
+            node not in documented
+            and isinstance(node, (ast.Constant, ast.BinOp, ast.JoinedStr))
+            and _is_bare_marker(value)
+        ) or any(
+            _has_source_marker(literals[part])
+            for part in _path_components(node, aliases)
+        ):
+            path_literals.add(node)
+
+    # Propagate sources through assignments in the same lexical scope. Keep a
+    # binding tainted if any assignment can supply the source, including branches.
+    sources = (
+        documented
+        | path_literals
+        | {
+            node
+            for node, value in literals.items()
+            if value and (_is_bare_marker(value) or _names_benchmark(value))
+        }
+    )
+    tainted: set[tuple[ast.AST, str]] = set()
+
+    def uses_source(expression: ast.expr) -> bool:
+        pending: list[ast.AST] = [expression]
+        while pending:
+            node = pending.pop()
+            if node in sources or (
+                isinstance(node, ast.Name)
+                and isinstance(node.ctx, ast.Load)
+                and (binding_scope(node), node.id) in tainted
+            ):
+                return True
+            pending.extend(_value_inputs(node, aliases))
+        return False
+
+    while True:
+        new = {
+            (scope, name)
+            for scope, names in list(bindings.items())
+            for name, values in names.items()
+            if (scope, name) not in tainted
+            and any(uses_source(value) for value in values)
+        }
+        if not new:
+            break
+        tainted.update(new)
+
+    violations = {f"line {node.lineno}: path literal" for node in path_literals}
+    for node in nodes:
+        if isinstance(node, (ast.Import, ast.ImportFrom)) and _imports_source_loader(
+            node, path
+        ):
+            violations.add(f"line {node.lineno}: owner or loader import")
         if isinstance(node, ast.Call) and _is_io_call(
             _qualified_name(node.func, aliases)
         ):
-            violations.append(f"line {node.lineno}: IO call")
-        if _is_path_expression(node, aliases):
-            parts = node.args if isinstance(node, ast.Call) else [node.right]
-            if any(_has_source_marker(_string_literal(part)) for part in parts):
-                violations.append(f"line {node.lineno}: path literal")
-        literal = _string_literal(node)
-        if any(_has_source_marker(token) for token in _path_tokens(literal)):
-            violations.append(f"line {node.lineno}: path literal")
-    return sorted(set(violations))
+            arguments = [*node.args, *(keyword.value for keyword in node.keywords)]
+            if isinstance(node.func, ast.Attribute):
+                arguments.append(node.func.value)
+            if any(uses_source(argument) for argument in arguments):
+                violations.add(f"line {node.lineno}: benchmark-derived IO")
+    return sorted(violations)
 
 
 def _json_strings(value: object) -> Iterator[str]:
@@ -410,41 +719,82 @@ def _text_vocabulary_violations(source: str, suffix: str) -> list[str]:
     return []
 
 
-def _vocabulary_violations(source: str, suffix: str) -> list[str]:
+def _vocabulary_violations(
+    source: str, path: str, review: _VocabularyReview
+) -> list[str]:
+    suffix = Path(path).suffix
     if suffix == ".py":
-        return _python_vocabulary_violations(source)
+        return _python_vocabulary_violations(source, path, review)
     assert suffix in {".md", ".json", ".csv"}
+    assert not review.constants and not review.literals
     return _text_vocabulary_violations(source, suffix)
 
 
 @pytest.mark.parametrize("path", sorted(_EXPECTED_VOCABULARY))
 def test_reviewed_vocabulary_has_no_source_access(path: str) -> None:
-    violations = _vocabulary_violations(_read_source(path), Path(path).suffix)
+    violations = _vocabulary_violations(
+        _read_source(path), path, _read_vocabulary_review()[path]
+    )
     assert not violations, f"{path}: {violations}"
 
 
 @pytest.mark.parametrize(
-    "source",
+    ("imports", "call"),
     [
-        "open('synthetic.json')",
-        "path.read_text()",
-        "path.read_bytes()",
-        "path.glob('*.json')",
-        "path.rglob('*.json')",
-        "path.iterdir()",
-        "import os as fs\nfs.listdir('fixtures')",
-        "from os import scandir as scan\nscan('fixtures')",
-        "import pandas as pd\npd.read_csv('synthetic.csv')",
-        "from pandas import read_parquet as load_frame\nload_frame('synthetic.parquet')",
-        "import json as codec\ncodec.load(stream)",
-        "from json import loads as parse\nparse('{}')",
+        ("", "open(file=target)"),
+        ("", "target.read_text()"),
+        ("", "target.read_bytes()"),
+        ("", "root.glob(target)"),
+        ("", "root.rglob(target)"),
+        ("", "target.iterdir()"),
+        ("import os as fs\n", "fs.listdir(target)"),
+        ("from os import scandir as scan\n", "scan(target)"),
+        ("import pandas as pd\n", "pd.read_csv(target)"),
+        ("from pandas import read_parquet as load_frame\n", "load_frame(target)"),
+        ("import json as codec\n", "codec.load(target)"),
+        ("from json import loads as parse\n", "parse(target)"),
     ],
 )
-def test_vocabulary_python_rejects_io(source: str) -> None:
-    assert any(
-        violation.endswith("IO call")
-        for violation in _vocabulary_violations(source, ".py")
+def test_vocabulary_python_rejects_io_built_from_a_documented_token(
+    imports: str, call: str
+) -> None:
+    tokens = (_SOURCE_MARKERS[0], "synthetic")
+    source = (
+        imports
+        + f"TOKENS = {tokens!r}\n"
+        + "def read(root):\n"
+        + "    alias = TOKENS\n"
+        + "    target = alias[0]\n"
+        + f"    return {call}\n"
     )
+    review = _VocabularyReview("ORDINARY_IO_NO_HO", constants={"TOKENS": tokens})
+    assert _vocabulary_violations(source, "tools/example.py", review) == [
+        f"line {len(source.splitlines())}: benchmark-derived IO"
+    ]
+
+
+def test_vocabulary_python_rejects_io_built_from_a_benchmark_directory() -> None:
+    source = (
+        "from pathlib import Path\n"
+        f"ROOT = Path('benchmarks') / '{_BENCHMARK_DIRECTORY.upper()}'\n"
+        "def read():\n"
+        "    path = ROOT / 'synthetic.json'\n"
+        "    return path.read_text()\n"
+    )
+    assert _vocabulary_violations(
+        source, "tools/example.py", _VocabularyReview("ORDINARY_IO_NO_HO")
+    ) == ["line 5: benchmark-derived IO"]
+
+
+def test_vocabulary_python_rejects_a_benchmark_directory_default() -> None:
+    source = (
+        f"ROOT = '{_BENCHMARK_DIRECTORY}'\n"
+        "def read(*, directory=ROOT):\n"
+        "    return directory.iterdir()\n"
+    )
+    assert _vocabulary_violations(
+        source, "tools/example.py", _VocabularyReview("ORDINARY_IO_NO_HO")
+    ) == ["line 3: benchmark-derived IO"]
 
 
 @pytest.mark.parametrize(
@@ -454,13 +804,79 @@ def test_vocabulary_python_rejects_io(source: str) -> None:
         f"example = '{_SOURCE_MARKERS[1].upper()}.csv'",
         f"from pathlib import Path as P\nexample = P('fixtures', '{_SOURCE_MARKERS[1]}')",
         f"example = Path('fixtures') / '{_SOURCE_MARKERS[0]}'",
+        "PREFIX = 'fixtures/HeLd'\nSUFFIX = 'OuT.json'\nexample = PREFIX + SUFFIX",
     ],
 )
 def test_vocabulary_python_rejects_path_literals(source: str) -> None:
-    assert any(
-        violation.endswith("path literal")
-        for violation in _vocabulary_violations(source, ".py")
+    violations = _vocabulary_violations(
+        source, "tools/example.py", _VocabularyReview("VOCAB_ONLY")
     )
+    assert violations and all(
+        violation.endswith("path literal") for violation in violations
+    )
+
+
+def test_vocabulary_python_rejects_a_documented_label_used_as_a_path() -> None:
+    tokens = (_SOURCE_MARKERS[1].upper(),)
+    source = f"TOKENS = {tokens!r}\nexample = Path('fixtures') / TOKENS[0]"
+    review = _VocabularyReview("VOCAB_ONLY", constants={"TOKENS": tokens})
+    assert _vocabulary_violations(source, "tools/example.py", review) == [
+        "line 2: path literal"
+    ]
+
+
+@pytest.mark.parametrize(
+    "source",
+    [
+        "import benchmarks.figure2_icu_agent_v2.protocol as protocol",
+        "from benchmarks import figure2_icu_agent_v2 as benchmark",
+        "from tests.research_agent.core import test_validity_signals as owner",
+        "from . import import_canonical9_to_agent_projects",
+        "from tools.benchmark_question_sources import load_questions as load",
+        "from .benchmark_question_sources import *",
+        "from tools import benchmark_question_sources as sources",
+        "import benchmark_question_sources as sources",
+    ],
+)
+def test_vocabulary_python_rejects_owner_and_loader_imports(source: str) -> None:
+    assert _vocabulary_violations(
+        source, "tools/example.py", _VocabularyReview("VOCAB_ONLY")
+    ) == ["line 1: owner or loader import"]
+
+
+def test_vocabulary_python_allows_ordinary_io_and_keeps_function_scopes_separate() -> (
+    None
+):
+    tokens = (_SOURCE_MARKERS[0],)
+    source = (
+        "from pathlib import Path\n"
+        "from tools.benchmark_question_sources import require_allowed_question_source\n"
+        f"TOKENS = {tokens!r}\n"
+        "def describes_split(label):\n"
+        "    target = TOKENS\n"
+        "    return label in target\n"
+        "def read_fixture():\n"
+        "    target = Path('tests/fixtures/synthetic.json')\n"
+        "    require_allowed_question_source(target)\n"
+        "    return target.read_text()\n"
+    )
+    review = _VocabularyReview("ORDINARY_IO_NO_HO", constants={"TOKENS": tokens})
+    assert _vocabulary_violations(source, "tools/example.py", review) == []
+
+
+def test_vocabulary_python_allows_a_documented_label() -> None:
+    tokens = (_SOURCE_MARKERS[0],)
+    source = f"TOKENS = {tokens!r}\nlabel_matches = 'validation' in TOKENS"
+    review = _VocabularyReview("VOCAB_ONLY", constants={"TOKENS": tokens})
+    assert _vocabulary_violations(source, "tools/example.py", review) == []
+
+
+def test_vocabulary_python_rejects_changed_documented_values() -> None:
+    review = _VocabularyReview(
+        "VOCAB_ONLY", constants={"TOKENS": (_SOURCE_MARKERS[0],)}
+    )
+    with pytest.raises(AssertionError, match="Vocabulary constant changed: TOKENS"):
+        _vocabulary_violations("TOKENS = ('synthetic',)", "tools/example.py", review)
 
 
 @pytest.mark.parametrize("suffix", [".md", ".json", ".csv"])
@@ -473,28 +889,45 @@ def test_vocabulary_text_rejects_benchmark_paths(suffix: str) -> None:
         ".json": json.dumps({"example": path}),
         ".csv": f"label,path\nsynthetic,{path}\n",
     }[suffix]
-    assert _vocabulary_violations(source, suffix) == ["benchmark path literal"]
+    assert _vocabulary_violations(
+        source, f"synthetic{suffix}", _VocabularyReview("VOCAB_ONLY")
+    ) == ["benchmark path literal"]
 
 
-@pytest.mark.parametrize("suffix", [".py", ".md", ".json", ".csv"])
+@pytest.mark.parametrize("suffix", [".md", ".json", ".csv"])
 def test_vocabulary_allows_plain_mentions(suffix: str) -> None:
     source = {
-        ".py": f"split = '{_SOURCE_MARKERS[0]}'",
         ".md": f"Plain vocabulary mention of {_SOURCE_MARKERS[0].title()}27.",
         ".json": json.dumps({"branch": f"feat/review-{_SOURCE_MARKERS[1]}"}),
         ".csv": f"split\n{_SOURCE_MARKERS[0]}\n",
     }[suffix]
-    assert _vocabulary_violations(source, suffix) == []
+    assert (
+        _vocabulary_violations(
+            source, f"synthetic{suffix}", _VocabularyReview("VOCAB_ONLY")
+        )
+        == []
+    )
 
 
-def _enclosing_scope(node: ast.AST, parents: dict[ast.AST, ast.AST]) -> ast.AST:
+def _enclosing_scope(
+    node: ast.AST,
+    parents: dict[ast.AST, ast.AST],
+    *,
+    include_comprehensions: bool = False,
+) -> ast.AST:
+    child = None
     while (parent := parents.get(node)) is not None:
         if isinstance(parent, (ast.ClassDef, ast.FunctionDef, ast.AsyncFunctionDef)):
             if node in parent.body:
                 return parent
         elif isinstance(parent, ast.Lambda) and node is parent.body:
             return parent
-        node = parent
+        elif include_comprehensions and isinstance(parent, _COMPREHENSIONS):
+            # The outermost iterable is evaluated in the surrounding scope.
+            first = parent.generators[0]
+            if node is not first or child is not first.iter:
+                return parent
+        child, node = node, parent
     return node
 
 
@@ -565,14 +998,7 @@ def test_item_construction_allows_io_in_a_different_function() -> None:
     assert _item_construction_sites(source) == [(4, ())]
 
 
-@pytest.mark.parametrize(
-    "path",
-    [
-        path
-        for path, reason in _EXPECTED_VOCABULARY.items()
-        if reason == "preregistration_text"
-    ],
-)
+@pytest.mark.parametrize("path", _PREREGISTRATION_PATHS)
 def test_preregistration_blobs_match_base(path: str) -> None:
     def git_oid(*args: str) -> bytes:
         return subprocess.check_output(["git", *args], cwd=_REPO_ROOT).strip()

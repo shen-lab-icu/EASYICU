@@ -1,13 +1,14 @@
 # Frozen vocabulary-only review set (S1381). Adding a file requires a supervisor ruling.
-# Reason code and repository-relative path
-preregistration_text	benchmarks/figure2_icu_agent_v2/data_platform_validation_protocol_v1.json
-preregistration_text	benchmarks/figure2_icu_agent_v2/statistical_analysis_plan_v1.json
-heldout_item_type	docs/INDEPENDENT_EVAL_PROTOCOL.md
-synthetic_split_label	docs/evidence/authority_followup_20260904/figure_exports/synthetic_sources/model_performance.csv
-heldout_item_type	src/easyicu/research_agent/__init__.py
-heldout_item_type	src/easyicu/research_agent/evaluation/independent_eval_harness.py
-ml_split_vocabulary	src/easyicu/research_agent/figures/prediction.py
-ml_split_vocabulary	src/easyicu/research_agent/reporting/supplement_inventory.py
-ml_split_vocabulary	src/easyicu/research_agent/validity_signals.py
-branch_name_note	tools/arch_baselines/execution_phase.json
-ml_split_vocabulary	tools/verify_figure_presentation.py
+# S1382 columns: reason code, repository-relative path, optional exact Python vocabulary.
+# Inline literals are counted by value. Dotted constant names select literal dictionary keys.
+VOCAB_ONLY	benchmarks/figure2_icu_agent_v2/data_platform_validation_protocol_v1.json
+VOCAB_ONLY	benchmarks/figure2_icu_agent_v2/statistical_analysis_plan_v1.json
+VOCAB_ONLY	docs/INDEPENDENT_EVAL_PROTOCOL.md
+VOCAB_ONLY	docs/evidence/authority_followup_20260904/figure_exports/synthetic_sources/model_performance.csv
+VOCAB_ONLY	src/easyicu/research_agent/__init__.py	{"literals": {"HeldOutItem": 2}}
+VOCAB_ONLY	src/easyicu/research_agent/evaluation/independent_eval_harness.py	{"literals": {"HeldOutItem": 2}}
+ORDINARY_IO_NO_HO	src/easyicu/research_agent/figures/prediction.py	{"constants": {"_HELDOUT_TOKENS": ("test", "held", "holdout", "validation", "valid", "external", "oos", "out_of_sample")}}
+ORDINARY_IO_NO_HO	src/easyicu/research_agent/reporting/supplement_inventory.py	{"constants": {"_SECTION_TOKENS.validation": ("validation", "heldout", "held_out", "split")}}
+ORDINARY_IO_NO_HO	src/easyicu/research_agent/validity_signals.py	{"literals": {"has_heldout": 2}}
+VOCAB_ONLY	tools/arch_baselines/execution_phase.json
+ORDINARY_IO_NO_HO	tools/verify_figure_presentation.py	{"literals": {"heldout": 2}}
