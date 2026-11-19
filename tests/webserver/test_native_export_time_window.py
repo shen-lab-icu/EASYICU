@@ -451,23 +451,84 @@ def test_web_dictionary_output_uses_the_same_time_guard(tmp_path, source, monkey
     assert len(pd.read_parquet(root / "vitals__measurements.parquet")) == 6
 
 
+@pytest.mark.parametrize("multi_index", [False, True], ids=["flat-index", "multi-index"])
 @pytest.mark.parametrize("has_charttime", [True, False], ids=["partial", "no-time"])
-def test_time_guard_normalises_zero_row_longitudinal_output(has_charttime):
+def test_time_guard_normalises_zero_row_longitudinal_output(has_charttime, multi_index):
     from easyicu.api import extraction
 
     frame = pd.DataFrame({"hr": pd.Series(dtype="float64")})
     if has_charttime:
         frame["charttime"] = pd.Series(dtype="object")
+    if multi_index:
+        frame.index = pd.MultiIndex.from_arrays([[], []], names=["stay_id", "charttime"])
 
     prepared, audit = extraction._enforce_native_export_time_axis(
         frame, module="vitals", stay_time_upper_bounds={1: 48.0},
     )
 
     assert len(prepared) == 0
+    assert list(prepared.columns) == ["stay_id", "charttime", "hr"]
     assert prepared.dtypes.astype(str).to_dict() == {
         "stay_id": "int64", "charttime": "float64", "hr": "float64",
     }
     assert audit["rows_with_los_bound"] == audit["excluded_rows"] == 0
+
+
+@pytest.mark.parametrize("export_format", ["parquet", "csv"])
+def test_web_writer_preserves_headers_across_longitudinal_batches(
+    tmp_path, source, monkeypatch, export_format,
+):
+    from easyicu import api
+
+    load = api.load_concepts
+
+    def load_empty_batch(concepts, **kwargs):
+        if concepts == ["hr"]:
+            return {"measurements": pd.DataFrame({"hr": pd.Series(dtype="float64")})}
+        return load(concepts, **kwargs)
+
+    def load_populated_batch(concepts, **kwargs):
+        frame = load(concepts, **kwargs)
+        return {"measurements": frame} if concepts == ["hr"] else frame
+
+    def export_batch(name, loader):
+        monkeypatch.setattr(api, "load_concepts", loader)
+        root = tmp_path / name
+        manifest = publish(root, ["vitals"], export_format)
+        file, = manifest["files"]
+        read = pd.read_parquet if export_format == "parquet" else pd.read_csv
+        return read(root / file["file"])
+
+    empty = export_batch("no_observations", load_empty_batch)
+    populated = export_batch("ward_transfer_followup", load_populated_batch)
+
+    assert empty.empty
+    assert len(populated) == 6
+    assert list(empty.columns) == list(populated.columns) == ["stay_id", "charttime", "hr"]
+
+
+def test_time_guard_accepts_registered_episode_support_with_native_stay_key(tmp_path):
+    from easyicu.api import extraction
+
+    pd.DataFrame({"patient_SN": [41]}).to_parquet(tmp_path / "stays.parquet", index=False)
+    frame = extraction._load_module_concepts(
+        None,
+        module_name="imv_first_episode",
+        load_kwargs={
+            "concepts": ["episode_status"], "database": "zhejiang_eicu",
+            "data_path": str(tmp_path), "patient_ids": {"patient_SN": [41]},
+        },
+    )
+    assert frame["patient_SN"].tolist() == [41]
+    assert frame["episode_status"].tolist() == ["source_unavailable"]
+
+    prepared, audit = extraction._enforce_native_export_time_axis(
+        frame, module="imv_first_episode", database="zhejiang_eicu",
+        stay_time_upper_bounds={41: 48.0},
+    )
+
+    pd.testing.assert_frame_equal(prepared, frame)
+    assert audit["policy"] == "not_applicable_stay_level_module"
 
 
 @pytest.mark.parametrize("columns", [{"charttime": [0.0]}, {}], ids=["timed", "no-columns"])

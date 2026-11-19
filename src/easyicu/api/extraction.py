@@ -7688,19 +7688,24 @@ def _enforce_native_export_time_axis(
         "fallback_upper_hours": ICU_TIME_FALLBACK_LIMIT_HOURS,
     }
     identity = next((column for column in _NATIVE_EXPORT_ID_COLUMNS if column in frame), None)
-    if len(frame.index) == 0 and (
+    is_longitudinal = (
         module not in {"demographics", "outcome"}
         and module not in THESIS_SUPPORT_MODULES
         and module not in STAY_LEVEL_SUPPORT_MODULES
-    ):
+    )
+    if is_longitudinal and len(frame.index) == 0:
         # The producer may return no coordinates when every concept has
         # zero observations. Keep its value columns and type the axes.
         schema = _native_export_empty_schema_frame(
             module=module, requested_concepts=[], dictionary={},
         )
         identity = identity or "stay_id"
-        frame = frame.assign(**{identity: schema["stay_id"], "charttime": schema["charttime"]})
-    elif len(frame.index) and identity is None:
+        frame = frame.reset_index(drop=True).assign(
+            **{identity: schema["stay_id"], "charttime": schema["charttime"]}
+        )
+        axes = [identity, "charttime"]
+        frame = frame.loc[:, axes + [column for column in frame.columns if column not in axes]]
+    elif is_longitudinal and len(frame.index) and identity is None:
         raise ValueError("native export frame has no ICU-stay identity column")
 
     if "charttime" not in frame.columns:
