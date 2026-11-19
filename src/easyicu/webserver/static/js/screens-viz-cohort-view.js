@@ -384,7 +384,7 @@
       const label = raw.match(/^(.+) is available only as an event flag; KM\/log-rank needs time-to-event or censoring time\.$/)[1];
       return t(raw, `“${cohortText(label)}”只有事件标志；KM 生存曲线和 log-rank 检验需要事件时间或删失时间。`);
     }
-    return t(raw, map[raw] || raw);
+    return raw === 'module_not_in_current_export' ? t('This module is not in the current export', map[raw]) : t(raw, map[raw] || raw);
   }
 
   function cohortDemoCatalogScope() {
