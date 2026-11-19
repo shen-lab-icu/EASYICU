@@ -183,3 +183,28 @@ for (const review of ['plan_scientific_changes_required', 'plan_execution_upgrad
   assert.equal(count('configure'), 1);
   assert.equal(count('plan'), 1);
 });
+
+// Carbon b10r2 F1: when the fresh plan's review also asks the planner for
+// repairs, the planner revises it once; that revision continues the same
+// compiled candidate, so its review is not compiled again either.
+test('a planner repair after the compile revises once and is not compiled again', async () => {
+  const ui = screen();
+  const count = name => JSON.parse(JSON.stringify(ui.state.calls)).filter(call => call === name).length;
+  ui.state.session.binding.run_id = 'run-1';
+  ui.state.workflow = { next_action_code: 'agent_plan_configuration_required' };
+  ui.state.after = { next_action_code: 'plan_configuration_superseded' };
+  await ui.actions.continueSystemOwnedPlanProgression();
+  ui.state.session.binding.run_id = 'run-2';
+  ui.state.workflow = { next_action_code: 'plan_scientific_changes_required', plan_review_summary: {
+    run_id: 'run-2', authorization_questions: [], remediation_buckets: {
+      agent_plan_revision: ['PLAN_STEP_ORDER_INCOMPLETE'], runtime_capability: ['POST_BASELINE_EXPOSURE_TIMING_NOT_CLOSED'] } } };
+  for (let poll = 0; poll < 3; poll++) await ui.actions.continueSystemOwnedPlanProgression();
+  assert.equal(count('plan'), 2, 'one fresh plan and one planner revision');
+  ui.state.session.binding.run_id = 'run-3';
+  ui.state.workflow = { next_action_code: 'plan_scientific_changes_required', plan_review_summary: {
+    run_id: 'run-3', authorization_questions: [], remediation_buckets: {
+      agent_plan_revision: [], runtime_capability: ['POST_BASELINE_EXPOSURE_TIMING_NOT_CLOSED'] } } };
+  for (let poll = 0; poll < 3; poll++) await ui.actions.continueSystemOwnedPlanProgression();
+  assert.equal(count('configure'), 1);
+  assert.equal(count('plan'), 2);
+});

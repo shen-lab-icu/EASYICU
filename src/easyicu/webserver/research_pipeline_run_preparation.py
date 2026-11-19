@@ -738,8 +738,17 @@ def _prepare_launch_execution(
         bound_change_request = compiled_configuration_plan_change(
             study=scientific.study, project_root=project_root,
         )
-        if bound_change_request is not None:
-            compiled_source_run_id = bound_change_request.source_run_id
+    if (
+        request.plan_change_request is None and scientific.metadata_only_planning
+        and not selected_resume_source and not request.execution_resume_source_run_id
+    ):
+        from easyicu.webserver.plan_change_requirements import compiled_source_run_id_for_launch
+
+        # A researcher's plan-change request is a user action: it records none.
+        compiled_source_run_id = compiled_source_run_id_for_launch(
+            study=scientific.study, project_root=project_root,
+            revision_source_run_id=request.plan_revision_source_run_id,
+        )
     if bound_change_request is not None:
         from easyicu.webserver.plan_change_requirements import bind_plan_change_requirements
 

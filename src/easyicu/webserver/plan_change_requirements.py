@@ -39,6 +39,41 @@ def _compiled_runtime_continuity(study: Mapping[str, Any], run: Mapping[str, Any
     }
 
 
+def compiled_source_run_id_for_launch(
+    *, study: Mapping[str, Any], project_root: str, revision_source_run_id: str = "",
+) -> str:
+    """The compiled candidate a planning launch continues, for its run context.
+
+    Decided at launch, before the job's own writes (B10, S1480): the compile
+    receipt's lineage still holds for this study (an exact match, or the one
+    signed reconfirmation), or this launch is the planner's revision of a
+    plan that already continued that candidate on the unchanged configuration
+    (Carbon b10r2 F1). It does not depend on whether the compiled handoff
+    could build a change request (F2). A researcher's own plan-change request
+    is a user action and is never passed here. Read only; "" when none.
+    """
+
+    from easyicu.webserver.pi_copilot import plan_review_progress
+
+    rows = agent_runs.list_run_history(
+        study_id=str(study.get("id") or ""), project_root=project_root, limit=200,
+    ).get("runs", ())
+    for row in rows:
+        if plan_review_progress.compiled_configuration_progress(study, row) is not None:
+            return str(row["run_id"])
+    source = next((row for row in rows if revision_source_run_id and row.get("run_id") == revision_source_run_id), None)
+    if source is None:
+        return ""
+    try:
+        recorded = plan_review_progress.recorded_compiled_source_run_id(
+            agent_runs.read_run_review(str(source["project_dir"])))
+    except (OSError, KeyError, TypeError, ValueError):
+        return ""
+    if plan_review_progress.planned_on_compiled_configuration(study, source, compiled_source_run_id=recorded):
+        return recorded
+    return ""
+
+
 def compiled_configuration_plan_change(
     *, study: Mapping[str, Any], project_root: str,
 ) -> PlanChangeRequest | None:

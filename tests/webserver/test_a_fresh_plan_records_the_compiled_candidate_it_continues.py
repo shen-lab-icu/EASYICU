@@ -50,3 +50,28 @@ def test_a_v010_review_is_not_read_as_a_continuation():
     assert recorded({"artifact_payloads": {"run_context.json": {"compiled_configuration_source_run_id": 7}}}) == ""
     assert recorded({"artifact_payloads": {}}) == "" and recorded({}) == ""
     assert recorded({"artifact_payloads": {"run_context.json": {"compiled_configuration_source_run_id": "run-a"}}}) == "run-a"
+
+
+@pytest.mark.parametrize("recorded", ["run-compiled", ""])
+def test_a_review_resume_keeps_the_record_its_launch_made(tmp_path, monkeypatch, recorded):
+    # S1488: a human-review resume continues the same run and rewrites its
+    # context; it keeps the launch's record and does not decide it again
+    # after the job's own writes. Launches that resume another run's
+    # checkpoint or execution are not plan launches and record none.
+    from types import SimpleNamespace
+
+    from tests.support.paused_plan_review import _RUN_ID, _FailingPipeline, _paused
+
+    _, wrapper, study = _paused(tmp_path, monkeypatch, _FailingPipeline(ValueError("unused"), resumable=True))
+    path = wrapper / "run_context.json"
+    launched = json.loads(path.read_text())
+    if recorded:
+        path.write_text(json.dumps({**launched, "compiled_configuration_source_run_id": recorded}))
+    monkeypatch.setattr(agent_pipeline_runs, "resume_pending_review", lambda *a, **k: SimpleNamespace(state="rejected"))
+    agent_pipeline_runs.resume_research_pipeline(
+        run_id=_RUN_ID, study_context_id=study["id"], decision="rejected", reviewer="local reviewer", note="",
+        job=SimpleNamespace(emit=lambda _event: None, cancel_requested=False), current_study_context=study)
+    resumed = json.loads(path.read_text())
+    assert resumed.get("compiled_configuration_source_run_id", "") == recorded
+    public = agent_runs._public_review_payloads({"run_context.json": resumed})["run_context.json"]
+    assert public.get("compiled_configuration_source_run_id", "") == recorded

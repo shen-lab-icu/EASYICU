@@ -367,6 +367,18 @@ def _read_json(path: Path, default: Any) -> Any:
         return default
 
 
+def _launch_compiled_source(wrapper_dir: Path) -> str:
+    """The compiled candidate this run's launch recorded (B10, S1488).
+
+    A human-review resume continues the same run, so it keeps what the launch
+    decided rather than deciding again after the job's own writes.
+    """
+
+    context = _read_json(Path(wrapper_dir) / "run_context.json", {})
+    value = context.get("compiled_configuration_source_run_id") if isinstance(context, Mapping) else None
+    return value if isinstance(value, str) else ""
+
+
 def _read_json_with_digest(path: Path) -> Dict[str, Any]:
     payload = _read_json(path, {})
     if not isinstance(payload, Mapping):
@@ -9332,6 +9344,7 @@ def resume_research_pipeline(
                 "diagnostic": diagnostic,
             },
         ) from exc
+    compiled_source = _launch_compiled_source(entry.wrapper_dir)
     if resume_result.state == "rejected":
         remove_review_recovery_record(key)
         _remove_local_recovery(entry.wrapper_dir)
@@ -9346,6 +9359,7 @@ def resume_research_pipeline(
             acquisition=entry.acquisition,
             run_dir=Path(entry.pending.run_dir),
             blocked_reason="human_plan_review_rejected",
+            compiled_configuration_source_run_id=compiled_source,
         )
     if resume_result.state == "pending":
         outcome = resume_result.outcome
@@ -9356,6 +9370,7 @@ def resume_research_pipeline(
             acquisition=entry.acquisition,
             run_dir=Path(outcome.run_dir),
             pending=outcome,
+            compiled_configuration_source_run_id=compiled_source,
         )
     outcome = resume_result.outcome
     projection = _write_terminal_projection(
@@ -9366,6 +9381,7 @@ def resume_research_pipeline(
         provider=entry.provider,
         acquisition=entry.acquisition,
         run_dir=Path(outcome.manifest_path).parent,
+        compiled_configuration_source_run_id=compiled_source,
     )
     remove_review_recovery_record(key)
     _cleanup_recovery_after_projection(

@@ -461,3 +461,134 @@ def test_copilot_amendment_pins_source_and_current_configuration(source, monkeyp
     assert captured['planner_start_mode'] == 'fresh' and captured['run_intent'] == 'candidate_plan'
     assert 'plan_revision_source_run_id' not in captured
     assert (bind(f, request, study=current_study).baseline_requirements() is None) == change_scope
+
+
+def _prepare(monkeypatch, f, study, **request_fields):
+    from easyicu.webserver import research_pipeline_run_preparation as preparation
+    from tests.webserver.test_research_pipeline_run_preparation import _request, _scientific
+
+    request = replace(_request(), study_context=study, project_root=f.root, **request_fields)
+    scientific = replace(_scientific(), study=study)
+    monkeypatch.setattr(preparation.capability_policy, 'capability_settings', lambda: {})
+    monkeypatch.setattr(preparation, 'ExtensionRegistry', lambda: SimpleNamespace(
+        snapshot=lambda: SimpleNamespace(revision=0, skills=(), mcp_servers=()), pipeline_activation=lambda snapshot: None))
+    monkeypatch.setattr(preparation, '_require_profile_dictionaries', lambda **kwargs: None)
+    monkeypatch.setattr(preparation, '_require_execution_runtime', lambda **kwargs: None)
+    provider = SimpleNamespace(provider={}, provider_environment={}, credential_source='fixture', literature_search_authorized=False)
+    return preparation._prepare_launch_execution(request, scientific, provider)[1]
+
+
+def test_the_launch_records_the_compiled_candidate_without_a_change_request(source, monkeypatch, tmp_path):
+    # Carbon b10r2 F2: the record follows the compiled lineage, not whether
+    # the compiled handoff could build a change request.
+    f = source()
+    changed = compiled_study(f, monkeypatch, tmp_path)
+    monkeypatch.setattr(owner, 'compiled_configuration_plan_change', lambda **_: None)
+    execution = _prepare(monkeypatch, f, changed)
+    assert execution.plan_change_request is None
+    assert execution.compiled_configuration_source_run_id == f.request.source_run_id
+
+
+def test_a_researchers_plan_change_records_no_compiled_candidate(source, monkeypatch, tmp_path):
+    # S1466: a plan change the researcher asked for is a user action; that
+    # plan may be compiled once more.
+    f = source()
+    changed = compiled_study(f, monkeypatch, tmp_path)
+    request = f.request.model_copy(update={
+        'source_scientific_configuration_sha256': f.digest,
+        'target_scientific_configuration_sha256': study_contexts.scientific_configuration_sha256(changed),
+    })
+    execution = _prepare(monkeypatch, f, changed, plan_change_request=request)
+    assert execution.plan_change_request is not None
+    assert execution.compiled_configuration_source_run_id == ''
+
+
+def _continued(f, monkeypatch, changed, recorded):
+    # The fresh plan that continued the compiled candidate, after its job's
+    # two lifecycle writes (the configuration digest is unchanged).
+    reviewed = {**changed, 'revision': changed['revision'] + 3}
+    fresh = {'run_id': 'run-fresh', 'project_dir': str(f.row['project_dir']) + '-fresh',
+             'scientific_configuration_sha256': study_contexts.scientific_configuration_sha256(reviewed)}
+    payloads = {fresh['project_dir']: {'artifact_payloads': {'run_context.json': {
+        'run_id': 'run-fresh', **({'compiled_configuration_source_run_id': recorded} if recorded else {})}}},
+                f.row['project_dir']: {'artifact_payloads': f.record.artifact_payloads}}
+    monkeypatch.setattr(owner.agent_runs, 'list_run_history', lambda **kwargs: {'runs': [fresh, f.row]})
+    monkeypatch.setattr(owner.agent_runs, 'read_run_review', lambda project_dir: payloads[project_dir])
+    return reviewed, fresh
+
+
+@pytest.mark.parametrize('recorded,carried', [('run-source', True), ('', False), ('another-run', False)])
+def test_the_planners_revision_of_a_continuing_plan_keeps_its_record(source, monkeypatch, tmp_path, recorded, carried):
+    # Carbon b10r2 F1: the planner's own revision of that plan, on the same
+    # configuration, continues the same compiled candidate.
+    f = source()
+    changed = compiled_study(f, monkeypatch, tmp_path)
+    recorded = f.request.source_run_id if recorded == 'run-source' else recorded
+    reviewed, fresh = _continued(f, monkeypatch, changed, recorded)
+    expected = f.request.source_run_id if carried else ''
+    assert owner.compiled_source_run_id_for_launch(
+        study=reviewed, project_root=f.root, revision_source_run_id=fresh['run_id'],
+    ) == expected
+    execution = _prepare(monkeypatch, f, reviewed, plan_revision_source_run_id=fresh['run_id'])
+    assert execution.compiled_configuration_source_run_id == expected
+    # A changed configuration ends it whatever the record says.
+    edited = {**reviewed, 'covariates': ['age', 'sex']}
+    assert owner.compiled_source_run_id_for_launch(
+        study=edited, project_root=f.root, revision_source_run_id=fresh['run_id'],
+    ) == ''
+    # Without naming that plan as its source, a launch carries nothing.
+    assert owner.compiled_source_run_id_for_launch(study=reviewed, project_root=f.root) == ''
+
+
+def test_a_compile_after_another_answer_on_the_same_review_still_records(source, monkeypatch, tmp_path):
+    # Carbon b10r2 F2(a): the receipt carries the researcher's earlier answer
+    # too, so the compiled handoff builds no change request; the launch still
+    # records the compiled candidate it continues.
+    from easyicu.webserver.pi_copilot import plan_review_progress
+
+    f = source()
+    monkeypatch.setenv('EASYICU_HOME', str(tmp_path / 'host-state'))
+    start = {**f.study, 'revision': 1}
+    answered = {**start, 'revision': 2, 'covariates': ['age']}
+    plan_review_progress.record_choice(before=start, after=answered, run=f.row,
+                                       decision_code='plan_adjustment_set', option_id='confirm')
+    compiled = {**answered, 'revision': 3, 'covariate_selection': 'exact', 'covariate_authority': 'agent_plan',
+                'confirmations': {'agent_plan_configuration_compiled': True, 'extraction_completed': True}}
+    plan_review_progress.record_choice(before=answered, after=compiled, run=f.row,
+                                       decision_code='agent_plan_configuration', option_id='typed_runtime_projection')
+    assert set(plan_review_progress.matching_progress(compiled, f.row).choices) == {
+        'plan_adjustment_set', 'agent_plan_configuration'}
+    execution = _prepare(monkeypatch, f, compiled)
+    assert execution.plan_change_request is None
+    assert execution.compiled_configuration_source_run_id == f.request.source_run_id
+
+
+@pytest.mark.parametrize('drift', ['study_edited', 'receipt_run_replanned'])
+def test_a_compile_receipt_for_another_configuration_records_nothing(source, monkeypatch, tmp_path, drift):
+    # S1488 (2): rule (a) records only when the receipt's configuration is
+    # this launch's: a scientific edit since the compile, or a history row
+    # for the receipt's run made on another configuration, records nothing.
+    f = source()
+    changed = compiled_study(f, monkeypatch, tmp_path)
+    assert owner.compiled_source_run_id_for_launch(study=changed, project_root=f.root) == f.request.source_run_id
+    if drift == 'study_edited':
+        study = {**changed, 'covariates': ['age', 'sex']}
+    else:
+        study = changed
+        other = {**f.row, 'scientific_configuration_sha256': 'e' * 64}
+        monkeypatch.setattr(owner.agent_runs, 'list_run_history', lambda **kwargs: {'runs': [other]})
+    assert owner.compiled_source_run_id_for_launch(study=study, project_root=f.root) == ''
+    assert _prepare(monkeypatch, f, study).compiled_configuration_source_run_id == ''
+
+
+def test_a_revision_of_a_plan_made_on_another_configuration_carries_nothing(source, monkeypatch, tmp_path):
+    # S1488 (3): the source plan's record names the compiled candidate, but
+    # that plan was made on another configuration; the revision is compiled
+    # once instead.
+    f = source()
+    changed = compiled_study(f, monkeypatch, tmp_path)
+    reviewed, fresh = _continued(f, monkeypatch, changed, f.request.source_run_id)
+    fresh['scientific_configuration_sha256'] = 'e' * 64
+    assert owner.compiled_source_run_id_for_launch(
+        study=reviewed, project_root=f.root, revision_source_run_id=fresh['run_id']) == ''
+    assert _prepare(monkeypatch, f, reviewed, plan_revision_source_run_id=fresh['run_id']).compiled_configuration_source_run_id == ''

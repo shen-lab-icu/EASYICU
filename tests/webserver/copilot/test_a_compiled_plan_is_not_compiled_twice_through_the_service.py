@@ -19,10 +19,21 @@ from easyicu.webserver import agent_runs, source_identity_authority, sources, st
 from easyicu.webserver.pi_copilot import plan_review_progress, service as service_module
 from easyicu.webserver.pi_copilot.demo_planning_authority import resolve_choice
 from easyicu.webserver.pi_copilot.workflow import build_project_workflow_projection
-from easyicu.webserver.plan_change_requirements import _compiled_runtime_continuity
+from easyicu.webserver.pi_copilot import workflow as workflow_owner
+from easyicu.webserver.plan_change_requirements import compiled_source_run_id_for_launch
 from tests.support.official_demo_choice import choice as choice
 from tests.support.official_demo_raw import official_raw as official_raw
 from tests.support.v010_run_context import V010_RUN_CONTEXT
+from tests.support.reviewed_candidate import reviewed_candidate as _candidate
+
+def _plan(*covariates):
+    covariates = covariates or ("age", "sex")
+    return {"design_selection": {"candidates": [{"design_id": "landmark_adjusted_association", "disposition": "selected"}]},
+            "steps": [{"model_requirements": [{
+                "analysis_role": "primary", "exposure_source": "aki_stage", "outcome": "death", "covariates": list(covariates),
+                "covariate_rationales": {name: "Measured at baseline, before exposure." for name in covariates},
+                "covariate_temporal_roles": {name: "baseline_static" for name in covariates}}]}]}
+
 
 _PLAN = {"design_selection": {"candidates": [{"design_id": "landmark_adjusted_association", "disposition": "selected"}]},
          "steps": [{"model_requirements": [{
@@ -36,26 +47,34 @@ class _Runs:
     """The bound run history and each run's review, as the service reads them."""
 
     def __init__(self, monkeypatch):
-        self.rows, self.contexts = [], {}
+        self.rows, self.contexts, self.plans = [], {}, {}
         monkeypatch.setattr(service_module, "list_bound_run_history", lambda **_: list(self.rows))
-        monkeypatch.setattr(service_module.agent_runs, "read_run_review", self.review)
+        monkeypatch.setattr(agent_runs, "list_run_history", lambda **_: {"runs": list(self.rows)})
+        monkeypatch.setattr(agent_runs, "read_run_review", self.review)
 
-    def launch(self, study, run_id, *, compiled_source_run_id=""):
-        # What the runner records: the launch's lineage, read before its job writes.
+    def launch(self, study, run_id, *, revision_source_run_id="", plan=None, researcher_change=False):
+        # The real launch owner decides the record before the job writes;
+        # the runner stores it in the run's context. Preparation never asks
+        # it for a researcher's own plan-change request (a user action).
+        recorded = "" if researcher_change else compiled_source_run_id_for_launch(
+            study=study, project_root="/synthetic", revision_source_run_id=revision_source_run_id)
         self.rows.insert(0, {"run_id": run_id, "project_dir": f"/synthetic/{run_id}",
                              "scientific_configuration_sha256": study_contexts.scientific_configuration_sha256(study)})
+        self.plans[f"/synthetic/{run_id}"] = plan or _PLAN
         self.contexts[f"/synthetic/{run_id}"] = {"run_id": run_id, **(
-            {"compiled_configuration_source_run_id": compiled_source_run_id} if compiled_source_run_id else {})}
+            {"compiled_configuration_source_run_id": recorded} if recorded else {})}
         return self.rows[0]
 
+    def recorded(self, run):
+        return self.contexts[run["project_dir"]].get("compiled_configuration_source_run_id", "")
+
     def review(self, project_dir):
-        return {"artifact_payloads": {"agent_plan.json": _PLAN, "scientific_plan_review.json": _REVIEW,
+        return {"artifact_payloads": {"agent_plan.json": self.plans[project_dir], "scientific_plan_review.json": _REVIEW,
                                       "run_context.json": self.contexts[project_dir]}}
 
 
 @pytest.fixture
 def runs(choice, monkeypatch):
-    monkeypatch.setattr(agent_runs, "list_run_history", lambda **_: {"runs": []})
     monkeypatch.setattr(sources, "_autodiscovered_paths", lambda **_: [])
     monkeypatch.setattr(source_identity_authority, "resolve_study_patient_grouping",
                         lambda **_: SimpleNamespace(group_source="opaque_patient"))
@@ -72,10 +91,15 @@ def _compile(choice, run):
         expected_revision=study["revision"], run_id=run["run_id"])
 
 
-def _lineage(study, runs):
-    # Preparation's own gate for a fresh plan (compiled_configuration_plan_change).
-    row = next((row for row in runs.rows if _compiled_runtime_continuity(study, row)), None)
-    return "" if row is None else row["run_id"]
+def _offers_compile(study, runs, run):
+    # The review card's next step for this run, as the workflow projects it.
+    # B10's card: the review asks for changes and names a runtime gap.
+    candidate = _candidate(study, ["REPEATED_STAY_IDENTITY_UNAVAILABLE"]).model_copy(
+        update={"next_action_code": "plan_scientific_changes_required"})
+    snapshot = workflow_owner._enrich_plan_review(
+        candidate, study=study,
+        review=runs.review(run["project_dir"]), run=run)
+    return snapshot.next_action_code == "agent_plan_configuration_required"
 
 
 def _job_writes(study_id, job_id):
@@ -113,13 +137,25 @@ def _assert_refused_without_writes(choice, run):
 
 def test_the_plan_after_one_reconfirmation_is_not_compiled_again(choice, runs):
     first = runs.launch(study_contexts.get_context(choice.study["id"]), "run-a")
+    assert _offers_compile(study_contexts.get_context(choice.study["id"]), runs, first)
     _compile(choice, first)
     reconfirmed = _reconfirm(choice)
-    # Its launch reads the lineage before any job write and records it.
-    assert _lineage(reconfirmed, runs) == "run-a"
-    fresh = runs.launch(reconfirmed, "run-b", compiled_source_run_id="run-a")
-    _job_writes(reconfirmed["id"], "job-b")
+    # S1488 (2): after the reconfirmation the receipt's run must still be the
+    # plan the compile read; the same run id on another configuration is not.
+    runs.rows[0] = {**first, "scientific_configuration_sha256": "e" * 64}
+    assert compiled_source_run_id_for_launch(study=reconfirmed, project_root="/synthetic") == ""
+    runs.rows[0] = first
+    fresh = runs.launch(reconfirmed, "run-b")
+    assert runs.recorded(fresh) == "run-a"
+    reviewed = _job_writes(reconfirmed["id"], "job-b")
+    assert not _offers_compile(reviewed, runs, fresh)
     _assert_refused_without_writes(choice, fresh)
+    # Carbon b10r2 F1: the planner's revision of that plan continues it too.
+    revised = runs.launch(reviewed, "run-c", revision_source_run_id="run-b")
+    assert runs.recorded(revised) == "run-a"
+    _job_writes(reviewed["id"], "job-c")
+    assert not _offers_compile(study_contexts.get_context(reviewed["id"]), runs, revised)
+    _assert_refused_without_writes(choice, revised)
 
 
 def test_a_write_outside_the_allowance_lets_the_next_plan_be_compiled_once(choice, runs):
@@ -128,19 +164,22 @@ def test_a_write_outside_the_allowance_lets_the_next_plan_be_compiled_once(choic
     _compile(choice, first)
     study_contexts.upsert_context({"id": choice.study["id"], "title": "Renamed project"})
     reconfirmed = _reconfirm(choice)
-    assert _lineage(reconfirmed, runs) == ""
-    second = runs.launch(reconfirmed, "run-b")
-    _job_writes(reconfirmed["id"], "job-b")
+    # Its planner wrote a different plan; with no record, that plan's
+    # settings may be compiled once.
+    second = runs.launch(reconfirmed, "run-b", plan=_plan("age", "sex", "weight"))
+    assert runs.recorded(second) == ""
+    reviewed = _job_writes(reconfirmed["id"], "job-b")
+    assert _offers_compile(reviewed, runs, second)
     _compile(choice, second)
     compiled = study_contexts.get_context(choice.study["id"])
     assert plan_review_progress._receipt(compiled).run_id == "run-b"
     # Right after that compile the lineage is the exact receipt match.
     assert plan_review_progress.matching_progress(compiled, second) is not None
-    assert _lineage(compiled, runs) == "run-b"
     reconfirmed = _reconfirm(choice)
-    assert _lineage(reconfirmed, runs) == "run-b"
-    third = runs.launch(reconfirmed, "run-c", compiled_source_run_id="run-b")
-    _job_writes(reconfirmed["id"], "job-c")
+    third = runs.launch(reconfirmed, "run-c", plan=_plan("age", "sex", "weight", "sofa"))
+    assert runs.recorded(third) == "run-b"
+    reviewed = _job_writes(reconfirmed["id"], "job-c")
+    assert not _offers_compile(reviewed, runs, third)
     _assert_refused_without_writes(choice, third)
 
 
@@ -154,3 +193,54 @@ def test_a_review_from_v010_is_compiled_as_before(choice, runs):
     after = study_contexts.get_context(choice.study["id"])
     assert after["revision"] == before["revision"] + 1
     assert plan_review_progress._receipt(after).run_id == "run-v010"
+
+
+def test_one_compile_bounds_a_chain_of_planner_revisions(choice, runs):
+    # S1488: after one compile, three automatic planner revisions each carry
+    # the record and none is compiled; a researcher's plan change in the
+    # middle allows exactly one more compile, after which it carries again.
+    # Each revised plan differs, so without the record it would be offered.
+    compiles = 0
+
+    def review(run):
+        nonlocal compiles
+        study = study_contexts.get_context(choice.study["id"])
+        if not _offers_compile(study, runs, run):
+            _assert_refused_without_writes(choice, run)
+            return study
+        _compile(choice, run)
+        compiles += 1
+        return _reconfirm(choice)
+
+    study = review(runs.launch(study_contexts.get_context(choice.study["id"]), "run-a"))
+    assert compiles == 1
+    previous = runs.launch(study, "run-b")
+    added = ["weight", "sofa", "lactate"]
+    for hop in range(1, len(added) + 1):
+        assert runs.recorded(previous) == "run-a"
+        _job_writes(study["id"], f"job-{previous['run_id']}")
+        review(previous)
+        assert compiles == 1
+        previous = runs.launch(study_contexts.get_context(study["id"]), f"run-r{hop}",
+                               revision_source_run_id=previous["run_id"], plan=_plan("age", "sex", *added[:hop]))
+    assert runs.recorded(previous) == "run-a"
+    _job_writes(study["id"], f"job-{previous['run_id']}")
+    review(previous)
+    assert compiles == 1
+
+    changed = runs.launch(study_contexts.get_context(study["id"]), "run-user", researcher_change=True,
+                          plan=_plan("age", "sex", "creatinine"))
+    assert runs.recorded(changed) == ""
+    _job_writes(study["id"], "job-user")
+    study = review(changed)
+    assert compiles == 2
+    fresh = runs.launch(study, "run-after")
+    assert runs.recorded(fresh) == "run-user"
+    _job_writes(study["id"], "job-after")
+    review(fresh)
+    revised = runs.launch(study_contexts.get_context(study["id"]), "run-after-r1",
+                          revision_source_run_id="run-after", plan=_plan("age", "sex", "creatinine", "weight"))
+    assert runs.recorded(revised) == "run-user"
+    _job_writes(study["id"], "job-after-r1")
+    review(revised)
+    assert compiles == 2
