@@ -67,8 +67,8 @@ function render(language, { open = true, code = 'provider_ready_to_generate_plan
 const count = (html, pattern) => (html.match(pattern) || []).length;
 const QUESTION = { zh: '首日峰值乳酸与院内死亡', en: 'First-day peak lactate and in-hospital death' };
 const COPY = {
-  zh: { generate: '生成候选计划', freeze: '冻结一个方向并继续', choose: '选择一个方向' },
-  en: { generate: 'Generate candidate plan', freeze: 'Freeze a direction and continue', choose: 'Choose a direction' },
+  zh: { generate: '生成候选计划', freeze: '冻结一个方向并继续', choose: '写下要冻结的方向' },
+  en: { generate: 'Generate candidate plan', freeze: 'Freeze a direction and continue', choose: 'Write the direction to freeze' },
 };
 
 for (const language of ['zh', 'en']) {

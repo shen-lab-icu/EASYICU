@@ -327,8 +327,9 @@
     const detail = question
       ? (zh ? `当前讨论的方向：${question}。冻结后，EasyICU 以它作为本项目的研究问题，继续可行性检查和研究计划。`
         : `Direction under discussion: ${question}. Once frozen, EasyICU uses it as this project's research question and continues with feasibility and the research plan.`)
-      : (zh ? '请先在上方选择一个挖掘出的方向，再冻结它并继续。' : 'Choose one of the mined directions above, then freeze it and continue.');
-    const label = question ? (zh ? '冻结一个方向并继续' : 'Freeze a direction and continue') : (zh ? '选择一个方向' : 'Choose a direction');
+      : (zh ? '在输入框写下你从上方挖掘结果中选定的方向并发送，EasyICU 会把它冻结为本项目的研究问题并继续。'
+        : 'Write the direction you chose from the mined results above in the message box and send it; EasyICU freezes it as this project\'s research question and continues.');
+    const label = question ? (zh ? '冻结一个方向并继续' : 'Freeze a direction and continue') : (zh ? '写下要冻结的方向' : 'Write the direction to freeze');
     const carried = question ? ` data-gpi-idea-freeze-question="${esc(question)}"` : '';
     return `<section class="gpi-next-step is-resolved" data-gpi-idea-freeze-step aria-label="${esc(heading)}"><strong>${esc(heading)}</strong><p>${esc(detail)}</p><div class="gpi-next-actions"><button type="button" data-gpi-idea-freeze${carried} ${disabled ? 'disabled' : ''}><span>${esc(label)}</span><b aria-hidden="true">→</b></button></div></section>`;
   }

@@ -47,10 +47,13 @@ test('an open exploration offers the freeze instead of the dead data-preparation
 });
 
 test('without a direction under discussion the step asks for one and carries nothing', () => {
-  const html = rendered(nextActions(), { open: true, question: '' });
-  assert.match(html, /选择一个方向/);
+  const owner = nextActions();
+  const html = rendered(owner, { open: true, question: '' });
+  assert.match(html, /写下要冻结的方向/);
+  assert.match(html, /在输入框写下你从上方挖掘结果中选定的方向并发送/);
   assert.doesNotMatch(html, /data-gpi-idea-freeze-question/);
   assert.doesNotMatch(html, /data-gpi-data-source-continue/);
+  assert.match(rendered(owner, { open: true, question: '' }, 'en'), /Write the direction to freeze/);
 });
 
 test('a closed exploration keeps the data-source step unchanged', () => {
@@ -62,7 +65,7 @@ test('a closed exploration keeps the data-source step unchanged', () => {
   }
 });
 
-function eventsHarness(question, selector = '[data-gpi-idea-freeze]', dataset = null) {
+function eventsHarness(question, selector = '[data-gpi-idea-freeze]', dataset = null, language = 'zh') {
   const listeners = {};
   const calls = [];
   const input = { value: '', focus() { calls.push(['focus', 'input']); }, matches: () => false };
@@ -88,7 +91,7 @@ function eventsHarness(question, selector = '[data-gpi-idea-freeze]', dataset = 
     vm.runInContext(fs.readFileSync(path.join(STATIC, 'js', file), 'utf8'), context, { filename: file });
   }
   const events = declared.events.create({
-    state, projectId: () => 'p1', render: () => {}, tr: (en, zh) => zh || en,
+    state, projectId: () => 'p1', render: () => {}, tr: (en, zh) => (language === 'zh' ? zh : en),
     COHORT_ELIGIBILITY: { actionFromEvent: () => null }, MESSAGE_ACTIONS: { handleClick: () => false },
     sendMessage: () => { calls.push(['send', state.draft, input.value]); },
     sendText: (...args) => { calls.push(['sendText', ...args]); },
@@ -109,11 +112,20 @@ test('the freeze is the typed composer message, never a host turn without action
   assert.deepEqual(calls, [['send', text, text]]);
 });
 
-test('with no direction the click focuses the direction choice and sends nothing', () => {
-  const { click, calls } = eventsHarness('');
-  click();
-  assert.deepEqual(calls, [['focus', 'choice']]);
-});
+// UX mining walk (S1459): the reply listed the directions as prose, so no
+// direction was drafted and the button only focused another control.
+for (const [language, prefix] of [
+  ['zh', '把这个方向冻结为本项目的研究问题，然后继续：'],
+  ['en', "Freeze this direction as this project's research question, then continue: "],
+]) {
+  test(`${language}: with no drafted direction the click fills the freeze sentence and sends nothing`, () => {
+    const { click, calls, state, input } = eventsHarness('', '[data-gpi-idea-freeze]', null, language);
+    click();
+    assert.deepEqual(calls, [['focus', 'input']]);
+    assert.equal(input.value, prefix);
+    assert.equal(state.draft, prefix);
+  });
+}
 
 test('a timing request button fills and focuses the message box but sends nothing (A′)', () => {
   const draft = '把结局改为院内死亡，乳酸（最大值）保持不变，然后重新生成研究计划。';

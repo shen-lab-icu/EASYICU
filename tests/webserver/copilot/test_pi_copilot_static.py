@@ -55,7 +55,7 @@ def test_pi_shell_assets_are_explicitly_wired_before_guided_owner() -> None:
 
     assert "js/screens-guided-pi-literature.js?v=20261026-funnel1" in index
     assert "js/screens-guided-pi-markdown.js?v=20261029-opt1" in index
-    assert "js/screens-guided-pi-next-actions.js?v=20261119-m23b" in index
+    assert "js/screens-guided-pi-next-actions.js?v=20261119-m24f" in index
     assert "js/screens-guided-pi-message-actions.js?v=20261119-m23b" in index
     assert "js/screens-guided-pi-regeneration.js?v=20261029-freshfix6" in index
     assert "js/screens-guided-pi-starters.js?v=20261102-ui1" in index
@@ -99,7 +99,7 @@ def test_pi_shell_assets_are_explicitly_wired_before_guided_owner() -> None:
         "js/screens-guided-pi-connect.js"
     ) < index.index("js/screens-guided-pi.js")
     assert "js/screens-guided-pi-study-workspace.js?v=20261102-ui1" in index
-    assert "js/screens-guided-pi-events.js?v=20261119-b2l3" in index
+    assert "js/screens-guided-pi-events.js?v=20261119-m24f" in index
     assert "js/screens-guided-pi-project.js?v=20261026-projects1" in index
     assert "js/screens-guided-pi-data-consent.js?v=20261102-demo2" in index
     assert "js/screens-guided-pi-data-binding.js?v=20261029-journey3" in index

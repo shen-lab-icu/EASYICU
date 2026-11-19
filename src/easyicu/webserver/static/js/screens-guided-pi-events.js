@@ -652,17 +652,15 @@
           // m23: the same freeze a researcher would type, sent from the composer.
           const question = String(ideaFreeze.dataset.gpiIdeaFreezeQuestion || '').trim();
           const input = state.host.querySelector('[data-gpi-input]');
-          if (!question) {
-            const choices = [...state.host.querySelectorAll('[data-gpi-next-choice]')];
-            (choices.at(-1) || input)?.focus();
-            return;
-          }
           const text = tr(
             `Freeze this direction as this project's research question, then continue: ${question}`,
             `把这个方向冻结为本项目的研究问题，然后继续：${question}`,
           );
           state.draft = text;
           if (input) input.value = text;
+          // No drafted direction (the reply listed them as prose): the
+          // researcher completes the sentence with their choice and sends it.
+          if (!question) { input?.focus(); return; }
           sendMessage();
           return;
         }
