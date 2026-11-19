@@ -250,9 +250,9 @@
       "shim_bypass_violations": []
     },
     "schema.py": {
-      "loc": 3165,
-      "sha256": "bc51089b82f1d6936c4d347ee207de72906ac8bfb80ab8d8e5ac900018e8564b",
-      "intra_package_import_edges": 22,
+      "loc": 3181,
+      "sha256": "53d75d247bbb90dda1f8deabdb47c1ce28d7c4d9854f0dd6166981ae31973c35",
+      "intra_package_import_edges": 25,
       "shim_bypass_violations": []
     },
     "contracts/declared_product.py": {
@@ -412,7 +412,7 @@
       "callable_closure_captured_names": 1
     }
   },
-  "baseline_reason": "Extract desktop initial-code, runtime diagnostic, nested-replay and run-entry policy owners on 81f8bcc36; all HEAD LOC and closure ratchets remain equal or lower, with no accepted growth.",
+  "baseline_reason": "S1400 approved additions-only schema.py change (e2e1 deliverables): schema.py +16 LOC vs this baseline (plan deliverables, host delivery step kind and their validation; Planner-facing descriptions kept byte for byte). intra_package_import_edges 22->25: +1 e2e1 contracts.product_files; +2 pre-existing since before 8cf58fc6c (ungated). Targeted hand move of this entry only (supervisor S1404/S1405); every other file and function entry, the tool digest and thresholds stay as they were.",
   "baseline_history": [
     {
       "reason": "Re-baselined after the 2026-07-24..2026-07-27 external-review hardening batch (19 commits): fail-closed concept outcomes, human-review state drift + payload-tamper guards, provider budget/resume accounting, three deterministic executors, scientific-table validation. All growth is reviewed hardening, not drift. Decomposing pipeline.py / execution/phase.py / repairs/source.py remains the open architectural workstream and is NOT authorized by this refresh.",
@@ -1288,6 +1288,15 @@
     },
     {
       "reason": "Extract desktop initial-code, runtime diagnostic, nested-replay and run-entry policy owners on 81f8bcc36; all HEAD LOC and closure ratchets remain equal or lower, with no accepted growth."
+    },
+    {
+      "reason": "S1400 approved additions-only schema.py change (e2e1 deliverables): schema.py +16 LOC vs this baseline (plan deliverables, host delivery step kind and their validation; Planner-facing descriptions kept byte for byte). intra_package_import_edges 22->25: +1 e2e1 contracts.product_files; +2 pre-existing since before 8cf58fc6c (ungated). Targeted hand move of this entry only (supervisor S1404/S1405); every other file and function entry, the tool digest and thresholds stay as they were.",
+      "accepted_growth": {
+        "schema.py": {
+          "loc_was": 3165,
+          "loc_now": 3181
+        }
+      }
     }
   ]
 }
