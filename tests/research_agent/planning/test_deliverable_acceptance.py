@@ -928,6 +928,52 @@ def test_first_result_delivery_selection_binds_to_article(question, article_excl
     }
 
 
+@pytest.mark.parametrize(("language", "question", "first_delivery", "article_delivery"), [
+    (
+        "en", "Compare next-day discharge counts across rehabilitation units.",
+        "The transfer team might use a web preview. Provide a PDF.",
+        "Please do not generate the HTML preview.",
+    ),
+    (
+        "zh", "比较各康复病区次日出院人数。",
+        "转诊团队可能会用到网页预览。请提供 PDF。",
+        "请勿生成浏览器预览。",
+    ),
+])
+def test_first_result_unanswered_preview_becomes_an_explicit_article_exclusion(
+    tmp_path, monkeypatch, language, question, first_delivery, article_delivery,
+):
+    first_question = f"{question} {first_delivery}"
+    _, attempt, _ = _plan(first_question, "first_result")
+    assert delivery_requests(first_question)[PREVIEW] is DeliveryRequest.CHECK
+    first = bind_run_deliverables(attempt.output, question=first_question, defaults=None, edit={
+        "requested": [], "excluded": [REFERENCES], "confirmed": True, "source": "user_edit",
+    })
+    assert first.deliverables.unanswered == (PREVIEW,)
+    assert first.deliverables.deferred == (PDF,)
+
+    article_question = f"{question} {article_delivery}"
+    assert delivery_requests(article_question)[PREVIEW] is DeliveryRequest.NOT_REQUESTED
+    article = bind_run_deliverables(
+        AnalysisPlan(research_question=article_question, steps=[]),
+        question=article_question, defaults=HOST_DELIVERY_KINDS, edit=first.deliverables.model_dump(mode="json"),
+    )
+    assert host_delivery_omissions(article.model_dump(mode="json")) == [
+        {"kind": PREVIEW, "reason_code": "excluded_by_user"},
+        {"kind": REFERENCES, "reason_code": "excluded_by_user"},
+    ]
+    assert article.deliverables.unanswered == ()
+    assert [step.host_delivery_kind for step in article.steps] == [PDF]
+
+    run_dir = tmp_path / "web" / "pipeline" / "run_article"
+    run_dir.mkdir(parents=True)
+    requests = human_review_requests_for_plan(
+        findings=[], plan=article, evidence=EvidenceStore(run_dir), require_plan_review=True,
+    )
+    card = _confirmation(run_dir, monkeypatch, language, _fixture_profile("article"), article_question, requests)
+    _assert_card_choice(card, PREVIEW, "no")
+
+
 def _screened_out(question):
     return _literature(question).model_copy(update={"screening_decisions": []})
 

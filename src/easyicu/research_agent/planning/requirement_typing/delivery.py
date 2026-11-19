@@ -202,7 +202,10 @@ def bind_run_deliverables(
         if plan.deliverables is not None:
             prior.update(plan.deliverables.requested)
         deferred.update(prior.difference(excluded, prefill.check))
-    unanswered = set(edited.unanswered) | set(prefill.check).difference(requested, deferred, excluded)
+    unanswered = (
+        set(edited.unanswered).difference(requested, deferred, prefill.excluded)
+        | set(prefill.check).difference(requested, deferred, excluded)
+    )
     excluded = (excluded | unanswered).difference(requested, deferred)
     selection = PlanDeliverables(
         requested=requested, confirmed=True, source="user_edit",
