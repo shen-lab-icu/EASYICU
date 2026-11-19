@@ -1333,6 +1333,7 @@ def validate_context_update(
     _server_question_wording_write: bool = False,
     _server_design_variance_basis_write: bool = False,
     _server_skill_attachments_write: bool = False,
+    _server_demo_planning_authority_write: bool = False,
 ) -> Dict[str, Any]:
     """Validate and normalize one proposed update without mutating the store.
 
@@ -1347,6 +1348,7 @@ def validate_context_update(
     patch = _sanitize_patch(
         raw_context,
         allow_skill_attachments=_server_skill_attachments_write,
+        allow_demo_planning_authority=_server_demo_planning_authority_write,
         allow_cohort_eligibility_authority=(
             _server_cohort_eligibility_authority_write
         ),

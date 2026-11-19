@@ -242,6 +242,15 @@ def _metadata_only_sic_definition_gap(request, database: str, scope_gap: Mapping
             and metadata_only_sic_definition_gap(database, scope_gap))
 
 
+def _demo_choice_stale() -> ResearchPipelineRunError:
+    return ResearchPipelineRunError(
+        "research_pipeline_demo_planning_authority_stale",
+        "The confirmed Demo planning source changed, so this conversation cannot use that choice. "
+        "The researcher starts a new project and chooses the official Demo there; "
+        "no Demo preparation or source binding in this conversation can restore it.",
+    )
+
+
 def _prepare_scientific_launch(
     request: ResearchPipelineLaunchRequest,
     *,
@@ -363,13 +372,20 @@ def _prepare_scientific_launch(
         request.execution_resume_source_run_id
         or _development_resume_source(request)
     ):
+        from easyicu.research_agent.authority.filesystem import AuthorityFilesystemError
         from easyicu.webserver.pi_copilot.plan_decisions import record_post_baseline_landmark
 
-        timed_study = record_post_baseline_landmark(
-            study=study, materialization_study=materialization_study,
-            primary_exposure=primary_exposure, target=target,
-            endpoint=planning_coordinates.get("endpoint"), database=database,
-        )
+        try:
+            timed_study = record_post_baseline_landmark(
+                study=study, materialization_study=materialization_study,
+                primary_exposure=primary_exposure, target=target,
+                endpoint=planning_coordinates.get("endpoint"), database=database,
+            )
+        except (ValueError, OSError, AuthorityFilesystemError) as exc:
+            # The confirmed raw Demo choice could not follow the launch timing.
+            if study.get("demo_planning_authority_ref") and str(exc).startswith("demo_planning_"):
+                raise _demo_choice_stale() from exc
+            raise
         if timed_study is not study:
             study = dict(timed_study)
             materialization_study = {
@@ -938,12 +954,7 @@ def prepare_research_pipeline_run(
                 raise ValueError("demo_planning_source_changed")
             source_identity = resolve_choice(request.study_context)
         except (ValueError, OSError, dataio.ExportCohortError, AuthorityFilesystemError) as exc:
-            raise ResearchPipelineRunError(
-                "research_pipeline_demo_planning_authority_stale",
-                "The confirmed Demo planning source changed, so this conversation cannot use that choice. "
-                "The researcher starts a new project and chooses the official Demo there; "
-                "no Demo preparation or source binding in this conversation can restore it.",
-            ) from exc
+            raise _demo_choice_stale() from exc
     else:
         source_identity = sources.registered_source_identity(request.export_path)
     return PreparedResearchPipelineRun(

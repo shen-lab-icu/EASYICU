@@ -103,10 +103,7 @@ def publish_choice(*, study: Mapping[str, Any], new_source: Mapping[str, Any],
     return ref
 
 
-def resolve_choice(study: Mapping[str, Any]) -> Any:
-    ref = str(study.get("demo_planning_authority_ref") or "")
-    if not ref:
-        return None
+def _signed_body(ref: str) -> dict[str, Any]:
     if len(ref) != 64 or any(ch not in "0123456789abcdef" for ch in ref):
         raise ValueError("demo_planning_authority_invalid")
     with AnchoredDirectory.open(_private_directory()) as directory:
@@ -118,6 +115,14 @@ def resolve_choice(study: Mapping[str, Any]) -> Any:
     body, signature = receipt["body"], receipt["signature"]
     if not isinstance(body, dict) or not isinstance(signature, str) or not hmac.compare_digest(_signature(body), signature):
         raise ValueError("demo_planning_authority_invalid")
+    return body
+
+
+def resolve_choice(study: Mapping[str, Any]) -> Any:
+    ref = str(study.get("demo_planning_authority_ref") or "")
+    if not ref:
+        return None
+    body = _signed_body(ref)
     source = study.get("data_source") or {}
     if (body.get("schema_version") != "easyicu.demo-planning-source-choice/1"
             or body.get("study_id") != study.get("id") or type(body.get("revision")) is not int
@@ -135,3 +140,49 @@ def resolve_choice(study: Mapping[str, Any]) -> Any:
     if any(body.get(key) != value for key, value in facts.items()):
         raise ValueError("demo_planning_source_changed")
     return identity
+
+
+def follow_launch_timing(before: Mapping[str, Any], landmark_patch: Mapping[str, Any]) -> str:
+    """Carry a confirmed choice onto the 24 h landmark the host adds at launch.
+
+    The choice signs the study's scientific configuration. At launch,
+    plan_decisions.record_post_baseline_landmark (the only caller) derives the
+    agent landmark from that same study, so the runner's recheck found the
+    receipt stale and every raw Demo plan with a first-day exposure and a death
+    outcome stopped (UX leg 3, 2026-11-19).
+
+    This re-signs the same choice (identity, offer, source facts, revision) for
+    ``before`` plus ``landmark_patch`` only when the original receipt resolves
+    for ``before`` now, is not itself a follow, ``before`` has no timing row,
+    and the patch equals, by value, the host's agent landmark for ``before``:
+    that one sensitivity row and its three plan_timing_* confirmations. The
+    follow is deterministic, so a receipt has exactly one.
+    """
+
+    from .plan_decisions import agent_post_baseline_landmark_patch
+
+    ref = str(before.get("demo_planning_authority_ref") or "")
+    if not ref:
+        raise ValueError("demo_planning_authority_stale")
+    original = _signed_body(ref)
+    rows = before.get("sensitivity_specs") or []
+    if ("follows" in original or resolve_choice(before) is None or not isinstance(rows, list)
+            or any(not isinstance(row, Mapping) or row.get("axis") == "timing" for row in rows)):
+        raise ValueError("demo_planning_authority_stale")
+    host_landmark = agent_post_baseline_landmark_patch(before)
+    if canonical_json(dict(landmark_patch)) != canonical_json(host_landmark):
+        raise ValueError("demo_planning_authority_stale")
+    body = {**original, "scientific_configuration_sha256": _source_study_sha256({**dict(before), **host_landmark}),
+            "nonce": hashlib.sha256(b"easyicu.demo-planning-follow/1\0" + ref.encode()).hexdigest(),
+            "follows": ref}
+    raw = canonical_json({"body": body, "signature": _signature(body)}).encode()
+    followed = hashlib.sha256(raw).hexdigest()
+    with AnchoredDirectory.open(_private_directory()) as directory:
+        try:
+            _publish_once(directory, f"demo-planning-{followed}.json", raw)
+        except FileExistsError:
+            # A refused launch left this same follow; the name is its content hash.
+            if directory.read_bytes(f"demo-planning-{followed}.json", max_bytes=65536) != raw:
+                raise ValueError("demo_planning_authority_invalid") from None
+        directory.assert_still_selected()
+    return followed

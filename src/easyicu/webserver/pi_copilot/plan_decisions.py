@@ -497,6 +497,17 @@ def post_baseline_landmark_configuration(
         end = host_materialization_window_hours(context)
     if end is None or not 0 < end <= QUESTION_LANDMARK_HOURS:
         return None
+    return agent_post_baseline_landmark_patch(study)
+
+
+def agent_post_baseline_landmark_patch(study: Mapping[str, Any]) -> Dict[str, Any]:
+    """The exact StudyContext patch of the host's agent 24 h landmark.
+
+    One owner for its value: the launch rule above writes it and the raw Demo
+    choice follows only this patch (demo_planning_authority.follow_launch_timing).
+    """
+
+    configuration = ScientificConfiguration.inspect(study)
     return {
         "sensitivity_specs": configuration.replace_sensitivity(
             axis="timing",
@@ -551,6 +562,13 @@ def record_post_baseline_landmark(
     patch = post_baseline_landmark_configuration(study=study, context=context)
     if patch is None:
         return study
+    authority: Dict[str, Any] = {}
+    if study.get("demo_planning_authority_ref"):
+        # The confirmed raw Demo choice follows this host-derived timing only.
+        from .demo_planning_authority import follow_launch_timing
+
+        patch = {**patch, "demo_planning_authority_ref": follow_launch_timing(study, patch)}
+        authority["_server_demo_planning_authority_write"] = True
     if (
         not study.get("id") or study.get("revision") is None
         or study_contexts.get_context(str(study["id"])) is None
@@ -565,7 +583,7 @@ def record_post_baseline_landmark(
     return upsert_launch_context(study,
         {"id": study["id"], **patch}, active=True,
         expected_revision=int(study["revision"]), require_revision=True,
-        lifecycle_write=False, _server_agent_landmark_decision=True,
+        lifecycle_write=False, _server_agent_landmark_decision=True, **authority,
     )
 
 
