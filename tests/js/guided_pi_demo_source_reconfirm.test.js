@@ -135,3 +135,25 @@ for (const [after, starts] of [[CODE, false], ['plan_configuration_superseded', 
     assert.equal(ui.state.calls.includes('plan'), starts);
   });
 }
+
+// B10 (UX leg 3 en/zh, 2026-11-19): the compile, the reconfirmation and a
+// fresh plan repeated without end. The host compiles a configuration once;
+// the plan made on it is reviewed with its own action, which starts nothing
+// without new planner repairs. Counted from the compile: one fresh plan.
+test('after one compile and its fresh plan, the same runtime gaps start no further plan', async () => {
+  const ui = screen();
+  ui.state.session.binding.run_id = 'run-1';
+  ui.state.workflow = { next_action_code: 'agent_plan_configuration_required' };
+  ui.state.after = { next_action_code: 'plan_configuration_superseded' };
+  await ui.actions.continueSystemOwnedPlanProgression();
+  // The fresh plan's review keeps the runtime gaps (the host does not
+  // compile its own configuration again) and asks for no planner repair.
+  ui.state.session.binding.run_id = 'run-2';
+  ui.state.workflow = { next_action_code: 'plan_scientific_changes_required', plan_review_summary: {
+    authorization_questions: [], remediation_buckets: { agent_plan_revision: [],
+      runtime_capability: ['POST_BASELINE_EXPOSURE_TIMING_NOT_CLOSED'] } } };
+  for (let poll = 0; poll < 3; poll++) await ui.actions.continueSystemOwnedPlanProgression();
+  const calls = JSON.parse(JSON.stringify(ui.state.calls));
+  assert.equal(calls.filter(call => call === 'configure').length, 1);
+  assert.equal(calls.filter(call => call === 'plan').length, 1);
+});

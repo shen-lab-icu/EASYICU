@@ -100,3 +100,33 @@ def test_launch_asks_the_official_export_for_first_stay_and_grouping(choice, cho
     # The export answers identity questions only; the study keeps its raw source.
     assert study["data_source"]["path"] == str(choice.paths.raw)
     assert study_contexts.get_context(study["id"])["data_source"] == study["data_source"]
+
+
+def test_one_reconfirmation_after_a_compile_keeps_the_compiled_lineage(choice, chosen):
+    # B10 (UX leg 3 en/zh, 2026-11-19): applying a plan's settings ended the
+    # signed choice; confirming it again is one more write. The next plan is
+    # still a revision of the compiled candidate, and is not compiled again.
+    # Any further write ends that (S1471).
+    from easyicu.webserver.pi_copilot import plan_review_progress
+    from easyicu.webserver.pi_copilot.workflow import build_project_workflow_projection
+
+    reviewed = {"run_id": "run-compiled", "scientific_configuration_sha256": study_contexts.scientific_configuration_sha256(chosen)}
+    compiled = study_contexts.upsert_context({"id": chosen["id"], "covariates": ["age"], "confirmations": {
+        **(chosen.get("confirmations") or {}), "extraction_completed": True, "agent_plan_configuration_compiled": True}})
+    assert resolve_choice(compiled) is None
+    plan_review_progress.record_choice(before=chosen, after=compiled, run=reviewed,
+                                       decision_code="agent_plan_configuration", option_id="typed_runtime_projection")
+    choice.record.binding = choice.service._binding_for_context(compiled)
+    offer = build_project_workflow_projection(study_context_id=compiled["id"]).workflow.bound_export_cohort_refusal["planning_source"]
+    choice.service.authorize_data_source(choice.record.session_id, **{
+        **choice.body, "expected_revision": compiled["revision"], "offer_sha256": offer["offer_sha256"]})
+    study = study_contexts.get_context(chosen["id"])
+    assert study["revision"] == compiled["revision"] + 1 and resolve_choice(study) is not None
+    assert study_contexts.scientific_configuration_sha256(study) != study_contexts.scientific_configuration_sha256(compiled)
+    fresh = {"run_id": "run-fresh", "scientific_configuration_sha256": study_contexts.scientific_configuration_sha256(study)}
+    assert plan_review_progress.compiled_configuration_progress(study, reviewed) is not None
+    assert plan_review_progress.planned_on_compiled_configuration(study, fresh)
+
+    renamed = study_contexts.upsert_context({"id": chosen["id"], "title": "Renamed project"})
+    assert plan_review_progress.compiled_configuration_progress(renamed, reviewed) is None
+    assert not plan_review_progress.planned_on_compiled_configuration(renamed, fresh)

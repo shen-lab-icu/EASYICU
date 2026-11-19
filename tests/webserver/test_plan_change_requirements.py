@@ -95,7 +95,8 @@ def compiled_study(f, monkeypatch, tmp_path):
     after = {
         **before, 'revision': 2, 'covariates': ['age'],
         'covariate_selection': 'exact', 'covariate_authority': 'agent_plan',
-        'confirmations': {'agent_plan_configuration_compiled': True},
+        # The host compile marks extraction complete (plan_decisions).
+        'confirmations': {'agent_plan_configuration_compiled': True, 'extraction_completed': True},
     }
     plan_review_progress.record_choice(
         before=before, after=after, run=f.row,
@@ -146,7 +147,7 @@ def test_fresh_runtime_replan_launch_recovers_host_source_without_browser_fields
     assert request.plan_change_request is None  # No new client field or execution grant.
 
 
-@pytest.mark.parametrize('drift', ['missing', 'corrupt', 'revision', 'question', 'source', 'user_choice', 'run'])
+@pytest.mark.parametrize('drift', ['missing', 'corrupt', 'revision', 'older_revision', 'question', 'source', 'user_choice', 'run'])
 def test_runtime_continuity_requires_exact_host_receipt(source, monkeypatch, tmp_path, drift):
     from easyicu.webserver.pi_copilot import plan_review_progress
 
@@ -159,7 +160,11 @@ def test_runtime_continuity_requires_exact_host_receipt(source, monkeypatch, tmp
     elif drift == 'corrupt':
         plan_review_progress._path(changed['id']).write_text('{}')
     elif drift == 'revision':
-        changed = {**changed, 'revision': 3}
+        # A write outside the reconfirmation allowance (here an unscientific
+        # title) keeps the digest and still ends the continuity (S1471).
+        changed = {**changed, 'revision': 3, 'title': 'Renamed project'}
+    elif drift == 'older_revision':
+        changed = {**changed, 'revision': 1}
     elif drift == 'question':
         changed = {**changed, 'question': 'New scientific scope.'}
     elif drift == 'source':
@@ -174,6 +179,49 @@ def test_runtime_continuity_requires_exact_host_receipt(source, monkeypatch, tmp
     assert owner.compiled_configuration_plan_change(study=changed, project_root=f.root) is None
     with pytest.raises(ResearchPipelineRunError):
         bind(f, bound, study=changed)
+
+
+@pytest.mark.parametrize('variant', ['reconfirmed', 'unsigned', 'second_write', 'signed_after_another_write', 'scientific_edit', 'extraction_kept'])
+def test_runtime_continuity_survives_only_one_signed_reconfirmation(source, monkeypatch, tmp_path, variant):
+    # B10 (UX leg 3, 2026-11-19): the raw official-Demo reconfirmation signs
+    # its choice one revision later and marks extraction incomplete. The fresh
+    # plan stayed a revision of the compiled candidate only at the exact
+    # revision; losing it planned from scratch and looped. Exactly that one
+    # signed write is allowed (S1471); anything else falls back to the exact match.
+    from easyicu.webserver.pi_copilot import demo_planning_authority, plan_review_progress
+
+    f = source()
+    changed = compiled_study(f, monkeypatch, tmp_path)
+    reconfirmed = {
+        **changed, 'revision': changed['revision'] + 1, 'demo_planning_authority_ref': 'c' * 64,
+        'confirmations': {**changed['confirmations'], 'extraction_completed': False},
+    }
+    signed = reconfirmed['revision']
+    if variant == 'unsigned':
+        signed = None
+    elif variant == 'second_write':
+        reconfirmed['revision'] += 1
+    elif variant == 'signed_after_another_write':
+        # Another write (a title) came between the compile and the signed choice.
+        reconfirmed['revision'] += 1
+        reconfirmed['title'] = 'Renamed project'
+        signed = reconfirmed['revision']
+    elif variant == 'scientific_edit':
+        reconfirmed['question'] = 'New scientific scope.'
+    elif variant == 'extraction_kept':
+        reconfirmed['confirmations']['extraction_completed'] = True
+    monkeypatch.setattr(demo_planning_authority, 'signed_choice_revision', lambda study: signed)
+    bound = owner.compiled_configuration_plan_change(study=reconfirmed, project_root=f.root)
+    fresh = {'run_id': 'run-fresh', 'scientific_configuration_sha256': study_contexts.scientific_configuration_sha256(reconfirmed)}
+    if variant == 'reconfirmed':
+        assert bound is not None and bound.source_run_id == f.request.source_run_id
+        assert bind(f, bound, study=reconfirmed).baseline_requirements() == bind(f).baseline_requirements()
+        assert plan_review_progress.planned_on_compiled_configuration(reconfirmed, fresh)
+    else:
+        assert bound is None
+        # The same digest as the compile wrote is that configuration (B10 part 1).
+        assert plan_review_progress.planned_on_compiled_configuration(reconfirmed, fresh) is (
+            variant == 'extraction_kept')
 
 
 @pytest.mark.parametrize('names', [

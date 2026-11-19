@@ -31,9 +31,9 @@ from easyicu.webserver.run_record import RunRecordReadError
 
 
 def _compiled_runtime_continuity(study: Mapping[str, Any], run: Mapping[str, Any]) -> bool:
-    from easyicu.webserver.pi_copilot.plan_review_progress import matching_progress
+    from easyicu.webserver.pi_copilot.plan_review_progress import compiled_configuration_progress
 
-    progress = matching_progress(study, run)
+    progress = compiled_configuration_progress(study, run)
     return progress is not None and progress.choices == {
         "agent_plan_configuration": "typed_runtime_projection",
     }

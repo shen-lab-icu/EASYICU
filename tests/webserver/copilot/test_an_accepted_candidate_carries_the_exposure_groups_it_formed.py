@@ -637,7 +637,7 @@ def test_a_run_asks_for_groups_only_when_it_plans_them(
 
 
 @pytest.mark.parametrize("change", [
-    None, "unrelated_edit", "unrecorded", "other_choice", "capsule",
+    None, "reconfirmed", "revision_only", "older_revision", "unrelated_edit", "unrecorded", "other_choice", "capsule",
     "capsule_metadata", "checkpoint_run", "grouping", "outside_study", "symlink",
 ])
 def test_configuration_carries_only_its_digest_bound_source_groups(
@@ -646,7 +646,8 @@ def test_configuration_carries_only_its_digest_bound_source_groups(
     monkeypatch.setenv("EASYICU_HOME", str(tmp_path / "state"))
     before = _study(workflow_complete_study)
     before["revision"] = 1
-    after = {**before, "revision": 2, "covariates": ["age"]}
+    after = {**before, "revision": 2, "covariates": ["age"], "confirmations": {
+        **(before.get("confirmations") or {}), "extraction_completed": True}}
     root = tmp_path / "projects"
     wrapper = root / before["id"] / "wrapper"
     inner = wrapper / "pipeline" / SOURCE_RUN_ID
@@ -669,7 +670,20 @@ def test_configuration_carries_only_its_digest_bound_source_groups(
             decision_code="other_choice" if change == "other_choice" else "agent_plan_configuration",
             option_id="typed_runtime_projection",
         )
-    if change == "unrelated_edit":
+    if change == "reconfirmed":
+        # B10: exactly one signed raw-Demo reconfirmation after the compile;
+        # the groups still cross (S1471).
+        from easyicu.webserver.pi_copilot import demo_planning_authority
+
+        after = {**after, "revision": 3, "demo_planning_authority_ref": "c" * 64,
+                 "confirmations": {**after["confirmations"], "extraction_completed": False}}
+        monkeypatch.setattr(demo_planning_authority, "signed_choice_revision", lambda study: 3)
+    elif change == "revision_only":
+        # A write outside the allowance keeps the digest and ends the handoff.
+        after = {**after, "revision": 3, "title": "Renamed project"}
+    elif change == "older_revision":
+        after = {**after, "revision": 1}
+    elif change == "unrelated_edit":
         after["question"] = "Another synthetic question."
     elif change == "capsule":
         capsule.write_text(json.dumps({"cohort_sha256": "0" * 64}))
@@ -698,7 +712,7 @@ def test_configuration_carries_only_its_digest_bound_source_groups(
         assert raised.value.code == "candidate_plan_materialization_authority_invalid"
     else:
         groups = load()
-        if change is None:
+        if change in {None, "reconfirmed"}:
             assert groups.variables == (_GROUPED,)
             assert groups.concepts == ("lact",)
             assert groups.columns[0].variable == _GROUPED

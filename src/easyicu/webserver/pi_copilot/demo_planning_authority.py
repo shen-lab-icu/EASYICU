@@ -144,6 +144,24 @@ def resolve_choice(study: Mapping[str, Any]) -> Any:
     return identity
 
 
+def signed_choice_revision(study: Mapping[str, Any]) -> int | None:
+    """The study revision the study's current, valid choice was written at.
+
+    ``None`` without a choice that resolves for this study now. Read only.
+    """
+
+    from easyicu.research_agent.authority.filesystem import AuthorityFilesystemError
+    from easyicu.webserver import dataio
+
+    try:
+        if resolve_choice(study) is None:
+            return None
+        revision = _signed_body(str(study.get("demo_planning_authority_ref") or "")).get("revision")
+    except (ValueError, OSError, KeyError, TypeError, dataio.ExportCohortError, AuthorityFilesystemError):
+        return None
+    return revision if type(revision) is int else None
+
+
 _RECEIPT_NAME = re.compile(r"demo-planning-([0-9a-f]{64})\.json")
 _MAX_RECEIPTS = 4096
 

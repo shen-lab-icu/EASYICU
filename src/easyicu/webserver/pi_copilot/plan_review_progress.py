@@ -71,6 +71,83 @@ def matching_progress(
 AGENT_PLAN_CONFIGURATION_CHOICE = ("agent_plan_configuration", "typed_runtime_projection")
 
 
+# What a raw official-Demo reconfirmation writes besides the signed choice
+# (demo_planning_source.bind_demo_planning_source): the raw source is to be
+# prepared again, so extraction is no longer complete. It carries no exposure
+# group, plan revision or analysis coordinate. Anything else it changes (a
+# drafted cohort scope, another source) is outside this allowance.
+_RECONFIRMATION_CONFIRMATIONS = {"extraction_completed": (True, False)}
+
+
+def _one_reconfirmation_after(
+    study: Mapping[str, Any], progress: ReviewChoiceProgress
+) -> bool:
+    """Exactly one write followed the compile: the signed raw-Demo reconfirmation.
+
+    The study keeps no per-revision field history, so this accepts one case
+    only: the study is one revision after the receipt, its current choice
+    resolves and was signed at exactly that revision, and undoing the
+    reconfirmation's allowed fields gives back the digest the compile wrote.
+    """
+
+    from .demo_planning_authority import signed_choice_revision
+
+    revision = study.get("revision")
+    if type(revision) is not int or revision != progress.revision + 1:
+        return False
+    if signed_choice_revision(study) != revision:
+        return False
+    confirmations = study.get("confirmations")
+    if not isinstance(confirmations, Mapping):
+        return False
+    before = dict(confirmations)
+    for key, (compiled, reconfirmed) in _RECONFIRMATION_CONFIRMATIONS.items():
+        if confirmations.get(key) is not reconfirmed:
+            return False
+        before[key] = compiled
+    compiled_study = {
+        **{key: value for key, value in study.items() if key != "demo_planning_authority_ref"},
+        "confirmations": before,
+        "revision": progress.revision,
+    }
+    return (
+        study_contexts.scientific_configuration_sha256(compiled_study)
+        == progress.current_digest
+    )
+
+
+def _compile_receipt(study: Mapping[str, Any]) -> ReviewChoiceProgress | None:
+    progress = _receipt(study)
+    name, option = AGENT_PLAN_CONFIGURATION_CHOICE
+    if progress is None or progress.study_id != study.get("id") or progress.choices.get(name) != option:
+        return None
+    return progress
+
+
+def compiled_configuration_progress(
+    study: Mapping[str, Any], run: Mapping[str, Any]
+) -> ReviewChoiceProgress | None:
+    """The compile receipt of ``run`` while the study keeps what it wrote.
+
+    The fresh plan after a host compile inherits that candidate's groups and
+    revision contract through this receipt. It holds for the exact revision
+    the compile wrote (``matching_progress``), or after exactly one signed
+    raw-Demo reconfirmation of that configuration (B10, UX leg 3, 2026-11-19:
+    the reconfirmation lost the candidate's groups, the grouped landmark
+    authority was released and the same runtime gaps returned). Any other
+    write, run or study is not this receipt.
+    """
+
+    progress = _compile_receipt(study)
+    if progress is None or progress.run_id != run.get("run_id") or (
+        progress.source_digest != run.get("scientific_configuration_sha256")
+    ):
+        return None
+    if matching_progress(study, run) is not None or _one_reconfirmation_after(study, progress):
+        return progress
+    return None
+
+
 def planned_on_compiled_configuration(
     study: Mapping[str, Any], run: Mapping[str, Any]
 ) -> bool:
@@ -79,19 +156,20 @@ def planned_on_compiled_configuration(
     The compiler projects one reviewed plan's runtime gaps into the study and
     a fresh plan follows. When that fresh plan is reviewed with runtime gaps
     again, compiling once more only rewrites the study from another plan's
-    wording and plans again (UX leg 3 en, 2026-11-19, B10: each round also
+    wording and plans again (UX leg 3 en/zh, 2026-11-19, B10: each round also
     ended a signed raw-Demo choice, so the loop never converged). Such a run
-    goes to its review instead. Read only; a missing or unrelated receipt is
-    not this fact.
+    goes to its review instead. A run planned after exactly one signed
+    reconfirmation of that configuration is the same lineage. Read only; a
+    missing or unrelated receipt is not this fact.
     """
-    progress = _receipt(study)
-    name, option = AGENT_PLAN_CONFIGURATION_CHOICE
-    return bool(
-        progress is not None
-        and progress.study_id == study.get("id")
-        and progress.run_id != run.get("run_id")
-        and progress.choices.get(name) == option
-        and progress.current_digest == run.get("scientific_configuration_sha256")
+
+    progress = _compile_receipt(study)
+    if progress is None or progress.run_id == run.get("run_id"):
+        return False
+    digest = run.get("scientific_configuration_sha256")
+    return digest == progress.current_digest or (
+        _one_reconfirmation_after(study, progress)
+        and digest == study_contexts.scientific_configuration_sha256(study)
     )
 
 

@@ -665,7 +665,7 @@ def load_configured_plan_groupings(
     available before materialization and runtime-family selection.
     """
 
-    from easyicu.webserver.pi_copilot.plan_review_progress import matching_progress
+    from easyicu.webserver.pi_copilot.plan_review_progress import compiled_configuration_progress
 
     if not project_root:
         return None
@@ -673,9 +673,7 @@ def load_configured_plan_groupings(
         study_id=str(study.get("id") or ""), project_root=project_root, limit=100,
     ).get("runs", ())
     for row in rows:
-        progress = matching_progress(study, row)
-        if (progress is None or progress.choices.get("agent_plan_configuration")
-                != "typed_runtime_projection"):
+        if compiled_configuration_progress(study, row) is None:
             continue
         try:
             study_root = Path(project_root).resolve() / _slug(study.get("id"))
