@@ -61,8 +61,10 @@
       if (job && code.startsWith('failed_pipeline_')) return 'draft';
       return ['failed_pipeline_requires_fresh_plan', 'failed_pipeline_execution_retry_futile'].includes(code) ? 'confirm' : 'edit';
     }
+    // A changed Demo choice cannot be made again in this conversation (M2).
+    if (kind === 'edit_study' && params.route === 'study_edit' && params.field === 'source') return 'new-project';
     if (kind === 'edit_study' && params.route === 'study_edit'
-      && ['cohort', 'outcome', 'source', 'source_or_question'].includes(params.field)) return 'draft';
+      && ['cohort', 'outcome', 'source_or_question'].includes(params.field)) return 'draft';
     if (kind === 'rephrase_in_scope' && params.route === 'question_edit'
       && params.scope_owner === 'easyicu.webserver.study_family_scope') return 'draft';
     if (kind === 'check_connection' && params.route === 'model_connection'
@@ -131,7 +133,7 @@
 
   function actionLabel(action, route, workflow, tr) {
     if (route === 'codex-login') return tr('Re-login to Codex', '重新登录 Codex');
-    if (route === 'draft') return window.EasyICU.guidedPi.optional('confirmation')?.stopActionCopy(action, tr)?.label;
+    if (route === 'draft' || route === 'new-project') return window.EasyICU.guidedPi.optional('confirmation')?.stopActionCopy(action, tr)?.label;
     const code = workflow?.next_action_code;
     const labels = {
       retry: 'retry',
@@ -172,7 +174,9 @@
         const label = actionLabel(action, route, workflow, tr);
         if (!label) continue;
         seen.add(key);
-        controls.push(`<button class="btn sm" type="button" data-gpi-stop-action="${esc(action.action_id)}" ${attribute}="${esc(coordinate)}" data-gpi-stop-workflow="${esc(workflow?.next_action_code || '')}">${esc(label)}</button>`);
+        // A new-project action is carried out by the shell's project owner (M2).
+        const shellOwned = route === 'new-project' ? ' data-project-new' : '';
+        controls.push(`<button class="btn sm" type="button" data-gpi-stop-action="${esc(action.action_id)}" ${attribute}="${esc(coordinate)}" data-gpi-stop-workflow="${esc(workflow?.next_action_code || '')}"${shellOwned}>${esc(label)}</button>`);
       }
       return controls;
     }

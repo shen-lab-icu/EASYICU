@@ -16,14 +16,28 @@ function owner(language) {
   });
 }
 
+function confirmationOwner() {
+  const context = vm.createContext({ window: { EU_HTML: { esc: String } } });
+  for (const name of ['modules', 'confirmation']) {
+    vm.runInContext(fs.readFileSync(path.join(js, `screens-guided-pi-${name}.js`), 'utf8'), context);
+  }
+  return context.window.EasyICU.guidedPi.require('confirmation');
+}
+
 for (const language of ['zh', 'en']) {
-  test(`${language}: stale Demo authority asks to reselect the source`, () => {
+  // M2 (11-19 walk): this conversation can no longer choose the Demo again,
+  // so the text and its only action lead to a new project, never a dead end.
+  test(`${language}: a changed Demo choice leads to a new project`, () => {
     const errors = owner(language);
     const code = 'research_pipeline_demo_planning_authority_stale';
     for (const text of [errors.errorText({ code }), errors.jobErrorText(code), errors.runFailureText(code)]) {
-      assert.match(text, language === 'zh' ? /重新选择 Demo 数据源.*审阅/ : /Select the Demo source again.*review/);
-      assert.doesNotMatch(text, /retry|重试|删除|remove/i);
+      assert.match(text, language === 'zh' ? /新建项目.*重新选择官方 Demo/ : /Start a new project and choose the official Demo/);
+      assert.doesNotMatch(text, /retry|重试|删除|remove|操作卡|请重新选择 Demo 数据源/i);
     }
+    const copy = confirmationOwner().stopActionCopy(
+      { kind: 'edit_study', params: { field: 'source' } }, (en, zh) => language === 'zh' ? zh : en);
+    assert.match(copy.label, language === 'zh' ? /新建项目/ : /New project/);
+    assert.equal(copy.draft, '');
   });
   test(`${language}: missing first ICU proof preserves the required population`, () => {
     const errors = owner(language);

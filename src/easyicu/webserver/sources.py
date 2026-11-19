@@ -159,6 +159,27 @@ def stored_source_path_for_identity(identity: SourceIdentity) -> str | None:
     The caller must verify the selected source's bound manifest separately.
     Unstored discoveries and ambiguous or malformed registrations fail closed.
     """
+    row = _stored_row_for_identity(identity)
+    return None if row is None else row["path"]
+
+
+@_registry_locked
+def stored_registration_sha256(identity: SourceIdentity) -> str | None:
+    """Digest of this one saved registration, unchanged by other registry writes.
+
+    Selecting, renaming or comparing sources and registering other folders
+    leave it as it was. Removing this folder, or registering it again with a
+    different release claim, makes it unavailable or different.
+    """
+    row = _stored_row_for_identity(identity)
+    if row is None:
+        return None
+    record = {key: row.get(key) for key in (
+        "path", "id", "database", "version", "source_id", "archive_sha256")}
+    return hashlib.sha256(json.dumps(record, sort_keys=True).encode("utf-8")).hexdigest()
+
+
+def _stored_row_for_identity(identity: SourceIdentity) -> Dict[str, Any] | None:
     if not isinstance(identity, SourceIdentity) or SourceIdentity.from_record(identity.to_dict()) != identity:
         return None
     raw = _read_raw()
@@ -184,7 +205,7 @@ def stored_source_path_for_identity(identity: SourceIdentity) -> str | None:
     record["registration_id"] = row["id"]
     if SourceIdentity.from_record(record) != identity or record != identity.to_dict():
         return None
-    return path
+    return row
 
 
 @_registry_locked

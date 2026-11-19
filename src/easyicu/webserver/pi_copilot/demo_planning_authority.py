@@ -47,14 +47,15 @@ def _source_facts(export: str, raw: str, database: str) -> dict[str, Any]:
     binding = dataio.resolve_registered_export_binding(export, database)
     if Path(binding["source_data_path"]) != Path(raw) or Path(raw) != paths.raw:
         raise ValueError("demo_planning_source_changed")
-    registry = Path(sources._CONFIG_PATH)
-    registry_sha = _sha(registry)
-    registry_stat = registry.stat()
+    # Bind this source's own registration, not the whole registry file: other
+    # registry writes (selecting or comparing sources, a finished extraction)
+    # must not invalidate a confirmed choice (M2, 2026-11-19).
+    registration_sha = sources.stored_registration_sha256(identity)
+    if registration_sha is None:
+        raise ValueError("demo_planning_source_unregistered")
     return {
         "identity": identity.to_dict(),
-        "registry_sha256": registry_sha,
-        "registry_inode": registry_stat.st_ino,
-        "registry_mtime_ns": registry_stat.st_mtime_ns,
+        "registration_sha256": registration_sha,
         "export_path_sha256": hashlib.sha256(export.encode()).hexdigest(),
         "raw_path_sha256": hashlib.sha256(raw.encode()).hexdigest(),
         "manifest_sha256": _sha(Path(export) / "_manifest.json"),

@@ -28,9 +28,11 @@
         tr('Specify the primary outcome', '明确主要结局'),
         tr('The primary outcome of this study is: ', '本研究的主要结局是：'),
       ],
+      // The confirmed Demo choice changed with its source; this conversation
+      // cannot choose again, so the action opens a new project (M2).
       source: [
-        tr('Request Demo source selection', '请求重新选择 Demo 数据源'),
-        tr('I want to choose the official Demo data source again for this study. Show the available choices.', '我想为本研究重新选择官方 Demo 数据源。请列出可用选项。'),
+        tr('New project for the Demo', '新建项目重新选择 Demo'),
+        '',
       ],
       source_or_question: [
         target ? tr(`Change source or question for ${target}`, `为 ${target} 修改数据源或研究问题`)
@@ -70,6 +72,10 @@
       tr(`I want to consider ${alternative} in place of ${concept} in the next plan. `, `我想在下一版计划中考虑用 ${alternative} 替代 ${concept}。`),
     ];
     return pair ? { label: pair[0], draft: pair[1] } : null;
+  }
+
+  function opensNewProject(action) {
+    return action?.kind === 'edit_study' && action.params?.field === 'source';
   }
 
   function studyStopEdits(workflow) {
@@ -146,7 +152,7 @@
       const copy = edits.length && stopActionCopy(edits[0], tr);
       if (!copy) return null;
       return {
-        code, grants: [], nonApprovable: true, editLabel: copy.label,
+        code, grants: [], nonApprovable: true, editLabel: copy.label, newProject: opensNewProject(edits[0]),
         stopEdits: edits.length > 1 || edits[0].kind === 'use_alternative_concept' ? edits : [],
         title: code === 'bound_export_cohort_invalid'
           ? tr('The cohort settings or bound data need review', '请核对人群设置或绑定的数据')
@@ -1117,7 +1123,8 @@
       const { readiness, retryPlanRevision } = confirmation;
       const stopEdits = (confirmation.stopEdits || []).map(action => {
         const copy = stopActionCopy(action, tr);
-        return copy ? `<button class="btn sm" type="button" data-gpi-stop-review data-gpi-stop-action="${esc(action.action_id)}" data-gpi-stop-workflow="${esc(confirmation.code)}">${esc(copy.label)}</button>` : '';
+        const shellOwned = opensNewProject(action) ? ' data-project-new' : '';
+        return copy ? `<button class="btn sm" type="button" data-gpi-stop-review data-gpi-stop-action="${esc(action.action_id)}" data-gpi-stop-workflow="${esc(confirmation.code)}"${shellOwned}>${esc(copy.label)}</button>` : '';
       }).join('');
       const showPrimaryAction = !readiness?.connect && (retryPlanRevision || !confirmation.nonApprovable);
       const editPrimary = !readiness?.connect && !showPrimaryAction
@@ -1132,7 +1139,7 @@
         <div class="gpi-confirmation-body">${failureNotice}<strong>${esc(displayedTitle)}</strong>${confirmation.reason && !firstDecisionCopy ? `<p class="gpi-confirmation-reason">${esc(confirmation.reason)}</p>` : ''}${displayedNote ? `<small>${esc(displayedNote)}</small>` : ''}${desktopProfile}${reviewedPopulation}${deferredInputScope}${populationPreparation}${populationAcceptance}${sourceAdjustments}${deliverables}${flowSteps}${dataStatus}${pendingPreparation}${repeatedStaysDefault}${icdSourceNotice}${reviewStatus}${studyReadings}${trialBody}${groupNotes}${questionNotes}${reviewMaterials}${compactOtherAction}</div>
         <div class="gpi-confirmation-actions${decisionActions ? ' has-decision-options' : ''}">
           ${confirmation.dataStatus && !confirmation.compactApproval ? `<button class="btn sm" type="button" data-gpi-confirm-preview-data>${esc(tr('Preview analysis data', '先预览分析数据'))}</button>` : ''}
-          ${decisionActions || stopEdits || (showEdit ? `<button class="btn ${editPrimary ? 'primary ' : ''}sm" type="button" data-gpi-confirm-edit>${confirmation.editLabel ? esc(confirmation.editLabel) : icdSourceFinding && !decisionCount ? tr('Change cohort', '修改人群') : confirmation.code === 'plan_scientific_changes_required' ? tr('Answer this question', '回答这个问题') : confirmation.code === 'provider_ready_to_generate_plan' ? tr('Add research requirements', '我想先补充研究要求') : confirmation.code === 'failed_pipeline_execution_retry_available' ? tr('Generate a fresh research plan', '重新生成研究计划') : confirmation.compactApproval ? tr('Change plan', '修改计划') : tr('Request changes', '提出修改')}</button>` : '')}
+          ${decisionActions || stopEdits || (confirmation.newProject ? `<button class="btn primary sm" type="button" data-project-new>${esc(confirmation.editLabel)}</button>` : showEdit ? `<button class="btn ${editPrimary ? 'primary ' : ''}sm" type="button" data-gpi-confirm-edit>${confirmation.editLabel ? esc(confirmation.editLabel) : icdSourceFinding && !decisionCount ? tr('Change cohort', '修改人群') : confirmation.code === 'plan_scientific_changes_required' ? tr('Answer this question', '回答这个问题') : confirmation.code === 'provider_ready_to_generate_plan' ? tr('Add research requirements', '我想先补充研究要求') : confirmation.code === 'failed_pipeline_execution_retry_available' ? tr('Generate a fresh research plan', '重新生成研究计划') : confirmation.compactApproval ? tr('Change plan', '修改计划') : tr('Request changes', '提出修改')}</button>` : '')}
           ${decisionActions && icdSourceFinding ? `<button class="btn sm" type="button" data-gpi-confirm-edit>${esc(tr('Change cohort', '修改人群'))}</button>` : ''}
           ${decisionActions && !icdSourceFinding && firstDecisionCopy && firstDecisionCopy.allowEdit ? `<button class="btn sm" type="button" data-gpi-confirm-edit>${esc(String(firstDecisionItem && firstDecisionItem.code || '') === 'ADJUSTMENT_SET_NOT_USER_CONFIRMED' ? tr('Request plan changes', '提出计划修改') : tr('Choose another approach', '选择其他方案'))}</button>` : ''}
           ${confirmation.exposureArrangement ? confirmation.exposureArrangement.alternatives.map(option => `<button class="btn sm" type="button" data-gpi-exposure-arrangement="${esc(option.id)}"${primaryDisabled}>${esc(option.label)}</button>`).join('') : ''}

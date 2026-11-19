@@ -487,6 +487,7 @@ async function testStopCatalog() {
           });
           else clickAction(choice.action_id);
           const expected = routes?.[i] || (
+            choice.kind === 'edit_study' && choice.params.field === 'source' ? 'new-project' :
             ['edit_study', 'rephrase_in_scope', 'use_alternative_concept', 'drop_variable', 'rerun_without_element'].includes(choice.kind)
               || (choice.kind === 'edit_plan' && (choice.params.concept || choice.params.step_id || choice.params.element || choice.params.change_question))
               ? 'draft' : choice.kind === 'check_connection' ? 'connect'
@@ -503,6 +504,9 @@ async function testStopCatalog() {
               assert.ok(drafts[0].includes(choice.params.alternative_concept));
               assert.ok(drafts[0].includes(choice.params.concept));
             }
+          } else if (expected === 'new-project') {
+            assert.deepEqual([drafts, calls], [[], []], 'the shell opens a new project; nothing starts here');
+            assert.match(html, new RegExp(`data-gpi-stop-action="${choice.action_id}"[^>]*data-project-new`));
           } else if (expected === 'connect') {
             assert.equal(state.showSetup, true, 'the current model setup opens');
           } else {

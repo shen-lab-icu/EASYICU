@@ -339,6 +339,9 @@ def _wrapped_stop_routes(reason, cause):
         return ["data"]
     if "model_connection" in policies:
         return ["connect"]
+    # A changed Demo choice cannot be made again here; its action opens a new project (M2).
+    if "research_pipeline_demo_planning_authority_stale" in codes:
+        return ["new-project"]
     if policies & {"scope", "study_edit", "data"} or codes & {
         *WINDOWED_SUMMARY_STOP_MESSAGES,
         "question_named_level_undistinguished",

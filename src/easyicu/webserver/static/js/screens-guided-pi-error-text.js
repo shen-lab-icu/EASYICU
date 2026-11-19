@@ -1028,8 +1028,8 @@
       }
       const known = {
         research_pipeline_demo_planning_authority_stale: tr(
-          'The selected Demo source or its confirmation changed. Select the Demo source again, then generate a new plan for review.',
-          '已选择的 Demo 数据源或确认信息发生变化。请重新选择 Demo 数据源，再生成新的研究计划供审阅。',
+          'The official Demo source changed after it was confirmed, so this conversation cannot use that choice any more. Start a new project and choose the official Demo there (about 1 minute).',
+          'Demo 数据源在确认之后发生了变化，此对话无法继续使用原来的选择。请新建项目，在新项目中重新选择官方 Demo（约 1 分钟）。',
         ),
         research_pipeline_first_observed_input_binding_unavailable: tr(
           'The first ICU population cannot currently be bound to the research input, so analysis has not started. Check the data source and preparation result, or contact support for help.',

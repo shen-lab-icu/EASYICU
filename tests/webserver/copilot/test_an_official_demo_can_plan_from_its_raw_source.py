@@ -279,7 +279,7 @@ def test_confirmed_raw_choice_binds_launch_and_survives_only_lifecycle_changes(c
     )
     assert preparation.prepare_research_pipeline_run(request).source_identity == identity
     from dataclasses import replace
-    with pytest.raises(preparation.ResearchPipelineRunError, match="confirmed Demo planning source changed"):
+    with pytest.raises(preparation.ResearchPipelineRunError, match="confirmed official Demo source changed"):
         preparation.prepare_research_pipeline_run(replace(request, export_path=str(choice.paths.export)))
     other = {**finished, "id": "different-study"}
     with pytest.raises(ValueError, match="stale"):
@@ -289,6 +289,27 @@ def test_confirmed_raw_choice_binds_launch_and_survives_only_lifecycle_changes(c
     assert not changed.get("demo_planning_authority_ref")
     study_contexts.upsert_context({"id": study["id"], "data_source": finished["data_source"]})
     assert resolve_choice(study_contexts.get_context(study["id"])) is None
+
+
+@pytest.mark.parametrize("write", ["select", "compare", "no_change", "same_release_again"])
+def test_a_confirmed_raw_choice_survives_registry_writes_about_other_things(choice, write):
+    """M2: an ordinary registry write is not drift of the chosen source."""
+    from easyicu.webserver.pi_copilot.demo_planning_authority import resolve_choice
+
+    choice.service.authorize_data_source(choice.record.session_id, **choice.body)
+    study = study_contexts.get_context(choice.study["id"])
+    identity = resolve_choice(study)
+    if write == "select":
+        sources.save_registry({"active_path": str(choice.paths.export)})
+    elif write == "compare":
+        sources.save_registry({"crossdb_paths": []})
+    elif write == "no_change":
+        sources.save_registry({})
+    else:
+        source = storage.verified_public_demo_raw(choice.paths.raw)
+        demo_source_prepare.register_export(source, choice.paths, SimpleNamespace(emit=lambda event: None))
+
+    assert resolve_choice(study) == identity
 
 
 @pytest.mark.parametrize("change", ["registry", "reregister", "export_manifest", "conversion_manifest", "prepared_marker", "converted_marker", "signature", "science"])
@@ -302,9 +323,9 @@ def test_confirmed_raw_choice_fails_closed_after_drift(choice, change):
     if change == "registry":
         sources.remove_source(str(choice.paths.export))
     elif change == "reregister":
+        # Registered again without the host's release claim.
         sources.remove_source(str(choice.paths.export))
-        source = storage.verified_public_demo_raw(choice.paths.raw)
-        demo_source_prepare.register_export(source, choice.paths, SimpleNamespace(emit=lambda event: None))
+        sources.register_source(str(choice.paths.export))
     elif change == "export_manifest":
         path = choice.paths.export / "_manifest.json"
         path.write_text(path.read_text() + " ")
