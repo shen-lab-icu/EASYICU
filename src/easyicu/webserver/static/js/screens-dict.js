@@ -264,7 +264,10 @@
     const hidden = internalCount();
     const toggle = hidden ? `<button type="button" class="btn sm ghost" data-dict-internal>${dictShowInternal ? L('Hide internal fields', '隐藏内部字段') : L(`Show internal fields (${hidden})`, `显示内部字段（${hidden}）`)}</button>` : '';
     const n = rows.filter(row => !row.variantOf).length;
-    return `<div class="dict-resultline row" style="justify-content:space-between;align-items:center;"><span>${t(n + ' concept' + (n === 1 ? '' : 's'), n + ' 个概念')}${dictCat !== 'all' ? ` · ${groupNameOf(dictCat)}` : ''}${dictSearch ? ` · "${dictSearch.replace(/[&<>"]/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]))}"` : ''}</span>${toggle}</div>${tableHtml(rows)}`;
+    // The header counts every dictionary concept; say how the list reaches it.
+    const folded = Object.keys(C().dict || {}).filter(k => listed(k) && primaryOf(k)).length;
+    const reconcile = dictCat === 'all' && !dictSearch && (folded || (hidden && !dictShowInternal)) ? `<span class="dict-reconcile" data-dict-reconcile> · ${L(`${C().totalConcepts} in the dictionary: ${folded} alternative definitions open under their main entry${dictShowInternal ? '' : `, ${hidden} internal fields hidden`}`, `字典共 ${C().totalConcepts} 个：${folded} 个替代定义收在主条目下${dictShowInternal ? '' : `，${hidden} 个内部字段已隐藏`}`)}</span>` : '';
+    return `<div class="dict-resultline row" style="justify-content:space-between;align-items:center;"><span>${t(n + ' concept' + (n === 1 ? '' : 's'), n + ' 个概念')}${reconcile}${dictCat !== 'all' ? ` · ${groupNameOf(dictCat)}` : ''}${dictSearch ? ` · "${dictSearch.replace(/[&<>"]/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]))}"` : ''}</span>${toggle}</div>${tableHtml(rows)}`;
   }
   function tableHtml(rows) {
     if (!rows.length) return `<div class="dict-empty">${icon('search', 22)}<div>${L('No matching concepts.', '未找到匹配的概念。')}</div></div>`;

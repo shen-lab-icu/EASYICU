@@ -60,6 +60,8 @@ let text = visible(dictionary.render() + dictionary.rail());
 assert(text.includes('AKI 分期（KDIGO）') && text.includes('2 个相关变量'), 'the entry names how many variables fold under it');
 assert(!text.includes('AKI（KDIGO ≥1 期）') && !text.includes('尿量标准'), 'variants stay folded');
 assert(text.includes('2 个概念') && text.includes('全部 2'), 'counts name entries, not variants');
+// The header counts all five; the list line says how two entries reach five.
+assert(text.includes('字典共 5 个：2 个替代定义收在主条目下，1 个内部字段已隐藏'), 'the list reconciles its count with the header');
 assert(dictionary.render().includes('aria-expanded="false"'), 'the entry says it is folded');
 
 (async () => {
