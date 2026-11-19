@@ -13,6 +13,8 @@ columns; Execute still verifies the produced table. Synthetic data.
 
 from __future__ import annotations
 
+from functools import partial
+
 import pytest
 
 from easyicu.research_agent.authority.current_case_scientific_runtime import (
@@ -20,6 +22,7 @@ from easyicu.research_agent.authority.current_case_scientific_runtime import (
 )
 from easyicu.research_agent.execution.owner_declaration import (
     HostPlanStepNeedsSandbox,
+    _declared_host_figure,
     require_host_rendered_plan,
 )
 from easyicu.research_agent.orchestration.scientific_runtime import ScientificRuntimeAuthorities
@@ -78,15 +81,23 @@ def test_the_landmark_cohorts_flow_figure_needs_no_sandbox(tmp_path):
 
 @pytest.mark.parametrize("change", ["presentation", "second_input"])
 def test_any_other_figure_over_that_flow_is_still_refused(tmp_path, change):
+    # Each variant is a schema-valid plan, so the refusal is the ownership query's.
     authority = _authority(tmp_path)
     figure = {**FIGURE, "figure_panels": [dict(panel) for panel in FIGURE["figure_panels"]]}
     if change == "presentation":
-        figure["figure_panels"][0]["presentation"] = {"title": "Custom"}
+        figure["figure_panels"][0]["presentation"] = {"layout": "column"}
     else:
         figure["inputs"] = ["table:cohort_flow", "artifact:analysis_cohort"]
-    try:
-        plan = _bound(authority, figure)
-    except ValueError:
-        return  # refused even earlier, by the plan contract
-    with pytest.raises(HostPlanStepNeedsSandbox):
-        _require(plan, authority)
+    with pytest.raises(HostPlanStepNeedsSandbox) as refused:
+        _require(_bound(authority, figure), authority)
+    assert refused.value.easyicu_safe_diagnostic["step_id"] == "family_cohort_flow_figure"
+
+
+def test_without_the_signed_cohort_authority_the_flow_figure_has_no_owner(tmp_path):
+    authority = _authority(tmp_path)
+    plan = _bound(authority)
+    figure = next(step for step in plan.steps if step.step_id == FIGURE["step_id"])
+    declared = partial(_declared_host_figure, figure, plan=plan, host_cohort_step=None,
+                       trajectory_scientific_runtime_authority=None)
+    assert declared(current_case_scientific_runtime_authority=authority)
+    assert not declared(current_case_scientific_runtime_authority=None)
