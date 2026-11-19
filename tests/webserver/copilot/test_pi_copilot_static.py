@@ -117,8 +117,8 @@ def test_pi_shell_assets_are_explicitly_wired_before_guided_owner() -> None:
         < index.index("js/screens-guided-pi-target-trial.js")
         < index.index("js/screens-guided-pi-confirmation.js")
     )
-    assert "js/screens-guided-pi-confirmation-data.js?v=20261119-m31a" in index
-    assert "js/screens-guided-pi-confirmation.js?v=20261119-b9c" in index
+    assert "js/screens-guided-pi-confirmation-data.js?v=20261119-b11" in index
+    assert "js/screens-guided-pi-confirmation.js?v=20261119-b11" in index
     assert index.index("js/screens-guided-pi-confirmation-data.js") < index.index("js/screens-guided-pi-confirmation.js")
     # The plan-approval card renders the database capability review through this owner.
     assert "js/screens-guided-pi-source-adjustments.js?v=20261026-quick2" in index

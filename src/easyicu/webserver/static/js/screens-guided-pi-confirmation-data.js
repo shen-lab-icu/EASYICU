@@ -1,6 +1,69 @@
-/* Read-only confirmation rendering for data scope, plan population and review evidence. */
+/* Read-only confirmation rendering for data scope, plan population and review evidence, and stop-action copy. */
 (function () {
   'use strict';
+  function stopActionCopy(action, tr) {
+    const { concept, alternative_concept: alternative, element, step_id: step, field } = action.params || {};
+    const target = concept || element || step || '';
+    let pair;
+    if (action.kind === 'rephrase_in_scope') pair = [
+      tr('Change study design or source', '修改研究设计或数据源'),
+      tr('I want to change the study design or data source: ', '我想修改研究设计或数据来源：'),
+    ];
+    if (action.kind === 'edit_study') pair = {
+      cohort: [
+        tr('Change cohort', '修改人群'),
+        tr('I want to change the cohort and, if needed, the research question as follows: ', '我想按以下内容修改研究人群，并在需要时修改研究问题：'),
+      ],
+      outcome: [
+        tr('Specify the primary outcome', '明确主要结局'),
+        tr('The primary outcome of this study is: ', '本研究的主要结局是：'),
+      ],
+      // The confirmed Demo choice changed with its source; this conversation
+      // cannot choose again, so the action opens a new project.
+      source: [
+        tr('New project for the Demo', '新建项目重新选择 Demo'),
+        '',
+      ],
+      source_or_question: [
+        target ? tr(`Change source or question for ${target}`, `为 ${target} 修改数据源或研究问题`)
+          : tr('Change data source or question', '修改数据源或研究问题'),
+        target ? tr(
+          `The current source cannot provide ${target}. I want to change the data source or research question as follows: `,
+          `当前数据源无法提供 ${target}。我想按以下内容修改数据源或研究问题：`,
+        ) : tr('I want to change the data source or research question as follows: ', '我想按以下内容修改数据源或研究问题：'),
+      ],
+    }[field];
+    if (action.kind === 'retry') pair = [
+      tr('Discuss retrying the stopped task', '讨论如何重试已停止的任务'),
+      tr('I want to retry the stopped task. Help me review what is needed to run it again. ', '我想重试已停止的任务。请帮我检查需要满足哪些条件。'),
+    ];
+    if (action.kind === 'edit_plan' && action.params?.change_question === true) pair = [
+      tr('Revise the research question', '修改研究问题'),
+      tr('To address the issue above, I want to revise the research question as follows: ', '为解决上述问题，我想按以下内容修改研究问题：'),
+    ];
+    else if (action.kind === 'edit_plan' && target) pair = [
+      tr(`Revise ${target} in the plan`, `修改计划中的 ${target}`),
+      tr(`I want to revise ${target} as follows: `, `我想按以下内容修改 ${target}：`),
+    ];
+    else if (action.kind === 'edit_plan') pair = [
+      tr('Revise the plan', '修改计划'),
+      tr('I want to revise the plan for the stopped task as follows: ', '我想按以下内容修改已停止任务的计划：'),
+    ];
+    if (action.kind === 'rerun_without_element' && target) pair = [
+      tr(`Plan without ${target}`, `制定不含 ${target} 的计划`),
+      tr(`I want to omit the optional ${target} from the next plan. `, `我想在下一版计划中省略可选的 ${target}。`),
+    ];
+    if (action.kind === 'drop_variable' && concept) pair = [
+      tr(`Plan without ${concept}`, `制定不含 ${concept} 的计划`),
+      tr(`I want to omit ${concept} from the next plan. `, `我想在下一版计划中省略 ${concept}。`),
+    ];
+    if (action.kind === 'use_alternative_concept' && concept && alternative) pair = [
+      tr(`Consider ${alternative}`, `考虑使用 ${alternative}`),
+      tr(`I want to consider ${alternative} in place of ${concept} in the next plan. `, `我想在下一版计划中考虑用 ${alternative} 替代 ${concept}。`),
+    ];
+    return pair ? { label: pair[0], draft: pair[1] } : null;
+  }
+
   function create(host) {
     const tr = host.tr;
     const esc = host.esc;
@@ -410,5 +473,5 @@
       staleConfirmationHtml, latestAttemptFailureHtml, planConversationHtml,
     });
   }
-  window.EasyICU.guidedPi.declare('confirmationData', { create });
+  window.EasyICU.guidedPi.declare('confirmationData', { create, stopActionCopy });
 })();

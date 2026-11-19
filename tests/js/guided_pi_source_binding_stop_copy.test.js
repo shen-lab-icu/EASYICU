@@ -18,7 +18,7 @@ function owner(language) {
 
 function confirmationOwner() {
   const context = vm.createContext({ window: { EU_HTML: { esc: String } } });
-  for (const name of ['modules', 'confirmation']) {
+  for (const name of ['modules', 'confirmation-data', 'confirmation']) {
     vm.runInContext(fs.readFileSync(path.join(js, `screens-guided-pi-${name}.js`), 'utf8'), context);
   }
   return context.window.EasyICU.guidedPi.require('confirmation');
