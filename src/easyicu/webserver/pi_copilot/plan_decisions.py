@@ -364,6 +364,39 @@ def landmark_followup_axis_available(outcome: str) -> bool:
     return _landmark_axis_columns(outcome)["observation_duration"] == "hospital_followup_time_hours"
 
 
+def landmark_unavailable_timing_question(
+    study: Mapping[str, Any], agent_plan: Mapping[str, Any], finding_codes: Sequence[str],
+) -> Dict[str, Any] | None:
+    """The timing choice the researcher makes when no landmark can close it (B2).
+
+    The reviewer leaves an Agent-selected temporal design to the host
+    compiler.  When the outcome has no host follow-up axis that compiler
+    refuses, so the same finding becomes the researcher's choice on the
+    existing timing card (descriptive, or re-extract for a time-varying
+    model) instead of a paused review with no way on.
+    """
+
+    if _TIMING_FINDING not in {str(code) for code in finding_codes}:
+        return None
+    if decision_is_resolved(study, _TIMING_FINDING):
+        return None
+    try:
+        outcome = _timing_coordinates(agent_plan)["outcome"]
+        if landmark_followup_axis_available(outcome):
+            return None
+        context = plan_decision_context(agent_plan, _TIMING_FINDING, study)
+    except PlanDecisionError:
+        return None
+    return {
+        "code": _TIMING_FINDING,
+        "question": (
+            "A 24-hour landmark is not available for this outcome. Choose how the "
+            "exposure window should align with outcome follow-up."
+        ),
+        "decision_context": context,
+    }
+
+
 def landmark_timing_specification(
     *, outcome: str, landmark_hours: float, spec_id: str
 ) -> Dict[str, Any]:
@@ -2198,6 +2231,7 @@ __all__ = [
     "decision_is_resolved",
     "endpoint_decision_options",
     "pending_authorization_questions",
+    "landmark_unavailable_timing_question",
     "plan_decision_context",
     "proposed_adjustment_set",
     "landmark_timing_specification",

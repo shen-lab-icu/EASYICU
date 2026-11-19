@@ -4227,6 +4227,17 @@ class PiCopilotService(SkillAttachmentService, QuickAnswerService):
         }
         if pending_decision is not None:
             authorized_codes.add(pending_decision.decision_code)
+        reviewed_plan = payloads.get("agent_plan.json")
+        timing_question = (
+            plan_decisions.landmark_unavailable_timing_question(
+                context, reviewed_plan,
+                [str(item.get("code") or "") for item in findings or [] if isinstance(item, Mapping)],
+            )
+            if isinstance(reviewed_plan, Mapping) else None
+        )
+        if timing_question is not None:
+            # The host hands this timing gap to the researcher (B2).
+            authorized_codes.add(timing_question["code"])
         if clean_code not in authorized_codes or plan_decisions.decision_is_resolved(context, clean_code):
             raise PiCopilotError(
                 "plan_decision_not_required_by_review",

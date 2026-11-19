@@ -1633,6 +1633,27 @@ def _enrich_plan_review(
                 },
             }
         )
+    timing_question = (
+        plan_decisions.landmark_unavailable_timing_question(
+            study, agent_plan, snapshot.plan_review_summary.get("finding_codes") or (),
+        )
+        if isinstance(agent_plan, Mapping)
+        and isinstance(snapshot.plan_review_summary, Mapping)
+        and snapshot.next_action_code
+        in {"plan_scientific_changes_required", "agent_plan_revision_nonconvergent"}
+        else None
+    )
+    if timing_question is not None:
+        # B2: the host cannot close this timing gap, so the researcher chooses
+        # on the timing card instead of facing a paused review with no way on.
+        summary = dict(snapshot.plan_review_summary)
+        summary["authorization_questions"] = [timing_question, *(
+            item for item in summary.get("authorization_questions") or []
+            if not (isinstance(item, Mapping) and item.get("code") == timing_question["code"])
+        )]
+        snapshot = snapshot.model_copy(update={
+            "next_action_code": "plan_scientific_changes_required", "plan_review_summary": summary,
+        })
     current_summary = snapshot.plan_review_summary
     remediation = (
         current_summary.get("remediation_buckets")
