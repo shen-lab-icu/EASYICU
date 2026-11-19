@@ -2436,7 +2436,8 @@ def _requested_adjustment_concepts(
     for pattern in (
         r"(?:按|依据)\s*([^。；;，]{1,120}?)\s*(?:调整|校正|控制)",
         # A Chinese list uses 、; a full-width comma ends the adjustment clause.
-        r"(?:调整|校正|控制)(?!组)(?:变量|因素)?(?:包括|为|：|:)?\s*([^。；;，]{1,120})",
+        r"(?:调整|校正)(?!组|后)(?:变量|因素)?(?:包括|为|：|:)?\s*([^。；;，]{1,120})",
+        r"控制(?:变量|因素)?(?:包括|为|：|:)\s*([^。；;，]{1,120})",
         r"(?:adjust(?:ed|ing)?\s+for|controlled\s+for|covariates?(?:\s+include|\s+were|\s*:))\s*([^.;]{1,160})",
     ):
         clauses.extend(
@@ -2469,17 +2470,21 @@ def _requested_adjustment_concepts(
 # conjunction belongs to a noun phrase the keyword ended (动态乳酸暴露、院内死亡…):
 # in Chinese the modifier precedes the keyword, so it names nothing.
 _ROLE_CLAUSE_DANGLING = re.compile(r"^\s*(?:[、，,。；;：:与和及或的]|并且|以及)")
-_ZH_EXPOSURE_ROLE = r"(?:暴露因素|暴露变量|暴露|预测因子|自变量)"
+_ZH_EXPOSURE_ROLE = r"(?:暴露因素|暴露变量|暴露(?!组)|预测因子|自变量)"
+_ZH_COPULA = r"(?:采用|定义为|为(?!止|主)|是(?!否)|：|:)"
 # (pattern, the capture precedes the keyword).  A keyword names a clause only
-# with a prefix (主要暴露) or a copula/colon (暴露为 / 暴露因素是 / exposure is),
-# or as the object of 以…为 / …作为 (S1444).
+# with a copula or colon (暴露为 / 主要暴露：/ exposure is), or as the object of
+# 以…为 / …作为 (S1444).  The concept adjacent to the keyword is the one named:
+# the first after it, or the last before it.
 _EXPOSURE_CLAUSE_PATTERNS: Tuple[Tuple[str, bool], ...] = (
-    (rf"(?:主要|核心|首要){_ZH_EXPOSURE_ROLE}(?:采用|定义为|为|是|：|:)?\s*([^。；;，,]{{1,140}})", False),
-    (rf"{_ZH_EXPOSURE_ROLE}(?:采用|定义为|为|是|：|:)\s*([^。；;，,]{{1,140}})", False),
-    (rf"(?:以|将|把)\s*([^。；;，,、]{{1,60}}?)\s*(?:作为|为|当作|当成)\s*(?:主要|核心|首要)?{_ZH_EXPOSURE_ROLE}", True),
+    (rf"(?:主要|核心|首要)?{_ZH_EXPOSURE_ROLE}{_ZH_COPULA}\s*([^。；;，,]{{1,140}})", False),
+    (rf"(?:以|将|把)\s*([^。；;，,、]{{1,60}}?)\s*(?:作为|(?<![分成变认因])为|当作|当成)\s*(?:主要|核心|首要)?{_ZH_EXPOSURE_ROLE}", True),
     (rf"([^。；;，,、以将把]{{1,60}}?)\s*(?:作为|当作|当成)\s*(?:主要|核心|首要)?{_ZH_EXPOSURE_ROLE}", True),
-    (r"(?:primary|main)\s+(?:exposure|predictor)(?:\s+(?:is|was|will\s+be|of)|\s*[:=])\s*([^.;,]{1,180})", False),
-    (r"(?:exposure|predictor)\s+(?:is|was|will\s+be)\s+([^.;,]{1,180})", False),
+    # Without a copula the next word must not be a preposition (... the primary
+    # exposure in sepsis patients names no exposure after the keyword).
+    (r"(?:primary|main)\s+(?:exposure|predictor)(?:\s+(?:is|was|will\s+be|of)\s+|\s*[:=]\s*"
+     r"|\s+(?!(?:in|among|for|with|within|during|on|at|and|or|to|from|by|as|after|before)\b))([^.;,:=]{1,180})", False),
+    (r"\b(?:exposure|predictor)(?:\s+(?:is|was|will\s+be)\s+|\s*[:=]\s*)([^.;,]{1,180})", False),
     (r"\b(?:with|using)\s+([^.;,]{1,60}?)\s+as\s+(?:the\s+)?(?:primary\s+|main\s+)?(?:exposure|predictor)\b", True),
 )
 
@@ -2501,9 +2506,13 @@ def _clause_concept(
         ]
         if not matched:
             continue
-        # A capture before its keyword names the concept closest to it.
-        end = max(normalized.rfind(alias) + len(alias) for alias in matched)
-        ranked.append((end if nearest_end else 0, max(len(alias) for alias in matched), concept_id))
+        # The concept adjacent to the keyword: the last one before it, or the
+        # first one after it; a longer alias breaks a tie at one position.
+        if nearest_end:
+            position = max(normalized.rfind(alias) + len(alias) for alias in matched)
+        else:
+            position = -min(normalized.find(alias) for alias in matched)
+        ranked.append((position, max(len(alias) for alias in matched), concept_id))
     if not ranked:
         return None
     return max(ranked)[2]
@@ -2548,7 +2557,7 @@ def _population_qualifier_concepts(text: str, hits: List[Dict[str, Any]]) -> set
             else:
                 pattern = (
                     rf"(?<![a-z0-9]){escaped}(?![a-z0-9])\s+(?:patients|cohort|population)\b"
-                    rf"|\b(?:in|among|with)\s+(?:adult\s+|adults\s+)?(?:icu\s+)?(?:patients\s+with\s+)?{escaped}(?![a-z0-9])"
+                    rf"|\b(?:patients|adults|subjects|cohort|population)\s+with\s+{escaped}(?![a-z0-9])"
                 )
             if re.search(pattern, haystack):
                 qualified.add(concept_id)

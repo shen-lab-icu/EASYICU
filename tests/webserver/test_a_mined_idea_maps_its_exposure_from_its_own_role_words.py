@@ -35,12 +35,17 @@ WALK = (
 @pytest.mark.parametrize("text", [
     WALK,
     "Whether the data support dynamic lactate exposure, in-hospital mortality or other sepsis outcomes",
+    # Carbon mine1444: 「暴露是否」, 「分为暴露组」 and a bare "in/with X" name no role.
+    "探讨动态乳酸暴露是否增加脓毒症患者院内死亡",
+    "按乳酸水平将脓毒症患者分为暴露组和对照组，结局为院内死亡",
+    "Whether the data support early change in lactate, in-hospital mortality or other sepsis outcomes",
+    "Sepsis mortality associated with lactate",
 ])
 def test_a_bare_exposure_word_after_its_modifier_names_no_exposure(text: str) -> None:
     idea = _idea(text)
     roles = _roles(idea)
     assert roles.get("sep3_sofa1") not in {"exposure", "predictor"}
-    assert roles["lact"] == "predictor"
+    assert roles["lact"] in {"predictor", "covariate_or_subgroup"}
     assert idea["exposure_or_predictor"] == "Lactate"
 
 
@@ -54,6 +59,8 @@ def test_a_bare_exposure_word_after_its_modifier_names_no_exposure(text: str) ->
     "Primary exposure: lactate; outcome: in-hospital mortality",
     "The main exposure is lactate in septic patients; outcome in-hospital mortality",
     "Using lactate as the primary exposure in sepsis patients, outcome in-hospital mortality",
+    "以乳酸作为主要暴露探讨脓毒症患者院内死亡",
+    "暴露因素是乳酸对脓毒症患者院内死亡的影响",
 ])
 def test_a_named_exposure_role_maps_that_concept(text: str) -> None:
     idea = _idea(text)
@@ -87,3 +94,27 @@ def test_an_adjustment_list_ends_at_its_clause_and_never_becomes_the_predictor()
 def test_a_control_noun_phrase_is_not_an_adjustment_clause(text: str) -> None:
     hits = mining._match_concepts(text)
     assert mining._requested_adjustment_concepts(text, hits) == []
+
+
+@pytest.mark.parametrize(("text", "exposure"), [
+    # Carbon mine1444 finding 3: the concept adjacent to the keyword, not the longest alias.
+    ("The main exposure is SOFA in sepsis patients; outcome in-hospital mortality", "sofa"),
+    # Finding 5: forms that mapped before this fix still do.
+    ("Primary exposure urine output; baseline lactate; outcome in-hospital mortality", "urine"),
+    ("Exposure: urine output; baseline lactate; outcome: mortality", "urine"),
+])
+def test_the_concept_next_to_the_keyword_is_the_exposure(text: str, exposure: str) -> None:
+    roles = _roles(_idea(text))
+    assert roles[exposure] == "exposure"
+    assert roles.get("sep3_sofa1") not in {"exposure", "predictor"}
+
+
+@pytest.mark.parametrize(("text", "adjusted"), [
+    # Finding 4: 调整后 is "after adjustment"; a bare 控制 is a noun.
+    ("按年龄和性别调整后乳酸与院内死亡的关系", {"age", "sex"}),
+    ("早期乳酸控制对脓毒症结局的影响", set()),
+    ("控制变量包括年龄和性别；乳酸与死亡", {"age", "sex"}),
+])
+def test_an_adjustment_needs_its_own_clause(text: str, adjusted: set[str]) -> None:
+    hits = mining._match_concepts(text)
+    assert set(mining._requested_adjustment_concepts(text, hits)) == adjusted

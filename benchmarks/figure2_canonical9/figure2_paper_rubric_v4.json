@@ -1603,7 +1603,7 @@
     "src/easyicu/webserver/zotero_probe.py"
   ],
   "scorer_tree_root": "benchmarks/figure2_canonical9/successor_v4",
-  "scorer_tree_sha256": "d32858fe3379cf81b356502637b94cbafe9fa7eccb6fd3c161896af5f8aef1f5",
+  "scorer_tree_sha256": "1244095761534910e268d1bf95b7d8c17447ead94d4858fcee07ddbac5353f89",
   "suite_projection_sha256": "11c39afac69c9a0b560c6aa92be19f05725f04c66b9d2c499cfdb353c40295ab",
   "suite_ref": "easyicu_evaluation_protocol_suite/v2",
   "tasks": [
