@@ -9,7 +9,6 @@ artifacts; it never computes a scientific result itself.
 
 from __future__ import annotations
 
-from easyicu.research_agent.providers.codex_app_server import codex_diagnostic_is_transient
 from easyicu.runtime.platform_compat import SecureDirectory
 
 import base64
@@ -812,6 +811,8 @@ def _pipeline_failure_code(
         "codex_auth_notification_timeout",
     }:
         return "research_pipeline_provider_timeout"
+    from easyicu.research_agent.providers.codex_app_server import codex_diagnostic_is_transient
+
     if typed_failure.get(
         "owner"
     ) == "easyicu.providers.codex_app_server_v1" and codex_diagnostic_is_transient(typed_failure):
