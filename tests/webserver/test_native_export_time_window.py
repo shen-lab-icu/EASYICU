@@ -80,10 +80,7 @@ def test_hosted_web_export_requires_complete_nested_los_batches(tmp_path, monkey
     monkeypatch.delenv("EASYICU_FORCE_SUBPROCESS_BATCH", raising=False)
     memory = psutil.virtual_memory()._replace(total=8 * 1024**3, available=3 * 1024**3)
     monkeypatch.setattr(psutil, "virtual_memory", lambda: memory)
-    if platform == "darwin":
-        policy = concept_api._memory_policy_isolates_batches
-        monkeypatch.setattr(concept_api, "_memory_policy_isolates_batches",
-                            lambda total, **_: policy(total, platform="darwin"))
+    monkeypatch.setattr(concept_api, "_platform_keeps_batches_in_process", lambda: platform == "darwin")
     assert api.plan_extraction_resources("miiv", ["demographics"], cohort_size).mode == "one_shot"
     plan = api.plan_extraction_resources("miiv", ["vitals"], cohort_size)
     assert plan.reason_code == "measured_profile_insufficient_memory"

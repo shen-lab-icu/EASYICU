@@ -1052,23 +1052,30 @@ def _one_resolver_per_call(function):
     return scoped
 
 
-@_one_resolver_per_call
+def _platform_keeps_batches_in_process() -> bool:
+    """macOS runs patient batches in-process.
 
-def _memory_policy_isolates_batches(total_patients: Optional[int], *, platform: Optional[str] = None) -> bool:
-    """Whether the RAM-based rule runs patient batches in worker processes.
-
-    Explicit ``EASYICU_FORCE_INPROCESS_BATCH`` / ``EASYICU_FORCE_SUBPROCESS_BATCH``
-    win. On macOS the rule keeps batches in-process: a forked worker inherits
-    DuckDB without its scheduler threads and spins forever (v0.1.3 RC, S1458),
-    and the frozen desktop app cannot start a fresh interpreter instead.
+    A forked worker inherits DuckDB without its scheduler threads and spins
+    forever with no error (v0.1.3 RC, S1458); the frozen desktop app cannot
+    start a fresh interpreter instead. Special concepts still need workers
+    (their in-process batches would drop the special loaders).
     """
     import sys
 
+    return sys.platform == "darwin"
+
+
+def _memory_policy_isolates_batches(total_patients: Optional[int]) -> bool:
+    """Whether the RAM-based rule runs patient batches in worker processes.
+
+    Explicit ``EASYICU_FORCE_INPROCESS_BATCH`` / ``EASYICU_FORCE_SUBPROCESS_BATCH``
+    win; otherwise macOS keeps batches in-process.
+    """
     if os.environ.get("EASYICU_FORCE_INPROCESS_BATCH"):
         return False
     if os.environ.get("EASYICU_FORCE_SUBPROCESS_BATCH"):
         return True
-    if (sys.platform if platform is None else platform) == "darwin":
+    if _platform_keeps_batches_in_process():
         return False
     try:
         import psutil
@@ -1087,6 +1094,7 @@ def _memory_policy_isolates_batches(total_patients: Optional[int], *, platform: 
     return total_patients > 120000
 
 
+@_one_resolver_per_call
 def load_concepts(
     concepts: Union[str, List[str]],
     patient_ids: Optional[Union[List, Dict]] = None,
@@ -1641,7 +1649,8 @@ def load_concepts(
                         )
 
                     # 分批时仍用子进程隔离；进程内路径优先走流式 patient batch
-                    use_subprocess = True
+                    # macOS batches stay in-process (S1458).
+                    use_subprocess = not _platform_keeps_batches_in_process()
                     use_streaming_patient_batches = effective_batch_size is not None
                 elif verbose:
                     print(
@@ -1715,7 +1724,7 @@ def load_concepts(
                     f"⚠️  稳定预算分批 (估算 {est_mem:.0f}MB > 预算 {_oneshot_budget_mb:.0f}MB): "
                     f"{_total_patients} patients, batch_size={effective_batch_size}"
                 )
-            use_subprocess = True
+            use_subprocess = not _platform_keeps_batches_in_process()  # S1458
 
     if auto_chunk_strategy and verbose and effective_batch_size is None:
         print("   🧠 已跳过自动 batch 分批，优先采用已验证的平衡 chunk 路径")
