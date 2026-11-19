@@ -8,7 +8,11 @@ service chain: a compile through ``apply_agent_plan_configuration``, the
 signed reconfirmation, the fresh plan's launch-time lineage, its job writes,
 then a second compile request on its review, which is refused with no write.
 A write the allowance does not cover breaks the lineage instead, and that
-plan may be compiled once. Synthetic official-Demo fixture; no benchmark item.
+plan may be compiled once. B11 (UX leg 3 en, 2026-11-19): that round-2
+plan's run rebuilt its data profile for the compiled groupings from the raw
+folder and stopped (manifest_marker_missing); it reads the registered
+official export, as the identity questions do. Synthetic official-Demo
+fixture; no benchmark item.
 """
 
 from types import SimpleNamespace
@@ -183,6 +187,29 @@ def test_a_write_outside_the_allowance_lets_the_next_plan_be_compiled_once(choic
     _assert_refused_without_writes(choice, third)
 
 
+def test_a_launch_that_failed_after_the_reconfirmation_costs_exactly_one_more_compile(choice, runs):
+    # S1515 known limitation (B11 walk, UX leg 3 en, a414): the round-2 launch
+    # failed before it planned, and its job marked and cleared the study. The
+    # allowance is one write after the compile (S1471), so the retry carries
+    # no record and may be compiled once more; after that compile and its
+    # reconfirmation the lineage holds again and the chain stops.
+    first = runs.launch(study_contexts.get_context(choice.study["id"]), "run-a")
+    _compile(choice, first)
+    reconfirmed = _reconfirm(choice)
+    after_failure = _job_writes(reconfirmed["id"], "job-failed")
+    retry = runs.launch(after_failure, "run-b")
+    assert runs.recorded(retry) == ""
+    reviewed = _job_writes(after_failure["id"], "job-b")
+    assert _offers_compile(reviewed, runs, retry)
+    _compile(choice, retry)
+    reconfirmed = _reconfirm(choice)
+    third = runs.launch(reconfirmed, "run-c")
+    assert runs.recorded(third) == "run-b"
+    reviewed = _job_writes(reconfirmed["id"], "job-c")
+    assert not _offers_compile(reviewed, runs, third)
+    _assert_refused_without_writes(choice, third)
+
+
 def test_a_review_from_v010_is_compiled_as_before(choice, runs):
     # S1480: a run made before the record existed carries none; its review
     # offers the compile once, as v0.1.0 did, and the compile writes.
@@ -244,3 +271,81 @@ def test_one_compile_bounds_a_chain_of_planner_revisions(choice, runs):
     _job_writes(study["id"], "job-after-r1")
     review(revised)
     assert compiles == 2
+
+
+def test_the_round_two_plan_reads_the_registered_export_not_the_raw_folder(choice, runs, monkeypatch):
+    # B11: raw Demo -> plan -> compile -> signed reconfirmation -> the round-2
+    # plan's launch. Its run rebuilds the data profile for the compiled
+    # groupings (agent_pipeline_runs, before the first progress step) with the
+    # launch study as the source study; the catalog is the registered export's.
+    from easyicu.research_agent.acquisition import catalog as catalog_owner
+    from easyicu.research_agent.intake.export_package import ExportPackageError
+    from easyicu.webserver import research_launch_scientific as launch
+    from easyicu.webserver import research_pipeline_run_preparation as preparation
+
+    first = runs.launch(study_contexts.get_context(choice.study["id"]), "run-a")
+    _compile(choice, first)
+    study = _reconfirm(choice)
+    request = preparation.ResearchPipelineLaunchRequest(
+        export_path=str(choice.paths.raw), study_context=study, project_root=str(choice.paths.raw.parent / "projects"),
+        provider={"provider": "openai"}, provider_environment={}, credential_source="pi_verified",
+        literature_search_authorized=False, plan_revision_source_run_id="", execution_resume_source_run_id="",
+        development_resume_source_job_id="", budget_mode="planner_canary", runner_image=None)
+    scientific = preparation._prepare_scientific_launch(request)
+    assert scientific.metadata_only_planning
+    # Without the owner the raw folder is opened as a package: the B11 stop.
+    with pytest.raises(ExportPackageError) as raised:
+        catalog_owner.build_available_catalog(choice.paths.raw)
+    assert raised.value.code == "manifest_marker_missing"
+    read = []
+
+    def catalog(path):
+        read.append(str(path))
+        raise _Read()
+
+    monkeypatch.setattr(catalog_owner, "build_available_catalog", catalog)
+    with pytest.raises(_Read):
+        launch._data_foundation_profile(
+            export_path=str(choice.paths.raw), study=scientific.materialization_study,
+            target=None, require_target=False, require_primary_exposure=False,
+            source_study=scientific.study)
+    assert read == [str(choice.paths.export)]
+    # The materialization view alone cannot resolve the signed choice; it is
+    # the launch study's.
+    assert launch._catalog_path(str(choice.paths.raw), scientific.materialization_study) == str(choice.paths.raw)
+    # A study with no resolving choice keeps its bound path, so it refuses as before.
+    unsigned = {**scientific.study, "demo_planning_authority_ref": ""}
+    assert launch._catalog_path(str(choice.paths.raw), unsigned) == str(choice.paths.raw)
+
+
+def test_a_launch_on_an_unreadable_package_names_it_and_offers_its_reexport(choice, runs):
+    # B11 card: a bound folder that is not a readable package stops with the
+    # launch's typed intake stop, not the bare intake code. The card says what
+    # is wrong and offers its re-export.
+    from easyicu.webserver import research_launch_scientific as launch
+    from easyicu.webserver import research_pipeline_run_preparation as preparation
+    from easyicu.webserver.pi_copilot.projections import project_job
+    from easyicu.webserver.research_pipeline_run_errors import ResearchPipelineRunError
+
+    first = runs.launch(study_contexts.get_context(choice.study["id"]), "run-a")
+    _compile(choice, first)
+    study = _reconfirm(choice)
+    request = preparation.ResearchPipelineLaunchRequest(
+        export_path=str(choice.paths.raw), study_context=study, project_root=str(choice.paths.raw.parent / "projects"),
+        provider={"provider": "openai"}, provider_environment={}, credential_source="pi_verified",
+        literature_search_authorized=False, plan_revision_source_run_id="", execution_resume_source_run_id="",
+        development_resume_source_job_id="", budget_mode="planner_canary", runner_image=None)
+    scientific = preparation._prepare_scientific_launch(request)
+    unsigned = {**scientific.study, "demo_planning_authority_ref": ""}
+    with pytest.raises(ResearchPipelineRunError) as raised:
+        launch._data_foundation_profile(
+            export_path=str(choice.paths.raw), study=scientific.materialization_study,
+            target=None, require_target=False, require_primary_exposure=False, source_study=unsigned)
+    assert raised.value.code == "research_pipeline_manifest_invalid"
+    assert raised.value.details["intake_error_code"] == "manifest_marker_missing"
+    job = project_job({"id": "b11_job", "kind": "agent-run", "status": "failed", "error": raised.value.code})
+    assert [action["kind"] for action in job["next_actions"]] == ["reexport_data"]
+
+
+class _Read(Exception):
+    """The catalog read was reached; the test stops there."""

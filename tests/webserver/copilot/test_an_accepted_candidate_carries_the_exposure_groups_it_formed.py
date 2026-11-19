@@ -595,6 +595,10 @@ def test_the_run_that_follows_the_candidate_forms_its_groups(
     # The prepared data hold the value its groups are formed from ...
     (prepared,) = [item for item in profiles if item.get("require_primary_exposure")]
     assert "lact" in prepared["analysis_inputs"]
+    # B11: the source's signed choice is read on the launch study, not on
+    # its materialization view.
+    assert prepared["source_study"]["id"] == study["id"]
+    assert prepared["source_study"].get("data_source") == study.get("data_source")
     # ... and the run forms the candidate's groups without asking.
     config = captured["config"]
     assert captured["safeguard_groupings"] is groupings

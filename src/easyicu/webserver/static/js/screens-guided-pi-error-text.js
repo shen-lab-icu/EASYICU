@@ -1168,6 +1168,10 @@
           'The analysis did not continue on its own: no saved approval of this plan was found. Review the plan and approve it again.',
           '分析没有自动继续：没有找到这份计划已保存的批准记录。请重新审阅并批准计划。',
         ),
+        research_pipeline_manifest_invalid: tr(
+          'The data package bound to this study has no readable EasyICU manifest, so the plan could not start. No analysis was run. Prepare the data again, then generate the plan; if it stops here again, send the failure receipt to support.',
+          '本研究绑定的数据包缺少可读取的 EasyICU 清单文件，计划无法开始，也没有运行任何分析。请重新准备数据后再生成计划；如果再次停在这里，请把失败回执发给支持人员。',
+        ),
         research_pipeline_manifest_required: tr(
           'The bound folder is a converted database, not a data package prepared for this study. Extract this study\'s data first, then generate the plan.',
           '绑定的是转换好的数据库，还不是为本研究准备的数据包。请先为本研究提取数据，再生成计划。',

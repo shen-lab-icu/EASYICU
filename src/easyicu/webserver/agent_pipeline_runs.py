@@ -7607,6 +7607,7 @@ def make_research_pipeline_run_runner(
                     sensitivity_specs=sensitivity_specs,
                     additional_outcomes=candidate_outcome_concepts,
                     analysis_inputs=_candidate_analysis_inputs(candidate_authority),
+                    source_study=study,
                 )
                 bound_plan_revision_contract = candidate_authority.contract
                 if patient_grouping is None:
@@ -7659,6 +7660,7 @@ def make_research_pipeline_run_runner(
                     covariates=covariates, sensitivity_specs=sensitivity_specs,
                     additional_outcomes=candidate_outcome_concepts,
                     analysis_inputs=bound_exposure_groupings.concepts,
+                    source_study=study,
                 )
         if bound_analysis_inputs is None and prepared_revision is not None:
             # A repair on the same prepared input is still bound to the

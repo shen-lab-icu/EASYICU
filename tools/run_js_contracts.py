@@ -287,6 +287,7 @@ CONTRACTS: dict[str, list[str]] = {
     ],
     "guided_pi_run_answer_group_names.test.js": [],
     "guided_pi_provider_stop_copy.test.js": [],
+    "guided_pi_unreadable_package_stop_copy.test.js": [],
     "guided_pi_source_binding_stop_copy.test.js": [],
     "guided_pi_connection_test_message_copy.test.js": [],
     "guided_pi_demo_walkthrough.test.js": [

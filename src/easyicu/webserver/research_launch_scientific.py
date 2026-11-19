@@ -2000,6 +2000,23 @@ def _metadata_only_planning_coordinates(
     }
 
 
+def _catalog_path(export_path: str, study: Mapping[str, Any]) -> str:
+    """The package whose catalog describes the study's bound source.
+
+    For the study's own bound path this is ``source_authority_export_path``:
+    a raw official-Demo folder with a signed choice reads its registered
+    official export, as the identity authorities do (B9). B11 (UX leg 3 en,
+    2026-11-19): after a compile and one signed reconfirmation, the fresh
+    plan's run rebuilt this profile for the compiled groupings and opened the
+    raw folder as an export package (manifest_marker_missing). Any other path
+    is read as given.
+    """
+
+    source = study.get("data_source")
+    bound = _clean_text(source.get("path"), 2_000) if isinstance(source, Mapping) else ""
+    return source_authority_export_path(study) if bound and bound == _clean_text(export_path, 2_000) else export_path
+
+
 def _data_foundation_profile(
     *,
     export_path: str,
@@ -2013,8 +2030,13 @@ def _data_foundation_profile(
     additional_outcomes: tuple[str, ...] = (),
     analysis_inputs: tuple[str, ...] = (),
     trajectory_concepts: tuple[str, ...] = (),
+    source_study: Optional[Mapping[str, Any]] = None,
 ) -> Dict[str, Any]:
     """Compile StudyContext modules into one typed materialization request.
+
+    ``source_study`` is the launch's own study when ``study`` is a
+    materialization view of it: the source's signed choice belongs to the
+    launch study, and the catalog is read through it (``_catalog_path``).
 
     ``analysis_inputs`` are an accepted candidate's primary-analysis concepts
     (``planning.accepted_analysis_inputs``); they are materialized like any
@@ -2034,7 +2056,20 @@ def _data_foundation_profile(
             "A full Research Agent run requires configured feature modules.",
         )
     allowed = set(modules)
-    catalog = build_available_catalog(Path(export_path).expanduser())
+    from easyicu.research_agent.intake.export_package import ExportPackageError
+
+    try:
+        catalog = build_available_catalog(Path(_catalog_path(export_path, source_study or study)).expanduser())
+    except ExportPackageError as exc:
+        # The launch's typed intake stop (dataio owns the public diagnostic),
+        # so the card names the package problem and offers its re-export.
+        from easyicu.webserver.dataio import _research_pipeline_intake_diagnostic
+
+        raise ResearchPipelineRunError(
+            "research_pipeline_manifest_invalid",
+            "The bound EasyICU export package cannot be read for planning.",
+            details=_research_pipeline_intake_diagnostic(exc),
+        ) from exc
     concepts = [
         concept
         for concept in catalog.concepts
