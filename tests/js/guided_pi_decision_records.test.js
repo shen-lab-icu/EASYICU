@@ -106,9 +106,9 @@ const trial = {
   confirmations: [{ text: 'Assign the strategy at the start of the first shift.' }],
 };
 const pendingTrial = { next_action_code: 'target_trial_review', target_trial_card: trial };
-function pendingDecisionHtml(workflow) {
+function pendingDecisionHtml(workflow, cardLanguage = 'en') {
   const previousLanguage = language;
-  language = window.EU_LANG = 'en';
+  language = window.EU_LANG = cardLanguage;
   try {
     return conversation(pendingSession, researchTurn, null, workflow);
   } finally {
@@ -530,7 +530,7 @@ test('choosing an article output for an analysis-only review shows the composer 
   assert.match(html, /separate article run/);
   assert.match(html, /data-gpi-confirm-edit[^>]*>Revise in the conversation<\/button>/);
   fields[0].value = 'yes';
-  assert.equal(owner.deliverableSelection(form), null);
+  assert.deepEqual(owner.deliverableSelection(form), { requested: [], deferred: ['manuscript_pdf'], excluded: [] });
   assert.equal(route.hidden, false);
   assert.equal(approve.disabled, true);
   fields[0].value = 'no';
@@ -538,8 +538,10 @@ test('choosing an article output for an analysis-only review shows the composer 
   assert.equal(route.hidden, true);
   assert.equal(approve.disabled, false);
   fields[0].dataset.gpiDeliverableOriginal = '';
-  assert.deepEqual(owner.deliverableSelection(form), []);
+  assert.deepEqual(owner.deliverableSelection(form), { requested: [], deferred: [], excluded: ['manuscript_pdf'] });
   assert.equal(forward.disabled, false);
+  fields[0].value = 'yes';
+  assert.deepEqual(owner.deliverableSelection(form), { requested: [], deferred: ['manuscript_pdf'], excluded: [] });
 });
 
 test('saving a check choice starts a new plan review and never submits approval', async () => {
@@ -574,11 +576,11 @@ test('saving a check choice starts a new plan review and never submits approval'
       submitAgentRunReview: () => assert.fail('Selecting a deliverable is never approval'),
     }),
   });
-  await owner.confirmDecision({ deliverables: [] });
+  await owner.confirmDecision({ deliverables: { requested: [], deferred: [], excluded: ['manuscript_pdf'] } });
   assert.deepEqual(calls[0], ['edit', {
     id: 'study-ward', expected_revision: 6, active: false,
     deliverables_source_run_id: 'review-ward',
-    plan_deliverables: { requested: [], confirmed: true, source: 'user_edit' },
+    plan_deliverables: { requested: [], deferred: [], excluded: ['manuscript_pdf'], confirmed: true, source: 'user_edit' },
   }]);
   assert.equal(calls[1][0], 'generate');
   assert.equal(calls[1][1].question, 'Describe shift recovery.');
@@ -598,4 +600,24 @@ test('a result-product choice outside the three fields still opens the inline co
   assert.match(log, /data-gpi-plan-deliverables/);
   assert.match(log, /data-gpi-confirm-edit[^>]*>Revise in the conversation<\/button>/);
   assert.doesNotMatch(log, /data-gpi-confirm-action/);
+});
+
+test('the pending ward transfer plan offers an inline analysis-only choice for requested article files', () => {
+  for (const [cardLanguage, description, forward] of [
+    ['en', 'Generate a fresh plan for analysis only', 'Generate fresh plan'],
+    ['zh', '重新生成仅分析计划', '重新生成计划'],
+  ]) {
+    const html = pendingDecisionHtml({
+      next_action_code: 'first_result_delivery_requires_article',
+      plan_review_summary: {
+        run_id: 'transfer-outcomes-plan',
+        deliverables: { article_required: true, source: 'user_edit', requested: ['manuscript_pdf'],
+          check: [], confirmed: true },
+      },
+    }, cardLanguage);
+    const log = html.slice(html.indexOf('data-gpi-log'), html.indexOf('data-gpi-input'));
+    assert.ok(log.includes(description));
+    assert.ok(log.includes(`data-gpi-deliverables-apply>${forward}</button>`));
+    assert.doesNotMatch(log, /data-gpi-confirm-action/);
+  }
 });

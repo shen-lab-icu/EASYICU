@@ -67,8 +67,10 @@
     const check = selection.check || [];
     const fields = DELIVERABLE_KINDS.map((kind, index) => {
       const value = check.includes(kind) ? '' : requested.includes(kind) ? 'yes' : 'no';
+      const omission = selection.excluded?.includes(kind) ? 'excluded'
+        : selection.deferred?.includes(kind) ? 'deferred' : '';
       const option = (key, label) => `<option value="${key}"${value === key ? ' selected' : ''}>${esc(label)}</option>`;
-      return `<label>${esc(names[index])}<select name="${kind}" required data-gpi-deliverable-original="${value}"${disabled ? ' disabled' : ''}>
+      return `<label>${esc(names[index])}<select name="${kind}" required data-gpi-deliverable-original="${value}" data-gpi-deliverable-omission="${omission}"${disabled ? ' disabled' : ''}>
         ${check.includes(kind) ? option('', tr('Choose', '请选择')) : ''}${option('yes', tr('Yes', '是'))}${option('no', tr('No', '否'))}
       </select></label>`;
     }).join('');
@@ -79,9 +81,10 @@
         <div class="gpi-plan-deliverable-choices">${fields}</div>
         <div data-gpi-deliverables-article${articleConflict ? '' : ' hidden'}>
           <small>${esc(tr('Start a separate article run to keep these deliverables.', '如需保留这些交付物，请另行启动论文任务。'))}</small>
+          <small>${esc(tr('Generate a fresh plan for analysis only to defer the items marked Yes.', '重新生成仅分析计划，将选“是”的交付物留到论文任务。'))}</small>
           <button type="button" class="btn sm" data-gpi-confirm-edit${disabled ? ' disabled' : ''}>${esc(tr('Revise in the conversation', '在对话里修改'))}</button>
         </div>
-        <button type="submit" class="btn primary sm" data-gpi-deliverables-apply disabled>${esc(tr('Generate fresh plan', '重新生成计划'))}</button>
+        <button type="submit" class="btn primary sm" data-gpi-deliverables-apply${disabled || !articleConflict || check.length ? ' disabled' : ''}>${esc(tr('Generate fresh plan', '重新生成计划'))}</button>
       </fieldset>
     </form>`;
   }
@@ -94,14 +97,22 @@
       && fields.every(field => field.value === 'yes' || field.value === 'no');
     const requiresArticle = form.hasAttribute('data-gpi-analysis-deliverables') && requested.length > 0;
     const forward = form.querySelector('[data-gpi-deliverables-apply]');
-    forward.disabled = !complete || !changed || requiresArticle || fields.some(field => field.disabled);
+    forward.disabled = !complete || (!changed && !requiresArticle) || fields.some(field => field.disabled);
     form.querySelector('[data-gpi-deliverables-article]').hidden = !requiresArticle;
     const approve = form.closest('.gpi-confirmation')?.querySelector('[data-gpi-confirm-action]');
     if (approve) {
       approve.dataset.originalDisabled ??= String(approve.disabled);
       approve.disabled = approve.dataset.originalDisabled === 'true' || changed;
     }
-    return forward.disabled ? null : requested;
+    if (forward.disabled) return null;
+    const excluded = fields.filter(field => field.value === 'no'
+      && (field.dataset.gpiDeliverableOriginal !== 'no' || field.dataset.gpiDeliverableOmission === 'excluded'));
+    const deferred = fields.filter(field => field.value === 'no' && field.dataset.gpiDeliverableOmission === 'deferred');
+    return {
+      requested: requiresArticle ? [] : requested,
+      excluded: excluded.map(field => field.name),
+      deferred: [...(requiresArticle ? requested : []), ...deferred.map(field => field.name)],
+    };
   }
 
   function create(host) {
@@ -989,7 +1000,7 @@
       await host.sendText(confirmation.rejectMessage, confirmation.grants, undefined, true, 'host_prompt');
     }
 
-    async function saveDeliverables(requested) {
+    async function saveDeliverables(selection) {
       const session = host.session() || {};
       const binding = session.binding || {};
       const project = host.projectId();
@@ -1001,7 +1012,7 @@
         await host.api().saveStudyContext({
           id: binding.study_context_id, expected_revision: binding.study_revision, active: false,
           deliverables_source_run_id: review.run_id,
-          plan_deliverables: { requested, confirmed: true, source: 'user_edit' },
+          plan_deliverables: { ...selection, confirmed: true, source: 'user_edit' },
         });
         if (!stillCurrent()) return;
         await host.refreshSession(true);
@@ -1022,7 +1033,7 @@
 
     async function confirmDecision(selection) {
       if (!selection || unavailable()) return;
-      if (Array.isArray(selection.deliverables)) return saveDeliverables(selection.deliverables);
+      if (selection.deliverables) return saveDeliverables(selection.deliverables);
       const session = host.session() || {};
       const binding = session.binding || {};
       const expectedRevision = Number(binding.study_revision || 0);

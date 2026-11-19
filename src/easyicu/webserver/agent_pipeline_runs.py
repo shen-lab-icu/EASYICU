@@ -4950,7 +4950,7 @@ def _check_host_manuscript_delivery(
     pdf_receipt: Optional[Dict[str, Any]],
 ) -> set[str]:
     from easyicu.research_agent.contracts.product_files import (
-        confirmed_host_delivery_kinds, host_delivery_failure_code, verified_host_deliveries,
+        EMPTY_BIBTEX, confirmed_host_delivery_kinds, host_delivery_failure_code, verified_host_deliveries,
     )
     from easyicu.research_agent.reporting.completion import completion_outcomes
 
@@ -4980,6 +4980,10 @@ def _check_host_manuscript_delivery(
         name = "manuscript_scaffold.bib"
         documents[:] = [row for row in documents if row["name"] != name]
         documents.append({"name": name, "content": bibliography[name], "media_type": _MANUSCRIPT_DOCUMENT_SPECS[name][0]})
+        if bibliography[name] == EMPTY_BIBTEX.encode("utf-8"):
+            gate.setdefault("deliverable_dispositions", []).append({
+                "kind": "references", "reason_code": "no_citable_references",
+            })
 
     failures = {kind: host_delivery_failure_code(kind) for kind in requested if kind not in verified}
     gate["host_delivery_steps"] = [

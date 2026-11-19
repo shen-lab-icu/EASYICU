@@ -27,6 +27,8 @@
       ? run.deliverable_dispositions.filter(row => row && Object.hasOwn(deliveryLabels, row.kind)) : [];
     const previewExcluded = run => deliveryDispositions(run).some(row =>
       row.kind === 'article_preview' && row.reason_code === 'excluded_by_user');
+    const emptyBibliography = run => deliveryDispositions(run).some(row =>
+      row.kind === 'references' && row.reason_code === 'no_citable_references');
 
     function articleRunPrompt(run) {
       const items = deliveryDispositions(run)
@@ -45,12 +47,13 @@
           : reason === 'first_result_delivery_requires_article'
             ? tr('This run produces first results only. This item requires a separate article run.',
               '本次仅生成首轮分析结果。此交付物需要另行启动论文任务。')
-            : '';
+            : reason === 'no_citable_references'
+              ? tr('This run has no citable references.', '本次没有可引用的参考文献。') : '';
         return note ? [`<li data-deliverable-disposition="${esc(kind)}"><strong>${esc(name)}</strong> ${esc(note)}</li>`] : [];
       });
       if (!rows.length) return '';
       const forward = articleRunPrompt(run) ? `<button type="button" class="btn sm"
-        data-gpi-article-run>${esc(tr('Extend to a full article', '扩展成完整论文'))}</button>` : '';
+        data-gpi-article-run${canPreview?.() ? '' : ' disabled'}>${esc(tr('Extend to a full article', '扩展成完整论文'))}</button>` : '';
       return `<ul>${rows.join('')}</ul>${forward}`;
     }
     let activeReviewTab = 0;
@@ -210,11 +213,12 @@
       addReport('full_analysis_report.json', 'Study overview', '研究总览');
       add('result_tables.json', 'Result tables', '结果表');
       if (latestRun.figure_count !== 0) add('figure_gallery.json', 'Figures', '图表');
-      if ((latestRun.manuscript_ready === true && !previewExcluded(latestRun)) || latestRun.report_revision_ready === true) {
+      if (!previewExcluded(latestRun) && (latestRun.manuscript_ready === true || latestRun.report_revision_ready === true)) {
         addReport('article_report.json', 'Article', '文章');
       }
       if (resources.some(row => row.artifact === 'manuscript_scaffold.bib')) {
-        add('manuscript_scaffold.bib', 'References', '文献');
+        if (emptyBibliography(latestRun)) add('manuscript_scaffold.bib', 'Empty BibTeX file', '空的 BibTeX 文件');
+        else add('manuscript_scaffold.bib', 'References', '文献');
       } else {
         add('literature_evidence.json', 'References', '文献');
       }
@@ -229,10 +233,12 @@
     function renderShelf(latestRun, workflow, query = '', options = {}) {
       const rows = collection(latestRun, workflow);
       if (!rows.length) return '';
+      const hidePreview = previewExcluded(latestRun);
       const files = (Array.isArray(latestRun.artifact_refs) ? latestRun.artifact_refs : [])
         .filter(row => row && row.run_id === latestRun.run_id
           && (/^[A-Za-z0-9_.-]+\.json$/.test(String(row.artifact || ''))
             || ['manuscript_revision.pdf', 'manuscript_scaffold.pdf', 'manuscript_scaffold.bib'].includes(row.artifact)))
+        .filter(row => !hidePreview || !['article_report.json', 'manuscript_draft.json', 'manuscript_provenance.json'].includes(row.artifact))
         .filter(row => row.artifact !== 'manuscript_scaffold.pdf'
           || latestRun.report_revision_ready !== true)
         .filter(row => row.artifact !== 'manuscript_revision.pdf'
@@ -255,6 +261,9 @@
       // the details view and search. Audit and provenance files keep their
       // place in a folded group instead of leading the list.
       const title = row => {
+        if (row.artifact === 'manuscript_scaffold.bib' && emptyBibliography(latestRun)) {
+          return tr('Empty BibTeX file', '空的 BibTeX 文件');
+        }
         const render = window.AGENT_RENDER;
         return render && typeof render.artifactTitle === 'function' ? String(render.artifactTitle(row.artifact) || row.artifact) : row.artifact;
       };
@@ -318,7 +327,9 @@
         'figure_gallery.json': tr('Browse analysis figures', '浏览本次分析图件'),
         'article_report.json': tr('Read the evidence-bound draft', '阅读证据绑定正文'),
         'literature_evidence.json': tr('Retrieved references and evidence', '检索文献与证据记录'),
-        'manuscript_scaffold.bib': tr('BibTeX bibliography for download', '可下载的 BibTeX 参考文献'),
+        'manuscript_scaffold.bib': emptyBibliography(latestRun)
+          ? tr('Comment-only BibTeX file for download', '可下载的 BibTeX 文件仅含注释')
+          : tr('BibTeX bibliography for download', '可下载的 BibTeX 参考文献'),
         'manuscript_revision.pdf': tr('Current report for download', '当前修订版，可下载'),
         'manuscript_scaffold.pdf': tr('Manuscript draft for download', '稿件草稿，可下载'),
       };
@@ -500,6 +511,7 @@
       const validated = latestRun.analysis_validated === true;
       const numericVerified = latestRun.numeric_verified === true;
       const manuscriptReady = latestRun.manuscript_ready === true || latestRun.report_revision_ready === true;
+      const hidePreview = previewExcluded(latestRun);
       const figureCount = Number.isInteger(latestRun.figure_count) ? latestRun.figure_count : null;
       const resources = Array.isArray(latestRun.artifact_refs) ? latestRun.artifact_refs : [];
       const ledger = resources.find(row => row && row.run_id === latestRun.run_id
@@ -518,7 +530,7 @@
         if (analysisReport) detailActions.push(resourceButton(
           analysisReport, tr('View complete analysis report', '查看完整分析报告'),
         ));
-        if (articleReport && (latestRun.report_revision_ready === true || (manuscriptReady && !previewExcluded(latestRun)))) detailActions.push(resourceButton(
+        if (articleReport && manuscriptReady && !hidePreview) detailActions.push(resourceButton(
           articleReport, tr('View article report with figures', '查看含图文章报告'),
         ));
         if (technicalReport) detailActions.push(resourceButton(
@@ -551,7 +563,8 @@
         `<button class="btn sm" type="button" data-gpi-run-outcome-data>${iconHtml('viz', 13)} ${esc(tr('Open data visualization', '打开数据可视化'))}</button>`,
       ];
       detailActions.push(...Object.keys(labels).map(name => {
-          if (!manuscriptReady && name === 'manuscript_provenance.json') return '';
+          if (name === 'manuscript_provenance.json' && (!manuscriptReady || hidePreview)) return '';
+          if (name === 'manuscript_draft.json' && hidePreview) return '';
           if (name === 'figure_gallery.json' && latestRun.figure_count === 0) return '';
           const resource = resources.find(row => row && row.artifact === name);
           const label = tr(labels[name][0], labels[name][1]);

@@ -11,6 +11,8 @@ from types import SimpleNamespace
 import pandas as pd
 import pytest
 
+from easyicu.research_agent import PipelineServices, ResearchAgentPipeline
+from easyicu.research_agent.agents import family_spec_planner
 from easyicu.research_agent.agents.progressive_planner import (
     FAMILY_SPEC_STRATEGY,
     ProgressivePlannerAgent,
@@ -20,21 +22,27 @@ from easyicu.research_agent.authority.evidence_store import EvidenceStore
 from easyicu.research_agent.cohort import materializer
 from easyicu.research_agent.cohort.schema import materialize_locked_analysis_cohort, write_locked_cohort_definition
 from easyicu.research_agent.contracts.claim_ceiling import first_result_instructions
-from easyicu.research_agent.contracts.product_files import HOST_DELIVERY_KINDS, PlanDeliverables, requested_deliverable_kinds
+from easyicu.research_agent.contracts.product_files import (
+    HOST_DELIVERY_KINDS, DeliveryRequest, PlanDeliverables, delivery_requests, requested_deliverable_kinds,
+)
 from easyicu.research_agent.execution.owner_declaration import require_host_rendered_plan
 from easyicu.research_agent.execution.runners.selection import resolve_standard_executor
 from easyicu.research_agent.intake.materialized_metadata import implementation_bundle_sha256, stage_materialized_cohort_authority
-from easyicu.research_agent.literature import CitationRecord, LiteratureBundle, LiteratureScreeningDecision
+from easyicu.research_agent.literature import (
+    CitationRecord, LiteratureBundle, LiteratureScreeningDecision, manuscript_citable_keys,
+)
 from easyicu.research_agent.methods.table_one import build_grouped_table_one
 from easyicu.research_agent.orchestration.config import PipelineConfig
 from easyicu.research_agent.orchestration.profiles import get_submission_profile
+from easyicu.research_agent.orchestration import progressive_planning
 from easyicu.research_agent.orchestration.progressive_planning import question_requirement_outcome
 from easyicu.research_agent.orchestration.run_entry import analysis_only_after_input_validation
 from easyicu.research_agent.orchestration.workflow import HumanReviewPending, build_pipeline_workflow, human_review_requests_for_plan
+from easyicu.research_agent import pipeline as pipeline_module
 from easyicu.research_agent.planning.requirement_typing.delivery import bind_confirmed_host_delivery, bind_run_deliverables
 from easyicu.research_agent.providers.mocks import PatternScriptedMockLLMClient, ScriptedMockLLMClient
 from easyicu.research_agent.reporting import completion, manuscript_sections, pdf_render, write_phase
-from easyicu.research_agent.schema import CritiqueReport
+from easyicu.research_agent.schema import AnalysisPlan, CritiqueReport
 from easyicu.webserver.agent_runs import read_run_artifact, read_run_artifact_bytes
 from easyicu.webserver import agent_pipeline_runs
 from easyicu.webserver.agent_pipeline_runs import _write_projection
@@ -51,6 +59,7 @@ from tests.research_agent.planning.family_spec_fixtures import (
     _spec_payload,
 )
 from tests.support.node import run_node
+from tests.support.pipeline_contracts import disable_article_contract
 from tests.support.typed_export import typed_export
 from tests.webserver.copilot.pi_copilot_static_fixtures import (
     _load_guided_pi_module_harness as _load_guided_pi_module_harness,
@@ -198,10 +207,12 @@ def _status(tmp_path, context, plan, stop_after_analysis, manuscript_ready):
     return status
 
 
-def _publish(tmp_path, monkeypatch, context, plan, evidence, config, findings, language, renders):
+def _publish(tmp_path, monkeypatch, context, plan, evidence, config, findings, language, renders, *,
+             literature_factory=_literature):
     def fake_tex_process(**kwargs):
         tex_path = kwargs["tex_path"]
         bib_path = kwargs["bib_path"]
+        assert bool(bib_path) == bool(REFERENCES in plan.deliverables.requested and manuscript_citable_keys(literature))
         pdf_path = tmp_path / "manuscript_scaffold.pdf"
         renders.append("pdf")
         pdf_path.write_bytes(b"%PDF-1.4\n% synthetic renderer response\n%%EOF\n")
@@ -254,13 +265,15 @@ def _publish(tmp_path, monkeypatch, context, plan, evidence, config, findings, l
     )
     assert llm.calls
     assert PROSE[language == "zh"] in draft
-    draft += f"\n\n{prose} [@synthetic_ref]\n"
+    literature = literature_factory(context.research_question)
+    if "synthetic_ref" in manuscript_citable_keys(literature):
+        draft += f"\n\n{prose} [@synthetic_ref]\n"
     bound_path = tmp_path / "manuscript_scaffold_bound.md"
     bound_path.write_text(draft)
     evidence.register_file(kind="log", description="Synthetic bound manuscript", source_path=bound_path,
                            evidence_id="manuscript_scaffold_bound", producer="pipeline", generation_mode="system")
-    literature = _literature(context.research_question)
-    (tmp_path / "preplan_literature_bundle.json").write_text(literature.model_dump_json())
+    if literature is not None:
+        (tmp_path / "preplan_literature_bundle.json").write_text(literature.model_dump_json())
     table_step = next(step for step in plan.steps if step.table_one_spec)
     spec = table_step.table_one_spec
     labels = list(spec.group_levels) * 20
@@ -289,20 +302,51 @@ def _publish(tmp_path, monkeypatch, context, plan, evidence, config, findings, l
     return _status(tmp_path, context, plan, stop, True)
 
 
-def _render(latest, language):
+def _render(latest, language, *, session_condition="ready"):
     node = shutil.which("node")
     assert node
     js = run_node(node, f"""
-      global.window = {{}};
+      global.window = {{EU_LANG:{language!r}, requestAnimationFrame: callback => callback()}};
+      global.document = {{querySelector:()=>null, readyState:'loading', addEventListener() {{}}}};
+      global.fetch = () => {{ throw new Error('Unexpected network request'); }};
+      eval({_read("js/api.js")!r});
+      eval({_read("js/html-escape.js")!r});
+      eval({_read("js/screens-guided-pi-resources.js")!r});
       eval({_read("js/screens-guided-pi-run-outcome.js")!r});
-      const owner = window.EU_GUIDED_PI_RUN_OUTCOME.create({{
-        tr:(en,zh)=>{language!r} === 'zh' ? zh : en, esc:String, iconHtml:()=>'', resourceButton:row=>row.artifact, manuscriptNotPassedText:String,
-      }});
+      eval({_read("js/screens-guided-pi-events.js")!r});
+      const condition = {session_condition!r};
+      const handlers = {{}};
       const workflow = {{stages:[{{id:'analysis', status:'complete'}}]}};
       const latest = {json.dumps(latest)};
+      const state = {{
+        busy: condition === 'busy', childJobId: condition === 'child' ? 'other-job' : '',
+        session: condition === 'missing' ? null : {{session_id:'ward-session', stale:{{stale:condition === 'stale'}}}},
+        host: {{addEventListener(name, handler) {{ handlers[name] = handler; }}, querySelector:()=>null}},
+        latestRun: latest, workflow, draft:'', sessionSelectionRevision:1,
+      }};
+      const labels = [];
+      const projectId = () => 'ward-project';
+      const api = () => window.EU_API;
+      const esc = window.EU_HTML.esc;
+      const resources = window.EU_GUIDED_PI_RESOURCES.create({{esc}});
+      const owner = window.EU_GUIDED_PI_RUN_OUTCOME.create({{
+        tr:(en,zh)=>{language!r} === 'zh' ? zh : en, esc, iconHtml:()=>'', manuscriptNotPassedText:String,
+        api, projectId, session:()=>state.session,
+        canPreview:()=>Boolean(state.session && !state.busy && !state.childJobId && !state.session.stale.stale),
+        resourceButton:(row,label)=>{{ labels.push(label); return resources.button(row,label); }},
+      }});
+      const html = owner.render(latest, workflow);
+      const button = html.match(/<button[^>]*data-gpi-article-run[^>]*>/);
+      if (button) {{
+        window.EU_GUIDED_PI_EVENTS.create({{state, projectId, RUN_OUTCOME:owner, render() {{}}}}).wire();
+        handlers.click({{target:{{closest: selector => selector === '[data-gpi-article-run]' ? button[0] : null}}}});
+      }}
       process.stdout.write(JSON.stringify({{
-        html:owner.render(latest, workflow), rows:owner.collection(latest, workflow),
-        articlePrompt:owner.articleRunPrompt?.(latest),
+        html, rows:owner.collection(latest, workflow), shelf:owner.renderShelf(latest, workflow),
+        articlePrompt:owner.articleRunPrompt?.(latest), labels,
+        articleClick:state.followUpDraft ? {{
+          draft:state.draft, intent:state.pendingEntryIntent, origin:state.followUpDraft.origin,
+        }} : null,
       }}));
     """, check=False)
     assert js.returncode == 0, js.stderr
@@ -551,13 +595,18 @@ def test_delivery_request(tmp_path, monkeypatch, tier, language, kind, wording):
     reader = read_run_artifact(str(wrapper), "manuscript_provenance.json")
     pdf = read_run_artifact_bytes(str(wrapper), "manuscript_scaffold.pdf")
     bib = read_run_artifact_bytes(str(wrapper), "manuscript_scaffold.bib")
+    bib_download = re.search(
+        r'<a class="gpi-result-download"[^>]+/documents/manuscript_scaffold\.bib\?expected_sha256=[a-f0-9]{64}"'
+        r' download="manuscript_scaffold\.bib"',
+        visible["shelf"],
+    )
     supplied = {
         PDF: pdf["ok"] and pdf["content"].startswith(b"%PDF")
         and "manuscript_scaffold.pdf" in rows and "manuscript_scaffold.pdf" in visible["html"],
         PREVIEW: reader["ok"] and "article_report.json" in rows and "article_report.json" in visible["html"]
         and PROSE[zh] in payloads["manuscript_draft.json"]["markdown_preview"],
         REFERENCES: bib["ok"] and b"synthetic_ref" in bib["content"]
-        and "manuscript_scaffold.bib" in rows and "manuscript_scaffold.bib" in visible["html"],
+        and "manuscript_scaffold.bib" in rows and bool(bib_download),
     }
 
     # A checked omission must reach the user even if every other artifact passes.
@@ -576,6 +625,7 @@ def test_delivery_request(tmp_path, monkeypatch, tier, language, kind, wording):
             assert ("本次仅生成首轮分析结果" if zh else "This run produces first results only") in message.group(1)
             assert "data-gpi-article-run" in visible["html"]
             assert LABELS[kind][zh] in visible["articlePrompt"]
+            assert visible["articleClick"]["draft"] == visible["articlePrompt"]
     else:
         assert not latest.get("deliverable_dispositions")
 
@@ -682,3 +732,234 @@ def test_first_result_names_all_deliverables_deferred_by_the_tier(tmp_path, monk
     assert {row["reason_code"] for row in latest["deliverable_dispositions"]} == {"first_result_delivery_requires_article"}
     assert all(f'data-deliverable-disposition="{kind}"' in result["html"] for kind in HOST_DELIVERY_KINDS)
     assert all(names[0] in result["articlePrompt"] for names in LABELS.values())
+
+
+REVIEW_QUESTIONS = (
+    "Describe how mortality is distributed across the recorded sex categories.",
+    "按登记的性别类别描述住院死亡的分布。",
+)
+REVIEW_CHECK = ("A PDF would be helpful for the care team.", "方便的话请提供 PDF。")
+
+
+def _pipeline_review(tmp_path, monkeypatch, question, tier, edit):
+    disable_article_contract(monkeypatch)
+    # This fixture reaches the review boundary without a signed typed export.
+    # The matrix verifies desktop executor ownership with that export separately.
+    monkeypatch.setattr(pipeline_module, "require_host_plan_before_review", lambda *_args, **_kwargs: None)
+    progress = progressive_planning.run_pipeline_progressive_planner
+
+    def plan_without_article_contract(**kwargs):
+        kwargs["planner_kwargs"]["enforce_article_contract"] = False
+        return progress(**kwargs)
+
+    monkeypatch.setattr(progressive_planning, "run_pipeline_progressive_planner", plan_without_article_contract)
+    client = ScriptedMockLLMClient([])
+    build_request = family_spec_planner.build_family_spec_request
+    labels = {
+        "sex": "Recorded sex at admission", "sex=0": "Source category zero",
+        "sex=1": "Source category one", "death": "Hospital mortality",
+    }
+
+    def script_response(*args, **kwargs):
+        request = build_request(*args, **kwargs)
+        client.responses.append(json.dumps({
+            "schema_version": "easyicu.family_plan_spec/1",
+            "family_id": request.family_id,
+            "request_sha256": request.request_sha256,
+            "adjustment_set": [],
+            "baseline_variables": [],
+            "distribution_missing_policies": {
+                "denominator_policy": "all_declared_rows",
+                "missing_exposure_policy": "exclude_from_denominator",
+                "missing_outcome_policy": "fail_closed",
+            },
+            "reader_display_labels": [
+                {"key": key, "value": labels[key]}
+                for key in (*request.required_reader_label_keys, *request.level_label_keys)
+            ],
+            "comparator_applications": [],
+            "roster_decision_note": "Summarize observed outcomes across recorded groups.",
+            "question_requirements": [],
+        }))
+        return request
+
+    monkeypatch.setattr(family_spec_planner, "build_family_spec_request", script_response)
+    tmp_path.mkdir(parents=True, exist_ok=True)
+    cohort = tmp_path / "cohort.parquet"
+    pd.DataFrame({
+        "stay_id": range(1, 13), "sex": [0, 1] * 6, "death": [0, 0, 1, 1] * 3,
+    }).to_parquet(cohort, index=False)
+    config = PipelineConfig(
+        workdir=tmp_path / "pipeline", planner_strategy="family_spec_v1", planner_only=True,
+        require_human_plan_review=True, enable_literature=False, enable_memory=False,
+        execution_tier=tier, bound_plan_deliverables=edit,
+        default_plan_deliverables=reviewed_article_deliverable_defaults(
+            _fixture_profile(tier), budget_mode="full_reviewed",
+        ),
+    )
+    pending = ResearchAgentPipeline.from_config(config, services=PipelineServices(llm=client)).run(
+        question=question, cohort=cohort, database="miiv", target_outcome="death", primary_exposure="sex",
+        user_preferences={"inferred_analysis_family": "descriptive_epidemiology",
+                          "covariate_selection": "planner_selectable"},
+    )
+    assert isinstance(pending, HumanReviewPending)
+    assert len(client.calls) == 1
+    plan = AnalysisPlan.model_validate_json((Path(pending.run_dir) / "analysis_plan.json").read_text())
+    return config, pending, plan
+
+
+@pytest.mark.parametrize("language", ("en", "zh"))
+@pytest.mark.parametrize("wording", ("unmentioned", "check"))
+def test_scope_switch_keeps_the_card_dispositions(tmp_path, monkeypatch, language, wording):
+    zh = language == "zh"
+    question = REVIEW_QUESTIONS[zh]
+    if wording == "check":
+        question += f" {REVIEW_CHECK[zh]}"
+    assert delivery_requests(question)[PDF] is (
+        DeliveryRequest.CHECK if wording == "check" else DeliveryRequest.UNMENTIONED
+    )
+    with monkeypatch.context() as patch:
+        _, stopped, _ = _pipeline_review(tmp_path / "selected", patch, question, "first_result", {
+            "requested": [PDF], "confirmed": True, "source": "user_edit",
+        })
+    (delivery_stop,) = [
+        row for row in stopped.requests if row.payload["reason"] == "first_result_delivery_requires_article"
+    ]
+    config, approved_scope, plan = _pipeline_review(
+        tmp_path / "analysis-scope" / "web", monkeypatch, question, "first_result",
+        {"requested": [], "deferred": [PDF], "excluded": [REFERENCES], "confirmed": True, "source": "user_edit"},
+    )
+    assert plan.deliverables.deferred == (PDF,)
+    assert plan.deliverables.excluded == (REFERENCES,)
+    assert not any(step.host_delivery_kind for step in plan.steps)
+    assert all(row.authority_sha256 != delivery_stop.authority_sha256 for row in approved_scope.requests)
+    assert all(row.payload["reason"] != "first_result_delivery_requires_article" for row in approved_scope.requests)
+
+    run_dir = Path(approved_scope.run_dir)
+    _save_plan(run_dir, plan, _fixture_profile("first_result"))
+    context = SimpleNamespace(research_question=question)
+    status = _publish(run_dir, monkeypatch, context, plan, EvidenceStore(run_dir), config, [], language, [])
+    assert status["analysis_outcome"]["status"] == "completed"
+    _, _, _, latest = _web_result(run_dir, context)
+    assert {row["kind"]: row["reason_code"] for row in latest["deliverable_dispositions"]} == {
+        PDF: "first_result_delivery_requires_article", REFERENCES: "excluded_by_user",
+    }
+    visible = _render(latest, language)
+    assert ("扩展成完整论文" if zh else "Extend to a full article") in visible["html"]
+    assert "PDF" in visible["articlePrompt"]
+
+
+@pytest.mark.parametrize("language", ("en", "zh"))
+def test_article_pipeline_keeps_card_exclusions(tmp_path, monkeypatch, language):
+    question = REVIEW_QUESTIONS[language == "zh"]
+    _, _, plan = _pipeline_review(tmp_path, monkeypatch, question, "article", {
+        "requested": [PDF], "excluded": [PREVIEW], "confirmed": True, "source": "user_edit",
+    })
+    assert plan.deliverables.excluded == (PREVIEW,)
+    assert [step.host_delivery_kind for step in plan.steps if step.host_delivery_kind] == [PDF]
+
+
+def _screened_out(question):
+    return _literature(question).model_copy(update={"screening_decisions": []})
+
+
+@pytest.mark.parametrize("language", ("en", "zh"))
+@pytest.mark.parametrize("literature_factory", [
+    pytest.param(lambda _question: None, id="no-search-bundle"),
+    pytest.param(_screened_out, id="zero-included"),
+])
+def test_default_bibliography_without_citable_references(tmp_path, monkeypatch, language, literature_factory):
+    zh = language == "zh"
+    question = BASE[zh] + (" 同时报告效应估计。" if zh else " Report the estimated effects as well.")
+    context, attempt, contract = _plan(question, "article")
+    profile = _fixture_profile("article")
+    defaults = reviewed_article_deliverable_defaults(profile, budget_mode="full_reviewed")
+    assert REFERENCES in defaults
+    run_dir = tmp_path / "web" / "pipeline" / "run_no_citable_keys"
+    run_dir.mkdir(parents=True)
+    plan = bind_run_deliverables(attempt.output, question=question, defaults=defaults, edit=None)
+    evidence, findings, _, _ = _requirements(
+        run_dir, context, SimpleNamespace(output=plan, facts=attempt.facts), contract,
+    )
+    config = PipelineConfig(workdir=run_dir, enable_pdf_render=True, **profile.as_pipeline_options())
+    _save_plan(run_dir, plan, profile)
+    status = _publish(
+        run_dir, monkeypatch, context, plan, evidence, config, findings, language, [],
+        literature_factory=literature_factory,
+    )
+    assert status["status"] == "manuscript_ready", status["gates"].get("host_delivery_failure")
+    wrapper, result, _, latest = _web_result(run_dir, context)
+    assert {row["kind"]: row["status"] for row in result["gate"]["host_delivery_steps"]} == {
+        kind: "verified" for kind in HOST_DELIVERY_KINDS
+    }
+    assert latest["deliverable_dispositions"] == [{"kind": REFERENCES, "reason_code": "no_citable_references"}]
+    bib = read_run_artifact_bytes(str(wrapper), "manuscript_scaffold.bib")
+    assert bib["ok"] and bib["content"] == b"@comment{No citable references}\n"
+    visible = _render(latest, language)
+    assert ("本次没有可引用的参考文献" if zh else "This run has no citable references") in visible["html"]
+    assert ("空的 BibTeX 文件" if zh else "Empty BibTeX file") in visible["html"]
+    assert 'download="manuscript_scaffold.bib"' in visible["shelf"]
+
+
+def _result_with_artifacts(*artifacts, **state):
+    return {
+        "present": True, "run_id": "ward-recovery", "analysis_results_available": True,
+        "analysis_validated": True, "research_question": "Summarize outcomes after a ward transfer.",
+        "artifact_refs": [
+            {"kind": "research_document" if name.endswith((".pdf", ".bib")) else "research_artifact",
+             "artifact": name, "run_id": "ward-recovery", "sha256": "c" * 64}
+            for name in ("evidence_ledger.json", *artifacts)
+        ],
+        **state,
+    }
+
+
+@pytest.mark.parametrize("language", ("en", "zh"))
+def test_excluded_preview_stays_hidden_after_report_revision(language):
+    latest = _result_with_artifacts(
+        "article_report.json", "manuscript_revision.pdf", "manuscript_provenance.json",
+        report_revision_ready=True, report_revision_pdf_ready=True,
+        deliverable_dispositions=[{"kind": PREVIEW, "reason_code": "excluded_by_user"}],
+    )
+    visible = _render(latest, language)
+    rows = {row["artifact"] for row in visible["rows"]}
+    assert "article_report.json" not in rows
+    assert "article_report.json" not in visible["html"] + visible["shelf"]
+    assert ("查看含图文章报告" if language == "zh" else "View article report with figures") not in visible["labels"]
+    assert ("预览证据绑定文章" if language == "zh" else "Preview evidence-bound article") not in visible["labels"]
+    assert "manuscript_revision.pdf" in rows
+    assert "manuscript_revision.pdf" in visible["html"]
+    assert ("按你的选择省略" if language == "zh" else "Excluded at your request") in visible["html"]
+
+
+def _deferred_result():
+    return _result_with_artifacts(deliverable_dispositions=[
+        {"kind": PDF, "reason_code": "first_result_delivery_requires_article", "next_action": "article"},
+    ])
+
+
+@pytest.mark.parametrize("language", ("en", "zh"))
+@pytest.mark.parametrize("condition", ("busy", "child", "missing", "stale"))
+def test_extend_article_is_disabled_when_unavailable(language, condition):
+    visible = _render(_deferred_result(), language, session_condition=condition)
+    assert re.search(r"<button[^>]+data-gpi-article-run[^>]+\bdisabled\b", visible["html"])
+    assert visible["articleClick"] is None
+
+
+@pytest.mark.parametrize("language", ("en", "zh"))
+def test_acceptance_reaches_download_and_article_click(language):
+    latest = _result_with_artifacts("manuscript_scaffold.bib", manuscript_ready=True)
+    visible = _render(latest, language)
+    assert re.search(
+        r'<a class="gpi-result-download" href="/api/copilot/pi/projects/ward-project/runs/ward-recovery/'
+        r'documents/manuscript_scaffold\.bib\?expected_sha256=c{64}" download="manuscript_scaffold\.bib"',
+        visible.get("shelf", ""),
+    )
+    visible = _render(_deferred_result(), language)
+    zh = language == "zh"
+    assert visible["articleClick"] == {
+        "draft": ("请为这项研究另行启动论文任务，并提供PDF。" if zh else
+                  "Start a separate article run for this study with PDF."),
+        "intent": "",
+        "origin": "host_prompt",
+    }

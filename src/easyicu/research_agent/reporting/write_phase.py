@@ -97,7 +97,7 @@ from .manuscript_result_facts import (
 )
 from .manuscript_result_structure import planned_result_roles
 from .novelty_positioning import build_unsigned_novelty_positioning_packet
-from ..literature import LiteratureAgent, LiteratureBundle, manuscript_citable_keys
+from ..literature import LiteratureAgent, LiteratureBundle
 from ..orchestration.profiles import is_paper_facing_profile
 from ..providers.mocks import MockLLMClient
 from ..providers.prompt_budget import budgeted_vlm_client
@@ -3060,7 +3060,7 @@ def _publish_and_audit_manuscript(
     emit_progress: Callable[..., None],
 ) -> None:
     """Render publication artifacts and run post-binding scientific audits."""
-    from ..contracts.product_files import host_delivery_owners
+    from ..contracts.product_files import EMPTY_BIBTEX, host_delivery_owners
 
     requested = host_delivery_owners(plan.model_dump(mode="json")) if isinstance(plan, AnalysisPlan) else {}
     written: set[str] = set()
@@ -3068,13 +3068,18 @@ def _publish_and_audit_manuscript(
     selection = getattr(plan, "deliverables", None)
     export_bibtex = "references" in requested or (selection is None and pipeline._enable_latex)
     bib_path = run_dir / "manuscript_scaffold.bib"
+    bibtex = ""
     if export_bibtex:
         try:
-            if manuscript_citable_keys(literature):
-                bib_path.write_text(render_bibtex(literature), encoding="utf-8")
+            bibtex = render_bibtex(literature)
+            if bibtex or "references" in requested:
+                bib_path.write_text(bibtex or EMPTY_BIBTEX, encoding="utf-8")
                 if evidence.get("manuscript_bibliography") is None:
                     evidence.register_file(
-                        kind="log", description="BibTeX file rendered from the literature bundle.",
+                        kind="log", description=(
+                            "BibTeX file rendered from the literature bundle." if bibtex
+                            else "Empty BibTeX file. This run has no citable references."
+                        ),
                         source_path=bib_path, evidence_id="manuscript_bibliography",
                         producer="pipeline", generation_mode="system",
                     )
@@ -3148,7 +3153,7 @@ def _publish_and_audit_manuscript(
                     generation_mode="system",
                 )
             if pdf_requested or (selection is None and pipeline._enable_pdf_render):
-                bib_full = bib_path if bib_path.name in written else None
+                bib_full = bib_path if bibtex and bib_path.name in written else None
                 pdf_result = render_pdf_for_run(
                     tex_path=tex_path,
                     bib_path=bib_full,

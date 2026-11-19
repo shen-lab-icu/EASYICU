@@ -189,12 +189,18 @@ def bind_run_deliverables(
     if edit is None:
         return bind_confirmed_host_delivery(plan, prefill)
 
-    edited = PlanDeliverables.model_validate(edit).requested
-    omitted = set(prefill.requested) - set(edited)
-    deferred = omitted if first else set()
-    excluded = (set(prefill.excluded) | set(prefill.check) | omitted) - set(edited) - deferred
+    edited = PlanDeliverables.model_validate(edit)
+    deferred = set(edited.deferred)
+    if first and not edited.requested:
+        # Older cards saved only the requested list. Keep known earlier
+        # requests unless the current edit explicitly excludes them.
+        prior = set(prefill.requested)
+        if plan.deliverables is not None:
+            prior.update(plan.deliverables.requested)
+        deferred.update(prior.difference(edited.excluded))
+    excluded = (set(edited.excluded) | set(prefill.excluded)).difference(edited.requested, deferred)
     selection = PlanDeliverables(
-        requested=edited, confirmed=True, source="user_edit",
+        requested=edited.requested, confirmed=True, source="user_edit",
         deferred=tuple(kind for kind in HOST_DELIVERY_KINDS if kind in deferred),
         excluded=tuple(kind for kind in HOST_DELIVERY_KINDS if kind in excluded),
     )

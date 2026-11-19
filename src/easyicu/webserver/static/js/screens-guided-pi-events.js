@@ -754,8 +754,8 @@
         const deliverables = event.target.closest('[data-gpi-plan-deliverables]');
         if (deliverables) {
           event.preventDefault();
-          const requested = window.EasyICU.guidedPi.require('planActions').deliverableSelection(deliverables);
-          if (requested) void confirmPlanDecision({ deliverables: requested });
+          const selection = window.EasyICU.guidedPi.require('planActions').deliverableSelection(deliverables);
+          if (selection) void confirmPlanDecision({ deliverables: selection });
           return;
         }
         const nextCustomForm = event.target.closest('[data-gpi-next-custom-form]');

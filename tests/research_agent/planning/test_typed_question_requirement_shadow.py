@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import json
 from collections import Counter
-from dataclasses import asdict
 from types import SimpleNamespace
 
 import pytest
@@ -22,11 +21,12 @@ from easyicu.research_agent.planning.requirement_typing.contract import CohortPr
 from easyicu.research_agent.planning.sensitivity_authority import PrespecifiedSensitivitySpec
 from easyicu.research_agent.schema import UserPreferences
 
-from .test_typed_question_requirement_coverage import _context, _model_plan
-from .test_typed_question_requirement_regressions import (
+from tests.support.requirement_typing import (
+    _context, _model_plan, _shadow_event, proposal,
     CLUSTER, KDIGO_48, MAX_POTASSIUM, REPORT_STAYS, STUDY_POPULATION, VASOPRESSOR16,
     bind, interval, key,
 )
+from tests.support.requirement_typing import shadow_events as shadow_events
 
 BILINGUAL_CASES = (
     ("time_zero", "Clarify vasopressor initiation time zero at 16 hours", "明确升压药开始的时间零点为16小时"),
@@ -98,43 +98,6 @@ _SCRIPTED_KEYS = {
     "repeat_stay_reporting": REPORT_STAYS,
     "repeat_stay_policy": CLUSTER,
 }
-
-
-def proposal(part_id, quote, asked, *, facet=None, alternatives=(), start=0):
-    return {
-        "part_id": part_id, "source_span": {"start": start, "end": start + len(quote)},
-        "facet_hint": facet or (asked.facet.kind if asked else None),
-        "key": asked.model_dump(mode="json") if asked else None,
-        "alternatives": [choice.model_dump(mode="json") for choice in alternatives],
-    }
-
-
-@pytest.fixture
-def shadow_events(monkeypatch):
-    comparisons = []
-    evaluate = shadow._observe
-
-    def capture(*args, **kwargs):
-        result = evaluate(*args, **kwargs)
-        comparisons.append(result)
-        return result
-
-    monkeypatch.setattr(shadow, "_observe", capture)
-    return comparisons
-
-
-def _shadow_event(shadow_events):
-    [comparison] = shadow_events
-    return {"parts": [{
-        "v1": row.v1,
-        "v1_reason": row.v1_reason,
-        "v2": row.decision.state,
-        "v2_reason": getattr(row.decision, "reason", None),
-        "source_span": row.result.part.source_span.model_dump() if row.result else None,
-        "result": row.result.model_dump(mode="json") if row.result else None,
-        "repair": [asdict(issue) for issue in row.repair],
-    } for row in comparison.parts]}
-
 
 
 @pytest.mark.parametrize(

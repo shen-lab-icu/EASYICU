@@ -325,6 +325,7 @@ def delivery_requests(question: str) -> dict[HostDeliveryKind, DeliveryRequest]:
 
 FIRST_RESULT_DELIVERY_STOP = "first_result_delivery_requires_article"
 DELIVERY_EXCLUDED_BY_USER = "excluded_by_user"
+EMPTY_BIBTEX = "@comment{No citable references}\n"
 
 
 HOST_DELIVERY_RECEIPT = "host_delivery_receipt.json"
