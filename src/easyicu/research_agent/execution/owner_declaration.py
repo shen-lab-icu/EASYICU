@@ -220,6 +220,21 @@ def _declared_host_figure(
             and producers[0].step_id == host_cohort_step
         ):
             return True
+        if step.inputs != ["table:cohort_flow"] or len(producers) != 1:
+            return False
+        # The signed fixed-landmark cohort writes its own eligibility flow in
+        # the figure's sequential columns (UX leg 3, 2026-11-19: the family's
+        # flow figure was refused as needing a sandbox, so a reviewed raw-Demo
+        # landmark plan could never prepare). Execute still verifies the
+        # produced table's actual columns and digest.
+        from .runners.landmark_categorical_association_executor import (
+            LANDMARK_CATEGORICAL_COHORT_ANALYSIS_KIND,
+        )
+
+        if (runtime_authority.get("current_case_scientific_runtime_authority") is not None
+                and resolve_standard_executor(producers[0], plan=plan, **runtime_authority).claimed_by
+                == LANDMARK_CATEGORICAL_COHORT_ANALYSIS_KIND):
+            return True
         # The signed trajectory representation owns its own aggregate flow.
         # Validate the whole signed plan before accepting that future source;
         # Execute still verifies the produced table's actual columns and digest.

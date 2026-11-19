@@ -2114,9 +2114,7 @@ def test_progressive_outline_schema_is_tiny_closed_and_has_no_step_details() -> 
 
     # Population choice and amendment rationale now belong to the whole-plan
     # stage; the outline still excludes executable details and stays bounded.
-    # 7ef8b8027 (B1): an array schema must define its items, or the model
-    # service rejects the outline; those 26 bytes raised the bound (S1452).
-    assert len(encoded.encode("utf-8")) < 4_525
+    assert len(encoded.encode("utf-8")) < 4_525  # 7ef8b8027 (B1): array items are required (S1452)
     assert request.name == "easyicu_progressive_plan_outline_v1"
     assert schema["properties"]["analysis_type"]["enum"] == ["association_study"]
     step = schema["$defs"]["ProgressiveOutlineStep"]["properties"]
