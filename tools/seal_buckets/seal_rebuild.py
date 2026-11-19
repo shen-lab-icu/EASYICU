@@ -219,7 +219,7 @@ SEALED_TOOLS = (
     VALIDATOR_REL,
 )
 HELPER_TOOLS = ("tools/seal_buckets/footer_scan.py", VALIDATOR_REL)
-VALIDATOR_SHA256 = "6656b78a87cd5729986a31f28fcfc708df2967279973904af2b51861e5ae8549"
+VALIDATOR_SHA256 = "341daa4a19540d7798c42935e07eeca596e677a3c0739e6e4ffd22c48c4ead51"
 # Launches the seal clone's builder like `python <builder>` (sys.path[0] = scripts/), under `python -I -S`:
 # no PYTHONPATH, no current directory and no site hook (sitecustomize, usercustomize, .pth) can add code.
 # The boot's first statements (only the builtin sys module is touched) reset sys.path to the standard

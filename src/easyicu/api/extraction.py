@@ -7687,6 +7687,22 @@ def _enforce_native_export_time_axis(
         "normalized_stay_level_rows": 0,
         "fallback_upper_hours": ICU_TIME_FALLBACK_LIMIT_HOURS,
     }
+    identity = next((column for column in _NATIVE_EXPORT_ID_COLUMNS if column in frame), None)
+    if len(frame.index) == 0 and (
+        module not in {"demographics", "outcome"}
+        and module not in THESIS_SUPPORT_MODULES
+        and module not in STAY_LEVEL_SUPPORT_MODULES
+    ):
+        # The producer may return no coordinates when every concept has
+        # zero observations. Keep its value columns and type the axes.
+        schema = _native_export_empty_schema_frame(
+            module=module, requested_concepts=[], dictionary={},
+        )
+        identity = identity or "stay_id"
+        frame = frame.assign(**{identity: schema["stay_id"], "charttime": schema["charttime"]})
+    elif len(frame.index) and identity is None:
+        raise ValueError("native export frame has no ICU-stay identity column")
+
     if "charttime" not in frame.columns:
         audit["policy"] = "not_applicable_stay_level_module"
         return frame, audit
@@ -7726,8 +7742,11 @@ def _enforce_native_export_time_axis(
         frame["charttime"] = 0.0
         return frame, audit
 
+    if not len(frame.index):
+        audit["rows_with_los_bound"] = 0
+        return frame, audit
+
     charttime = pd.to_numeric(frame["charttime"], errors="coerce")
-    identity = next(column for column in _NATIVE_EXPORT_ID_COLUMNS if column in frame)
     upper = frame[identity].map(stay_time_upper_bounds).astype("float64")
     upper = upper.fillna(ICU_TIME_FALLBACK_LIMIT_HOURS)
     invalid = charttime.notna() & (

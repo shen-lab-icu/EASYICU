@@ -451,6 +451,36 @@ def test_web_dictionary_output_uses_the_same_time_guard(tmp_path, source, monkey
     assert len(pd.read_parquet(root / "vitals__measurements.parquet")) == 6
 
 
+@pytest.mark.parametrize("has_charttime", [True, False], ids=["partial", "no-time"])
+def test_time_guard_normalises_zero_row_longitudinal_output(has_charttime):
+    from easyicu.api import extraction
+
+    frame = pd.DataFrame({"hr": pd.Series(dtype="float64")})
+    if has_charttime:
+        frame["charttime"] = pd.Series(dtype="object")
+
+    prepared, audit = extraction._enforce_native_export_time_axis(
+        frame, module="vitals", stay_time_upper_bounds={1: 48.0},
+    )
+
+    assert len(prepared) == 0
+    assert prepared.dtypes.astype(str).to_dict() == {
+        "stay_id": "int64", "charttime": "float64", "hr": "float64",
+    }
+    assert audit["rows_with_los_bound"] == audit["excluded_rows"] == 0
+
+
+@pytest.mark.parametrize("columns", [{"charttime": [0.0]}, {}], ids=["timed", "no-columns"])
+def test_time_guard_refuses_nonempty_output_without_a_stay_key(columns):
+    from easyicu.api import extraction
+
+    with pytest.raises(ValueError, match="no ICU-stay identity column"):
+        extraction._enforce_native_export_time_axis(
+            pd.DataFrame(columns, index=[0]),
+            module="vitals", stay_time_upper_bounds={1: 48.0},
+        )
+
+
 @pytest.mark.parametrize("identity", ["stay_id", "patientunitstayid", "admissionid"])
 def test_time_guard_is_independent_of_patient_batch_and_source_identity(identity):
     from easyicu.api import extraction

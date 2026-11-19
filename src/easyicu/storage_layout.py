@@ -1129,8 +1129,9 @@ def table_decision(
 ) -> TablePresence:
     """Own the complete Parquet decision and loader for reader, cohort and resolver.
 
-    Every runtime caller uses recursive nested search. Only ABSENT permits
-    the returned CSV loader. BROKEN carries the typed refusal and its reason;
+    Every runtime caller uses recursive nested search. ABSENT permits a CSV
+    loader, including the legacy MIMIC-III services exception below.
+    BROKEN carries the typed refusal and its reason;
     callers rethrow it with :func:`refuse_broken_presence`. A corrupt bucket
     may use a complete validated flat source, as before; two healthy independent
     sources refuse. No source-choice cache is maintained here.
@@ -1164,8 +1165,7 @@ def table_decision(
                 raise StorageSourceChanged("storage_source_missing", table, str(path / MANIFEST))
             if os.path.realpath(path) != chosen["realpath"]:
                 raise StorageSourceChanged("storage_source_changed", table, str(path))
-        if not listings_only:
-            _conversion_index(Path(source.base_path))
+        conversion_index = None if listings_only else _conversion_index(Path(source.base_path))
         found = match_table_entries(source, table)
         candidates = (*found.flat, *found.bucket, *found.broken)
         if found.broken:
@@ -1227,6 +1227,21 @@ def table_decision(
                 raise TableScanError("table_scan_incomplete", table, "directory loader omits nested Parquet files")
         for file in files:
             admit_consumed_realpath(source.base_path, table, file)
+        # Legacy MIMIC-III services can use the raw CSV beside a single
+        # unmanifested Parquet file. Converted and bound sources still pass
+        # through inventory and footer validation.
+        if (
+            conversion_index is None and chosen is None and bucket is None
+            and not flat_variant and flat is not None and files == (flat,)
+            and source.config.name == "mimic" and table.casefold() == "services"
+        ):
+            csv = _csv_loader(source, table)
+            if csv is not None:
+                from .storage_seal_publication import assert_source_published
+
+                assert_source_published(source, table, formal=False)
+                return TablePresence(PRESENCE_ABSENT, loader=csv,
+                                     reason="legacy_mimic_services_csv", candidates=candidates)
         files = verify_flat_scan(source, table, files)
         if not files:
             if chosen is not None:
