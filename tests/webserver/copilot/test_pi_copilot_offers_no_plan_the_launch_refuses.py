@@ -293,7 +293,7 @@ def test_a_first_plan_is_checked_on_the_first_stay_scope_its_question_states(tmp
     # The launch drafts a first plan on the first-stay scope the question
     # states, then refuses an all-stays export. The workflow read the study
     # without that scope, offered the plan, and every click was refused.
-    from easyicu.webserver.pi_copilot.population_preparation import study_for_first_plan
+    from easyicu.webserver.pi_copilot.population_preparation import study_for_first_plan, study_for_next_plan
 
     export_path = tmp_path / "export"
     study = _planning_study(export_path)
@@ -310,6 +310,6 @@ def test_a_first_plan_is_checked_on_the_first_stay_scope_its_question_states(tmp
     # A question without a stated first stay is drafted unchanged.
     plain = _planning_study(export_path)
     assert study_for_first_plan(plain) is plain
-
-    workflow_source = Path(workflow_owner.__file__).read_text(encoding="utf-8")
-    assert "study if latest_run else study_for_first_plan(study)" in workflow_source
+    # The workflow drafts on that scope before a first run only.
+    assert study_for_next_plan(study, after_run=False) == drafted
+    assert study_for_next_plan(study, after_run=True) is study

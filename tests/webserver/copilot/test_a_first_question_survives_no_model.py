@@ -23,12 +23,13 @@ def _function_body(source: str, name: str) -> str:
 
 def test_no_session_keeps_the_question_pending_instead_of_dropping_it():
     body = _function_body((JS / "screens-guided-pi.js").read_text(encoding="utf-8"), "askFirstQuestion")
-    no_session = body.index("if (!state.session)")
-    keep = body.index("sessionStorage.setItem('easyicu.skillHub.question', queued.text)")
-    draft = body.index("state.draft = queued.text")
-    assert no_session < keep < draft
-    # The project check still guards both branches.
-    assert body.index("projectId() !== expectedId") < no_session
+    assert "await startEntry({ pendingQuestion: queued.text });" in body
+    assert body.index("pendingQuestion") < body.index("state.draft = queued.text")
+    # The navigation owner keeps it only when no conversation started here.
+    nav = (JS / "screens-guided-pi-session-navigation.js").read_text(encoding="utf-8")
+    entry = nav[nav.index("async function startEntry(options = {})"):]
+    keep = entry.index("sessionStorage.setItem('easyicu.skillHub.question', options.pendingQuestion)")
+    assert entry.index("options.pendingQuestion && !state.session && expectedProjectId === projectId()") < keep
 
 
 def test_the_pending_question_is_shown_and_filled_into_the_next_conversation():

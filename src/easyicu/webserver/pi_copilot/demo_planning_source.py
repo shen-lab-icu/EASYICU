@@ -13,9 +13,19 @@ from easyicu.webserver import dataio, demo_source_storage, study_contexts
 from easyicu.webserver.research_launch_scientific import bound_export_cohort_refusal
 
 from .contracts import PiCopilotError, PiSessionRecord
-from .population_preparation import study_for_first_plan
+from .population_preparation import study_for_next_plan
+from .run_authority import latest_bound_run_id, research_pipeline_project_root
 
 ACTION = "use_official_demo_raw_for_plan"
+
+
+def _planning_study(study: Mapping[str, Any]) -> Mapping[str, Any]:
+    """The study the workflow's next plan reads, by its own run predicate."""
+    study_id = str(study.get("id") or "").strip() or None
+    after_run = latest_bound_run_id(
+        study_context_id=study_id, project_root=research_pipeline_project_root(study_id),
+    ) is not None
+    return study_for_next_plan(study, after_run=after_run)
 
 
 @dataclass(frozen=True)
@@ -45,7 +55,7 @@ def resolve_demo_planning_source(study: Mapping[str, Any]) -> DemoPlanningSource
     if candidate.database != database:
         return None
     try:
-        refusal = bound_export_cohort_refusal(study_for_first_plan(study), str(export_path))
+        refusal = bound_export_cohort_refusal(_planning_study(study), str(export_path))
         if refusal is None or refusal.code != "research_pipeline_export_cohort_mismatch":
             return None
         marker = demo_source_storage.read_marker(paths.prepared_marker, candidate)
@@ -118,10 +128,10 @@ def bind_demo_planning_source(
     from .demo_planning_authority import publish_choice
 
     new_source = {"path": resolved.raw_path, "database": resolved.database, "label": resolved.label}
-    # The choice is signed on the study a first plan is drafted on; the launch
-    # would otherwise add the question's stated first-stay scope afterwards
-    # and find this receipt stale.
-    drafted = study_for_first_plan({**study, "data_source": new_source})
+    # The choice is signed on the study the next plan is drafted on; before a
+    # first run the launch would otherwise add the question's stated
+    # first-stay scope afterwards and find this receipt stale.
+    drafted = _planning_study({**study, "data_source": new_source})
     drafted_scope = {"cohort": drafted["cohort"]} if drafted.get("cohort") != study.get("cohort") else {}
     try:
         authority_ref = publish_choice(study=study, new_source=new_source, confirmations=confirmations,
