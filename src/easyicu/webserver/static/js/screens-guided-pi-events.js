@@ -639,6 +639,14 @@
           prepareEntryCompose(starterAction);
           return;
         }
+        const prefill = event.target.closest('[data-gpi-composer-prefill]');
+        if (prefill) {
+          // A′: a request the researcher reviews and sends; nothing is sent here.
+          const input = state.host.querySelector('[data-gpi-input]');
+          state.draft = String(prefill.dataset.gpiComposerPrefill || '');
+          if (input) { input.value = state.draft; input.focus(); }
+          return;
+        }
         const ideaFreeze = event.target.closest('[data-gpi-idea-freeze]');
         if (ideaFreeze) {
           // m23: the same freeze a researcher would type, sent from the composer.

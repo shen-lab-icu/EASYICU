@@ -825,6 +825,50 @@ def endpoint_decision_options(study: Mapping[str, Any]) -> list[Dict[str, str]]:
     return options
 
 
+_GROUPED_EXPOSURE_CODINGS = frozenset({"binary", "categorical", "ordinal"})
+
+
+def _primary_exposure_kind(plan: Mapping[str, Any]) -> str:
+    """``"grouped"`` when the primary exposure has closed levels, else ``"continuous"``.
+
+    A descriptive result counts the outcome by exposure group, so only a
+    grouped exposure has one (exposure_outcome_distribution's closed levels).
+    """
+
+    requirement = _primary_requirement(plan)
+    levels = requirement.get("exposure_levels")
+    if isinstance(levels, Sequence) and not isinstance(levels, (str, bytes)) and len(levels) >= 2:
+        return "grouped"
+    terms = requirement.get("model_terms")
+    for term in terms if isinstance(terms, Sequence) and not isinstance(terms, (str, bytes)) else ():
+        if isinstance(term, Mapping) and term.get("role") == "exposure":
+            if str(term.get("coding") or "").strip() in _GROUPED_EXPOSURE_CODINGS:
+                return "grouped"
+            break
+    return "continuous"
+
+
+def timing_options_available(outcome: str, exposure_kind: str) -> tuple[str, ...]:
+    """The timing choices that can run for this outcome and exposure (S1437/S1441).
+
+    The landmark and the time-varying model both follow the one host
+    follow-up axis (in-hospital death); without it neither runs, and a
+    descriptive result needs exposure groups.
+    """
+
+    if landmark_followup_axis_available(outcome):
+        return ("landmark_24h", "descriptive_only", "time_varying_reextract")
+    return ("descriptive_only",) if exposure_kind == "grouped" else ()
+
+
+def _timing_alternatives(outcome: str, exposure_kind: str) -> list[str]:
+    """What does run when the timing choices cannot: the card's prefilled requests."""
+
+    if landmark_followup_axis_available(outcome):
+        return []
+    return ["use_in_hospital_death", *(["group_exposure"] if exposure_kind == "continuous" else [])]
+
+
 def plan_decision_context(
     plan: Mapping[str, Any],
     decision_code: str,
@@ -852,8 +896,17 @@ def plan_decision_context(
     )
     exposure_en, exposure_zh = _reader_labels(exposure, aggregation)
     outcome_en, outcome_zh = _reader_labels(coordinates["outcome"])
+    from easyicu.concept.catalog import CONCEPT_DICTIONARY
+
+    entry = CONCEPT_DICTIONARY.get(exposure) or ()
+    unit = str(entry[2] or "").strip() if len(entry) > 2 and entry[2] != "boolean" else ""
+    exposure_kind = _primary_exposure_kind(plan)
     return {
         **coordinates,
+        "exposure_kind": exposure_kind,
+        "exposure_unit": unit,
+        "available_options": list(timing_options_available(coordinates["outcome"], exposure_kind)),
+        "alternatives": _timing_alternatives(coordinates["outcome"], exposure_kind),
         "exposure_label_en": exposure_en,
         "exposure_label_zh": exposure_zh,
         "outcome_label_en": outcome_en,
@@ -2016,6 +2069,15 @@ def compile_plan_decision(
         )
     coordinates = _timing_coordinates(agent_plan)
     outcome = coordinates["outcome"]
+    if option in {"descriptive_only", "time_varying_reextract"} and option not in timing_options_available(
+        outcome, _primary_exposure_kind(agent_plan)
+    ):
+        # The card leaves these out; a conversation route cannot pick them either.
+        raise PlanDecisionError(
+            "plan_decision_option_not_applicable",
+            "This timing choice cannot run for this outcome and exposure.",
+            details={"decision_code": code, "option_id": option, "outcome": outcome},
+        )
     fixed_24h_landmark = _fixed_24h_landmark_candidate(agent_plan, study)
     # The exposure keeps the plan's own window operation (or none, for a host
     # derivation that already publishes one reading per stay), resolved by

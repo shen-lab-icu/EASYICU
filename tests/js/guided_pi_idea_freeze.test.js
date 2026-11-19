@@ -62,12 +62,12 @@ test('a closed exploration keeps the data-source step unchanged', () => {
   }
 });
 
-function eventsHarness(question) {
+function eventsHarness(question, selector = '[data-gpi-idea-freeze]', dataset = null) {
   const listeners = {};
   const calls = [];
   const input = { value: '', focus() { calls.push(['focus', 'input']); }, matches: () => false };
   const choice = { focus() { calls.push(['focus', 'choice']); } };
-  const button = { dataset: question ? { gpiIdeaFreezeQuestion: question } : {} };
+  const button = { dataset: dataset || (question ? { gpiIdeaFreezeQuestion: question } : {}) };
   const host = {
     addEventListener: (name, fn) => { (listeners[name] ||= []).push(fn); },
     querySelector: selector => selector === '[data-gpi-input]' ? input : null,
@@ -96,10 +96,10 @@ function eventsHarness(question) {
   });
   events.wire();
   const click = () => {
-    const target = { closest: selector => selector === '[data-gpi-idea-freeze]' ? button : null, matches: () => false };
+    const target = { closest: wanted => wanted === selector ? button : null, matches: () => false };
     for (const fn of listeners.click || []) fn({ target, preventDefault() {}, stopPropagation() {} });
   };
-  return { click, calls };
+  return { click, calls, state, input };
 }
 
 test('the freeze is the typed composer message, never a host turn without actions', () => {
@@ -113,4 +113,13 @@ test('with no direction the click focuses the direction choice and sends nothing
   const { click, calls } = eventsHarness('');
   click();
   assert.deepEqual(calls, [['focus', 'choice']]);
+});
+
+test('a timing request button fills and focuses the message box but sends nothing (A′)', () => {
+  const draft = '把结局改为院内死亡，乳酸（最大值）保持不变，然后重新生成研究计划。';
+  const { click, calls, state, input } = eventsHarness('', '[data-gpi-composer-prefill]', { gpiComposerPrefill: draft });
+  click();
+  assert.equal(state.draft, draft);
+  assert.equal(input.value, draft);
+  assert.deepEqual(calls, [['focus', 'input']]);
 });

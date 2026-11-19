@@ -330,7 +330,66 @@
       </article>`;
     }
 
+    /* A′ (S1437/S1441): the host's landmark-unavailable timing card offers
+       only choices that run (context.available_options). When none runs, it
+       says why and offers what does, as requests put in the message box for
+       the researcher to send; nothing is sent from here. */
+    function timingAlternatives(context, exposureLabel) {
+      const ids = Array.isArray(context.alternatives) ? context.alternatives : [];
+      const unit = String(context.exposure_unit || '').trim();
+      // The cut-off example is lactate's own clinical threshold; other
+      // exposures name no cut-off the plan did not state.
+      const lactate = String(context.exposure || '') === 'lact' && unit === 'mmol/L';
+      return ids.map(id => (id === 'use_in_hospital_death' ? {
+        id,
+        label: tr('Use in-hospital death instead (24-hour landmark)', '改用院内死亡结局（自动采用 24 小时 landmark）'),
+        draft: tr(
+          `Change the outcome to in-hospital death, keep ${exposureLabel} as it is, and generate the research plan again.`,
+          `把结局改为院内死亡，${exposureLabel}保持不变，然后重新生成研究计划。`,
+        ),
+      } : id === 'group_exposure' ? {
+        id,
+        label: lactate
+          ? tr(`Group ${exposureLabel} (e.g. ≤2 / >2 ${unit})`, `把${exposureLabel}分组（如 ≤2 / >2 ${unit}）`)
+          : tr(`Group ${exposureLabel}`, `把${exposureLabel}分组`),
+        draft: lactate
+          ? tr(
+            `Group ${exposureLabel} as ≤2 / >2 ${unit} and generate the research plan again.`,
+            `把${exposureLabel}分为 ≤2 / >2 ${unit} 两组，然后重新生成研究计划。`,
+          )
+          : tr(`Group ${exposureLabel}${unit ? ` (${unit})` : ''} as: `, `把${exposureLabel}${unit ? `（${unit}）` : ''}分组为：`),
+      } : null)).filter(Boolean);
+    }
+
+    function runnableTimingCard(context, exposureLabel, copy) {
+      const available = Array.isArray(context.available_options) ? context.available_options : null;
+      if (!available) return copy;  // a decision projected before the host named its runnable options
+      const options = copy.options.filter(option => available.includes(option.optionId));
+      const alternatives = timingAlternatives(context, exposureLabel);
+      if (options.length) return { ...copy, options, alternatives };
+      const outcomeLabel = String(window.EU_LANG === 'zh'
+        ? context.outcome_label_zh || tr('this outcome', '该结局')
+        : context.outcome_label_en || tr('this outcome', '该结局'));
+      return {
+        ...copy, options: [], alternatives, allowEdit: false,
+        context: tr(
+          `No time-aligned analysis of ${exposureLabel} can run for ${outcomeLabel} in this version: this outcome has no follow-up time to start from hour 24, and a descriptive result needs ${exposureLabel} groups.`,
+          `当前版本无法对${outcomeLabel}运行时间对齐的${exposureLabel}分析：该结局没有可从第 24 小时起算的随访时间，而描述性结果需要${exposureLabel}分组。`,
+        ),
+        guidance: tr(
+          'Choose a version that can run. EasyICU puts the request in the message box; review it and send it.',
+          '请选择一个可以运行的版本。EasyICU 会把请求放入输入框，请核对后发送。',
+        ),
+      };
+    }
+
+    function timingAlternativesHtml(copy) {
+      const rows = copy && Array.isArray(copy.alternatives) ? copy.alternatives : [];
+      return rows.map(row => `<button class="btn sm" type="button" data-gpi-composer-prefill="${esc(row.draft)}" data-gpi-timing-alternative="${esc(row.id)}">${esc(row.label)}</button>`).join('');
+    }
+
     return Object.freeze({
+      runnableTimingCard, timingAlternativesHtml,
       preparedDataStatus, validDeferredInputScope, deferredInputScopeHtml,
       reviewedPopulationSpecHtml, populationPreparationHtml, populationAcceptanceHtml,
       localizedAuthorizationQuestion, localizedDecisionEvidence, survivalLandmarkDecisionCopy,

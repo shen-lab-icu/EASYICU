@@ -23,18 +23,24 @@ from easyicu.webserver.pi_copilot.plan_decisions import (
 _TIMING = "POST_BASELINE_EXPOSURE_TIMING_NOT_CLOSED"
 
 
-def _plan(outcome: str) -> dict:
+def _plan(outcome: str, coding: str = "continuous", exposure: str = "lact_max") -> dict:
+    """A reviewed plan; ``coding`` is its primary exposure term's (S1441: grouped vs continuous)."""
+
+    requirement = {
+        "analysis_role": "primary", "exposure_source": exposure, "outcome": outcome,
+        "covariates": ["age", "sex"],
+        "covariate_rationales": {"age": "Baseline age precedes the window.", "sex": "Baseline sex precedes the window."},
+        "covariate_temporal_roles": {"age": "baseline_static", "sex": "baseline_static"},
+        "model_terms": [{"name": exposure, "role": "exposure", "coding": coding}],
+    }
+    if coding != "continuous":
+        requirement["exposure_levels"] = ["1", "2"]
     return {
         "design_selection": {"candidates": [{
             "design_id": "landmark_adjusted_association", "disposition": "selected",
-            "required_variables": ["lact_max", outcome, "age", "sex"],
+            "required_variables": [exposure, outcome, "age", "sex"],
         }]},
-        "steps": [{"model_requirements": [{
-            "analysis_role": "primary", "exposure_source": "lact_max", "outcome": outcome,
-            "covariates": ["age", "sex"],
-            "covariate_rationales": {"age": "Baseline age precedes the window.", "sex": "Baseline sex precedes the window."},
-            "covariate_temporal_roles": {"age": "baseline_static", "sex": "baseline_static"},
-        }]}],
+        "steps": [{"model_requirements": [requirement]}],
     }
 
 
@@ -83,11 +89,37 @@ def test_a_forced_landmark_choice_on_28_day_mortality_is_refused() -> None:
     assert raised.value.details["outcome"] == "mort_28d"
 
 
-@pytest.mark.parametrize("option", ["descriptive_only", "time_varying_reextract"])
-def test_the_offered_choices_on_28_day_mortality_compile(option: str) -> None:
-    compiled = compile_plan_decision(decision_code=_TIMING, option_id=option,
-                                     study=_study(), agent_plan=_plan("mort_28d"))
+def test_a_grouped_exposure_on_28_day_mortality_can_stay_descriptive() -> None:
+    compiled = compile_plan_decision(decision_code=_TIMING, option_id="descriptive_only",
+                                     study=_study(), agent_plan=_plan("mort_28d", "binary"))
     assert not any(spec.get("strategy") == "landmark" for spec in compiled.patch.get("sensitivity_specs") or [])
+    assert compiled.patch["analysis_design"]["analysis_family"] == "descriptive_epidemiology"
+
+
+@pytest.mark.parametrize(("option", "coding"), [
+    # A descriptive result counts the outcome by exposure group (S1437).
+    ("descriptive_only", "continuous"),
+    # The time-varying model follows only the in-hospital death axis (S1437).
+    ("time_varying_reextract", "continuous"), ("time_varying_reextract", "binary"),
+])
+def test_a_timing_choice_that_cannot_run_is_refused_on_28_day_mortality(option: str, coding: str) -> None:
+    with pytest.raises(PlanDecisionError) as raised:
+        compile_plan_decision(decision_code=_TIMING, option_id=option,
+                              study=_study(), agent_plan=_plan("mort_28d", coding))
+    assert raised.value.code == "plan_decision_option_not_applicable"
+
+
+@pytest.mark.parametrize(("outcome", "coding", "options", "alternatives"), [
+    ("mort_28d", "continuous", [], ["use_in_hospital_death", "group_exposure"]),
+    ("mort_28d", "binary", ["descriptive_only"], ["use_in_hospital_death"]),
+    ("death", "continuous", ["landmark_24h", "descriptive_only", "time_varying_reextract"], []),
+])
+def test_the_timing_context_names_only_choices_that_run(outcome, coding, options, alternatives) -> None:
+    context = plan_decision_context(_plan(outcome, coding), _TIMING, _study())
+    assert context["available_options"] == options
+    assert context["alternatives"] == alternatives
+    assert context["exposure_kind"] == ("continuous" if coding == "continuous" else "grouped")
+    assert context["exposure_unit"] == "mmol/L"
 
 
 def _outcome_catalogue() -> list[str]:
@@ -112,7 +144,7 @@ def test_no_outcome_compiles_a_landmark_data_readiness_would_refuse(outcome: str
     assert spec.source_materialization_variables == ()
 
 
-def _service_and_projection(monkeypatch, outcome: str):
+def _service_and_projection(monkeypatch, outcome: str, coding: str = "binary"):
     """The card and its route, end to end, for a reviewed plan on ``outcome`` (B2 re-walk)."""
     from easyicu.webserver.pi_copilot import service as service_module, workflow as workflow_owner
     from easyicu.webserver.pi_copilot.contracts import AuthorityBinding, PiSessionRecord
@@ -123,7 +155,7 @@ def _service_and_projection(monkeypatch, outcome: str):
     run = {"run_id": "b2-run", "scientific_configuration_sha256": study_contexts.scientific_configuration_sha256(current)}
     findings = [{"code": _TIMING, "severity": "blocker", "requires_user_authorization": False,
                  "message": "Exposure is classified after ICU time zero."}]
-    review = {"artifact_payloads": {"agent_plan.json": _plan(outcome),
+    review = {"artifact_payloads": {"agent_plan.json": _plan(outcome, coding),
                                     "scientific_plan_review.json": {"findings": findings}}}
     service = service_module.PiCopilotService.__new__(service_module.PiCopilotService)
     record = PiSessionRecord(session_id="b2", project_id="project", binding=AuthorityBinding(
@@ -232,7 +264,7 @@ def test_a_review_artifact_cannot_mark_its_own_timing_question(monkeypatch, outc
                      "OUTCOME_DEFINITION_UNRESOLVED": None}
 
 
-def _card_for(question: dict) -> dict:
+def _card_for(question: dict, language: str = "zh") -> dict:
     import json
     import shutil
     from pathlib import Path
@@ -246,12 +278,13 @@ def _card_for(question: dict) -> dict:
 
     owner = Path(webserver.__file__).parent / "static" / "js" / "screens-guided-pi-confirmation.js"
     script = r"""
-global.window = { EU_LANG: 'zh' };
+const language = process.argv[3];
+global.window = { EU_LANG: language };
 require(require('node:path').join(require('node:path').dirname(process.argv[1]), 'screens-guided-pi-confirmation-data.js'));
 require(process.argv[1]);
 const question = JSON.parse(process.argv[2]);
 const owner = window.EU_GUIDED_PI_CONFIRMATION.create({
-  tr: (en, zh) => zh || en, esc: value => String(value), iconHtml: () => '', resourceButton: () => '',
+  tr: (en, zh) => language === 'zh' ? zh || en : en, esc: value => String(value), iconHtml: () => '', resourceButton: () => '',
   sessionIsStale: () => false, busy: () => false, session: () => ({ binding: { run_id: 'run-1' } }),
   workflow: () => ({ next_action_code: 'plan_scientific_changes_required',
     plan_review_summary: { authorization_questions: [question] } }),
@@ -260,6 +293,9 @@ const html = owner.workflowConfirmationHtml();
 process.stdout.write(JSON.stringify({
   options: (html.match(/data-gpi-plan-decision-option="([^"]+)"/g) || []).map(m => m.split('"')[1]),
   paused: html.includes('候选计划修订已暂停'),
+  alternatives: (html.match(/data-gpi-timing-alternative="([^"]+)"/g) || []).map(m => m.split('"')[1]),
+  drafts: (html.match(/data-gpi-composer-prefill="([^"]+)"/g) || []).map(m => m.split('"')[1]),
+  html,
 }));
 """
     import os
@@ -267,7 +303,7 @@ process.stdout.write(JSON.stringify({
     from tests.webserver.copilot.pi_copilot_static_fixtures import NODE_MODULE_HARNESS
 
     env = {**os.environ, "NODE_OPTIONS": f"--require={NODE_MODULE_HARNESS}"}
-    result = run_node(node, script, str(owner.resolve()), json.dumps(question), check=False, env=env)
+    result = run_node(node, script, str(owner.resolve()), json.dumps(question), language, check=False, env=env)
     assert result.returncode == 0, result.stderr or result.stdout
     return json.loads(result.stdout)
 
@@ -276,9 +312,11 @@ def test_the_hosts_timing_question_reaches_the_card_with_its_descriptive_default
     """Leg-1 re-walk (4b08e403d): the card's system-owned filter hid the host's question."""
     from easyicu.webserver.pi_copilot.plan_decisions import landmark_unavailable_timing_question
 
-    question = landmark_unavailable_timing_question(_study(), _plan("mort_28d"), [_TIMING])
+    question = landmark_unavailable_timing_question(_study(), _plan("mort_28d", "binary"), [_TIMING])
     card = _card_for(question)
-    assert card["options"] == ["descriptive_only", "time_varying_reextract"]
+    # S1441: a grouped exposure keeps the descriptive choice; time-varying cannot run here.
+    assert card["options"] == ["descriptive_only"]
+    assert card["alternatives"] == ["use_in_hospital_death"]
     assert card["paused"] is False
     unmarked = _card_for({key: value for key, value in question.items() if key != "researcher_choice"})
     assert unmarked["options"] == []  # an unmarked timing finding stays a system repair
@@ -334,3 +372,39 @@ def test_the_handed_timing_choice_is_refused_outside_this_studys_current_review(
         "stale_revision": {"plan_decision_revision_conflict", "plan_decision_source_superseded"},
         "already_resolved": {"plan_decision_not_required_by_review"},
     }[case]
+
+
+def test_a_continuous_exposure_card_offers_only_what_runs() -> None:
+    """S1441: continuous lactate on 28-day mortality: no futile choice, the reason, and two requests."""
+    from easyicu.webserver.pi_copilot.plan_decisions import landmark_unavailable_timing_question
+
+    card = _card_for(landmark_unavailable_timing_question(_study(), _plan("mort_28d"), [_TIMING]))
+    assert card["options"] == []
+    assert card["alternatives"] == ["use_in_hospital_death", "group_exposure"]
+    assert "没有可从第 24 小时起算的随访时间" in card["html"] and "描述性结果需要" in card["html"]
+    assert "把乳酸（最大值）分组（如 ≤2 / >2 mmol/L）" in card["html"] or "分组（如 ≤2 / >2 mmol/L）" in card["html"]
+    assert card["drafts"][0].startswith("把结局改为院内死亡")
+    assert "≤2 / >2 mmol/L" in card["drafts"][1]
+    assert "data-gpi-confirm-edit" not in card["html"]  # no "choose another approach" into nothing
+    assert card["paused"] is False
+
+
+def test_another_continuous_exposure_names_no_cut_off() -> None:
+    from easyicu.webserver.pi_copilot.plan_decisions import landmark_unavailable_timing_question
+
+    question = landmark_unavailable_timing_question(_study(), _plan("mort_28d", exposure="crea_max"), [_TIMING])
+    card = _card_for(question)
+    assert card["alternatives"] == ["use_in_hospital_death", "group_exposure"]
+    assert "≤" not in card["html"] and "mmol/L" not in card["html"]
+    assert card["drafts"][1].endswith("分组为：")  # the researcher states the groups
+
+
+def test_the_continuous_card_and_its_requests_are_in_english_in_the_english_ui() -> None:
+    from easyicu.webserver.pi_copilot.plan_decisions import landmark_unavailable_timing_question
+
+    card = _card_for(landmark_unavailable_timing_question(_study(), _plan("mort_28d"), [_TIMING]), "en")
+    assert card["options"] == []
+    assert "no follow-up time to start from hour 24" in card["html"]
+    assert card["drafts"][0].startswith("Change the outcome to in-hospital death")
+    assert card["drafts"][1].startswith("Group ") and "≤2 / >2 mmol/L" in card["drafts"][1]
+    assert not any("\u4e00" <= ch <= "\u9fff" for ch in "".join(card["drafts"]))

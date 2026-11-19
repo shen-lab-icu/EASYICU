@@ -102,6 +102,7 @@
       reviewedPopulationSpecHtml, populationPreparationHtml, populationAcceptanceHtml,
       localizedAuthorizationQuestion, localizedDecisionEvidence, survivalLandmarkDecisionCopy,
       staleConfirmationHtml, latestAttemptFailureHtml, planConversationHtml,
+      runnableTimingCard, timingAlternativesHtml,
     } = window.EasyICU.guidedPi.require('confirmationData').create(host);
     const cohortEligibilityDecisionHtml = typeof host.cohortEligibilityDecisionHtml === 'function'
       ? host.cohortEligibilityDecisionHtml : () => '';
@@ -1122,6 +1123,7 @@
       const decisionActions = firstDecisionCopy && Array.isArray(firstDecisionCopy.options)
         ? firstDecisionCopy.options.map(option => `<button class="gpi-decision-option" type="button" data-gpi-plan-decision-code="${esc(String(firstDecisionItem && firstDecisionItem.code || ''))}" data-gpi-plan-decision-option="${esc(option.optionId)}"${firstDecisionCopy.cardSha256 ? ` data-gpi-plan-decision-card="${esc(firstDecisionCopy.cardSha256)}"` : ''}><strong>${esc(option.label)}</strong><span>${esc(option.effect)}</span>${option.requirement ? `<small>${esc(option.requirement)}</small>` : ''}</button>`).join('')
         : '';
+      const timingAlternatives = timingAlternativesHtml(firstDecisionCopy);
       const { readiness, retryPlanRevision } = confirmation;
       const stopEdits = (confirmation.stopEdits || []).map(action => {
         const copy = stopActionCopy(action, tr);
@@ -1141,7 +1143,8 @@
         <div class="gpi-confirmation-body">${failureNotice}<strong>${esc(displayedTitle)}</strong>${confirmation.reason && !firstDecisionCopy ? `<p class="gpi-confirmation-reason">${esc(confirmation.reason)}</p>` : ''}${displayedNote ? `<small>${esc(displayedNote)}</small>` : ''}${desktopProfile}${reviewedPopulation}${deferredInputScope}${populationPreparation}${populationAcceptance}${sourceAdjustments}${deliverables}${flowSteps}${dataStatus}${pendingPreparation}${repeatedStaysDefault}${icdSourceNotice}${reviewStatus}${studyReadings}${trialBody}${groupNotes}${questionNotes}${reviewMaterials}${compactOtherAction}</div>
         <div class="gpi-confirmation-actions${decisionActions ? ' has-decision-options' : ''}">
           ${confirmation.dataStatus && !confirmation.compactApproval ? `<button class="btn sm" type="button" data-gpi-confirm-preview-data>${esc(tr('Preview analysis data', '先预览分析数据'))}</button>` : ''}
-          ${decisionActions || stopEdits || (confirmation.newProject ? `<button class="btn primary sm" type="button" data-project-new>${esc(confirmation.editLabel)}</button>` : showEdit ? `<button class="btn ${editPrimary ? 'primary ' : ''}sm" type="button" data-gpi-confirm-edit>${confirmation.editLabel ? esc(confirmation.editLabel) : icdSourceFinding && !decisionCount ? tr('Change cohort', '修改人群') : confirmation.code === 'plan_scientific_changes_required' ? tr('Answer this question', '回答这个问题') : confirmation.code === 'provider_ready_to_generate_plan' ? tr('Add research requirements', '我想先补充研究要求') : confirmation.code === 'failed_pipeline_execution_retry_available' ? tr('Generate a fresh research plan', '重新生成研究计划') : confirmation.compactApproval ? tr('Change plan', '修改计划') : tr('Request changes', '提出修改')}</button>` : '')}
+          ${decisionActions || timingAlternatives || stopEdits || (confirmation.newProject ? `<button class="btn primary sm" type="button" data-project-new>${esc(confirmation.editLabel)}</button>` : showEdit ? `<button class="btn ${editPrimary ? 'primary ' : ''}sm" type="button" data-gpi-confirm-edit>${confirmation.editLabel ? esc(confirmation.editLabel) : icdSourceFinding && !decisionCount ? tr('Change cohort', '修改人群') : confirmation.code === 'plan_scientific_changes_required' ? tr('Answer this question', '回答这个问题') : confirmation.code === 'provider_ready_to_generate_plan' ? tr('Add research requirements', '我想先补充研究要求') : confirmation.code === 'failed_pipeline_execution_retry_available' ? tr('Generate a fresh research plan', '重新生成研究计划') : confirmation.compactApproval ? tr('Change plan', '修改计划') : tr('Request changes', '提出修改')}</button>` : '')}
+          ${decisionActions ? timingAlternatives : ''}
           ${decisionActions && icdSourceFinding ? `<button class="btn sm" type="button" data-gpi-confirm-edit>${esc(tr('Change cohort', '修改人群'))}</button>` : ''}
           ${decisionActions && !icdSourceFinding && firstDecisionCopy && firstDecisionCopy.allowEdit ? `<button class="btn sm" type="button" data-gpi-confirm-edit>${esc(String(firstDecisionItem && firstDecisionItem.code || '') === 'ADJUSTMENT_SET_NOT_USER_CONFIRMED' ? tr('Request plan changes', '提出计划修改') : tr('Choose another approach', '选择其他方案'))}</button>` : ''}
           ${confirmation.exposureArrangement ? confirmation.exposureArrangement.alternatives.map(option => `<button class="btn sm" type="button" data-gpi-exposure-arrangement="${esc(option.id)}"${primaryDisabled}>${esc(option.label)}</button>`).join('') : ''}
@@ -1168,7 +1171,7 @@
               : context.exposure_label_en || context.primary_exposure_materialized || tr('the exposure', '当前暴露')
           );
           const selectedTimeZero = String(context.time_zero || '').trim();
-          return {
+          return runnableTimingCard(context, exposureLabel, {
             cardTitle: tr(
               `Choose how ${exposureLabel} should align with mortality follow-up`,
               `请选择 ${exposureLabel} 与死亡随访的时间对齐方式`,
@@ -1219,7 +1222,7 @@
                 ),
               },
             ],
-          };
+          });
         }
         const exposureLabel = String(
           window.EU_LANG === 'zh'
