@@ -281,21 +281,24 @@ test('persisted recovery replay marks only its assistant explanation after a rel
   assert.equal(rows[2].replyContinuation, undefined);
 });
 
-async function realSidecarRecovery({ unstarted = false } = {}) {
+async function realSidecarRecovery({ unstarted = false, reload = true, initialFailures = 0, recoveryFailures = 0 } = {}) {
   const temp = fs.mkdtempSync(path.join(os.tmpdir(), 'easyicu-reply-continuation-'));
   const artifact = path.join(temp, 'brief.html');
-  const originalCalls = unstarted ? 4 : 2;
-  const recoveryCalls = unstarted ? 2 : 1;
+  const originalCalls = initialFailures + (unstarted ? 1 : 2);
+  const recoveryCalls = recoveryFailures + (unstarted ? 2 : 1);
   const maxCalls = originalCalls + recoveryCalls;
   const events = []; const requests = []; let recovered = false; let writes = 0; let checks = 0;
   const server = http.createServer(async (req, res) => {
     let text = ''; for await (const part of req) text += part;
     const body = JSON.parse(text); requests.push(body);
-    const writeDecision = unstarted ? recovered && !body.messages.some(message => message.role === 'tool') : requests.length === 1;
-    if (!recovered && (unstarted || requests.length > 1)) {
-      // The pre-tool turn retries an empty 503. End the scripted outage with a
-      // non-retryable 5xx so the resumed turn still has its original allowance.
-      const status = unstarted && requests.length >= originalCalls ? 501 : 503;
+    const attempt = requests.length;
+    const writeDecision = unstarted
+      ? recovered && !body.messages.some(message => message.role === 'tool')
+      : !recovered && attempt === initialFailures + 1;
+    if ((!recovered && !writeDecision) || (recovered && attempt <= originalCalls + recoveryFailures)) {
+      // For an unstarted task, end the scripted outage while there is still
+      // allowance for explicit recovery. A post-tool 503 stops on its own.
+      const status = unstarted && !recovered && attempt >= originalCalls ? 501 : 503;
       res.writeHead(status, { 'content-type': 'application/json' });
       res.end(JSON.stringify({ error: { message: 'Synthetic upstream unavailable' } }));
       return;
@@ -359,31 +362,35 @@ async function realSidecarRecovery({ unstarted = false } = {}) {
     await rpc('session.create', { session_id: 'recovery-test', agent_mode: 'workspace', language: 'zh' });
     const failed = await rpc('session.prompt', { session_id: 'recovery-test', message: '保存并检查 brief.html，然后说明结果。' });
     assert.equal(writes, unstarted ? 0 : 1); assert.equal(checks, unstarted ? 0 : 1);
-    assert.equal(requests.length, originalCalls, unstarted
-      ? 'each empty pre-tool failure consumes a guarded attempt'
-      : 'the committed tool turn stops at its first provider failure');
+    assert.equal(requests.length, originalCalls, 'each permitted Provider attempt is counted, including the terminal failure');
+    const retryCount = () => events.filter(row => row.event.type === 'retry').length;
+    assert.equal(retryCount(), initialFailures, 'automatic retries stay before tools or other committed content');
     assert.equal(failed.reply_continuation.available, true, JSON.stringify(failed.reply_continuation));
     assert.equal(failed.reply_continuation.recovery_kind, unstarted ? 'retry_unstarted' : 'continue_explanation');
     assert.equal(failed.shell_usage.message_provider_calls, originalCalls);
     const savedHash = unstarted ? null : hash(artifact); const originalErrorId = failed.reply_continuation.source_error_entry_id;
     assert.ok(failed.transcript.some(row => row.error_code === 'pi_model_provider_unavailable'));
-    await stop(); start();
-    const restored = await rpc('session.create', { session_id: 'recovery-test', session_file: failed.session_file, agent_mode: 'workspace', language: 'zh' });
-    assert.equal(restored.reply_continuation.available, true, 'recovery remains available after sidecar reload');
+    if (reload) {
+      await stop(); start();
+      const restored = await rpc('session.create', { session_id: 'recovery-test', session_file: failed.session_file, agent_mode: 'workspace', language: 'zh' });
+      assert.equal(restored.reply_continuation.available, true, 'recovery remains available after sidecar reload');
+    }
     recovered = true;
     const rpcMethod = unstarted ? 'session.retry_failed_turn' : 'session.continue_reply';
     const continued = await rpc(rpcMethod, { session_id: 'recovery-test', source_error_entry_id: originalErrorId,
       ...(unstarted ? {} : { validation_context: { status: 'failed', summary: 'Synthetic current runtime acceptance failed' } }) });
     assert.equal(writes, 1); assert.equal(checks, 1);
     if (!unstarted) assert.equal(hash(artifact), savedHash);
-    assert.equal(requests.length, maxCalls);
+    assert.equal(requests.length, maxCalls, 'every permitted attempt uses the original message allowance across recovery');
+    assert.equal(retryCount(), initialFailures + recoveryFailures);
     if (unstarted) {
       const tools = (requests.at(-1).tools || []).map(tool => tool.function?.name);
       assert.ok(tools.includes('easyicu_write_project_file'));
       assert.ok(!tools.includes('easyicu_run') && !tools.includes('easyicu_call_mcp_tool'));
       assert.match(JSON.stringify(requests.at(-1).messages), /EASYICU_WORKSPACE_RETRY_V1/);
     } else {
-      assert.equal((requests.at(-1).tools || []).length, 0, 'continuation request has zero tool capability');
+      assert.ok(requests.slice(originalCalls).every(request => !request.tools?.length),
+        'all explanation attempts have zero tool capability');
       assert.match(JSON.stringify(requests.at(-1).messages), /"status\\":\\"failed/);
     }
     assert.equal(continued.shell_usage.message_provider_calls, maxCalls, 'original message budget accumulates rather than resetting');
@@ -395,15 +402,18 @@ async function realSidecarRecovery({ unstarted = false } = {}) {
     assert.ok(events.some(row => row.event.type === 'message_end' && row.event.error_code === 'pi_model_provider_unavailable'));
     assert.ok(events.some(row => row.event.type === 'text_delta' && row.event.delta.includes(unstarted ? '原任务的文件现已保存' : '当前运行时验收失败')));
     const jsonl = fs.readFileSync(failed.session_file, 'utf8').trim().split('\n').map(JSON.parse);
+    assert.deepEqual(jsonl.filter(row => row.customType === 'easyicu.shell-budget/1').map(row => row.data.provider_calls),
+      Array.from({ length: maxCalls }, (_, index) => index + 1), 'each provider attempt has its own persisted budget receipt');
     assert.ok(jsonl.some(row => row.customType === (unstarted ? 'easyicu.workspace-retry/1' : 'easyicu.reply-continuation/1') && row.data.state === 'completed'));
     await assert.rejects(rpc(rpcMethod, { session_id: 'recovery-test', source_error_entry_id: originalErrorId }));
     assert.equal(requests.length, maxCalls);
     const outDir = process.env.EASYICU_REPLY_RECOVERY_RECEIPT_DIR;
     if (outDir) {
       fs.mkdirSync(outDir, { recursive: true });
-      fs.writeFileSync(path.join(outDir, unstarted ? 'deterministic-pretool-retry.json' : 'deterministic-sidecar-recovery.json'), JSON.stringify({
+      const name = unstarted ? 'pretool-retry' : reload ? 'sidecar-recovery' : 'live-sidecar-recovery';
+      fs.writeFileSync(path.join(outDir, `deterministic-${name}.json`), JSON.stringify({
         schema_version: 'easyicu.reply-continuation-test/1', provider: 'loopback deterministic HTTP',
-        original_failure_preserved: true, sidecar_reloaded_before_continuation: true,
+        original_failure_preserved: true, sidecar_reloaded_before_continuation: reload,
         write_count: writes, check_count: checks, provider_calls: requests.length,
         original_message_provider_calls: continued.shell_usage.message_provider_calls,
         artifact_sha256_before: savedHash, artifact_sha256_after: hash(artifact),
@@ -416,5 +426,9 @@ async function realSidecarRecovery({ unstarted = false } = {}) {
 }
 
 const sidecarOptions = { skip: !fs.existsSync(path.join(app, 'node_modules/@earendil-works/pi-ai/package.json')), timeout: 60000 };
-test('real sidecar: write/check once, fail Provider, reload, continue explanation without tool replay', sidecarOptions, () => realSidecarRecovery());
-test('real sidecar: pre-tool failure, reload, retry same task once with cumulative original budget', sidecarOptions, () => realSidecarRecovery({ unstarted: true }));
+test('real sidecar: five original guarded attempts, write/check once, reload and explain without tool replay',
+  sidecarOptions, () => realSidecarRecovery({ initialFailures: 3, recoveryFailures: 2 }));
+test('real sidecar: a live explanation continuation retries empty failures with the original budget',
+  sidecarOptions, () => realSidecarRecovery({ reload: false, recoveryFailures: 2 }));
+test('real sidecar: pre-tool failure, reload, retry same task once with cumulative original budget',
+  sidecarOptions, () => realSidecarRecovery({ unstarted: true, initialFailures: 3 }));

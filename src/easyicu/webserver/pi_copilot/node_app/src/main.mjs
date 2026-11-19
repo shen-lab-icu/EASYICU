@@ -1704,6 +1704,8 @@ async function continueReplySession(requestId, params) {
   const continuation = prepareReplyContinuation(record, params.source_error_entry_id, params.validation_context);
   const activeTools = record.session.getActiveToolNames();
   activeRequestBySession.set(sessionId, requestId);
+  // The explicit continuation starts its own stream under the resumed budget.
+  record.providerTurnCommitted = false;
   try {
     // Retain the current branch, failed assistant, receipts, and cumulative
     // usage. This call appends a hidden host instruction, never the original
