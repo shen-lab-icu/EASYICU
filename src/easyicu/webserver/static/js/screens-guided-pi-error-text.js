@@ -1169,8 +1169,8 @@
           '分析没有自动继续：没有找到这份计划已保存的批准记录。请重新审阅并批准计划。',
         ),
         research_pipeline_manifest_invalid: tr(
-          'The data package bound to this study has no readable EasyICU manifest, so the plan could not start. No analysis was run. Prepare the data again, then generate the plan; if it stops here again, send the failure receipt to support.',
-          '本研究绑定的数据包缺少可读取的 EasyICU 清单文件，计划无法开始，也没有运行任何分析。请重新准备数据后再生成计划；如果再次停在这里，请把失败回执发给支持人员。',
+          'The data package bound to this study did not pass EasyICU\'s package checks (its manifest or a listed file is missing or changed), so the plan could not start. No analysis was run. Prepare the data again, then generate the plan; if it stops here again, send the failure receipt to support.',
+          '本研究绑定的数据包没有通过 EasyICU 的数据包校验（清单文件或其中列出的文件缺失或被改动），计划无法开始，也没有运行任何分析。请重新准备数据后再生成计划；如果再次停在这里，请把失败回执发给支持人员。',
         ),
         research_pipeline_manifest_required: tr(
           'The bound folder is a converted database, not a data package prepared for this study. Extract this study\'s data first, then generate the plan.',

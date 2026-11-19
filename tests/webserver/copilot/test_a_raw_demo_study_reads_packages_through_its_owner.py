@@ -11,6 +11,7 @@ Synthetic official-Demo fixture; no benchmark item.
 """
 
 import ast
+from collections import Counter
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -103,6 +104,23 @@ def test_exact_columns_bind_against_the_official_export_or_wait_for_a_package(ch
         study_context_update._execution_catalog(chosen, {}, chosen["data_source"])
 
 
+def test_clearing_exact_columns_reads_no_catalog():
+    # Carbon b11r1: only an update that binds a concept reads the package.
+    assert not study_context_update._execution_binds_columns({})
+    assert not study_context_update._execution_binds_columns({"outcome": None, "covariates": []})
+    assert study_context_update._execution_binds_columns({"covariates": ["age"]})
+
+
+def test_the_owner_compares_the_bound_path_as_a_path(choice, chosen):
+    # Carbon b11r1: "~" or a trailing separator is the same bound folder.
+    raw = chosen["data_source"]["path"]
+    assert launch.bound_source_authority_path(raw + "/", chosen) == str(choice.paths.export)
+    home = str(Path.home())
+    if raw.startswith(home):
+        assert launch.bound_source_authority_path("~" + raw[len(home):], chosen) == str(choice.paths.export)
+    assert launch.bound_source_planning_concepts({}) == set()
+
+
 # Every call in src/easyicu/webserver that opens a path as an export package
 # or asks an identity authority of it, by (file, enclosing function, reader).
 # OWNER: the path comes from source_authority_export_path /
@@ -115,65 +133,77 @@ _READERS = frozenset({
     "validate_research_pipeline_source", "prepared_export_manifest_path", "index_export_package",
     "resolve_study_patient_grouping", "resolve_study_first_icu_stay",
     "resolve_study_first_icu_stay_per_hospitalization", "resolve_patient_grouping_authority",
+    # Wrappers that take a path or a study view: their callers are classified too.
+    "_data_foundation_profile", "_source_groups_stays_at", "bound_source_planning_concepts",
+    "bound_source_authority_path",
 })
 _CLASSIFIED = {
-    ("agent_pipeline_runs.py", "_metadata_only_planning_catalog", "build_available_catalog"): "OWNER",
-    ("agent_pipeline_runs.py", "make_research_pipeline_run_runner.runner", "validate_research_pipeline_source"): "REGISTERED",
-    ("agent_pipeline_runs.py", "resume_research_pipeline", "validate_research_pipeline_source"): "REGISTERED",
-    ("agent_review_recovery.py", "recover_pending_review", "validate_research_pipeline_source"): "REGISTERED",
-    ("case_duration_materialization.py", "materialize_approved_case_duration_universe", "open_export_package"): "REGISTERED",
-    ("data_package_execution_readiness.py", "_first_icu_stay_flags", "resolve_study_first_icu_stay"): "REGISTERED",
-    ("data_package_execution_readiness.py", "_first_icu_stay_review", "resolve_study_first_icu_stay"): "REGISTERED",
-    ("data_package_execution_readiness.py", "_hospital_first_eligibility_review", "resolve_study_first_icu_stay_per_hospitalization"): "REGISTERED",
-    ("data_package_execution_readiness.py", "_hospital_first_stay_review", "resolve_study_first_icu_stay_per_hospitalization"): "REGISTERED",
-    ("data_package_execution_readiness.py", "_patient_grouping_review", "resolve_study_patient_grouping"): "REGISTERED",
-    ("data_package_review.py", "build_registered_data_package_review", "build_available_catalog"): "REFUSES",
-    ("dataio.py", "_detect_database", "inspect_export_layout"): "OWNER",
-    ("dataio.py", "scan_path", "inspect_export_layout"): "OWNER",
-    ("dataio.py", "validate_research_pipeline_source", "inspect_export_layout"): "REFUSES",
-    ("dataio.py", "validate_research_pipeline_source", "open_export_package"): "REFUSES",
-    ("dataio.py", "validate_research_pipeline_source", "prepared_export_manifest_path"): "REFUSES",
-    ("demo_source_storage.py", "egress_source_database", "inspect_export_layout"): "OWNER",
-    ("manuscript_repair.py", "make_report_only_run_runner", "validate_research_pipeline_source"): "REGISTERED",
-    ("pi_copilot/service.py", "PiCopilotService.apply_agent_plan_configuration", "resolve_study_first_icu_stay"): "OWNER",
-    ("pi_copilot/service.py", "PiCopilotService.apply_agent_plan_configuration", "resolve_study_patient_grouping"): "OWNER",
-    ("pi_copilot/study_context_update.py", "_execution_catalog", "build_available_catalog"): "OWNER",
-    ("pi_copilot/tools.py", "_assess_idea_feasibility", "build_available_catalog"): "REFUSES",
-    ("pi_copilot/tools.py", "_list_concept_catalog", "build_available_catalog"): "REGISTERED",
-    ("pi_copilot/workflow.py", "_source_groups_stays_at", "resolve_study_patient_grouping"): "OWNER",
-    ("quick_answer/preparation.py", "_verified_identity", "resolve_study_first_icu_stay"): "REGISTERED",
-    ("quick_answer/preparation.py", "_verified_identity", "resolve_study_patient_grouping"): "REGISTERED",
-    ("quick_answer/preparation.py", "prepare_registered_question", "validate_research_pipeline_source"): "REGISTERED",
-    ("research_append_source.py", "registered_source_changed", "validate_research_pipeline_source"): "REGISTERED",
-    ("research_launch_resume.py", "_development_resume_launch_scope", "validate_research_pipeline_source"): "REGISTERED",
-    ("research_launch_scientific.py", "_bound_source_column", "build_available_catalog"): "OWNER",
-    ("research_launch_scientific.py", "_data_foundation_profile", "build_available_catalog"): "OWNER",
-    ("research_launch_scientific.py", "_first_icu_stay_for_cohort", "resolve_study_first_icu_stay"): "OWNER",
-    ("research_launch_scientific.py", "_first_icu_stay_per_hospitalization_for_cohort", "resolve_study_first_icu_stay_per_hospitalization"): "OWNER",
-    ("research_launch_scientific.py", "bound_source_planning_concepts", "build_available_catalog"): "OWNER",
-    ("research_launch_scientific.py", "verified_patient_grouping", "resolve_study_patient_grouping"): "OWNER",
-    ("research_multi_extraction.py", "prepare_source", "prepared_export_manifest_path"): "OWNER",
-    ("research_multi_extraction.py", "prepare_source", "validate_research_pipeline_source"): "REGISTERED",
-    ("research_multi_pipeline.py", "PipelineDatabaseOwner._plan", "validate_research_pipeline_source"): "REGISTERED",
-    ("research_pipeline_run_preparation.py", "_prepare_scientific_launch", "validate_research_pipeline_source"): "REGISTERED",
-    ("research_plan_revision.py", "load_prepared_plan_revision", "validate_research_pipeline_source"): "REGISTERED",
-    ("research_resume_package.py", "_package_offer_verdict", "validate_research_pipeline_source"): "REGISTERED",
-    ("research_resume_package.py", "prepared_package_identity", "prepared_export_manifest_path"): "REGISTERED",
-    ("research_run_submission.py", "_with_repeated_stays_default", "resolve_study_patient_grouping"): "OWNER",
-    ("research_run_submission.py", "submit_research_run", "prepared_export_manifest_path"): "OWNER",
-    ("research_run_submission.py", "submit_research_run", "validate_research_pipeline_source"): "REGISTERED",
-    ("run_population_proof.py", "verified_first_stay_applied", "open_export_package"): "REGISTERED",
-    ("scientific_runtime_projection.py", "export_kdigo_strict_derivation_available", "open_export_package"): "OWNER",
-    ("source_identity_authority.py", "resolve_study_first_icu_stay", "resolve_study_patient_grouping"): "OWNER",
-    ("source_identity_authority.py", "resolve_study_patient_grouping", "resolve_patient_grouping_authority"): "OWNER",
-    ("time_origin_source_authority.py", "attest_case_duration_for_review", "open_export_package"): "REGISTERED",
-    ("time_origin_source_authority.py", "attest_registered_export_time_origin", "open_export_package"): "REGISTERED",
+    ("agent_pipeline_runs.py", "_metadata_only_planning_catalog", "build_available_catalog"): (1, "OWNER"),
+    ("agent_pipeline_runs.py", "make_research_pipeline_run_runner.runner", "validate_research_pipeline_source"): (1, "REGISTERED"),
+    ("agent_pipeline_runs.py", "resume_research_pipeline", "validate_research_pipeline_source"): (1, "REGISTERED"),
+    ("agent_review_recovery.py", "recover_pending_review", "validate_research_pipeline_source"): (1, "REGISTERED"),
+    ("case_duration_materialization.py", "materialize_approved_case_duration_universe", "open_export_package"): (1, "REGISTERED"),
+    ("data_package_execution_readiness.py", "_first_icu_stay_flags", "resolve_study_first_icu_stay"): (1, "REGISTERED"),
+    ("data_package_execution_readiness.py", "_first_icu_stay_review", "resolve_study_first_icu_stay"): (1, "REGISTERED"),
+    ("data_package_execution_readiness.py", "_hospital_first_eligibility_review", "resolve_study_first_icu_stay_per_hospitalization"): (1, "REGISTERED"),
+    ("data_package_execution_readiness.py", "_hospital_first_stay_review", "resolve_study_first_icu_stay_per_hospitalization"): (1, "REGISTERED"),
+    ("data_package_execution_readiness.py", "_patient_grouping_review", "resolve_study_patient_grouping"): (1, "REGISTERED"),
+    ("data_package_review.py", "build_registered_data_package_review", "build_available_catalog"): (1, "REFUSES"),
+    ("dataio.py", "_detect_database", "inspect_export_layout"): (1, "OWNER"),
+    ("dataio.py", "scan_path", "inspect_export_layout"): (1, "OWNER"),
+    ("dataio.py", "validate_research_pipeline_source", "inspect_export_layout"): (1, "REFUSES"),
+    ("dataio.py", "validate_research_pipeline_source", "open_export_package"): (1, "REFUSES"),
+    ("dataio.py", "validate_research_pipeline_source", "prepared_export_manifest_path"): (1, "REFUSES"),
+    ("demo_source_storage.py", "egress_source_database", "inspect_export_layout"): (1, "OWNER"),
+    ("manuscript_repair.py", "make_report_only_run_runner", "validate_research_pipeline_source"): (1, "REGISTERED"),
+    ("pi_copilot/service.py", "PiCopilotService.apply_agent_plan_configuration", "resolve_study_first_icu_stay"): (1, "OWNER"),
+    ("pi_copilot/service.py", "PiCopilotService.apply_agent_plan_configuration", "resolve_study_patient_grouping"): (1, "OWNER"),
+    ("pi_copilot/study_context_update.py", "_execution_catalog", "build_available_catalog"): (1, "OWNER"),
+    ("pi_copilot/tools.py", "_assess_idea_feasibility", "build_available_catalog"): (1, "REFUSES"),
+    ("pi_copilot/tools.py", "_list_concept_catalog", "build_available_catalog"): (1, "REGISTERED"),
+    ("pi_copilot/workflow.py", "_source_groups_stays_at", "resolve_study_patient_grouping"): (1, "OWNER"),
+    ("quick_answer/preparation.py", "_verified_identity", "resolve_study_first_icu_stay"): (1, "REGISTERED"),
+    ("quick_answer/preparation.py", "_verified_identity", "resolve_study_patient_grouping"): (1, "REGISTERED"),
+    ("quick_answer/preparation.py", "prepare_registered_question", "validate_research_pipeline_source"): (1, "REGISTERED"),
+    ("research_append_source.py", "registered_source_changed", "validate_research_pipeline_source"): (1, "REGISTERED"),
+    ("research_launch_resume.py", "_development_resume_launch_scope", "validate_research_pipeline_source"): (1, "REGISTERED"),
+    ("research_launch_scientific.py", "_bound_source_column", "build_available_catalog"): (1, "OWNER"),
+    ("research_launch_scientific.py", "_data_foundation_profile", "build_available_catalog"): (1, "OWNER"),
+    ("research_launch_scientific.py", "_first_icu_stay_for_cohort", "resolve_study_first_icu_stay"): (1, "OWNER"),
+    ("research_launch_scientific.py", "_first_icu_stay_per_hospitalization_for_cohort", "resolve_study_first_icu_stay_per_hospitalization"): (1, "OWNER"),
+    ("research_launch_scientific.py", "bound_source_planning_concepts", "build_available_catalog"): (1, "OWNER"),
+    ("research_launch_scientific.py", "verified_patient_grouping", "resolve_study_patient_grouping"): (1, "OWNER"),
+    ("research_multi_extraction.py", "prepare_source", "prepared_export_manifest_path"): (1, "OWNER"),
+    ("research_multi_extraction.py", "prepare_source", "validate_research_pipeline_source"): (1, "REGISTERED"),
+    ("research_multi_pipeline.py", "PipelineDatabaseOwner._plan", "validate_research_pipeline_source"): (1, "REGISTERED"),
+    ("research_pipeline_run_preparation.py", "_prepare_scientific_launch", "validate_research_pipeline_source"): (1, "REGISTERED"),
+    ("research_plan_revision.py", "load_prepared_plan_revision", "validate_research_pipeline_source"): (1, "REGISTERED"),
+    ("research_resume_package.py", "_package_offer_verdict", "validate_research_pipeline_source"): (1, "REGISTERED"),
+    ("research_resume_package.py", "prepared_package_identity", "prepared_export_manifest_path"): (1, "REGISTERED"),
+    ("research_run_submission.py", "_with_repeated_stays_default", "resolve_study_patient_grouping"): (1, "OWNER"),
+    ("research_run_submission.py", "submit_research_run", "prepared_export_manifest_path"): (1, "OWNER"),
+    ("research_run_submission.py", "submit_research_run", "validate_research_pipeline_source"): (2, "REGISTERED"),
+    ("run_population_proof.py", "verified_first_stay_applied", "open_export_package"): (1, "REGISTERED"),
+    ("scientific_runtime_projection.py", "export_kdigo_strict_derivation_available", "open_export_package"): (1, "OWNER"),
+    ("source_identity_authority.py", "resolve_study_first_icu_stay", "resolve_study_patient_grouping"): (1, "OWNER"),
+    ("source_identity_authority.py", "resolve_study_patient_grouping", "resolve_patient_grouping_authority"): (1, "OWNER"),
+    ("time_origin_source_authority.py", "attest_case_duration_for_review", "open_export_package"): (1, "REGISTERED"),
+    ("time_origin_source_authority.py", "attest_registered_export_time_origin", "open_export_package"): (1, "REGISTERED"),
+    ("agent_pipeline_runs.py", "make_research_pipeline_run_runner.runner", "_data_foundation_profile"): (2, "OWNER"),
+    ("pi_copilot/study_context_update.py", "_execution_catalog", "bound_source_authority_path"): (1, "OWNER"),
+    ("pi_copilot/workflow.py", "_study_source_groups_stays", "_source_groups_stays_at"): (1, "OWNER"),
+    ("research_launch_scientific.py", "_data_foundation_profile", "bound_source_authority_path"): (1, "OWNER"),
+    ("research_launch_scientific.py", "checked_exposure_concept", "bound_source_planning_concepts"): (1, "OWNER"),
+    ("research_launch_scientific.py", "checked_stated_variables", "bound_source_planning_concepts"): (1, "OWNER"),
+    ("research_launch_scientific.py", "target_trial_launch_inputs", "_data_foundation_profile"): (1, "REGISTERED"),
+    ("research_pipeline_run_preparation.py", "_prepare_scientific_launch", "_data_foundation_profile"): (1, "REGISTERED"),
+    ("research_run_submission.py", "_with_repeated_stays_default", "bound_source_authority_path"): (1, "OWNER"),
 }
 
 
-def _reader_sites() -> set[tuple[str, str, str]]:
+def _reader_sites() -> Counter:
     root = Path(__file__).resolve().parents[3] / "src/easyicu/webserver"
-    sites = set()
+    sites: Counter = Counter()
     for path in sorted(root.rglob("*.py")):
         relative = path.relative_to(root).as_posix()
 
@@ -186,7 +216,7 @@ def _reader_sites() -> set[tuple[str, str, str]]:
                     func = child.func
                     name = func.id if isinstance(func, ast.Name) else func.attr if isinstance(func, ast.Attribute) else None
                     if name in _READERS:
-                        sites.add((relative, ".".join(scope) or "<module>", name))
+                        sites[(relative, ".".join(scope) or "<module>", name)] += 1
                 walk(child, scope)
 
         walk(ast.parse(path.read_text(encoding="utf-8")), [])
@@ -194,12 +224,15 @@ def _reader_sites() -> set[tuple[str, str, str]]:
 
 
 def test_every_package_or_identity_reader_is_classified():
+    # Exact counts (Carbon b11r1): a second reader call inside a classified
+    # function is a new site and must be classified too.
     sites = _reader_sites()
-    new = sorted(sites - _CLASSIFIED.keys())
+    expected = {key: count for key, (count, _cls) in _CLASSIFIED.items()}
+    new = sorted((key, count) for key, count in sites.items() if expected.get(key) != count)
     assert not new, (
         "Classify these readers (route a study's bound path through "
         "source_authority_export_path / bound_source_authority_path, or record "
-        f"why a raw Demo folder cannot reach them): {new}"
+        f"why a raw Demo folder cannot reach them), with their call counts: {new}"
     )
-    assert not sorted(_CLASSIFIED.keys() - sites), "a classified reader is gone; drop its row"
-    assert set(_CLASSIFIED.values()) <= {"OWNER", "REGISTERED", "REFUSES"}
+    assert not sorted(expected.keys() - sites.keys()), "a classified reader is gone; drop its row"
+    assert {cls for _count, cls in _CLASSIFIED.values()} <= {"OWNER", "REGISTERED", "REFUSES"}

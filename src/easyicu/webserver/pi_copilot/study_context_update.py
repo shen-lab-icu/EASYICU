@@ -1129,6 +1129,14 @@ def _causal_receipt_text(receipt: Mapping[str, Any]) -> str:
     return ""
 
 
+def _execution_binds_columns(execution: Any) -> bool:
+    """Whether an update names concepts to bind; clearing them reads no catalog."""
+
+    return isinstance(execution, Mapping) and any(
+        value for key, value in execution.items() if key in ("outcome", "primary_exposure", "covariates")
+    )
+
+
 def _execution_catalog(
     current: Optional[Mapping[str, Any]], patch: Mapping[str, Any], source: Mapping[str, Any],
 ) -> Any:
@@ -2029,8 +2037,11 @@ def update_study_context(
         effective_modules = (current or {}).get("modules") or []
     execution = patch.get("execution_concepts")
     # Exact columns read a package catalog (_execution_catalog, S1506).
-    execution_catalog = _execution_catalog(current, patch, effective_source) if execution is not None else None
-    if execution is not None and execution_catalog is None:
+    binds_columns = _execution_binds_columns(execution)
+    execution_catalog = _execution_catalog(current, patch, effective_source) if binds_columns else None
+    if execution is not None and (
+        not str(effective_source.get("path") or "").strip() or (binds_columns and execution_catalog is None)
+    ):
         # Exact columns are bound against a source's catalog. Before one is
         # confirmed, the rest of the setup is still the researcher's stated
         # study: save it and leave the columns to the planner, which reads

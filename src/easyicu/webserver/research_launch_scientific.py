@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import dataclasses
 import math
+import os
 import re
 from pathlib import Path
 from typing import Any, Dict, List, Literal, Mapping, Optional, Sequence
@@ -1392,18 +1393,21 @@ def bound_source_planning_concepts(source: Mapping[str, Any], *, database: Optio
     from easyicu.webserver.demo_source_storage import verified_public_demo_raw
 
     path = str(source.get("path") or "").strip()
-    raw_demo = verified_public_demo_raw(Path(path)) if path else None
+    if not path:
+        return set()
+    folder = Path(path).expanduser()
+    raw_demo = verified_public_demo_raw(folder)
     raw_database = (
         raw_demo.database if raw_demo is not None
         else str(source.get("database") or database or "").strip()
-        if path and Path(path).is_dir() and not is_export_package(path) else ""
+        if folder.is_dir() and not is_export_package(folder) else ""
     )
     if raw_database:
         return {item.concept_id for item in build_database_capability_catalog(raw_database).concepts}
     from easyicu.webserver.raw_preparation_dependencies import native_planning_metadata
 
-    native = native_planning_metadata(export_path=Path(path), database=str(source.get("database") or database or "") or None)
-    return {item.concept_id for item in (native["catalog"] if native is not None else build_available_catalog(Path(path))).concepts}
+    native = native_planning_metadata(export_path=folder, database=str(source.get("database") or database or "") or None)
+    return {item.concept_id for item in (native["catalog"] if native is not None else build_available_catalog(folder)).concepts}
 
 
 def checked_stated_variables(
@@ -2016,7 +2020,11 @@ def bound_source_authority_path(export_path: str, study: Mapping[str, Any]) -> s
 
     source = study.get("data_source")
     bound = _clean_text(source.get("path"), 2_000) if isinstance(source, Mapping) else ""
-    return source_authority_export_path(study) if bound and bound == _clean_text(export_path, 2_000) else export_path
+
+    def same(value: str) -> str:
+        return os.path.normpath(os.path.expanduser(value))
+
+    return source_authority_export_path(study) if bound and same(bound) == same(_clean_text(export_path, 2_000)) else export_path
 
 
 def _data_foundation_profile(
@@ -2063,13 +2071,18 @@ def _data_foundation_profile(
     try:
         catalog = build_available_catalog(Path(bound_source_authority_path(export_path, source_study or study)).expanduser())
     except ExportPackageError as exc:
-        # The launch's typed intake stop (dataio owns the public diagnostic),
-        # so the card names the package problem and offers its re-export.
+        # The launch's typed intake stops (dataio owns the public diagnostic),
+        # so the card names the problem and offers its extraction: a folder
+        # with no package marker (a converted database, or a raw Demo without
+        # a resolving choice) needs this study's data extracted first; a
+        # package that fails its checks needs exporting again (Carbon b11r1).
         from easyicu.webserver.dataio import _research_pipeline_intake_diagnostic
 
+        missing = exc.code == "manifest_marker_missing"
         raise ResearchPipelineRunError(
-            "research_pipeline_manifest_invalid",
-            "The bound EasyICU export package cannot be read for planning.",
+            "research_pipeline_manifest_required" if missing else "research_pipeline_manifest_invalid",
+            "The bound folder is not an EasyICU export package; extract this study's data first."
+            if missing else "The bound EasyICU export package cannot be read for planning.",
             details=_research_pipeline_intake_diagnostic(exc),
         ) from exc
     concepts = [

@@ -318,7 +318,7 @@ def test_the_round_two_plan_reads_the_registered_export_not_the_raw_folder(choic
     assert launch.bound_source_authority_path(str(choice.paths.raw), unsigned) == str(choice.paths.raw)
 
 
-def test_a_launch_on_an_unreadable_package_names_it_and_offers_its_reexport(choice, runs):
+def test_a_launch_on_an_unreadable_package_names_it_and_offers_its_reexport(choice, runs, monkeypatch):
     # B11 card: a bound folder that is not a readable package stops with the
     # launch's typed intake stop, not the bare intake code. The card says what
     # is wrong and offers its re-export.
@@ -337,12 +337,31 @@ def test_a_launch_on_an_unreadable_package_names_it_and_offers_its_reexport(choi
         development_resume_source_job_id="", budget_mode="planner_canary", runner_image=None)
     scientific = preparation._prepare_scientific_launch(request)
     unsigned = {**scientific.study, "demo_planning_authority_ref": ""}
-    with pytest.raises(ResearchPipelineRunError) as raised:
-        launch._data_foundation_profile(
+
+    def profile():
+        return launch._data_foundation_profile(
             export_path=str(choice.paths.raw), study=scientific.materialization_study,
             target=None, require_target=False, require_primary_exposure=False, source_study=unsigned)
-    assert raised.value.code == "research_pipeline_manifest_invalid"
+
+    # A folder with no package marker needs this study's data extracted first
+    # (Carbon b11r1: a converted database is not a corrupt package).
+    with pytest.raises(ResearchPipelineRunError) as raised:
+        profile()
+    assert raised.value.code == "research_pipeline_manifest_required"
     assert raised.value.details["intake_error_code"] == "manifest_marker_missing"
+    job = project_job({"id": "b11_job", "kind": "agent-run", "status": "failed", "error": raised.value.code})
+    assert [action["kind"] for action in job["next_actions"]] == ["reexport_data"]
+    # A package that fails its own checks is named as such.
+    from easyicu.research_agent.acquisition import catalog as catalog_owner
+    from easyicu.research_agent.intake.export_package import ExportPackageError
+
+    def broken(_path):
+        raise ExportPackageError("synthetic", code="manifest_file_missing")
+
+    monkeypatch.setattr(catalog_owner, "build_available_catalog", broken)
+    with pytest.raises(ResearchPipelineRunError) as raised:
+        profile()
+    assert raised.value.code == "research_pipeline_manifest_invalid"
     job = project_job({"id": "b11_job", "kind": "agent-run", "status": "failed", "error": raised.value.code})
     assert [action["kind"] for action in job["next_actions"]] == ["reexport_data"]
 
