@@ -1131,6 +1131,20 @@ def _enclosing_scope(
     return node
 
 
+def _compound_type_references(value: ast.AST) -> Iterator[ast.expr]:
+    if isinstance(value, ast.Subscript):
+        yield from _compound_type_references(value.value)
+        yield from _compound_type_references(value.slice)
+    elif isinstance(value, (ast.Tuple, ast.List)):
+        for element in value.elts:
+            yield from _compound_type_references(element)
+    elif isinstance(value, ast.BinOp) and isinstance(value.op, ast.BitOr):
+        yield from _compound_type_references(value.left)
+        yield from _compound_type_references(value.right)
+    elif isinstance(value, (ast.Name, ast.Attribute)):
+        yield value
+
+
 def _item_site_contexts(
     nodes: list[ast.AST], aliases: dict[str, str]
 ) -> tuple[dict[ast.AST, ast.FunctionDef | ast.AsyncFunctionDef], set[ast.AST]]:
@@ -1145,6 +1159,18 @@ def _item_site_contexts(
             excluded = node.returns
         elif isinstance(node, (ast.arg, ast.AnnAssign)):
             excluded = node.annotation
+            if (
+                isinstance(node, ast.AnnAssign)
+                and isinstance(node.value, (ast.Subscript, ast.Tuple, ast.BinOp))
+                and _qualified_name(node.annotation, aliases)
+                in {"TypeAlias", "typing.TypeAlias", "typing_extensions.TypeAlias"}
+            ):
+                # A bare alias remains a callable reference.
+                non_constructors.update(
+                    ref
+                    for ref in _compound_type_references(node.value)
+                    if _qualified_name(ref, aliases).rsplit(".", 1)[-1] == "HeldOutItem"
+                )
         elif isinstance(node, type_alias):
             excluded = node.value
         elif (
@@ -1179,13 +1205,12 @@ def _item_construction_sites(source: str) -> list[tuple[int, tuple[int, ...]]]:
             if isinstance(parent, ast.Call) and node is parent.func:
                 continue
             name = _qualified_name(node, aliases)
-            if (
-                name.rsplit(".", 1)[-1] == "HeldOutItem"
-                and isinstance(parent, ast.Attribute)
-                and node is parent.value
-            ):
-                # Attribute access alone does not use the class as a factory.
-                continue
+            if isinstance(parent, ast.Attribute) and node is parent.value:
+                if name.rsplit(".", 1)[-1] == "HeldOutItem" or (
+                    name.split(".")[-2:] == ["HeldOutItem", "from_dict"]
+                    and parent.attr != "__call__"
+                ):
+                    continue
         else:
             continue
         scope = _enclosing_scope(node, parents)
@@ -1336,6 +1361,11 @@ def test_item_construction_matches_io_in_both_default_argument_scopes() -> None:
             id="class-attribute",
         ),
         pytest.param(
+            "document = snapshot_file.read_text()\n"
+            "factory_name = HeldOutItem.from_dict.__name__\n",
+            id="factory-attribute",
+        ),
+        pytest.param(
             "def load_row():\n"
             "    raw = staging_source.read_text()\n"
             "    return isinstance(raw, HeldOutItem)\n",
@@ -1351,6 +1381,49 @@ def test_item_construction_matches_io_in_both_default_argument_scopes() -> None:
 )
 def test_item_construction_allows_non_constructor_references(source: str) -> None:
     assert _item_construction_sites(source) == []
+
+
+@pytest.mark.parametrize(
+    ("import_statement", "annotation", "value"),
+    [
+        pytest.param(
+            "from typing import TypeAlias",
+            "TypeAlias",
+            "tuple[HeldOutItem, str]",
+            id="tuple",
+        ),
+        pytest.param(
+            "import typing",
+            "typing.TypeAlias",
+            "typing.Optional[HeldOutItem]",
+            id="optional",
+        ),
+        pytest.param(
+            "from typing_extensions import TypeAlias as Alias",
+            "Alias",
+            "HeldOutItem | None",
+            id="union",
+        ),
+    ],
+)
+def test_item_construction_allows_compound_pep613_type_aliases(
+    import_statement: str, annotation: str, value: str
+) -> None:
+    source = (
+        f"{import_statement}\n"
+        "document = snapshot_file.read_text()\n"
+        f"CatalogEntry: {annotation} = {value}\n"
+    )
+    assert _item_construction_sites(source) == []
+
+
+def test_item_construction_detects_bare_callable_pep613_type_alias() -> None:
+    source = (
+        "from typing import TypeAlias\n"
+        "document = snapshot_file.read_text()\n"
+        "CatalogEntry: TypeAlias = HeldOutItem\n"
+    )
+    assert _item_construction_sites(source) == [(3, (2,))]
 
 
 def test_item_construction_allows_type_aliases(monkeypatch: pytest.MonkeyPatch) -> None:
