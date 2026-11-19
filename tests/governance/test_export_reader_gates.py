@@ -61,6 +61,9 @@ READER_CONTRACTS: dict[str, tuple[str, str]] = {
         "raw-source", "Parquet footers under the source installation being sealed"),
     "tools/seal_buckets/seal_rebuild.py": (
         "raw-source", "source stays and chart-event bucket parts during seal validation"),
+    "tools/thesis_support/frozen_equivalence.py": (
+        "raw-source", "raw source tables under --db-root or SHA-256-pinned D0 module files "
+        "under --pinned-input, with explicit stay IDs or a Parquet/text cohort file"),
     "tools/verify_figure_presentation.py": ("not-export", "figure source CSVs"),
     "tools/windows_laptop_acceptance.py": (
         "raw-source", "the prepared raw demo folder inventory"),

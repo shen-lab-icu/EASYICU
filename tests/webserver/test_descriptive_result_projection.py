@@ -159,16 +159,17 @@ def answer_payload(payload: dict, plan: dict, *, root: Path | None = None,
       global.window = global; global.EU_LANG = input.lang || 'zh';
       const esc = value => String(value ?? '').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/"/g, '&quot;');
       require(path.join(process.argv[1], 'src/easyicu/webserver/static/js/data-catalog.js'));
-      for (const name of ['modules', 'result-summary', 'run-answer'])
+      for (const name of ['modules', 'resources', 'result-summary', 'run-answer'])
         require(path.join(process.argv[1], 'src/easyicu/webserver/static/js', `screens-guided-pi-${name}.js`));
       const modules = global.EasyICU.guidedPi;
+      const resources = modules.require('resources').create({esc});
       const payloads = {'agent_plan.json': input.plan, 'result_tables.json': input.payload,
         'run_context.json': input.context || {}};
       const run = {run_id: 'aggregate_replay', analysis_results_available: true, artifact_refs:
         Object.entries(payloads).map(([artifact, value]) => ({artifact, run_id: 'aggregate_replay',
           kind: 'research_artifact', sha256: crypto.createHash('sha256').update(JSON.stringify(value)).digest('hex')}))};
       const answer = modules.require('runAnswer').create({esc, tr: (en, zh) => global.EU_LANG === 'zh' ? zh : en,
-        projectId: () => 'aggregate_replay', resourceButton: () => '',
+        projectId: () => 'aggregate_replay', resourceButton: resources.button,
         api: () => ({loadPiCopilotResearchArtifact: async (project, runId, artifact) => ({payload: payloads[artifact]})})});
       (async () => {
         await answer.load(run);
@@ -183,6 +184,11 @@ def answer_payload(payload: dict, plan: dict, *, root: Path | None = None,
         result = run_node("node", script, str(root or Path(easyicu.__file__).resolve().parents[2]),
                           str(input_file), check=True, timeout=15)
     return json.loads(result.stdout)
+
+
+def assert_summary_unavailable(html: str) -> None:
+    assert 'class="gpi-run-answer is-unavailable"' in html
+    assert 'data-gpi-resource-artifact="result_tables.json"' in html
 
 
 @pytest.mark.parametrize("kind", ["median_only", "mean_only", "categorical", "ungrouped", "unanswerable"])
@@ -205,9 +211,9 @@ def test_registered_csv_reaches_the_answer_without_a_browser(tmp_path, kind):
     html = answer_payload(_table_projection(tmp_path, plan=PLAN), PLAN)["html"]
 
     if kind == "unanswerable":
-        assert "分析已完成，暂未生成结果摘要。请查看结果表。" in html
+        assert_summary_unavailable(html)
         return
-    assert "暂未生成结果摘要" not in html
+    assert 'class="gpi-run-answer is-unavailable"' not in html
     if kind == "categorical":
         assert "28.6%（2/7）" in html
     else:
@@ -268,7 +274,7 @@ def test_missing_group_labels_are_not_invented_as_overall(tmp_path, wide):
             row[-1] = ""
         registered(tmp_path, rows)
     result = answer_payload(_table_projection(tmp_path, plan=PLAN), PLAN)
-    assert "分析已完成，暂未生成结果摘要。请查看结果表。" in result["html"]
+    assert_summary_unavailable(result["html"])
 
 
 @pytest.mark.parametrize("mode", ["bound", "wrong_digest", "wrong_step", "outside", "duplicate", "absent"])

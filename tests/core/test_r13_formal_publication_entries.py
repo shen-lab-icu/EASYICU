@@ -8,6 +8,8 @@ import inspect
 import json
 import os
 from pathlib import Path
+import shlex
+import shutil
 import subprocess
 import sys
 
@@ -21,14 +23,32 @@ REPO = Path(__file__).resolve().parents[2]
 
 
 @pytest.fixture(autouse=True)
-def identity():
+def revision_identity() -> str:
     import easyicu
 
     origin = Path(easyicu.__file__).resolve()
-    head = subprocess.check_output(["git", "rev-parse", "HEAD"], cwd=REPO, text=True).strip()
+    head = subprocess.check_output(
+        ["git", "rev-parse", "--verify", "HEAD^{commit}"], cwd=REPO, text=True,
+    ).strip()
     print(f"easyicu={origin}\nHEAD={head}", flush=True)
     assert origin.is_relative_to(REPO / "src")
-    assert head == os.environ["CLAIMED_SHA"]
+    claimed_sha = os.environ.get("CLAIMED_SHA")
+    if claimed_sha is not None:
+        assert head == claimed_sha, "CLAIMED_SHA does not match the checkout"
+    return head
+
+
+@pytest.fixture
+def formal_wrapper_guard() -> tuple[Path, Path]:
+    guard = os.environ.get("RUN_WW3_GUARD")
+    if not guard or guard == "none":
+        pytest.skip("formal_wrapper_guard_unconfigured: RUN_WW3_GUARD is absent")
+    guard_dir = Path(guard).resolve()
+    loaded_guard = getattr(sys.modules.get("sitecustomize"), "__file__", None)
+    assert loaded_guard and Path(loaded_guard).resolve() == guard_dir / "sitecustomize.py"
+    runner = os.environ.get("RUN_WW3_GRUN") or shutil.which("grun.sh")
+    assert runner and Path(runner).is_file(), "set RUN_WW3_GRUN to the grun.sh launcher"
+    return guard_dir, Path(runner).resolve()
 
 
 def _root(path):
@@ -173,8 +193,9 @@ def test_dictionary_binding_refuses_closure_file_but_accepts_work_root(
 
 @pytest.mark.parametrize("shape", ["direct", "linked", "provenance"])
 def test_required_layout_wrapper_refuses_before_cmp_json_or_copy_and_allows_work_root(
-    tmp_path, shape,
+    tmp_path, shape, revision_identity, formal_wrapper_guard,
 ):
+    guard_dir, runner = formal_wrapper_guard
     root, target = _closure(tmp_path, shape)
     layout = {"schema": "easyicu.required_layout/2", "complete": True,
               "databases": {"hirid": {"sample": {"layout": "flat"}}}}
@@ -182,18 +203,38 @@ def test_required_layout_wrapper_refuses_before_cmp_json_or_copy_and_allows_work
     inside.write_text(json.dumps(layout))
     outside = tmp_path / "layout.json"
     outside.write_text(json.dumps(layout))
-    # Execute the actual wrapper block. Replace only the staged boot launch seam;
-    # the helper runs the real formal_inputs CLI with an audit hook armed.
+    # Execute the actual wrapper block with guarded Python launchers. The shim
+    # runs the real formal_inputs CLI with an audit hook armed.
     wrapper = (REPO / "tools/formal/bench7v3f.sh").read_text()
     start = wrapper.index('if [ "${BENCH_FORMAL_RECEIPT:-0}" = 1 ]; then')
     end = wrapper.index('IFS=: read -r _db _dir IC', start)
+    python = tmp_path / "guarded_python"
+    python.write_text(
+        "#!/bin/bash\n"
+        # The inline layout validator uses -I, which would bypass grun's guard.
+        'if [[ "$1" == -I ]]; then shift; fi\n'
+        f"export RUN_WW3_GUARD={shlex.quote(str(guard_dir))} PYTHONDONTWRITEBYTECODE=1\n"
+        f'exec bash {shlex.quote(str(runner))} {shlex.quote(str(REPO))} "$@"\n',
+        encoding="utf-8",
+    )
+    python.chmod(0o700)
     shim = tmp_path / "audit_boot.py"
-    shim.write_text('''import json, os, pathlib, subprocess, sys
+    shim.write_text(
+        f"REPO = {str(REPO)!r}\n"
+        f"CLAIM = {revision_identity!r}\n"
+        f"CONFIG = {str(inside)!r}\n"
+        f"LOG = {str(tmp_path / 'opens')!r}\n"
+        f"GUARD = {str(guard_dir)!r}\n"
+        '''import os, pathlib, subprocess, sys
 import easyicu
+import sitecustomize
 origin = pathlib.Path(easyicu.__file__).resolve()
-head = subprocess.check_output(['git', 'rev-parse', 'HEAD'], cwd=REPO, text=True).strip()
+head = subprocess.check_output(
+    ['git', 'rev-parse', '--verify', 'HEAD^{commit}'], cwd=REPO, text=True,
+).strip()
 print('easyicu:', origin, 'HEAD:', head, flush=True)
 assert origin.is_relative_to(pathlib.Path(REPO) / 'src')
+assert pathlib.Path(sitecustomize.__file__).resolve() == pathlib.Path(GUARD) / 'sitecustomize.py'
 assert head == CLAIM
 def audit(event, args):
     if event == 'open' and args and isinstance(args[0], str) and os.path.realpath(args[0]) == CONFIG:
@@ -202,9 +243,9 @@ def audit(event, args):
 sys.addaudithook(audit)
 from easyicu.formal_inputs import main
 sys.exit(main(sys.argv[3:]))
-'''.replace("REPO", repr(str(REPO))).replace("CLAIM", repr(os.environ["CLAIMED_SHA"]))
-        .replace("CONFIG", repr(str(inside))).replace("LOG", repr(str(tmp_path / "opens"))))
-    env = dict(os.environ, PYTHONPATH=f"{REPO / 'src'}:{REPO}:{os.environ['RUN_WW3_GUARD']}")
+''',
+        encoding="utf-8",
+    )
     for candidate, allowed in ((inside, False), (outside, True)):
         run = tmp_path / ("outside_run" if allowed else "inside_run")
         run.mkdir()
@@ -214,14 +255,14 @@ sys.exit(main(sys.argv[3:]))
         shell = '''set -eu
 R=$1; RL=$2; PY=$3; SHIM=$4; FT=$R/.formal_tools
 BENCH_REQUIRED_LAYOUT=$RL; BENCH_FORMAL_RECEIPT=1
-BOOT=(env "PYTHONPATH=$PYTHONPATH" "RUN_WW3_GUARD=$RUN_WW3_GUARD" "$PY" "$SHIM")
+BOOT=("$PY" "$SHIM")
 cmp() { echo cmp >> "$R/reads"; command cmp "$@"; }
 cp() { echo cp >> "$R/reads"; command cp "$@"; }
 shift 4
 ''' + wrapper[start:end]
         result = subprocess.run(["bash", "-c", shell, "test", str(run), str(candidate),
-                                 sys.executable, str(shim), f"hirid:{root}:144-145"],
-                                env=env, capture_output=True, text=True)
+                                 str(python), str(shim), f"hirid:{root}:144-145"],
+                                capture_output=True, text=True)
         if allowed:
             assert result.returncode == 0, result.stderr
             assert (run / "reads").read_text().strip() == "cmp"

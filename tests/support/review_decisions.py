@@ -72,3 +72,19 @@ def decision_codes() -> set[str]:
             code = code.body
         codes.update(_strings(code))
     return codes
+
+
+def assert_review_decision_sentinels(codes: set[str]) -> None:
+    """Pin representative decisions and findings handled without authorization."""
+    assert {
+        "REQUESTED_DOSE_RESPONSE_NOT_ESTIMABLE",
+        "PRIMARY_EXPOSURE_TIME_ANCHOR_MISMATCH",
+        "PRIMARY_EXPOSURE_TIME_ANCHOR_UNVERIFIED",
+        "POPULATION_SCOPE_AMENDMENT_DECLARED",
+        "SURVIVAL_LANDMARK_OWNER_NOT_SEALED",
+    } <= codes
+    # scientific_review.py:4614–4668 routes repeated stays to runtime_capability
+    # or agent_plan_revision. scientific_maturity.py:1486–1499 records an advisory
+    # without researcher authorization.
+    assert "REPEATED_STAY_METHOD_NOT_DECLARED" not in codes
+    assert "PLAN_POPULATION_REQUIREMENT_DRIFT" not in codes
