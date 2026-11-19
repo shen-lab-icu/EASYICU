@@ -286,7 +286,7 @@ def prepare_dataset(source: Any, paths: Any, phases: dict, *, excluded_pids=(), 
             storage.extract_archive(source, paths, digest, job)
             metrics["cache_hit"] = reused
         else:
-            # Tests supply only synthetic raw tables at the download boundary.
+            # Generated sources supply only invented tables at the download boundary.
             fetch(source, paths, job)
             metrics["cache_hit"] = False
         metrics["file_count"] = sum(path.is_file() for path in paths.raw.rglob("*"))
@@ -343,6 +343,30 @@ def prepare_dataset(source: Any, paths: Any, phases: dict, *, excluded_pids=(), 
     return paths.export
 
 
+def acceptance_sources(synthetic_source: bool) -> tuple:
+    if synthetic_source:
+        from easyicu.synthetic_desktop_source import source_spec
+
+        return (source_spec(),)
+    from easyicu.webserver.demo_source_contracts import SOURCES
+
+    return SOURCES
+
+
+def prepare_synthetic_dataset(source, paths, phases, *, excluded_pids=()) -> Path:
+    from easyicu.synthetic_desktop_source import write_archive
+    from easyicu.webserver import demo_source_storage as storage
+
+    def extract_generated_archive(source, paths, job):
+        write_archive(paths)
+        storage.extract_archive(source, paths, source.archive_sha256, job)
+
+    export = prepare_dataset(source, paths, phases, excluded_pids=excluded_pids, fetch=extract_generated_archive)
+    storage.write_export_marker(paths, source, archive_sha256=source.archive_sha256,
+                                export={"manifest_sha256": storage.sha256_file(export / "_manifest.json")})
+    return export
+
+
 def request_json(base_url: str, method: str, path: str, body: dict | None, *, timeout=120, headers=None) -> tuple[int, dict]:
     data = None if body is None else json.dumps(body).encode("utf-8")
     request = Request(base_url + path, data=data, method=method, headers={"Content-Type": "application/json", **(headers or {})})
@@ -372,7 +396,8 @@ def probe_read_paths(request: Callable, exports: list[Path], records: list[dict]
             # With no entity_ref the real owner selects the first demo stay.
             (f"patient_{index}", "POST", "/api/patient-review/drilldown", {"source_path": str(export)}),
         ])
-    checks.append(("crossdb", "POST", "/api/crossdb-review/summary", {"paths": [str(path) for path in exports]}))
+    if len(exports) > 1:
+        checks.append(("crossdb", "POST", "/api/crossdb-review/summary", {"paths": [str(path) for path in exports]}))
     failed = False
     for name, method, path, body in checks:
         started = time.perf_counter()
@@ -525,12 +550,12 @@ def verify_desktop_build(backend: Path) -> dict:
     return {"installed_backend": True, "kernel_identity_matches": True}
 
 
-def probe_desktop_first_result(exports: list[Path], *, cassette_path: Path | None = None) -> dict:
+def probe_desktop_first_result(exports: list[Path], *, cassette_path: Path | None = None,
+                               synthetic_source: bool = False) -> dict:
     """Use reviewed replay when supplied; otherwise keep the honest model stop."""
     from easyicu.research_agent.execution import runner
     from easyicu.research_agent.orchestration.profiles import WEB_DESKTOP_FIRST_RESULT_SIC_OVERLAY, get_submission_profile
     from easyicu.webserver import dataio
-    from easyicu.webserver.demo_source_contracts import SOURCES
     from easyicu.webserver.research_launch_runtime import _require_execution_runtime, _submission_profile_ref
 
     docker = runner.probe_runner_availability("docker")
@@ -542,9 +567,16 @@ def probe_desktop_first_result(exports: list[Path], *, cassette_path: Path | Non
     ))
     if profile != WEB_DESKTOP_FIRST_RESULT_SIC_OVERLAY or profile.requires_runner != "host":
         raise AcceptanceFailure("desktop_first_result_profile_mismatch")
-    if len(exports) != len(SOURCES):
+    sources = acceptance_sources(synthetic_source)
+    if len(exports) != len(sources):
         raise AcceptanceFailure("demo_exports_unavailable_for_research")
-    source, eicu = next((source, path) for source, path in zip(SOURCES, exports) if source.database == "eicu_demo")
+    source, eicu = next((source, path) for source, path in zip(sources, exports) if source.database == "eicu_demo")
+    analysis = dict(question="In the public eICU demo, is age associated with hospital mortality after adjustment for sex?",
+                    primary_exposure="age", target_outcome="death", covariates=("sex",))
+    if synthetic_source:
+        from easyicu.synthetic_desktop_source import ANALYSIS_INPUTS
+
+        analysis = ANALYSIS_INPUTS
     # Do not publish source paths, per-file seals, or any rows from the binding.
     dataio.validate_research_pipeline_source(str(eicu), database=source.database)
     result = {
@@ -558,7 +590,7 @@ def probe_desktop_first_result(exports: list[Path], *, cassette_path: Path | Non
         "analysis_executed": False, "provider_calls": 0,
         "first_result": {
             "status": "blocked", "reason_code": "desktop_first_result_model_replay_unavailable",
-            "question": "In the public eICU demo, is age associated with hospital mortality after adjustment for sex?",
+            "question": analysis["question"],
             "last_completed_step": "registered_export_validation_and_host_runtime_preflight",
             "boundary_owner": "easyicu.research_agent.agents.family_spec_planner.run_family_spec_attempt",
             "requires_real_provider": profile.requires_real_provider,
@@ -570,10 +602,9 @@ def probe_desktop_first_result(exports: list[Path], *, cassette_path: Path | Non
         from easyicu.research_agent.facade import replay_public_demo
         from easyicu.research_agent.orchestration.profiles import PUBLIC_DEMO_ACCEPTANCE
 
-        replay = replay_public_demo(cassette_path=cassette_path, export_path=eicu,
-            database=source.database, work_dir=Path.cwd() / "model-replay",
-            question=result["first_result"]["question"], primary_exposure="age",
-            target_outcome="death", covariates=("sex",))
+        options = {"synthetic_source": True} if synthetic_source else {}
+        replay = replay_public_demo(cassette_path=cassette_path, export_path=eicu, database=source.database,
+                                    work_dir=Path.cwd() / "model-replay", **analysis, **options)
         result["first_result"].update(replay)
         result.update(provider_kind=replay["provider_kind"], cassette_sha256=replay["cassette_sha256"],
                       profile_ref=PUBLIC_DEMO_ACCEPTANCE.ref,
@@ -603,6 +634,8 @@ def write_reports(report: dict, output_dir: Path) -> None:
         json.dumps(report, ensure_ascii=False, indent=2, allow_nan=False) + "\n", encoding="utf-8",
     )
     lines = [f"Windows laptop acceptance: **{report['status']}**", ""]
+    if "model_disclosure" in report:
+        lines.extend([report["model_disclosure"], f"`model_mode={report['model_mode']}`", ""])
     memory = report.get("memory", {})
     if memory:
         lines.append(f"Memory pressure: {memory['requested_bytes'] / GIB:g} GiB; phase peaks exclude this helper.")
@@ -681,7 +714,8 @@ def private_owner_logs(log):
 
 def run_acceptance(work_dir: Path, cache_dir: Path, output_dir: Path, *, memory_pressure_gb=8, fetch=None,
                    desktop_first_result=False, desktop_backend: Path | None = None,
-                   cassette_path: Path | None = None, cassette_root: Path | None = None) -> dict:
+                   cassette_path: Path | None = None, cassette_root: Path | None = None,
+                   synthetic_source: bool = False) -> dict:
     started = time.monotonic()
     report: dict[str, Any] = {
         "schema_version": "easyicu_laptop_acceptance_v1", "status": "failed",
@@ -690,6 +724,12 @@ def run_acceptance(work_dir: Path, cache_dir: Path, output_dir: Path, *, memory_
     }
     output_dir = output_dir.resolve()
     try:
+        if synthetic_source:
+            from easyicu.research_agent.providers.protocol import SCRIPTED_REPLAY_DISCLOSURE
+
+            report.update(model_mode="scripted_replay", model_disclosure=SCRIPTED_REPLAY_DISCLOSURE)
+            if not desktop_first_result or cassette_path is None or fetch is not None:
+                raise AcceptanceFailure("synthetic_source_requires_scripted_desktop_replay")
         work_dir, cache_dir = work_dir.resolve(), cache_dir.resolve()
         if cassette_path is not None:
             if cassette_root is not None:
@@ -706,24 +746,28 @@ def run_acceptance(work_dir: Path, cache_dir: Path, output_dir: Path, *, memory_
                 report["desktop"] = verify_desktop_build(desktop_backend)
             # Set the isolated state root before importing owners with path constants.
             from easyicu.webserver import demo_source_storage as storage
-            from easyicu.webserver.demo_source_contracts import SOURCES
-
-            report["demo_cache_key"] = demo_cache_key(SOURCES)
+            sources = acceptance_sources(synthetic_source)
+            if not synthetic_source:
+                report["demo_cache_key"] = demo_cache_key(sources)
             pressure = MemoryPressure(memory_pressure_gb, work_dir)
             report["memory"] = pressure.report
             with pressure, (work_dir / "owners.log").open("w", encoding="utf-8") as log, private_owner_logs(log):
                 excluded = (pressure.pid,) if pressure.pid else ()
                 exports = []
-                for source in SOURCES:
+                for source in sources:
                     dataset = {"database": source.database, "version": source.version, "phases": {}}
                     report["datasets"].append(dataset)
                     try:
-                        exports.append(prepare_dataset(source, storage.source_paths(source), dataset["phases"], excluded_pids=excluded, fetch=fetch))
+                        paths = storage.source_paths(source)
+                        if synthetic_source:
+                            exports.append(prepare_synthetic_dataset(source, paths, dataset["phases"], excluded_pids=excluded))
+                        else:
+                            exports.append(prepare_dataset(source, paths, dataset["phases"], excluded_pids=excluded, fetch=fetch))
                     except Exception as exc:
                         report["failures"].append(failure_receipt(exc))
                 try:
                     with phase("web", report, excluded) as metrics:
-                        if len(exports) != len(SOURCES):
+                        if len(exports) != len(sources):
                             raise AcceptanceFailure("demo_exports_unavailable_for_web")
                         if desktop_backend is None:
                             probe_web(work_dir, exports, metrics)
@@ -734,6 +778,8 @@ def run_acceptance(work_dir: Path, cache_dir: Path, output_dir: Path, *, memory_
                 try:
                     with phase("research", report, excluded) as metrics:
                         replay_options = {"cassette_path": cassette_path} if cassette_path is not None else {}
+                        if synthetic_source:
+                            replay_options["synthetic_source"] = True
                         metrics.update(probe_desktop_first_result(exports, **replay_options) if desktop_first_result else probe_research())
                         if desktop_first_result:
                             elapsed = round(time.monotonic() - started, 4)
@@ -768,6 +814,7 @@ def main(argv=None) -> int:
     parser.add_argument("--desktop-first-result", action="store_true", help="Probe the desktop M1 path; exit 2 at its model boundary.")
     parser.add_argument("--desktop-backend", type=Path, help="Installed desktop sidecar from the same build as this interpreter's wheel.")
     parser.add_argument("--model-cassette", type=Path, help="Optional reviewed public-demo cassette path relative to this repository.")
+    parser.add_argument("--synthetic-source", action="store_true", help="Generate the invented eICU source for scripted desktop replay.")
     parser.add_argument("--hold-memory-bytes", type=int, help=argparse.SUPPRESS)
     args = parser.parse_args(argv)
     if args.hold_memory_bytes is not None:
@@ -783,6 +830,7 @@ def main(argv=None) -> int:
         memory_pressure_gb=args.memory_pressure_gb,
         desktop_first_result=args.desktop_first_result, desktop_backend=args.desktop_backend,
         cassette_path=args.model_cassette, cassette_root=Path(__file__).resolve().parents[1],
+        synthetic_source=args.synthetic_source,
     )
     print(f"Laptop acceptance: {report['status']}")
     return {"passed": 0, "blocked": 2}.get(report["status"], 1)

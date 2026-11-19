@@ -1,0 +1,37 @@
+{
+  "model": {
+    "provider": "scripted",
+    "model": "desktop-m1-script-v1",
+    "supports_strict_json_schema": true
+  },
+  "entries": [
+    {
+      "request_sha256": "7b4a95a11494f355f7f2e6bedd152d1b87b22d2919ac551aa1b305c77e21cb5c",
+      "response": {
+        "schema_version": "easyicu.family_plan_spec/1",
+        "family_id": "baseline_adjusted_association",
+        "adjustment_set": [],
+        "roster_decision_note": "Preserve the host-bound adjustment for recorded sex.",
+        "reader_display_labels": [
+          {
+            "key": "age",
+            "value": "Age at admission"
+          },
+          {
+            "key": "death",
+            "value": "Death before hospital discharge"
+          },
+          {
+            "key": "sex",
+            "value": "Recorded sex"
+          }
+        ],
+        "comparator_applications": [],
+        "population": null,
+        "effect_measure": null,
+        "question_requirements": []
+      },
+      "finish_reason": "stop"
+    }
+  ]
+}

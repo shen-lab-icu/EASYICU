@@ -215,6 +215,8 @@ __all__ = [
 SHA256 = Annotated[str, Field(pattern=r"^[0-9a-f]{64}$")]
 CASSETTE_SCHEMA = "easyicu.public_demo_model_cassette/1"
 MAX_CASSETTE_BYTES = 32 * 1024 * 1024
+SCRIPTED_PROVIDER = "scripted"
+SCRIPTED_REPLAY_DISCLOSURE = "desktop first-result acceptance used scripted model responses, not a live model"
 
 
 class ReplayError(RuntimeError):

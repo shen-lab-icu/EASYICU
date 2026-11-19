@@ -70,6 +70,8 @@ from .protocol import (
     RecordedResponse,
     ReplayCassette,
     ReplayError,
+    SCRIPTED_PROVIDER,
+    SCRIPTED_REPLAY_DISCLOSURE,
     StructuredOutputCapabilityError,
     StructuredOutputRequest,
     request_digest,
@@ -1800,6 +1802,8 @@ class ReplayLLMClient:
         scope = _require_scope()
         # Revalidate even model_copy/model_construct inputs before trusting bytes.
         cassette = ReplayCassette.model_validate_json(cassette.model_dump_json())
+        if (cassette.model.provider == SCRIPTED_PROVIDER) != scope.scripted:
+            raise ReplayError("model_replay_provider_mismatch")
         if cassette.source != scope.source:
             raise ReplayError("model_replay_source_mismatch")
         object.__setattr__(self, "_cassette", cassette)
@@ -1829,9 +1833,14 @@ class ReplayLLMClient:
         raise ReplayError("model_replay_request_missing", request_sha256=key)
 
     def receipt(self):
-        return {"provider": "replay", "provider_kind": "replay", "model": self._model,
-                "cassette_sha256": self._cassette.cassette_sha256, "destination": "replay",
-                "authorization_mode": "public_demo_acceptance", "reportable": False, "publishable": False}
+        receipt = {"provider": "replay", "provider_kind": "replay", "model": self._model,
+                   "cassette_sha256": self._cassette.cassette_sha256, "destination": "replay",
+                   "authorization_mode": "public_demo_acceptance", "reportable": False, "publishable": False}
+        if self._scope.scripted:
+            receipt.update(model_mode="scripted_replay", model_disclosure=SCRIPTED_REPLAY_DISCLOSURE,
+                           model_identity=self._cassette.model.model_dump(mode="json"),
+                           source=self._scope.source.model_dump(mode="json"), profile_ref=self._scope.profile_ref)
+        return receipt
 
 
 class RecordingLLMClient:
@@ -1852,6 +1861,12 @@ class RecordingLLMClient:
         _register_recording_scope(self, self._scope)
 
     def _validate_model(self):
+        if self._scope.scripted or self.model.provider == SCRIPTED_PROVIDER:
+            if (self._scope.scripted and type(self.inner) is ReplayLLMClient
+                    and self.model == self.inner._cassette.model):
+                require_replay_scope(self.inner._scope)
+                return
+            raise ReplayError("model_replay_recording_model_mismatch")
         record = _trusted_client_record(self.inner)
         if record is not None and record.kind == "offline" and self.model.provider == "synthetic":
             return

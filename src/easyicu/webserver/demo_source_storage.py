@@ -1276,7 +1276,7 @@ __all__ = [
 
 
 @contextmanager
-def public_demo_replay_scope(*, export_path: Path, database: str, profile_ref: str):
+def public_demo_replay_scope(*, export_path: Path, database: str, profile_ref: str, synthetic_source: bool = False):
     """Use the egress owner's manifest/pinned-release proof, never a label."""
     from easyicu.research_agent.providers.client_trust import (
         ACCEPTANCE_PROFILE_REF, TEST_PROFILE_REF, ReplayScope,
@@ -1289,7 +1289,16 @@ def public_demo_replay_scope(*, export_path: Path, database: str, profile_ref: s
 
     if profile_ref not in {ACCEPTANCE_PROFILE_REF, TEST_PROFILE_REF}:
         raise ReplayError("model_replay_profile_forbidden")
-    source = next((item for item in SOURCES if item.database == database), None)
+    if synthetic_source:
+        from easyicu.synthetic_desktop_source import PROVENANCE_DATABASE
+
+        if profile_ref != ACCEPTANCE_PROFILE_REF or os.environ.get("EASYICU_DEPLOYMENT") != "desktop":
+            raise ReplayError("model_replay_profile_forbidden")
+        source = _verified_synthetic_replay_source(export_path, database)
+        identity_database = PROVENANCE_DATABASE
+    else:
+        source = next((item for item in SOURCES if item.database == database), None)
+        identity_database = database
     if source is None:
         raise ReplayError("model_replay_source_forbidden")
     # MIMIC's public demo deliberately shares the miiv database profile. Only
@@ -1297,11 +1306,30 @@ def public_demo_replay_scope(*, export_path: Path, database: str, profile_ref: s
     if database == "miiv" and _verified_public_demo(str(export_path)) != source:
         raise ReplayError("model_replay_source_forbidden")
     egress_source_database(str(export_path), database)
-    scope = ReplayScope(PublicDemoIdentity(source_id=source.id, database=database,
-        version=source.version, archive_sha256=source.archive_sha256), profile_ref, Path(export_path).resolve())
+    scope = ReplayScope(PublicDemoIdentity(source_id=source.id, database=identity_database,
+        version=source.version, archive_sha256=source.archive_sha256), profile_ref, Path(export_path).resolve(),
+        database=database, scripted=synthetic_source)
     token = _bind_public_demo_replay_scope(scope)
     try:
         with public_demo_egress_scope(str(export_path)):
             yield scope
     finally:
         _reset_public_demo_replay_scope(token)
+
+
+def _verified_synthetic_replay_source(export_path: Path, database: str) -> DemoSourceSpec | None:
+    from easyicu.synthetic_desktop_source import source_spec
+
+    source = source_spec()
+    paths = source_paths(source)
+    if (database != source.database or not os.getenv(CACHE_ENV) or export_path.absolute() != paths.export
+            or paths.export.resolve() != paths.export or not export_ready(paths, source)
+            or paths.archive.resolve() != paths.archive or not archive_ready(paths, source)):
+        return None
+    marker = read_marker(paths.prepared_marker, source)
+    exported = (marker or {}).get("export")
+    if (marker and marker.get("archive_sha256") == source.archive_sha256 == sha256_file(paths.archive)
+            and isinstance(exported, dict)
+            and exported.get("manifest_sha256") == sha256_file(paths.export / "_manifest.json")):
+        return source
+    return None

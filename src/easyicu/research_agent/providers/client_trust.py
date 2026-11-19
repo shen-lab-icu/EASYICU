@@ -132,10 +132,11 @@ def require_data_handling(source: str, data_handling: DataHandling | str) -> Non
     DataHandling(data_handling)
 
 
-def require_credentialed_data_clearance(client: Any, source: str) -> None:
-    """Check a replayed client's source and the source identity before deriving a prompt."""
-    _require_replay_source(client, source)
+def require_credentialed_data_clearance(client: Any, source: str) -> ReplayScope | None:
+    """Validate the data source and return any active replay scope bound to the client graph."""
+    scope = _require_replay_source(client, source)
     source_requires_clearance(source)
+    return scope
 
 
 def require_run_clearance(database: str, additional_sources: Sequence[str] | None, *clients: Any) -> None:
@@ -151,7 +152,9 @@ def require_run_clearance(database: str, additional_sources: Sequence[str] | Non
                 require_credentialed_data_clearance(client, source)
 
 
-def _require_replay_source(client: Any, source: str) -> None:
+def _require_replay_source(client: Any, source: str) -> ReplayScope | None:
+    leaf_scopes: set[ReplayScope | None] = set()
+    scopes: set[ReplayScope] = set()
     stack, seen = [client], set()
     while stack:
         item = stack.pop()
@@ -159,12 +162,31 @@ def _require_replay_source(client: Any, source: str) -> None:
             continue
         seen.add(id(item))
         record = _trusted_client_record(item)
-        if record is not None and record.replay_scope is not None:
-            require_replay_scope(record.replay_scope)
-            if source != record.replay_scope.source.database:
-                raise ReplayError("model_replay_source_forbidden")
+        bound = record.replay_scope if record is not None else None
+        if bound is not None:
+            scopes.add(bound)
         if record is not None and record.kind == "wrapper" and record.children_getter:
             stack.extend(record.children_getter())
+        else:
+            leaf_scopes.add(bound)
+
+    if None in leaf_scopes and len(leaf_scopes) > 1:
+        raise ReplayError("model_replay_mixed_provider_forbidden")
+    if len(scopes) > 1:
+        raise ReplayError("model_replay_source_mismatch")
+    if not scopes:
+        return None
+    scope = scopes.pop()
+    require_replay_scope(scope)
+    if source != scope.database:
+        raise ReplayError("model_replay_source_forbidden")
+
+    # A directly supplied recorder has its own registered scope. A recorder
+    # nested in a non-replay graph cannot confer its scope on other clients.
+    root = _trusted_client_record(client)
+    if scope in leaf_scopes or (root is not None and root.replay_scope == scope):
+        return scope
+    return None
 
 
 def require_context_clearance(context: Any, *clients: Any) -> None:
@@ -1474,7 +1496,7 @@ def _register_provider_wrapper(
         )
     return wrapper
 
-ACCEPTANCE_PROFILE_REF = "public_demo_acceptance_dev/20261118-audit15"
+ACCEPTANCE_PROFILE_REF = "public_demo_acceptance_dev/20261119-desktop-m1"
 TEST_PROFILE_REF = "public_demo_replay_test/1"
 
 
@@ -1483,6 +1505,8 @@ class ReplayScope:
     source: PublicDemoIdentity
     profile_ref: str
     export_path: Path
+    database: str
+    scripted: bool = False
 
 
 _SCOPE: ContextVar[ReplayScope | None] = ContextVar("public_demo_replay", default=None)
