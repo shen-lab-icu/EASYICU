@@ -56,7 +56,10 @@
   const AMBIGUOUS = ['quick_reading_ambiguous', 'quick_reading_invalid', 'quick_measure_ambiguous', 'quick_measure_unresolved',
     'quick_window_unresolved', 'quick_level_unresolved', 'quick_levels_unresolved', 'quick_grouping_ambiguous', 'quick_comparison_ambiguous'];
   const NOT_PREPARED = ['quick_population_not_prepared', 'quick_prepared_columns_missing', 'quick_unit_not_prepared',
-    'quick_prepared_source_required', 'quick_bound_source_unavailable', 'quick_unit_identity_missing', 'quick_unit_identity_invalid'];
+    'quick_unit_identity_missing', 'quick_unit_identity_invalid'];
+  // The bound source is not a prepared package a quick answer can read (e.g.
+  // official Demo raw data): its data may well hold the answer (UX M6).
+  const SOURCE_NOT_PREPARED = ['quick_prepared_source_required', 'quick_bound_source_unavailable'];
   const CHANGED = ['quick_card_stale', 'quick_plan_changed', 'quick_population_changed', 'quick_source_changed', 'quick_levels_changed',
     'quick_source_identity_mismatch', 'quick_source_metadata_mismatch', 'quick_approval_mismatch'];
 
@@ -68,7 +71,8 @@
       const key = String(code || '');
       if (REASONS[key]) return tr(REASONS[key][0], REASONS[key][1]);
       if (AMBIGUOUS.includes(key)) return tr('The question leaves the measure, time window or groups open.', '问题里的指标、时间窗或分组不够明确。');
-      if (NOT_PREPARED.includes(key)) return tr('The current data package does not hold what the question needs.', '当前数据包里没有问题所需的数据。');
+      if (SOURCE_NOT_PREPARED.includes(key)) return tr('A quick answer reads a prepared data package, and this data source is not prepared that way yet. Make it a full study to plan from this source.', '快速回答只读取已准备好的数据包，当前数据源还没有准备成这种形式。改为完整研究即可基于这个数据源规划。');
+      if (NOT_PREPARED.includes(key)) return tr('The prepared data package does not include what the question needs; the source data may. Make it a full study to prepare it.', '已准备的数据包中没有这个问题所需的内容，原始数据中可能有。改为完整研究即可按需准备。');
       if (CHANGED.includes(key)) return tr('The data or the question changed after this card was made. Ask again.', '卡片生成后数据或问题有变化，请重新提问。');
       return tr('This question is not suited to a quick answer.', '这个问题不适合快速回答。');
     }

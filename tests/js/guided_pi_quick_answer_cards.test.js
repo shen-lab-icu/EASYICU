@@ -239,6 +239,20 @@ test('an unresolved concept offers the full study in both languages', () => {
   }
 });
 
+test('an unprepared data source is not reported as data the source lacks (UX M6)', () => {
+  for (const [language, said] of [
+    ['zh', /快速回答只读取已准备好的数据包，当前数据源还没有准备成这种形式/],
+    ['en', /A quick answer reads a prepared data package, and this data source is not prepared that way yet/],
+  ]) {
+    for (const reason of ['quick_prepared_source_required', 'quick_bound_source_unavailable']) {
+      const html = rendered(owners(language).cards, attachment({ proposal: { status: 'stopped', reason, expand: {} } }));
+      assert.match(html, said, reason);
+      assert.doesNotMatch(html, /数据包里没有问题所需的数据|does not hold what the question needs/);
+      assert.match(html, /class="btn primary sm" type="button" data-gpi-quick-expand="qa_1"/);
+    }
+  }
+});
+
 test('a stopped comparison over repeated stays offers the first-stay question only where it can be prepared', () => {
   const cases = [
     ['quick_repeated_units_ask_first_stay', 'zh', /同一患者有多次 ICU 入住。可改问每位患者的首次 ICU 入住，或改为完整研究。/],
