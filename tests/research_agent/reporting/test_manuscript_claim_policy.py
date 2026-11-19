@@ -52,6 +52,54 @@ def test_policy_accepts_only_a_complete_known_claim_token() -> None:
     assert result.unsupported_scientific_claim_sentences == result.filtered_sentences
 
 
+def test_quoted_context_heading_survives_without_ending_results() -> None:
+    retained = (
+        "## Results\n\n"
+        "> ### Materials and methods\n"
+        "> This section explains the prespecified study design.\n"
+    )
+    quoted_claim = "The filter eliminated false alerts."
+    results_claim = "The patch eliminated duplicate alerts."
+    filtered = filter_evidence_bound_scaffold(
+        f"{retained}\n> ### {quoted_claim}\n\n{results_claim}\n",
+        resolve_claim=_resolver,
+    )
+
+    assert filtered.scaffold == retained
+    assert filtered.unsupported_scientific_claim_sentences == (quoted_claim, results_claim)
+
+
+@pytest.mark.parametrize("separator", [" ", "\n"], ids=["inline", "separate-line"])
+@pytest.mark.parametrize(
+    "body",
+    [
+        "The patch eliminated duplicate alerts [@prior_2024].",
+        "The patch eliminated duplicate alerts {claim:alerts.deduplicated}.",
+    ],
+    ids=["cited-prose", "embedded-claim"],
+)
+def test_rejected_abstract_body_leaves_its_label(separator, body) -> None:
+    filtered = filter_evidence_bound_scaffold(
+        f"## Abstract\n\n**Results:**{separator}{body}\n",
+        resolve_claim=_resolver,
+    )
+
+    assert filtered.scaffold == "## Abstract\n\n**Results:**\n"
+    assert filtered.unsupported_scientific_claim_sentences == (body,)
+
+
+def test_partially_filtered_abstract_body_keeps_its_line_break_after_label() -> None:
+    retained = "This study describes baseline characteristics."
+    rejected = "The patch eliminated duplicate alerts."
+    filtered = filter_evidence_bound_scaffold(
+        f"## Abstract\n\n**Results:**\n{rejected} {retained}\n",
+        resolve_claim=_resolver,
+    )
+
+    assert filtered.scaffold == f"## Abstract\n\n**Results:**\n{retained}\n"
+    assert filtered.unsupported_scientific_claim_sentences == (rejected,)
+
+
 @pytest.mark.parametrize(
     "prefix",
     ["**Results:** ", "**Conclusions:** ", "> - **Results:** ", "**结果：** "],

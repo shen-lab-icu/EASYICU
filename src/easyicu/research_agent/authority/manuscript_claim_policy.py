@@ -530,6 +530,8 @@ def _split_markdown_structure_prefix(line: str) -> tuple[str, str]:
     # remains prose and cannot wrap a claim to smuggle in another assertion.
     if match := INLINE_SECTION_LABEL_RE.match(line, cursor):
         cursor = match.end()
+        if newline := re.match(r"\r?\n", line[cursor:]):
+            cursor += newline.end()
     return line[:cursor], line[cursor:]
 
 
@@ -862,15 +864,18 @@ def filter_evidence_bound_scaffold(
             ]:
                 filtered_lines.append(line)
                 continue
-            if is_method_fact_candidate(line):
-                unsupported_scientific_claims.append(stripped)
-                filtered_claims.append(stripped)
-                filtered_lines.append("")
-                continue
-            if stripped.startswith(("```", "~~~")) or not stripped:
+            structure_prefix, content = _split_markdown_structure_prefix(line)
+            # A top-level abstract label remains even if its entire body fails admission.
+            abstract_label_line = (
+                structure_prefix.rstrip()
+                if in_abstract and region.kind == "prose"
+                and INLINE_SECTION_LABEL_RE.fullmatch(structure_prefix.strip())
+                else ""
+            )
+            method_fact_candidate = is_method_fact_candidate(line)
+            if not method_fact_candidate and (stripped.startswith(("```", "~~~")) or not stripped):
                 filtered_lines.append(line)
                 continue
-            structure_prefix, content = _split_markdown_structure_prefix(line)
             heading_prefix, heading_content = _split_markdown_heading_prefix(content)
             heading_requires_claim = False
             if heading_prefix:
@@ -892,12 +897,17 @@ def filter_evidence_bound_scaffold(
                     ):
                         findings_depth = None
                         in_abstract = False
+                # A quoted context heading can survive inside the current section.
+                quoted_heading = region.kind == "structural" and ">" in structure_prefix
                 restricted_heading = (
                     findings_depth is not None and name not in _RESULT_STRUCTURE_HEADINGS
-                    and not (in_abstract and name in _CONTEXT_HEADINGS)
+                    and not ((in_abstract or quoted_heading) and name in _CONTEXT_HEADINGS)
                     and _CAPTION_LABEL_RE.fullmatch(heading_content) is None
                 )
-                if not restricted_heading and not _heading_requires_evidence(heading_content):
+                if not (
+                    method_fact_candidate or restricted_heading
+                    or _heading_requires_evidence(heading_content)
+                ):
                     filtered_lines.append(line)
                     continue
                 heading_requires_claim = True
@@ -913,6 +923,12 @@ def filter_evidence_bound_scaffold(
                 abstract_findings = abstract_label.group("label").casefold() not in {
                     "background", "methods", "背景", "方法"
                 }
+            if method_fact_candidate:
+                rejected = content.strip() if abstract_label_line else stripped
+                unsupported_scientific_claims.append(rejected)
+                filtered_claims.append(rejected)
+                filtered_lines.append(abstract_label_line)
+                continue
             restricted_line = bool(
                 (findings_depth is not None and (not in_abstract or abstract_findings))
                 or (abstract_label is not None and abstract_label.group("label").casefold()
@@ -935,7 +951,7 @@ def filter_evidence_bound_scaffold(
                 rejected = content.strip()
                 unsupported_scientific_claims.append(rejected)
                 filtered_claims.append(rejected)
-                filtered_lines.append("")
+                filtered_lines.append(abstract_label_line)
                 continue
             sentences = _split_sentences(content)
             if (
@@ -1055,7 +1071,7 @@ def filter_evidence_bound_scaffold(
                         filtered_claims.append(dependent)
             kept_content = " ".join(part for part in kept if part).strip()
             filtered_lines.append(
-                f"{structure_prefix}{kept_content}".rstrip() if kept_content else ""
+                f"{structure_prefix}{kept_content}" if kept_content else abstract_label_line
             )
         if opaque:
             # Apply the admission checks inside the block without borrowing
