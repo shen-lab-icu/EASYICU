@@ -66,6 +66,7 @@ def test_every_public_plan_field_has_exactly_one_authority_class() -> None:
         plan_scope._ANALYSIS_PLAN_CORE_SCIENTIFIC_AUTHORITY_FIELDS,
         plan_scope._ANALYSIS_PLAN_STRUCTURED_SCIENTIFIC_AUTHORITY_FIELDS,
         plan_scope._ANALYSIS_PLAN_STEP_AUTHORITY_FIELDS,
+        plan_scope._ANALYSIS_PLAN_DELIVERY_AUTHORITY_FIELDS,
         plan_scope._ANALYSIS_PLAN_PRESENTATION_ONLY_FIELDS,
         plan_scope._ANALYSIS_PLAN_RUNTIME_ONLY_FIELDS,
     )

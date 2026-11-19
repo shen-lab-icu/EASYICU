@@ -164,7 +164,7 @@ def require_host_rendered_plan(
     if first_result(plan):
         require_first_result_steps(plan)
     host_cohort_step = _verified_host_cohort_step(plan, run_dir)
-    for step in plan.steps:
+    for step in getattr(plan, "execution_steps", plan.steps):
         if step.step_id == host_cohort_step:
             continue
         try:
@@ -181,7 +181,7 @@ def require_host_rendered_plan(
 def require_first_result_steps(plan: Any) -> None:
     """A report/coder step cannot sneak into an analysis-only approval."""
     for step in plan.steps:
-        if any(str(output).startswith(("report:", "manuscript:", "latex:")) for output in step.expected_outputs):
+        if getattr(step, "host_delivery_kind", None) or any(str(output).startswith(("report:", "manuscript:", "latex:")) for output in step.expected_outputs):
             raise ValueError(f"first_result forbids article-only step {step.step_id!r}; start an article run")
     if not any(step.measurement_audit_spec is not None for step in plan.steps):
         raise ValueError("first_result requires measurement_audit before approval")

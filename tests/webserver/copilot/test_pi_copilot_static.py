@@ -33,7 +33,7 @@ def test_node_prompt_obeys_owner_order_before_internal_resolution() -> None:
 def test_pi_shell_assets_are_explicitly_wired_before_guided_owner() -> None:
     index = _read("index.html")
     assert "css/guided-pi.css?v=20261028-wait1-cfg1" in index
-    assert "css/guided-pi-clinical-card.css?v=20261025-owner-split1" in index
+    assert "css/guided-pi-clinical-card.css?v=20261119-int1" in index
     # The connection dialog sheet reads the provider tokens the base sheet defines.
     assert index.index("css/guided-pi.css?v=") < index.index("css/guided-pi-connect.css?v=20261026-openrouter1") < index.index("css/guided-pi-header.css?v=")
     # The header's narrow-width layout is its own owner, loaded right after the base sheet.
@@ -85,7 +85,7 @@ def test_pi_shell_assets_are_explicitly_wired_before_guided_owner() -> None:
     assert "js/screens-guided-pi-preview.js?v=20261030-video3" in index
     assert "js/screens-guided-pi-replay.js?v=20261009-target-trial1" in index
     assert "js/screens-guided-pi-resources.js?v=20261029-uxcomplete2" in index
-    assert "js/screens-guided-pi-run-outcome.js?v=20261117-fix1" in index
+    assert "js/screens-guided-pi-run-outcome.js?v=20261119-int1" in index
     assert "js/screens-guided-pi-result-append.js?v=20261102-plain1" in index
     assert index.index("js/screens-guided-pi-result-append.js") < index.index("js/screens-guided-pi-run-outcome.js")
     assert "js/screens-guided-pi-activity.js?v=20261030-progress3" in index
@@ -99,12 +99,12 @@ def test_pi_shell_assets_are_explicitly_wired_before_guided_owner() -> None:
         "js/screens-guided-pi-connect.js"
     ) < index.index("js/screens-guided-pi.js")
     assert "js/screens-guided-pi-study-workspace.js?v=20261102-ui1" in index
-    assert "js/screens-guided-pi-events.js?v=20261117-fix1" in index
+    assert "js/screens-guided-pi-events.js?v=20261118-s1368" in index
     assert "js/screens-guided-pi-project.js?v=20261026-projects1" in index
     assert "js/screens-guided-pi-data-consent.js?v=20261102-demo2" in index
     assert "js/screens-guided-pi-data-binding.js?v=20261029-journey3" in index
     assert "js/screens-guided-pi-session-navigation.js?v=20261111-s872" in index
-    assert "js/screens-guided-pi-session-view.js?v=20261111-s872" in index
+    assert "js/screens-guided-pi-session-view.js?v=20261119-int1" in index
     assert index.index("js/screens-guided-pi-session-view.js") < index.index(
         "js/screens-guided-pi.js"
     )
@@ -117,8 +117,8 @@ def test_pi_shell_assets_are_explicitly_wired_before_guided_owner() -> None:
         < index.index("js/screens-guided-pi-target-trial.js")
         < index.index("js/screens-guided-pi-confirmation.js")
     )
-    assert "js/screens-guided-pi-confirmation-data.js?v=20261102-population1" in index
-    assert "js/screens-guided-pi-confirmation.js?v=20261117-run2" in index
+    assert "js/screens-guided-pi-confirmation-data.js?v=20261119-int1" in index
+    assert "js/screens-guided-pi-confirmation.js?v=20261119-int1" in index
     assert index.index("js/screens-guided-pi-confirmation-data.js") < index.index("js/screens-guided-pi-confirmation.js")
     # The plan-approval card renders the database capability review through this owner.
     assert "js/screens-guided-pi-source-adjustments.js?v=20261026-quick2" in index
@@ -137,7 +137,7 @@ def test_pi_shell_assets_are_explicitly_wired_before_guided_owner() -> None:
     assert "js/screens-guided-pi-review-items.js?v=20261026-review1" in index
     assert index.index("js/screens-guided-pi-review-items.js") < index.index("js/screens-guided-pi-run-outcome.js")
     assert "css/guided-pi-source-adjustments.css?v=20261026-six1" in index
-    assert "js/screens-guided-pi-plan-actions.js?v=20261117-run2" in index
+    assert "js/screens-guided-pi-plan-actions.js?v=20261118-s1368" in index
     assert "js/screens-guided-pi-quick-answers.js?v=20261117-distribution1" in index
     assert "js/screens-guided-pi-childjob.js?v=20261026-recovered1" in index
     assert "js/screens-guided-pi-error-text.js?v=20261111-s872" in index
@@ -2512,6 +2512,7 @@ def test_existing_project_study_setup_stays_in_bound_pi_conversation() -> None:
 def test_scientific_review_hides_system_owned_method_questions() -> None:
     owner = _read("js/screens-guided-pi.js")
     confirmation = _read("js/screens-guided-pi-confirmation.js")
+    confirmation_data = _read("js/screens-guided-pi-confirmation-data.js")
     owner_css = _read("css/guided-pi.css")
     preview_css = _read("css/guided-pi-preview.css")
     shell_css = _read("css/app.css") + _read("css/screens.css")
@@ -2541,8 +2542,8 @@ def test_scientific_review_hides_system_owned_method_questions() -> None:
     assert "review.authorization_questions" in confirmation
     assert "item.evidence" in confirmation
     assert "item.remediation" in confirmation
-    assert "gpi-plan-design-disclosure" in confirmation
-    assert "查看精确模型与变量设置" in confirmation
+    assert "gpi-plan-design-disclosure" in confirmation_data
+    assert "查看精确模型与变量设置" in confirmation_data
     assert ".gpi-decision-option" in owner_css
     assert ".gpi-plan-conversation-summary" in owner_css
     assert ".gpi-plan-design-disclosure" in owner_css
@@ -6667,6 +6668,7 @@ def test_latest_idea_exploration_turn_hides_project_results_but_keeps_current_de
     assert "const continuation = showHostDecision && !dataConsentRequired ? continuationCardsHtml()" in session_panel
     log = session_panel.split("data-gpi-log>", 1)[1].split("data-gpi-dismiss-error", 1)[0]
     assert "${dataConsentHtml}" in log and "${continuation}" in log
+    assert "const dataConsentRequired = showHostDecision && requiresConsent" in session_panel
     assert "return { transcriptMessages, latestTurnCompletedIdeaExploration," in transcript
     index = _read("index.html")
     assert "screens-guided-pi-transcript.js?v=20261030-preparation1" in index

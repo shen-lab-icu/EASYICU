@@ -109,6 +109,25 @@ def test_an_upgrade_offers_raw_in_the_real_renderer_without_reusing_the_old_expo
     assert study_contexts.get_context(choice.study["id"])["data_source"]["path"] == str(choice.paths.raw)
 
 
+
+def test_editing_deliverables_preserves_the_confirmed_raw_demo_source(choice):
+    from easyicu.webserver.pi_copilot.demo_planning_authority import resolve_choice
+
+    choice.service.authorize_data_source(choice.record.session_id, **choice.body)
+    original = study_contexts.get_context(choice.study["id"])
+    source = resolve_choice(original)
+    assert source is not None
+    edited = study_contexts.upsert_context(
+        {"id": original["id"], "plan_deliverables": {
+            "requested": ["references"], "check": [], "confirmed": True, "source": "user_edit",
+        }},
+        expected_revision=original["revision"], _server_plan_deliverables_write=True,
+    )
+    assert edited["demo_planning_authority_ref"] == original["demo_planning_authority_ref"]
+    assert study_contexts.scientific_configuration_sha256(edited) != study_contexts.scientific_configuration_sha256(original)
+    assert resolve_choice(edited) == source
+
+
 @pytest.mark.parametrize("defect", ["producer_missing", "producer_malformed", "producer_folder_mismatch",
                                   "release_mismatch", "manifest_symlink"])
 def test_historical_exports_need_their_own_exact_official_receipts(choice, monkeypatch, defect):

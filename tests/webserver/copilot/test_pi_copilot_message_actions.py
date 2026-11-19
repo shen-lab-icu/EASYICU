@@ -412,6 +412,7 @@ def test_copilot_message_owner_wires_only_latest_next_step_to_send_or_focus() ->
     assert "regenerateMessage(" not in continuation
     log = owner.split("data-gpi-log>", 1)[1].split("data-gpi-dismiss-error", 1)[0]
     assert "${dataConsentHtml}" in log and "${continuation}" in log
+    assert "const dataConsentRequired = showHostDecision && requiresConsent" in owner
     assert "if (await continueAfterDataSourceConfirmation()) return true;" in data_binding_owner
     next_actions = _read("js/screens-guided-pi-next-actions.js")
     assert "查看数据准备确认" in next_actions

@@ -368,12 +368,26 @@
       const ideaExplorationTurn = !workspace
         && TRANSCRIPT.latestTurnCompletedIdeaExploration(state.messages);
       const showProjectResults = !workspace && !lightweight && !freshTask && !ideaExplorationTurn;
+      const workflow = state.workflow || {};
+      const planStage = workflow.stages?.find(stage => stage.id === 'plan');
+      const requiresConsent = DATA_CONSENT?.requiresConfirmation?.(session);
+      const pendingDecision = requiresConsent
+        || (planStage?.status === 'review_required' && planStage.reason_code === workflow.next_action_code)
+        || (Boolean(workflow.plan_decision || workflow.plan_review_summary?.run_id) && [
+          'operator_plan_approval_required', 'plan_execution_upgrade_required',
+          'question_requirement_not_covered', 'question_requirement_capability_gap', 'question_requirements_unreadable',
+          'first_result_delivery_requires_article',
+        ].includes(workflow.next_action_code))
+        || Object.values(workflow.host_decisions || {}).some(Boolean) || [
+          'cohort_eligibility_confirmation_required', 'study_primary_outcome_confirmation_required',
+          'provider_ready_to_generate_plan', 'agent_plan_configuration_required', 'plan_scientific_changes_required',
+          'target_trial_statement_needed', 'target_trial_review', 'target_trial_plan_ready', 'host_delivery_request_ambiguous',
+        ].includes(workflow.next_action_code);
       // Exploration can coexist with a new host-owned decision. The trace
       // hides historical results, while the current decision leads the log.
-      const showHostDecision = !workspace && !lightweight && (!freshTask
-        || Boolean(state.workflow?.study_setup_receipt?.configuration?.question));
-      const dataConsentRequired = showHostDecision
-        && DATA_CONSENT && DATA_CONSENT.requiresConfirmation(session);
+      const showHostDecision = !workspace && !lightweight && (showProjectResults || pendingDecision
+        || (!ideaExplorationTurn && Boolean(workflow.study_setup_receipt?.configuration?.question)));
+      const dataConsentRequired = showHostDecision && requiresConsent;
       const continuation = showHostDecision && !dataConsentRequired ? continuationCardsHtml() : '';
       const hasRecovery = continuation.includes(' data-gpi-review-recovery');
       const discussionDraft = MODULES.optional('researchDraft')?.current(state.messages);
@@ -482,7 +496,7 @@
       const resultsView = Boolean(outcome) && !dataConsentRequired;
       // Workflow completion may arrive before the separate run-file catalog.
       // Use its authoritative stop until that run has a stop in the timeline.
-      const pendingStop = showProjectResults && RUN_STOP
+      const pendingStop = showHostDecision && (showProjectResults || pendingDecision) && RUN_STOP
         ? (state.workflow && Array.isArray(state.workflow.runs) ? state.workflow.runs : []).find(run => (
           run.authoritative && RUN_STOP.stopped(run)
           && !timeline.some(row => (row.savedRuns || []).some(saved => (
@@ -584,7 +598,7 @@
             ${freshTask && !chosenStart && !workspace && !lightweight ? projectContinuityHtml() : ''}
             ${conversation || (resultsView || continuation || dataConsentRequired ? '' : workspace
                 ? `<div class="gpi-empty"><strong>${tr('Build something in this project', '在当前项目中创建产物')}</strong><span>${tr('EasyICU Copilot can read, write, edit, check, and preview files in this project’s isolated workspace, while retaining EasyICU research tools.', 'EasyICU 研究助手可以在当前项目的隔离工作区中读取、写入、编辑、检查并预览文件，同时保留 EasyICU 研究工具。')}</span></div>`
-                : emptyResearchHtml)}
+                : emptyResearch ? emptyResearchHtml : '')}
             ${outcome}
             ${dataConsentHtml}
             ${continuation}

@@ -128,21 +128,31 @@ def _workflow(study: Mapping[str, Any], reasons: list[str]):
 
 
 def test_the_registry_holds_the_owners_stops() -> None:
-    assert QUESTION_REQUIREMENT_STOP_CODES == tuple(_STOPS)
+    assert QUESTION_REQUIREMENT_STOP_CODES == (
+        _NOT_COVERED, _GAP, "host_delivery_request_ambiguous", _UNREADABLE,
+    )
     assert set(_STOPS) <= set(PLAN_APPROVAL_STOPS)
     # A fresh candidate plan can be generated from each stop.
     assert set(_STOPS) <= agent_routes._CANDIDATE_PLAN_WORKFLOW_CODES
 
 
-@pytest.mark.parametrize("quote, allowed", [
-    ("web article preview and downloadable PDF", True),
-    ("fit an unsupported joint model and provide a PDF", False),
+@pytest.mark.parametrize("quote, include_owner, verdict, expected_stop", [
+    ("Include the result tables", False, "unverifiable", None),
+    ("web article preview and downloadable PDF", True, "unverifiable", None),
+    ("web article preview and downloadable PDF", False, "unverifiable", _NOT_COVERED),
+    ("fit an unsupported joint model and provide a PDF", True, "unverifiable", _NOT_COVERED),
+    ("fit an unsupported joint model and provide a PDF", True, "verified", _GAP),
 ])
-def test_host_delivery_is_approvable_but_a_scientific_gap_still_blocks(quote, allowed) -> None:
+def test_approval_checks_the_delivery_owner_and_the_scientific_gap(quote, include_owner, verdict, expected_stop) -> None:
+    from easyicu.research_agent.planning.requirement_coverage import bind_requested_host_delivery
+
+    allowed = expected_stop is None
     plan = AnalysisPlan(research_question=quote, steps=[AnalysisStep(
         step_id="primary", intent="Describe the synthetic cohort", method="descriptive",
         inputs=[], expected_outputs=["table:summary"],
     )])
+    if include_owner:
+        plan = bind_requested_host_delivery(plan)
     requirement = QuestionRequirement(
         id="r1", kind="analysis", quote=quote, coverage="capability_gap",
         gap={"requirement": "design_element_unsupported", "element": "analysis",
@@ -151,8 +161,11 @@ def test_host_delivery_is_approvable_but_a_scientific_gap_still_blocks(quote, al
     judged = judge_question_requirements(
         [requirement], plan=plan, family_template=True,
         relatives=lambda concept: frozenset({concept}),
-        check_gap=lambda gap: ("unverifiable", "No scientific capability evidence."),
+        check_gap=lambda gap: (verdict, "Synthetic host verdict on the claimed capability gap."),
     )
+    if include_owner and allowed:
+        owners = judged[0].delivery["owner_step_ids_by_kind"]
+        assert owners == {step.host_delivery_kind: [step.step_id] for step in plan.steps if step.host_delivery_kind}
     requests = human_review_requests_for_plan(
         findings=question_requirement_findings(judged), plan=plan, require_plan_review=True,
     )
@@ -172,7 +185,7 @@ def test_host_delivery_is_approvable_but_a_scientific_gap_still_blocks(quote, al
     )
     offers = host_decision_offers(snapshot, study=study, latest_run=run, plan_review_authority=review)
     assert (offers.plan_review is not None) is allowed
-    assert snapshot.next_action_code == ("operator_plan_approval_required" if allowed else _GAP)
+    assert snapshot.next_action_code == (expected_stop or "operator_plan_approval_required")
 
 
 @pytest.mark.parametrize("reason", _STOPS)
@@ -453,7 +466,7 @@ def _written_records(run_dir: Path) -> dict[str, dict[str, Any]]:
         findings=findings, plan=result.output, require_plan_review=True,
     )
     assert [(request.payload["reason"], request.payload["approval_allowed"]) for request in requests] == [
-        (_GAP, False)
+        (_NOT_COVERED, False)
     ]
     return {
         name: json.loads((run_dir / name).read_text(encoding="utf-8"))
@@ -474,7 +487,8 @@ def test_each_record_opens_in_the_conversation_with_every_field_it_holds(
     run_dir.mkdir()
     record = _written_records(run_dir)[name]
     # What a reader needs to see why the plan stopped is in the record.
-    (gap,) = [row for row in record["judged"] if row["disposition"] == "capability_gap"]
+    (gap,) = [row for row in record["judged"] if row["claimed_coverage"] == "capability_gap"]
+    assert (gap["disposition"], gap["gap_verification"]) == ("not_covered", "unverifiable")
     assert (gap["quote"], gap["gap"]["detail"]) == (
         _ASKED[1]["quote"],
         _ASKED[1]["gap"]["detail"],
@@ -516,3 +530,38 @@ def test_each_record_opens_in_the_conversation_with_every_field_it_holds(
     # The run file projection withholds no field and the browser projection
     # drops none: the conversation shows the record as written.
     assert opened["payload"] == record
+
+
+@pytest.mark.parametrize("reason", ["first_result_delivery_requires_article", "host_delivery_request_ambiguous"])
+def test_a_delivery_stop_survives_web_review_policy(reason):
+    request = SimpleNamespace(payload={"reason": reason, "approval_allowed": False})
+    projected = agent_pipeline_runs._pending_review_reason_code(
+        request=request, plan_recommendation_complete=False, scientific_plan_review={},
+    )
+    assert projected == reason
+    workflow, offers = _workflow(complete_study(), ["plan_scientific_changes_required", projected])
+    assert workflow.next_action_code == reason
+    assert workflow.plan_execution_ready is False
+    assert "plan_execution" not in offers
+
+
+
+def test_the_deliverable_choice_survives_a_review_without_a_scientific_summary():
+    study = complete_study()
+    digest = study_context_owner.scientific_configuration_sha256(dict(study))
+    reason = "host_delivery_request_ambiguous"
+    run, review = _run_and_review([reason], digest=digest)
+    review.pop("scientific_plan_review")
+    selection = {
+        "requested": ["references"], "check": ["manuscript_pdf"],
+        "confirmed": False, "source": "detector_prefill",
+    }
+    review["deliverables"] = selection
+    review["deliverables_require_article"] = True
+    snapshot = build_research_workflow_snapshot(
+        study=study, active_export_present=True, active_job=None,
+        latest_run=run, plan_review_authority=review,
+    )
+    assert snapshot.next_action_code == reason
+    assert snapshot.plan_review_summary["deliverables"] == {**selection, "article_required": True}
+    assert snapshot.plan_execution_ready is False

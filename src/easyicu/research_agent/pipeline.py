@@ -2712,6 +2712,8 @@ class ResearchAgentPipeline:
                 self._provider_hard_stop, prompt_version, emit_progress,
             )
         plan = seal_plan_tier(generation.plan, self._config, resumed=generation.reused_prior_plan)
+        if not generation.reused_prior_plan and len(plan.execution_steps) != len(plan.steps):
+            plan = plan.model_copy(update={"steps": plan.execution_steps})
         self._services.validate_plan_revision(plan=plan, context=agent_context, before_runtime_binding=self._scientific_runtime_authorities)
         reused_prior_plan = generation.reused_prior_plan
         reused_plan_path = generation.reused_plan_path
@@ -2842,6 +2844,13 @@ class ResearchAgentPipeline:
                 )
         validate_plan_against_adjustment_authority(plan=plan, context=agent_context)
         self._scientific_runtime_authorities.validate_plan(plan)
+        if not reused_prior_plan:
+            from .planning.requirement_coverage import bind_run_deliverables
+
+            plan = bind_run_deliverables(
+                plan, question=context.research_question, defaults=self._config.default_plan_deliverables,
+                edit=self._config.bound_plan_deliverables,
+            )
         plan_path = (
             migrated_plan_path or reused_plan_path or (run_dir / "analysis_plan.json")
         )
@@ -4994,7 +5003,7 @@ class ResearchAgentPipeline:
 
         def _human_review_invoker(plan_result):
             return _pipeline_run___human_review_invoker(
-                plan_result, reviewed_plan=reviewed_plan, self=self
+                plan_result, reviewed_plan=reviewed_plan, self=self, stop_after_analysis=stop_after_analysis,
             )
 
         def _human_review_recorder(records):
@@ -7166,10 +7175,19 @@ def _pipeline_run___review_evidence_store(
     return EvidenceStore(run_dir, enforcement_mode=self._evidence_enforcement_mode)
 
 
-def _pipeline_run___human_review_invoker(plan_result, *, reviewed_plan: Any, self: Any):
+def _pipeline_run___human_review_invoker(plan_result, *, reviewed_plan: Any, self: Any, stop_after_analysis: bool = False):
     from .orchestration.workflow import human_review_requests_for_plan
+    from .planning.approval_stops import delivery_approval_stop
 
-    require_host_plan_before_review(self, plan_result.plan, run_dir=host_plan_review_root(plan_result))
+    question = getattr(getattr(plan_result, "context", None), "research_question", None)
+    config = getattr(self, "_config", None)
+    article_allowed = not stop_after_analysis and getattr(config, "generate_manuscript", None) is not False
+    delivery_stop = (
+        delivery_approval_stop(plan_result.plan, article_allowed=article_allowed)
+        if isinstance(plan_result.plan, AnalysisPlan) else None
+    )
+    if delivery_stop is None:
+        require_host_plan_before_review(self, plan_result.plan, run_dir=host_plan_review_root(plan_result))
     reviewed_plan.append(plan_result)
     plan_evidence = getattr(plan_result, "evidence", None)
     capsule_record = (
@@ -7178,7 +7196,8 @@ def _pipeline_run___human_review_invoker(plan_result, *, reviewed_plan: Any, sel
         else None
     )
     if (
-        getattr(plan_result, "resume_state", None) is not None
+        delivery_stop is None
+        and getattr(plan_result, "resume_state", None) is not None
         and capsule_record is not None
     ):
         evidence_root = getattr(plan_evidence, "root", None)
@@ -7216,6 +7235,7 @@ def _pipeline_run___human_review_invoker(plan_result, *, reviewed_plan: Any, sel
             plan=plan_result.plan,
             evidence=plan_evidence,
             require_plan_review=self._config.require_human_plan_review,
+            question=question, article_allowed=article_allowed,
         )
         if not requests_without_execution:
             return requests_without_execution
@@ -7244,6 +7264,7 @@ def _pipeline_run___human_review_invoker(plan_result, *, reviewed_plan: Any, sel
         evidence=plan_evidence,
         execution_authority=execution_authority,
         require_plan_review=self._config.require_human_plan_review,
+        question=question, article_allowed=article_allowed,
     )
     return requests
 

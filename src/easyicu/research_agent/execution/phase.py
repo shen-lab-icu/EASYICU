@@ -1737,7 +1737,7 @@ def run_execute_phase(
         development_sample=run_input_authority_state.development_sample,
     )
     step_order = {s.step_id: i for i, s in enumerate(plan.steps)}
-    total_steps = len(plan.steps)
+    total_steps = len(plan.execution_steps)
 
     _record_repair = functools.partial(
         _step_record_repair,
@@ -4629,7 +4629,7 @@ def _step_apply_revised_plan(
         plan=plan,
         executed_step_ids=executed_step_ids,
     )
-    total_steps = len(plan.steps)
+    total_steps = len(plan.execution_steps)
     return remaining, plan, total_steps
 
 

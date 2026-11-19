@@ -65,6 +65,14 @@ def _source_facts(export: str, raw: str, database: str) -> dict[str, Any]:
     }
 
 
+def _source_study_sha256(study: Mapping[str, Any]) -> str:
+    # A document choice changes the review candidate, while this receipt
+    # grants access to a specific scientific study and registered source.
+    return study_contexts.scientific_configuration_sha256(
+        {key: value for key, value in study.items() if key != "plan_deliverables"}
+    )
+
+
 def publish_choice(*, study: Mapping[str, Any], new_source: Mapping[str, Any],
                    confirmations: Mapping[str, Any], offer_sha256: str) -> str:
     source = study.get("data_source") or {}
@@ -81,7 +89,7 @@ def publish_choice(*, study: Mapping[str, Any], new_source: Mapping[str, Any],
     proposed = {**dict(study), "data_source": dict(new_source), "confirmations": dict(confirmations)}
     body = {"schema_version": "easyicu.demo-planning-source-choice/1",
             "study_id": study["id"], "revision": study["revision"] + 1,
-            "scientific_configuration_sha256": study_contexts.scientific_configuration_sha256(proposed),
+            "scientific_configuration_sha256": _source_study_sha256(proposed),
             "offer_sha256": offer_sha256, "nonce": secrets.token_hex(32), **facts}
     receipt = {"body": body, "signature": _signature(body)}
     raw = canonical_json(receipt).encode()
@@ -111,7 +119,7 @@ def resolve_choice(study: Mapping[str, Any]) -> Any:
     if (body.get("schema_version") != "easyicu.demo-planning-source-choice/1"
             or body.get("study_id") != study.get("id") or type(body.get("revision")) is not int
             or type(study.get("revision")) is not int or study["revision"] < body["revision"]
-            or body.get("scientific_configuration_sha256") != study_contexts.scientific_configuration_sha256(dict(study))):
+            or body.get("scientific_configuration_sha256") != _source_study_sha256(study)):
         raise ValueError("demo_planning_authority_stale")
     identity_record = body.get("identity")
     identity = SourceIdentity.from_record(identity_record)

@@ -28,6 +28,8 @@ from typing import Any, Dict, List, Mapping, Optional
 from easyicu.research_agent.contracts.product_files import (
     RUN_DELIVERY_ARTIFACT_NAMES,
     RUN_DOCUMENT_SPECS,
+    host_delivery_owners,
+    verified_host_deliveries,
 )
 from easyicu.webserver import state_paths
 from easyicu.webserver import agent_outputs
@@ -876,6 +878,20 @@ def _current_manuscript_projection_matches(run_dir: Path, name: str, raw: bytes)
             return False
         if owner.resolve(strict=True).parent != pipeline.resolve(strict=True):
             return False
+        from easyicu.research_agent.canonical_json import canonical_sha256
+        from .literature_projection import load_current_plan_authority
+
+        plan = load_current_plan_authority(owner)
+        owners = host_delivery_owners(plan)
+        kind = "references" if name == "manuscript_scaffold.bib" else "manuscript_pdf"
+        if step_id := owners.get(kind):
+            current = verified_host_deliveries(
+                owner, run_id=run_id, plan_sha256=canonical_sha256(plan), owners={kind: step_id},
+            ).get(kind)
+            if current is None:
+                return False
+            if kind == "references":
+                return raw == current[name]
         from .agent_pipeline_runs import _validated_manuscript_documents
         receipt, documents = _validated_manuscript_documents(owner)
         if receipt is None:

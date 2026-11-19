@@ -4,11 +4,29 @@ from __future__ import annotations
 
 import re
 from pathlib import Path
-from typing import Any, Mapping
+from typing import TYPE_CHECKING, Any, Mapping
+
+from easyicu.research_agent.contracts.product_files import HOST_DELIVERY_KINDS, HostDeliveryKind
 
 from easyicu.webserver import provider_adapter
 from easyicu.webserver.hosted import deployment_kind
 from easyicu.webserver.research_pipeline_run_errors import ResearchPipelineRunError
+
+if TYPE_CHECKING:
+    from easyicu.research_agent.orchestration.profiles import SubmissionProfile
+
+
+def reviewed_article_deliverable_defaults(
+    profile: SubmissionProfile, *, budget_mode: str,
+) -> tuple[HostDeliveryKind, ...] | None:
+    """Offer article defaults only on a Web run that reviews and writes an article."""
+    if (
+        budget_mode in {"full_reviewed", "deferred_reviewed"}
+        and profile.execution_tier != "first_result"
+        and profile.generate_manuscript is not False
+    ):
+        return HOST_DELIVERY_KINDS
+    return None
 
 
 def _clean_text(value: Any, limit: int = 1_200) -> str:

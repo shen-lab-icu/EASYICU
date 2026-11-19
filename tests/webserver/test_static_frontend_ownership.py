@@ -823,6 +823,7 @@ def test_clinical_card_styles_have_one_owner_before_route_overrides() -> None:
         ".gpi-clinical-lines>li:first-child",
         ".gpi-clinical-lines>li>em",
         ".gpi-plan-timing",
+        ".gpi-plan-deliverables",
     ):
         assert selector in card
         assert selector not in shell
@@ -830,7 +831,7 @@ def test_clinical_card_styles_have_one_owner_before_route_overrides() -> None:
     assert sheets.count("guided-pi-clinical-card.css") == 1
     assert sheets.index("guided-pi.css") + 1 == sheets.index("guided-pi-clinical-card.css")
     assert sheets.index("guided-pi-clinical-card.css") < sheets.index("guided-pi-desktop.css")
-    assert "css/guided-pi-clinical-card.css?v=20261025-owner-split1" in index
+    assert "css/guided-pi-clinical-card.css?v=20261119-int1" in index
     assert "css/guided-pi.css?v=20261028-wait1-cfg1" in index
 
 

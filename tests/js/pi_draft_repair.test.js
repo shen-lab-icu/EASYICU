@@ -105,7 +105,7 @@ test('real sidecar repairs an omitted draft once with no active tools', { timeou
     res.end('data: [DONE]\n\n');
   });
   await new Promise(resolve => server.listen(0, '127.0.0.1', resolve));
-  const env = { PATH: process.env.PATH, EASYICU_PI_API_KEY: 'synthetic',
+  const env = { PATH: process.env.PATH, TMPDIR: temp, EASYICU_PI_API_KEY: 'synthetic',
     EASYICU_PI_BASE_URL: `http://127.0.0.1:${server.address().port}/v1`, EASYICU_PI_MODEL: 'draft-test',
     EASYICU_PI_PROVIDER: 'local', EASYICU_PI_API: 'openai-completions', EASYICU_PI_SESSION_DIR: path.join(temp, 'sessions'),
     EASYICU_PI_CWD: temp, EASYICU_PI_MAX_TOKENS: '1024', EASYICU_PI_MAX_PROVIDER_CALLS_PER_MESSAGE: '4' };

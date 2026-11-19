@@ -256,9 +256,9 @@ def test_each_requirement_reads_with_its_disposition_reason_and_source(
         ],
         [
             "r5 · 指定估计量或指标：「its net benefit」",
-            "这份计划做不到 · 不能批准",
-            "规划的说明：This plan cannot estimate net benefit at named thresholds.",
-            "规划声明，EasyICU 无法核对",
+            "没有回答 · 不能批准",
+            "EasyICU 未能核实草案所称的能力缺口",
+            "EasyICU 已核实",
         ],
         [
             "r6 · 定义：「septic shock」",
@@ -273,7 +273,11 @@ def test_each_requirement_reads_with_its_disposition_reason_and_source(
     ]
 
 
-def test_host_delivery_is_shown_with_its_verified_reason() -> None:
+@pytest.mark.parametrize("include_owner", [True, False])
+def test_reader_shows_delivery_verification_only_with_a_plan_owner(include_owner) -> None:
+    from easyicu.research_agent.planning.requirement_coverage import bind_requested_host_delivery
+    from easyicu.research_agent.schema import AnalysisPlan, AnalysisStep
+
     requirement = QuestionRequirement(
         id="r1", kind="delivery", quote="downloadable manuscript PDF",
         coverage="capability_gap", deliverable_kinds=["manuscript_pdf"],
@@ -282,15 +286,26 @@ def test_host_delivery_is_shown_with_its_verified_reason() -> None:
             detail="The statistical plan cannot generate this document.",
         ),
     )
+    plan = AnalysisPlan(research_question=requirement.quote, steps=[
+        AnalysisStep(step_id="summary", intent="Summarize collection shifts", expected_outputs=["table:summary"]),
+    ])
+    if include_owner:
+        plan = bind_requested_host_delivery(plan)
     judged = judge_question_requirements(
-        [requirement], plan=PLAN, family_template=True,
+        [requirement], plan=plan, family_template=True,
         relatives=lambda concept: frozenset({concept}),
         check_gap=lambda gap: ("unverifiable", "No scientific capability evidence."),
     )
     html = _render(QUESTION_REQUIREMENTS_REVIEW_FILENAME, _record(judged))
-    assert "由 EasyICU 的文章与下载交付覆盖" in html
     assert "EasyICU 已核实" in html
-    assert "不能批准" not in html
+    assert ("不能批准" in html) is not include_owner
+    if include_owner:
+        (owner_id,) = judged[0].delivery["owner_step_ids_by_kind"]["manuscript_pdf"]
+        assert next(step for step in plan.steps if step.step_id == owner_id).host_delivery_kind == "manuscript_pdf"
+        assert f"由本计划的类型化步骤 {owner_id} 覆盖" in html
+    else:
+        assert "由本计划的类型化步骤" not in html
+        assert "由 EasyICU 的文章与下载交付覆盖" not in html
 
 
 def test_english_readers_keep_the_hosts_own_gap_detail(tmp_path: Path) -> None:
@@ -332,7 +347,7 @@ def test_only_the_judgment_of_the_plan_under_review_says_approval_stops(
         "已回答",
         "计划声明已回答",
         "没有回答",
-        "这份计划做不到",
+        "没有回答",
         "只用于定义",
     ]
 

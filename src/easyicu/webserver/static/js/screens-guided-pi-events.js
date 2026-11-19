@@ -224,6 +224,12 @@
           if (prompt) void prepareNewTaskFollowUp(prompt);
           return;
         }
+        if (event.target.closest('[data-gpi-article-run]')) {
+          if (state.busy || state.childJobId || !state.session || state.session.stale?.stale) return;
+          const text = RUN_OUTCOME.articleRunPrompt(state.latestRun);
+          if (text) prepareEntryCompose({ text, intent: '', origin: 'host_prompt' });
+          return;
+        }
         const dismissFollowUp = event.target.closest('[data-gpi-followup-dismiss]');
         if (dismissFollowUp) {
           if (RUN_OUTCOME.dismissFollowUp(dismissFollowUp.dataset.gpiFollowupDismiss, state.latestRun, state.workflow)) render();
@@ -731,6 +737,11 @@
         if (event.target.matches('[data-gpi-skill-search]')) STUDY_WORKSPACE.filterSkills(state.host, event.target.value);
       });
       state.host.addEventListener('change', event => {
+        const deliverables = event.target.closest('[data-gpi-plan-deliverables]');
+        if (deliverables) {
+          window.EasyICU.guidedPi.require('planActions').deliverableSelection(deliverables);
+          return;
+        }
         if (RUN_FILES && RUN_FILES.handleChange(event)) return;
         if (IDEA_SOURCE && IDEA_SOURCE.handleChange(event, {
           host: () => state.host, render, tr,
@@ -773,6 +784,13 @@
       });
       state.host.addEventListener('submit', event => {
         if (MESSAGE_ACTIONS.handleSubmit(event)) return;
+        const deliverables = event.target.closest('[data-gpi-plan-deliverables]');
+        if (deliverables) {
+          event.preventDefault();
+          const selection = window.EasyICU.guidedPi.require('planActions').deliverableSelection(deliverables);
+          if (selection) void confirmPlanDecision({ deliverables: selection });
+          return;
+        }
         const nextCustomForm = event.target.closest('[data-gpi-next-custom-form]');
         if (nextCustomForm) {
           event.preventDefault();

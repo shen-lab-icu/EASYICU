@@ -74,7 +74,7 @@ class CaseDurationLandmarkAuthority(BaseModel):
 
     def validate_plan(self, plan) -> None:
         """Require a named, reviewed risk-set step before the exact OLS model."""
-        if (plan.analysis_type not in {"association", "association_study"} or len(plan.steps) != 2
+        if (plan.analysis_type not in {"association", "association_study"} or len(plan.execution_steps) != 2
                 or plan.cohort is None or plan.cohort.inclusion or plan.cohort.exclusion
                 or plan.cohort.unapplied_population_criteria):
             raise ValueError("case_duration_landmark_plan_scope_mismatch")

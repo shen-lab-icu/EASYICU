@@ -40,6 +40,7 @@ from easyicu.webserver.execution_failure import (
     track_failure_location,
 )
 
+from easyicu.research_agent.orchestration.workflow import plan_repair_receipt
 from easyicu.research_agent.authority.plan_review import PlanReviewAuthority
 from easyicu.research_agent.authority.run_input import (
     RunInputCapsuleV2,
@@ -48,6 +49,7 @@ from easyicu.research_agent.authority.run_input import (
     load_verified_run_input_capsule,
 )
 from easyicu.research_agent.contracts.executor_stop import registered_executor_stop
+from easyicu.research_agent.contracts.product_files import HostDeliveryKind
 from easyicu.research_agent.planning.question_interpretation import (
     QUESTION_SUBSTANCE_FORMS_KEY,
 )
@@ -167,7 +169,9 @@ from easyicu.webserver.research_launch_resume import (
     _DevelopmentResumeAcquisition,
     _slug,
 )
-from easyicu.webserver.research_launch_runtime import _submission_profile_ref, recorded_submission_profile_ref
+from easyicu.webserver.research_launch_runtime import (
+    _submission_profile_ref, recorded_submission_profile_ref, reviewed_article_deliverable_defaults,
+)
 from easyicu.webserver.study_intent import explicit_outcome_concepts
 from easyicu.webserver.research_launch_scientific import (
     _analysis_requires_longitudinal_trajectory,
@@ -737,8 +741,12 @@ def _pending_review_reason_code(
 ) -> str:
     """Project one precise current-policy reason for the paused plan."""
 
+    from easyicu.research_agent.planning.approval_stops import DELIVERY_APPROVAL_STOPS
+
     payload = request.payload if isinstance(request.payload, Mapping) else {}
     explicit_reason = _clean_text(payload.get("reason"), 160)
+    if explicit_reason in DELIVERY_APPROVAL_STOPS:
+        return explicit_reason
     # A current host policy must remain visible even when the older review
     # cannot be displayed and the plan also has other independent problems.
     if host_icd_source_required and not scientific_plan_review:
@@ -1503,6 +1511,7 @@ def _write_pipeline_failure_diagnostic(
             if isinstance(rows := getattr(item, "easyicu_compile_retry_metadata", None), list) and rows
         ), attempts),
         "structured_attempts": attempts,
+        **safe_stop_coordinates({"plan_repair": plan_repair_receipt(exc)}),
         "raw_model_output_recorded": False,
         "prompt_recorded": False,
         "patient_rows_recorded": False,
@@ -1530,6 +1539,39 @@ def _write_pipeline_failure_diagnostic(
     except OSError:
         return None
     return relative
+
+
+def _repairable_plan_check(exc: Exception) -> Mapping[str, Any]:
+    """Feed back only checks owned by the plan compiler or host plan validator."""
+    from easyicu.research_agent.planning.capability_gap import CapabilityGapDiagnostic
+
+    code = _pipeline_failure_code(exc)
+    if code not in {
+        "research_pipeline_progressive_compile_failed", "research_pipeline_plan_step_needs_sandbox",
+        "research_pipeline_plan_contract_exhausted",
+    }:
+        return {}
+    check = _safe_pipeline_typed_failure(exc)
+    if check.get("owner") not in {
+        "easyicu.planning.progressive_compiler_v1", "easyicu.execution.host_plan_v1",
+    }:
+        return {}
+    if (check.get("metrics") or {}).get("planner_provider_calls") == 0:
+        return {}
+    if check.get("reason_code") == "progressive_family_result_contract_unwritable":
+        return {}  # This is owned by the study's explicit design decision.
+    for error in _pipeline_exception_chain(exc):
+        gap = getattr(error, "easyicu_rejected_planning_capability_gap", None) or getattr(
+            error, "easyicu_planning_capability_gap", None,
+        )
+        if isinstance(gap, CapabilityGapDiagnostic):
+            if gap.verification == "verified":
+                return {}
+            return {**check, "capability_gap": gap.model_dump(mode="json", exclude={"rationale"})}
+        requirement = getattr(error, "easyicu_question_requirement_gap", None)
+        if isinstance(requirement, dict):
+            return {**check, "requirement": requirement}
+    return check
 
 
 def _failure_gate_detail(
@@ -1709,6 +1751,14 @@ def _record_pipeline_failure(
         reason_code = typed.get("reason_code")
         cause_code = typed.get("cause_code")
         coordinates = {key: value for key, value in safe_stop_coordinates(typed).items() if not (key == "step_id" and value == "unknown")}
+        repair = safe_stop_coordinates({"plan_repair": plan_repair_receipt(exc)})
+        if repair:
+            coordinates.update(repair)
+            # An outline with a verified capability gap never enters repair.
+            # The private receipt retains the Planner's rejected gap claim.
+            if reason_code == "progressive_capability_gap":
+                reason_code = "progressive_capability_gap_claim_unverified"
+            reason_code = reason_code or code
         if code == "research_pipeline_provider_timeout":
             coordinates.update(provider_timeout_coordinates(_safe_pipeline_attempt_metadata(exc)))
             reason_code = reason_code or code
@@ -4244,6 +4294,8 @@ def _readiness_axes(run_dir: Path) -> Dict[str, Any]:
             "analysis_errors",
             "writer_stop",
             "manuscript_requested",
+            "host_delivery_steps",
+            "host_delivery_failure",
         )
         if key in merged
     }
@@ -4324,11 +4376,13 @@ def _failed_closed_detail(axes: Mapping[str, Any]) -> Optional[Dict[str, Any]]:
 
 
 def _gate_from_axes(axes: Mapping[str, Any], *, pending: bool) -> Dict[str, Any]:
-    from easyicu.research_agent.reporting.completion import completion_outcomes
+    from easyicu.research_agent.reporting.completion import completion_outcomes, host_delivery_checks_apply
 
     outcomes = completion_outcomes(axes, pending=pending)
-    status = "analysis_only" if outcomes["analysis_outcome"]["status"] == "completed" else "blocked"
-    reason = (
+    delivery_failure = axes.get("host_delivery_failure") if not pending and host_delivery_checks_apply(axes) else None
+    analysis_complete = outcomes["analysis_outcome"]["status"] == "completed"
+    status = "analysis_only" if analysis_complete and not delivery_failure else "blocked"
+    reason = delivery_failure or (
         "human_plan_review_required" if pending else
         "research_agent_pipeline_complete_human_interpretation_required"
         if status == "analysis_only" else "research_agent_pipeline_failed_closed"
@@ -4883,6 +4937,71 @@ def _system_validation_figure_gallery(
     }
 
 
+def _check_host_manuscript_delivery(
+    *,
+    run_dir: Path,
+    plan: Mapping[str, Any],
+    owners: Mapping[HostDeliveryKind, str],
+    axes: Mapping[str, Any],
+    gate: Dict[str, Any],
+    manuscript_text: str,
+    provenance: Mapping[str, Any],
+    documents: List[Dict[str, Any]],
+    pdf_receipt: Optional[Dict[str, Any]],
+) -> set[str]:
+    from easyicu.research_agent.contracts.product_files import (
+        EMPTY_BIBTEX, confirmed_host_delivery_kinds, host_delivery_failure_code, verified_host_deliveries,
+    )
+    from easyicu.research_agent.reporting.completion import completion_outcomes
+
+    requested = confirmed_host_delivery_kinds(plan) if "deliverables" in plan else tuple(owners)
+    if not requested:
+        return set()
+    verified = verified_host_deliveries(
+        run_dir, run_id=run_dir.name, plan_sha256=canonical_sha256(plan), owners=owners,
+    ) if plan else {}
+    # Treat the public products as part of delivery too. Reuse the existing
+    # PDF and article-provenance readers, with the same verified bytes.
+    preview = verified.get("article_preview")
+    if preview and (
+        not manuscript_text.strip() or not provenance
+        or not preview["manuscript_scaffold_bound.md"].startswith(manuscript_text.encode("utf-8"))
+        or provenance != json.loads(preview["manuscript_provenance.json"])
+    ):
+        verified.pop("article_preview")
+    pdf = verified.get("manuscript_pdf")
+    if pdf and (
+        pdf_receipt != json.loads(pdf["manuscript_pdf_receipt.json"])
+        or not any(row["name"] == "manuscript_scaffold.pdf" and row["content"] == pdf["manuscript_scaffold.pdf"]
+                   for row in documents)
+    ):
+        verified.pop("manuscript_pdf")
+    if bibliography := verified.get("references"):
+        name = "manuscript_scaffold.bib"
+        documents[:] = [row for row in documents if row["name"] != name]
+        documents.append({"name": name, "content": bibliography[name], "media_type": _MANUSCRIPT_DOCUMENT_SPECS[name][0]})
+        if bibliography[name] == EMPTY_BIBTEX.encode("utf-8"):
+            gate.setdefault("deliverable_dispositions", []).append({
+                "kind": "references", "reason_code": "no_citable_references",
+            })
+
+    failures = {kind: host_delivery_failure_code(kind) for kind in requested if kind not in verified}
+    gate["host_delivery_steps"] = [
+        {"kind": kind, "step_id": step_id, "status": "verified" if kind in verified else "unverified",
+         "reason_code": failures.get(kind)}
+        for kind, step_id in owners.items()
+    ]
+    if failures:
+        reason = next(iter(failures.values()))
+        gate.update(completion_outcomes({**axes, "host_delivery_failure": reason}))
+        gate.update(status="blocked", reason=reason, reportable=False, draft_unlocked=False)
+        gate["manuscript_detail"] = {"reason_code": reason}
+        for check in gate["checks"]:
+            if check["id"] in {"manuscript_ready", "publication_ready", "paper_authorized"}:
+                check.update(passed=False, reason=reason)
+    return set(failures)
+
+
 def _projection_time_window_hours(study: Mapping[str, Any]) -> Optional[float]:
     """Project an explicit study window without inventing Planner authority."""
 
@@ -4903,6 +5022,7 @@ def _write_projection(
     pending: Optional[Any] = None,
     blocked_reason: Optional[str] = None,
     plan_revision_source_run_id: str = "",
+    plan_repair: Mapping[str, Any] | None = None,
 ) -> Dict[str, Any]:
     wrapper_dir.mkdir(parents=True, exist_ok=True)
     run_id = str(
@@ -5041,13 +5161,6 @@ def _write_projection(
         plan_recommendation_complete=plan_recommendation_complete,
         population_acceptance=population_acceptance,
     )
-    scientific_readiness = build_scientific_readiness_projection(
-        run_id=run_id,
-        run_dir=run_dir,
-        axes=axes,
-        literature_evidence=literature_evidence,
-        study=study,
-    ).model_dump(mode="json")
     manuscript_path = run_dir / "manuscript_scaffold_bound.md" if run_dir else None
     manuscript_text = ""
     if manuscript_path is not None:
@@ -5103,7 +5216,63 @@ def _write_projection(
         _read_json(run_dir / "evidence" / "evidence_index.json", []) if run_dir else []
     )
     evidence_count = len(evidence_index) if isinstance(evidence_index, list) else 0
-    pdf_receipt, manuscript_documents = _validated_manuscript_documents(run_dir)
+    from easyicu.research_agent.contracts.product_files import (
+        host_delivery_omissions, host_delivery_owners, recorded_host_delivery_owners,
+    )
+    from easyicu.research_agent.reporting.completion import host_delivery_checks_apply
+
+    delivery_active = (
+        run_dir is not None and pending is None and not blocked_reason and host_delivery_checks_apply(axes)
+    )
+    delivery_owners = host_delivery_owners(plan)
+    if run_dir is not None and not plan:
+        delivery_owners = recorded_host_delivery_owners(run_dir, run_id=run_dir.name)
+        delivery_owners.update(host_delivery_owners({"steps": [
+            {"host_delivery_kind": row.get("kind"), "step_id": row.get("step_id")}
+            for row in (axes.get("host_delivery_steps") or ()) if isinstance(row, Mapping)
+        ]}))
+    planned_pdf = "manuscript_pdf" in delivery_owners
+    explicit_delivery = isinstance(plan.get("deliverables"), Mapping)
+    omissions = host_delivery_omissions(plan)
+    if omissions and pending is None and gate["analysis_outcome"]["status"] == "completed":
+        gate["deliverable_dispositions"] = omissions
+    try:
+        pdf_receipt, manuscript_documents = _validated_manuscript_documents(
+            None if (planned_pdf and not delivery_active) or (explicit_delivery and not planned_pdf) else run_dir
+        )
+    except ResearchPipelineRunError:
+        if not planned_pdf:
+            raise
+        pdf_receipt, manuscript_documents = None, []
+    if delivery_active:
+        failed_deliveries = _check_host_manuscript_delivery(
+            run_dir=run_dir, plan=plan, owners=delivery_owners, axes=axes, gate=gate, manuscript_text=manuscript_text,
+            provenance=manuscript_provenance, documents=manuscript_documents, pdf_receipt=pdf_receipt,
+        )
+        if failed_deliveries:
+            axes = {**axes, "manuscript_ready": False, "publication_ready": False, "paper_authorized": False}
+        if "article_preview" in failed_deliveries:
+            manuscript_text, manuscript_provenance, claims = "", {}, []
+        if "manuscript_pdf" in failed_deliveries:
+            pdf_receipt = None
+            manuscript_documents = [row for row in manuscript_documents if row["name"] not in {
+                "manuscript_scaffold.pdf", "manuscript_scaffold.tex",
+            }]
+        if "references" in failed_deliveries:
+            manuscript_documents = [row for row in manuscript_documents if row["name"] != "manuscript_scaffold.bib"]
+    if explicit_delivery:
+        if "article_preview" not in delivery_owners or not delivery_active:
+            manuscript_text, manuscript_provenance, claims = "", {}, []
+        if "references" not in delivery_owners or not delivery_active:
+            manuscript_documents = [row for row in manuscript_documents if row["name"] != "manuscript_scaffold.bib"]
+
+    scientific_readiness = build_scientific_readiness_projection(
+        run_id=run_id,
+        run_dir=run_dir,
+        axes=axes,
+        literature_evidence=literature_evidence,
+        study=study,
+    ).model_dump(mode="json")
     pending_requests = []
     if pending is not None:
         pending_requests = [
@@ -5147,6 +5316,9 @@ def _write_projection(
             }
             for request in pending.requests
         ]
+    repair_detail = safe_stop_coordinates({"plan_repair": plan_repair})
+    if repair_detail:
+        gate["detail"] = {**(gate.get("detail") or {}), "reason_code": gate["reason"], **repair_detail}
     source = study.get("data_source")
     gate["next_actions"] = project_stop_next_actions(
         gate, pending_reason_codes=[item["reason_code"] for item in pending_requests],
@@ -5257,6 +5429,11 @@ def _write_projection(
         "result_tables.json": result_tables,
         "source_run_manifest.json": source_manifest,
     }
+    if explicit_delivery and "article_preview" not in delivery_owners:
+        payloads.pop("manuscript_draft.json")
+    if pending is None and any(row["kind"] == "references" for row in omissions):
+        payloads.pop("literature_evidence.json")
+        (wrapper_dir / "literature_evidence.json").unlink(missing_ok=True)
     from .data_provenance_projection import load_data_provenance_projection
     payloads["data_provenance.json"] = load_data_provenance_projection(run_dir)
     system_figure_gallery = None
@@ -5324,13 +5501,11 @@ def _write_projection(
         system_validation_html = None
     for name, payload in payloads.items():
         _write_json(wrapper_dir / name, payload)
-    # A resumed/reprojected wrapper may predate this pass.  Fixed document names
-    # are removed before the newly validated set is copied so a missing, stale,
-    # or privacy-withheld receipt can never leave an older PDF reachable.
-    for document_name in _RUN_DOCUMENT_SPECS:
-        stale = wrapper_dir / document_name
-        if stale.exists() or stale.is_symlink():
-            stale.unlink()
+    # A resumed wrapper can still contain exports from its last projection.
+    # Purge those without a current validated document or JSON payload.
+    for name in (*_RUN_DOCUMENT_SPECS, "manuscript_draft.json", "manuscript_provenance.json", "manuscript_pdf_receipt.json"):
+        if name not in payloads:
+            (wrapper_dir / name).unlink(missing_ok=True)
     document_rows: List[Dict[str, Any]] = []
     if privacy_scan["passed"]:
         for document in manuscript_documents:
@@ -5597,9 +5772,8 @@ def pending_review(run_id: Any) -> Optional[Dict[str, Any]]:
         isinstance(source_manifest, Mapping)
         and source_manifest.get("plan_revision_nonconvergent") is True
     )
-    plan_recommendation_complete = _plan_has_complete_reviewable_recommendation(
-        _pending_plan_authority(pending)
-    )
+    reviewed_plan = _pending_plan_authority(pending)
+    plan_recommendation_complete = _plan_has_complete_reviewable_recommendation(reviewed_plan)
     run_dir = Path(pending.run_dir)
     scientific_plan_review = _load_pending_scientific_review(run_dir, pending)
     from easyicu.webserver.pi_copilot.population_acceptance import current_review_study, population_acceptance_proposal
@@ -5619,6 +5793,11 @@ def pending_review(run_id: Any) -> Optional[Dict[str, Any]]:
     return {
         **({"deferred_input_scope": deferred_scope} if deferred_scope is not None else {}),
         "run_id": pending.run_id,
+        "deliverables": reviewed_plan.get("deliverables"),
+        "deliverables_require_article": (
+            (reviewed_plan.get("design_selection") or {}).get("execution_tier") == "first_result"
+            or any(request.payload.get("reason") == "first_result_delivery_requires_article" for request in pending.requests)
+        ),
         "study_id": _clean_text(study.get("id"), 160),
         "scientific_configuration_sha256": (
             study_context_owner.scientific_configuration_sha256(study)
@@ -8274,6 +8453,12 @@ def make_research_pipeline_run_runner(
                 latex_draft_watermark=True,
                 bound_preplan_literature=bound_preplan_literature,
                 bound_plan_revision_contract=(bound_plan_revision_contract or None),
+                bound_plan_deliverables=study.get("plan_deliverables"),
+                default_plan_deliverables=(
+                    None if analysis_only_execution else reviewed_article_deliverable_defaults(
+                        submission_profile, budget_mode=selected_budget_mode,
+                    )
+                ),
                 bound_population_requirements=(
                     bound_population_requirements.model_dump(mode="json")
                     if bound_population_requirements is not None else None
@@ -8381,7 +8566,8 @@ def make_research_pipeline_run_runner(
                 consume_approved_first_observed_input, publish_approved_source_flow,
             )
 
-            pipeline = ResearchAgentPipeline.from_config(
+            create_pipeline = partial(
+                ResearchAgentPipeline.from_config,
                 config,
                 services=PipelineServices(
                     llm=planning_client,
@@ -8544,8 +8730,28 @@ def make_research_pipeline_run_runner(
             # population compilation; no request-supplied proof is trusted.
             from easyicu.webserver.first_observed_run_guard import host_first_observed_review_scope
 
+            from easyicu.research_agent.orchestration.workflow import PLAN_REPAIR_LIMIT, run_plan_with_repairs
+
+            def invoke_candidate():
+                attempted_pipeline = create_pipeline()
+                result = call_with_failure_location(attempted_pipeline.run, runner_kind=execution.runner_kind, **run_arguments)
+                return attempted_pipeline, result
+
             with host_first_observed_review_scope(study_context_id=str(study["id"])):
-                outcome = call_with_failure_location(pipeline.run, runner_kind=execution.runner_kind, **run_arguments)
+                (pipeline, outcome), plan_repair = run_plan_with_repairs(
+                    invoke_candidate,
+                    check_failure=_repairable_plan_check,
+                    notify=lambda attempt: _progress(
+                        job, step="planning", label="Revising the candidate plan after an EasyICU check.",
+                        current=attempt, total=PLAN_REPAIR_LIMIT, actor="system",
+                        planning_unit="plan", retry_phase="rejected",
+                    ),
+                    enabled=(
+                        config.require_human_plan_review and not config.no_automatic_retries
+                        and execution_resume_target is None and development_resume_binding is None
+                        and grouped_continuation is None and not analysis_only_execution
+                    ),
+                )
             if execution_resume_target is not None and isinstance(
                 outcome, HumanReviewPending
             ):
@@ -8588,6 +8794,7 @@ def make_research_pipeline_run_runner(
                     run_dir=run_dir,
                     pending=outcome,
                     plan_revision_source_run_id=source_run_id,
+                    **({"plan_repair": plan_repair} if plan_repair is not None else {}),
                 )
             projection = _write_terminal_projection(
                 job=job,

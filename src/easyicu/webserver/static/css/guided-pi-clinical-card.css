@@ -1,4 +1,4 @@
-/* Owner: the confirmation card's clinical summary and timing.
+/* Owner: the confirmation card's clinical summary, timing, and deliverable choices.
    Load after guided-pi.css and before the route/desktop overrides. */
 /* Five clinical sentences; no clipped uncertainty or numbered tiles. */
 .gpi-plan-conversation-summary>ol.gpi-clinical-lines{display:grid;grid-template-columns:1fr;gap:0;padding:0 12px 8px}
@@ -6,3 +6,11 @@
 .gpi-clinical-lines>li:first-child{border:0}
 .gpi-clinical-lines>li>em{display:block;overflow:visible;margin:0;-webkit-line-clamp:unset;color:var(--ink-2)}
 .gpi-plan-timing{margin:0;padding:0 12px 10px;font-size:12px;line-height:1.5;color:var(--ink-2)}
+
+.gpi-plan-deliverables{min-width:0;margin:10px 0 0;padding:8px 10px;border:1px solid var(--hair-2);border-radius:8px}
+.gpi-plan-deliverables legend{padding:0 4px;font-weight:600}
+.gpi-plan-deliverable-choices{display:flex;flex-wrap:wrap;gap:6px 12px;margin-bottom:8px}
+.gpi-plan-deliverable-choices label{display:inline-flex;align-items:center;gap:5px}
+.gpi-plan-deliverable-choices select{width:auto;max-width:100%;color:inherit;font:inherit}
+.gpi-plan-deliverables [data-gpi-deliverables-article]{margin-bottom:7px}
+.gpi-plan-deliverables [data-gpi-deliverables-article][hidden]{display:none}

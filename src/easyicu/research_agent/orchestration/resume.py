@@ -729,7 +729,7 @@ class ResumeController:
     ) -> List[AnalysisStep]:
         return [
             step
-            for step in plan.steps
+            for step in plan.execution_steps
             if step.step_id not in executed_step_ids
             and self.within_requested_stop(plan=plan, step=step)
         ]

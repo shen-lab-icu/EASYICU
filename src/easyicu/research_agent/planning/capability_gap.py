@@ -140,7 +140,12 @@ class CapabilityGapRepair:
     def check_outline(self, outline: ProgressivePlanOutline, check: CapabilityGapCheck) -> None:
         gap = outline.declared_capability_gap()
         if gap is not None and check.verification != "verified":
-            self.check((capability_gap_feedback(gap, check, offered_families=self.offered_families),))
+            try:
+                self.check((capability_gap_feedback(gap, check, offered_families=self.offered_families),))
+            except ProgressivePlanCompileError as error:
+                if check.verification == "unverified":
+                    error.easyicu_rejected_planning_capability_gap = _gap_diagnostic(outline, gap, check)
+                raise
 
     def check(
         self, feedback: tuple[RepairFeedback, ...], *, regressions: tuple[RepairFeedback, ...] = (),
@@ -183,6 +188,16 @@ def _capability_gap_repair_message(requirement: str | None) -> str:
     )
 
 
+def _gap_diagnostic(
+    outline: ProgressivePlanOutline, gap: ProgressiveCapabilityGap, check: CapabilityGapCheck,
+) -> CapabilityGapDiagnostic:
+    return CapabilityGapDiagnostic(
+        requirement=gap.requirement, concept=gap.concept,
+        verification=check.verification, fact=check.fact, rationale=outline.rationale,
+        next_action=capability_gap_next_action(gap, check),
+    )
+
+
 def capability_gap_stop(
     outline: ProgressivePlanOutline, check: CapabilityGapCheck,
 ) -> ProgressivePlanCompileError:
@@ -191,20 +206,18 @@ def capability_gap_stop(
     gap = outline.declared_capability_gap()
     if gap is None:
         raise ValueError("a capability-gap stop requires a declared gap")
+    diagnostic = _gap_diagnostic(outline, gap, check)
     if check.verification == "unverified":
         # A saved outline bypasses response parsing. It must still never turn
         # a contradicted claim into a terminal capability-gap receipt.
-        raise ProgressivePlanCompileError(
+        stop = ProgressivePlanCompileError(
             "progressive_capability_gap_claim_unverified",
             f"the declared capability gap does not hold: {check.fact}; "
             "draft the steps the offered families can express, or declare a gap the study shows",
             path="capability_gap", cause_code=gap.requirement,
         )
-    diagnostic = CapabilityGapDiagnostic(
-        requirement=gap.requirement, concept=gap.concept,
-        verification=check.verification, fact=check.fact, rationale=outline.rationale,
-        next_action=capability_gap_next_action(gap, check),
-    )
+        stop.easyicu_rejected_planning_capability_gap = diagnostic
+        raise stop
     message = (
         "the question needs something no offered family can express"
         if check.verification == "verified"
@@ -689,6 +702,16 @@ def check_capability_gap(
             return CapabilityGapCheck("unverified", f"{family} offers a subgroup owner and the source supplies {gap.concept!r}")
 
         if adjustment is None:
+            from ..concept_availability import explain_concept_availability
+
+            available = explain_concept_availability(concept=gap.concept, database=context.cohort.database)
+            if available.available:
+                return CapabilityGapCheck(
+                    "unverified", f"the bound source offers registered concept {available.concept!r}; "
+                    "a missing method would require separate typed evidence",
+                )
+            if available.structural_unavailable:
+                return CapabilityGapCheck("verified", f"the bound source cannot supply {available.concept!r}")
             return CapabilityGapCheck("unverified", f"{gap.concept!r} is not a stated adjustment or subgroup")
         if adjustment.source_status == "available" or stated_adjustment_columns(context, adjustment):
             return CapabilityGapCheck(

@@ -480,13 +480,18 @@ def test_delivery_alternatives_and_uncontracted_exports_do_not_get_credit(monkey
     monkeypatch.setenv(FLAG, "shadow")
     context, plan = _with_exposure("k")
     result_tables = key(Delivery(output_id="result_tables"), STUDY_POPULATION)
-    for quote in ("Deliver result tables or figures", "Deliver a patient-level spreadsheet"):
+    for quote, legacy_verdict in [
+        ("Deliver result tables or figures", "needs_clarification"),
+        ("Deliver a patient-level spreadsheet", "not_covered"),
+    ]:
         shadow_events.clear()
-        _judge(quote, context, plan, kind="delivery", outputs=("result_tables",),
-               proposals=[proposal("r1", quote, result_tables)])
+        (judged,) = _judge(quote, context, plan, kind="delivery", outputs=("result_tables",),
+                           proposals=[proposal("r1", quote, result_tables)])
         [row] = _shadow_event(shadow_events)["parts"]
-        assert row["v1"] == "covered"
+        assert row["v1"] == legacy_verdict
         assert row["v2"] == "unknown"
+        assert judged.delivery is None
+        assert judged.disposition == legacy_verdict
 
 
 def test_multiple_outputs_keep_distinct_parts_even_with_the_same_span(monkeypatch, shadow_events) -> None:
