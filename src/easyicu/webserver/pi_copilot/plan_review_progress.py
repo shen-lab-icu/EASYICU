@@ -100,6 +100,12 @@ def _one_reconfirmation_after(
         return False
     if signed_choice_revision(study) != revision:
         return False
+    return _reconfirmed_compiled_digest(study, progress)
+
+
+def _reconfirmed_compiled_digest(study: Mapping[str, Any], progress: ReviewChoiceProgress) -> bool:
+    """Undoing the reconfirmation's allowed field gives back the compiled digest."""
+
     confirmations = study.get("confirmations")
     if not isinstance(confirmations, Mapping) or confirmations.get(_RECONFIRMATION_FIELD) is not False:
         return False
@@ -114,6 +120,19 @@ def _one_reconfirmation_after(
         if digest == progress.current_digest:
             return True
     return False
+
+
+def compiled_digest_holds(study: Mapping[str, Any], progress: ReviewChoiceProgress) -> bool:
+    """The study's scientific configuration is the one the compile wrote.
+
+    Exactly, or but for the signed raw-Demo reconfirmation's allowed field.
+    Revisions are not compared: job lifecycle writes change none of it.
+    """
+
+    return (
+        study_contexts.scientific_configuration_sha256(study) == progress.current_digest
+        or _reconfirmed_compiled_digest(study, progress)
+    )
 
 
 def _compile_receipt(study: Mapping[str, Any]) -> ReviewChoiceProgress | None:
@@ -175,20 +194,25 @@ def planned_on_compiled_configuration(
     (``compiled_source_run_id``, from run_context.json) only when
     ``compiled_configuration_progress`` held then; job lifecycle writes since
     then do not matter, a changed configuration does. A plan launched
-    without that record (its lineage was broken) may be compiled once more.
-    Read only.
+    without that record (its lineage was broken) may be compiled once more;
+    the compiled run itself is not, while the study holds what its compile
+    wrote (B13). Read only.
     """
 
     progress = _compile_receipt(study)
-    return bool(
-        progress is not None
-        and compiled_source_run_id
-        and compiled_source_run_id == progress.run_id
-        # The compiled run itself was planned before the compile wrote: its
-        # digest is not the study's.
-        and run.get("scientific_configuration_sha256")
-        == study_contexts.scientific_configuration_sha256(study)
-    )
+    # The compiled run itself was planned before the compile wrote: its
+    # digest is not the study's.
+    if progress is None or run.get("scientific_configuration_sha256") != study_contexts.scientific_configuration_sha256(study):
+        return False
+    if compiled_source_run_id and compiled_source_run_id == progress.run_id:
+        return True
+    # B13 (UX leg 3 en, 80e0455cf): the compiled run itself. Its compile
+    # changed only the reconfirmation's field (extraction_completed), so the
+    # signed reconfirmation that followed gave back the digest it was planned
+    # on: it read as current again and offered the same compile, whose
+    # reconfirmation offered it again, with no way to a run. While the study
+    # holds what that compile wrote, its own run is not compiled again.
+    return run.get("run_id") == progress.run_id and compiled_digest_holds(study, progress)
 
 
 def validate_choice_source(study: Mapping[str, Any], run: Mapping[str, Any]) -> None:

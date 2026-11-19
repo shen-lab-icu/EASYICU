@@ -192,7 +192,8 @@ def test_a_launch_that_failed_after_the_reconfirmation_costs_exactly_one_more_co
     # failed before it planned, and its job marked and cleared the study. The
     # allowance is one write after the compile (S1471), so the retry carries
     # no record and may be compiled once more; after that compile and its
-    # reconfirmation the lineage holds again and the chain stops.
+    # reconfirmation the lineage holds again and the chain stops, and the
+    # compiled plan itself is not compiled again (B13).
     first = runs.launch(study_contexts.get_context(choice.study["id"]), "run-a")
     _compile(choice, first)
     reconfirmed = _reconfirm(choice)
@@ -203,6 +204,13 @@ def test_a_launch_that_failed_after_the_reconfirmation_costs_exactly_one_more_co
     assert _offers_compile(reviewed, runs, retry)
     _compile(choice, retry)
     reconfirmed = _reconfirm(choice)
+    # B13 (UX leg 3 en, 80e0455cf): that compile changed only the field the
+    # reconfirmation resets, so the compiled plan reads as current again. It
+    # is not offered, nor compiled, again: the walk looped compile ->
+    # reconfirm -> compile with no way to a run.
+    assert retry["scientific_configuration_sha256"] == study_contexts.scientific_configuration_sha256(reconfirmed)
+    assert not _offers_compile(reconfirmed, runs, retry)
+    _assert_refused_without_writes(choice, retry)
     third = runs.launch(reconfirmed, "run-c")
     assert runs.recorded(third) == "run-b"
     reviewed = _job_writes(reconfirmed["id"], "job-c")
