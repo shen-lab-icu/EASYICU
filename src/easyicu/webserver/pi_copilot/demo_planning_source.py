@@ -13,6 +13,7 @@ from easyicu.webserver import dataio, demo_source_storage, study_contexts
 from easyicu.webserver.research_launch_scientific import bound_export_cohort_refusal
 
 from .contracts import PiCopilotError, PiSessionRecord
+from .population_preparation import study_for_first_plan
 
 ACTION = "use_official_demo_raw_for_plan"
 
@@ -44,7 +45,7 @@ def resolve_demo_planning_source(study: Mapping[str, Any]) -> DemoPlanningSource
     if candidate.database != database:
         return None
     try:
-        refusal = bound_export_cohort_refusal(study, str(export_path))
+        refusal = bound_export_cohort_refusal(study_for_first_plan(study), str(export_path))
         if refusal is None or refusal.code != "research_pipeline_export_cohort_mismatch":
             return None
         marker = demo_source_storage.read_marker(paths.prepared_marker, candidate)

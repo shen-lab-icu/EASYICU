@@ -113,6 +113,17 @@ def stated_first_stay_planning_default(study: Mapping[str, Any]) -> dict[str, An
     return {"cohort": cohort}
 
 
+def study_for_first_plan(study: Mapping[str, Any]) -> Mapping[str, Any]:
+    """The study a first candidate plan is drafted on, without saving it.
+
+    The launch writes ``stated_first_stay_planning_default`` before its bound
+    export cohort gate. Checks that decide whether to offer that plan read
+    this same study, so they never offer a start the launch then refuses.
+    """
+    patch = stated_first_stay_planning_default(study)
+    return {**study, **patch} if patch else study
+
+
 def _admission_patch(criterion: Any, cohort: dict, time_zero: Any) -> str | None:
     """Intersect one inclusion with existing admission axes, or name the gap."""
     if criterion.role != "include":
