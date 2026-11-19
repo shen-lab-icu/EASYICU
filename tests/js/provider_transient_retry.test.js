@@ -114,10 +114,12 @@ async function harness(attempts, config = {}) {
   const notices = [];
   const retryStarts = [];
   const closed = [];
-  const authorize = guard.authorize.bind(guard);
-  guard.authorize = (...args) => { order.push('authorize'); return authorize(...args); };
+  const authorize = guard.authorize;
+  guard.authorize = function (...args) {
+    order.push('authorize');
+    return authorize.apply(this, args);
+  };
   const usage = [];
-  const record = { budgetGuard: guard, language: 'zh', usageLedger: new ShellUsageLedger({ persist: row => usage.push(row) }) };
   let subscribed;
   const session = { agent: {}, subscribe: publisher => { subscribed = publisher; return () => {}; } };
   const manager = {
@@ -125,8 +127,12 @@ async function harness(attempts, config = {}) {
       order.push('receipt');
       assert.equal(schema, receipt.schema_version);
       receipts.push(receipt);
-      config.onReceipt?.(receipts.length);
+      config.onReceipt?.(receipts.length, receipt);
     },
+  };
+  const record = {
+    session, sessionManager: manager, budgetGuard: guard, language: 'zh',
+    usageLedger: new ShellUsageLedger({ persist: row => usage.push(row) }),
   };
   const originalStreamFunction = async (selected, suppliedContext, options) => {
     order.push('provider');
@@ -167,6 +173,7 @@ async function harness(attempts, config = {}) {
         sleepOptions?.signal?.throwIfAborted();
       },
     });
+  const activeRequestBySession = new Map(config.activeRequest === false ? [] : [['synthetic-session', 'synthetic-request']]);
   vm.runInNewContext(eventPublisher + wrapper, {
     session, record, manager, originalStreamFunction, lazyStream,
     externalId: 'synthetic-session',
@@ -178,7 +185,7 @@ async function harness(attempts, config = {}) {
       egressReceipts.push({ selected, suppliedContext });
       assert.equal(calls.length + 1, egressReceipts.length, 'receipt precedes transport');
     },
-    activeRequestBySession: new Map(config.activeRequest === false ? [] : [['synthetic-session', 'synthetic-request']]),
+    activeRequestBySession,
     normalizePiEvent: projection.normalizePiEvent,
     emit: envelope => { order.push('retry'); notices.push(envelope); },
     ...finalization,
@@ -196,7 +203,8 @@ async function harness(attempts, config = {}) {
   const result = await stream.result();
   const projected = projection.normalizePiEvent({ type: 'message_end', message: result });
   return { guard, receipts, egressReceipts, calls, waits, order, events, result, projected, notices, retryStarts, closed, usage,
-    openCall: () => session.agent.streamFunction(model, context, { maxTokens: 1000 }),
+    record, activeRequestBySession,
+    openCall: () => session.agent.streamFunction(model, turnContext, { maxTokens: 1000 }),
   };
 }
 
@@ -811,6 +819,78 @@ test('a later provider call in a committed turn cannot retry', async () => {
   for await (const event of later) events.push(event);
   assert.equal(result.calls.length, 2);
   assert.equal(events.at(-1).type, 'error');
+});
+
+test('explicit reply continuation clears a tool-committed retry flag within the original budget', async () => {
+  const user = { role: 'user', content: 'Save a draft summary.' };
+  const turnContext = { messages: [user] };
+  const entries = [{ type: 'message', id: 'user', message: user }];
+  const appendMessage = (id, message) => {
+    entries.push({ type: 'message', id, message });
+    turnContext.messages.push(message);
+  };
+  const toolCall = { type: 'toolCall', id: 'write', name: 'easyicu_write_project_file', arguments: {} };
+  const transientFailure = failed('HTTP 503: unavailable');
+  const maxCalls = 4;
+  const result = await harness([
+    decided([toolCall], 'toolUse'), [transientFailure], [transientFailure], success(4),
+  ], {
+    context: turnContext,
+    guard: { maxProviderCallsPerMessage: maxCalls },
+    onReceipt: (_count, data) => entries.push({ type: 'custom', customType: data.schema_version, data }),
+  });
+  const { record, guard, activeRequestBySession } = result;
+  assert.equal(record.providerTurnCommitted, true, 'the tool call commits the turn');
+  appendMessage('tool-call', result.result);
+  appendMessage('tool-result', {
+    role: 'toolResult', toolName: toolCall.name, toolCallId: toolCall.id, content: [],
+    details: { status: 'ok', code: 'pi_workspace_file_written', details: { file: 'draft.md', sha256: 'a'.repeat(64) } },
+  });
+  const implicit = result.openCall();
+  for await (const event of implicit) assert.equal(event.type, 'error');
+  appendMessage('failed-reply', await implicit.result());
+  assert.equal(record.providerTurnCommitted, true, 'the implicit post-tool stream inherits the flag');
+  assert.equal(result.calls.length, 2, 'the implicit stream does not retry its transient failure');
+  assert.deepEqual(result.waits, []);
+  const originalBudget = guard.state();
+  guard.endMessage();
+  activeRequestBySession.clear();
+
+  record.agentMode = 'workspace';
+  Object.assign(record.sessionManager, { getEntries: () => entries, getBranch: () => entries });
+  Object.assign(record.session, {
+    model, messages: turnContext.messages,
+    getActiveToolNames: () => [toolCall.name],
+    setActiveToolsByName() {},
+    async sendCustomMessage(instruction, { triggerTurn }) {
+      assert.equal(triggerTurn, true);
+      assert.equal(record.providerTurnCommitted, false, 'the explicit continuation must open with retries enabled');
+      assert.deepEqual(guard.state(), originalBudget, 'the explicit continuation resumes the original budget');
+      turnContext.messages.push({ role: 'user', content: instruction.content });
+      const stream = result.openCall();
+      for await (const _event of stream) { /* Drain the scripted provider stream. */ }
+      appendMessage('continued-reply', await stream.result());
+    },
+  });
+
+  // Inject the same session and stream into the real handler without starting stdin RPC.
+  const boundaryStart = source.indexOf('\nasync function continueReplySession(');
+  const boundaryEnd = source.indexOf('\nasync function handleRequest(', boundaryStart);
+  assert.ok(boundaryStart >= 0 && boundaryEnd > boundaryStart, 'Exercise the session continuation handler');
+  const { prepareReplyContinuation } = await import(pathToFileURL(path.join(path.dirname(mainFile), 'reply-continuation.mjs')));
+  const continueReplySession = vm.runInNewContext(source.slice(boundaryStart, boundaryEnd) + '\ncontinueReplySession;', {
+    sessions: new Map([['synthetic-session', record]]), activeRequestBySession, prepareReplyContinuation,
+    assertExactKeys() {}, boundedText: String,
+    sessionLifecycle: { admit() {}, touch() {} },
+    sessionState: () => guard.state(),
+  }, { filename: mainFile });
+  const continuedBudget = await continueReplySession('explicit-continue', {
+    session_id: 'synthetic-session', source_error_entry_id: 'failed-reply',
+  });
+  assert.equal(turnContext.messages.at(-1).stopReason, 'stop');
+  assert.deepEqual(result.waits, [2000], 'the explicit stream retries its initial transient failure');
+  assert.equal(continuedBudget.message_provider_calls, maxCalls, 'the retry consumes the last original provider call');
+  assert.equal(continuedBudget.provider_calls, maxCalls);
 });
 
 for (const thrown of [false, true]) {
