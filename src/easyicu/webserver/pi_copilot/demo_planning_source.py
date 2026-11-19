@@ -13,19 +13,14 @@ from easyicu.webserver import dataio, demo_source_storage, study_contexts
 from easyicu.webserver.research_launch_scientific import bound_export_cohort_refusal
 
 from .contracts import PiCopilotError, PiSessionRecord
-from .population_preparation import study_for_next_plan
-from .run_authority import latest_bound_run_id, research_pipeline_project_root
+from .population_preparation import has_prior_run, study_for_next_plan
 
 ACTION = "use_official_demo_raw_for_plan"
 
 
 def _planning_study(study: Mapping[str, Any]) -> Mapping[str, Any]:
     """The study the workflow's next plan reads, by its own run predicate."""
-    study_id = str(study.get("id") or "").strip() or None
-    after_run = latest_bound_run_id(
-        study_context_id=study_id, project_root=research_pipeline_project_root(study_id),
-    ) is not None
-    return study_for_next_plan(study, after_run=after_run)
+    return study_for_next_plan(study, after_run=has_prior_run(study))
 
 
 @dataclass(frozen=True)
