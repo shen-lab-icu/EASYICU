@@ -157,3 +157,29 @@ test('after one compile and its fresh plan, the same runtime gaps start no furth
   assert.equal(calls.filter(call => call === 'configure').length, 1);
   assert.equal(calls.filter(call => call === 'plan').length, 1);
 });
+
+// S1474: the raw-Demo sequence counted end to end. The compile is automatic,
+// the reconfirmation is the researcher's click and starts one plan, and that
+// plan's review with the same runtime gaps starts nothing more.
+test('compile, reconfirm click, one plan, then nothing more', async () => {
+  const ui = screen();
+  ui.state.session.binding.run_id = 'run-1';
+  ui.state.workflow = { next_action_code: 'agent_plan_configuration_required' };
+  ui.state.after = { next_action_code: CODE, bound_export_cohort_refusal: { code: CODE, reason_codes: [],
+    planning_source: { action: 'use_official_demo_raw_for_plan', study_id: 'study-1', expected_revision: 8,
+      offer_sha256: 'b'.repeat(64), database: 'miiv' } } };
+  await ui.actions.continueSystemOwnedPlanProgression();
+  const count = name => JSON.parse(JSON.stringify(ui.state.calls)).filter(call => call === name).length;
+  assert.equal(count('plan'), 0, 'the plan waits for the data-source card');
+  ui.state.session.binding.study_revision = 8;
+  ui.state.after = { next_action_code: 'plan_configuration_superseded' };
+  await ui.actions.confirmWorkflow(ui.confirmation.workflowConfirmation());
+  assert.equal(count('plan'), 1);
+  ui.state.session.binding.run_id = 'run-2';
+  ui.state.workflow = { next_action_code: 'plan_scientific_changes_required', plan_review_summary: {
+    authorization_questions: [], remediation_buckets: { agent_plan_revision: [],
+      runtime_capability: ['POST_BASELINE_EXPOSURE_TIMING_NOT_CLOSED'] } } };
+  for (let poll = 0; poll < 3; poll++) await ui.actions.continueSystemOwnedPlanProgression();
+  assert.equal(count('configure'), 1);
+  assert.equal(count('plan'), 1);
+});
