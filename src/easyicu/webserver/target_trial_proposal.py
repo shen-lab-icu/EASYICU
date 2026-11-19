@@ -13,6 +13,7 @@ from easyicu.databases import normalize_database_key
 from easyicu.outcome_availability import (
     OUTCOME_CONCEPT_SUPPORTED_DATABASES,
     FixedHorizonMortalityEndpoint,
+    StatedHorizonMention,
     fixed_horizon_mortality_endpoint,
     fixed_horizon_mortality_endpoint_stated_by,
     stated_mortality_horizon_mentions,
@@ -64,8 +65,18 @@ _TIME_ZERO_DIRECTIVE = re.compile(r"\b(?:set|define) $", re.IGNORECASE)
 _OUTCOME_ORIGIN = re.compile(
     r"\b(?:from|after|since|following|post|starting at|as of)[ \-‐–—]+"
     r"(?:the )?ICU[ \-‐–—]+admission\b"
-    r"|(?:自|从)\s*入(?:住)?\s*ICU\s*(?:[后後]\s*(?:起算|算起|起)?|起算|算起|起)"
-    r"|入(?:住)?\s*ICU\s*[后後]",
+    r"|(?P<zh>(?:自|从)\s*入(?:住)?\s*ICU\s*(?:[后後]\s*(?:起算|算起|起)?|起算|算起|起)"
+    r"|入(?:住)?\s*ICU\s*[后後])",
+    re.IGNORECASE,
+)
+_CLAUSE_END = ",.。;?!"
+_OUTCOME_PREFIX_BOUNDARY = re.compile(
+    rf"(?:[{re.escape(_CLAUSE_END)}]|\b(?:for|compare)|比较|对比)$", re.IGNORECASE,
+)
+_TRIAL_METHOD_SENTENCE = re.compile(
+    r"(?:^|(?<=[.。?!]))\s*(?:"
+    r"(?:use|apply)\s+(?P<en>target[\s-]+trial\s+emulation)"
+    r"|(?:采用|使用)\s*(?P<zh>目标试验模拟))(?=[.。?!]?$)",
     re.IGNORECASE,
 )
 _PUNCTUATION = "".join(
@@ -312,7 +323,11 @@ def _fixed_outcome(
     question: str,
     confirmed_label: Any,
     database: str,
-) -> tuple[FixedHorizonMortalityEndpoint, _Span] | None:
+) -> tuple[
+    FixedHorizonMortalityEndpoint,
+    StatedHorizonMention,
+    list[tuple[FixedHorizonMortalityEndpoint | None, StatedHorizonMention]],
+] | None:
     # Read the primary from its confirmation when the question states more
     # than one horizon. Its proof remains the exact words of the question.
     label = str(confirmed_label or "").strip()
@@ -346,29 +361,55 @@ def _fixed_outcome(
         endpoint.event_concept, ()
     ):
         return None
-    match = next(item for candidate, item in mentions if candidate == endpoint)
-    return endpoint, (match.start, match.end)
+    primary = next(item for candidate, item in mentions if candidate == endpoint)
+    if confirmed and len(mentions) > 1:
+        exact_label = any(
+            _mortality_span(label, item) == (0, len(label))
+            for item in stated_mortality_horizon_mentions(label, exact_mortality=True)
+        )
+        exact_mentions = set(stated_mortality_horizon_mentions(question, exact_mortality=True))
+        if (registered == endpoint or exact_label) and all(
+            item in exact_mentions for _, item in mentions
+        ):
+            return endpoint, primary, mentions
+    return endpoint, primary, [(endpoint, primary)]
+
+
+def _mortality_span(question: str, mention: StatedHorizonMention) -> _Span:
+    end = mention.end
+    if question[end:end + 1] == "率" and question[end - 1] in "亡死":
+        end += 1
+    return mention.start, end
 
 
 def _outcome_span(
-    question: str, endpoint: FixedHorizonMortalityEndpoint, span: _Span, other_spans: list[_Span],
+    question: str,
+    endpoint: FixedHorizonMortalityEndpoint | None,
+    span: _Span,
+    other_spans: list[_Span],
 ) -> _Span:
     """Read the endpoint with an immediately attached, encoded ICU origin."""
     start, end = span
-    if question[end:end + 1] == "率" and question[end - 1] in "亡死":
-        end += 1
-    if endpoint.time_origin != "icu_admission":
+    if endpoint is None or endpoint.time_origin != "icu_admission":
         return start, end
-    def independent(match: re.Match[str]) -> bool:
-        return all(match.end() <= left or match.start() >= right for left, right in other_spans)
+
+    def independent(begin: int, stop: int) -> bool:
+        return all(stop <= left or begin >= right for left, right in other_spans)
 
     prefixes = [
         match for match in _OUTCOME_ORIGIN.finditer(question, 0, start)
-        if re.fullmatch(r"\s*,?\s*", question[match.end():start])
-        and independent(match)
+        if question[match.end():start].strip() in (("", "的") if match["zh"] else ("",))
+        and (
+            not (before := question[:match.start()].rstrip())
+            or _OUTCOME_PREFIX_BOUNDARY.search(before)
+        )
+        and independent(match.start(), start)
     ]
     suffix = _OUTCOME_ORIGIN.match(question, end + int(question[end:end + 1] == " "))
-    if suffix and not independent(suffix):
+    if suffix and (
+        ((after := question[suffix.end():].lstrip()) and after[0] not in _CLAUSE_END)
+        or not independent(end, suffix.end())
+    ):
         suffix = None
     if prefixes and suffix is None:
         return prefixes[-1].start(), end
@@ -475,18 +516,30 @@ def target_trial_proposal(study: Mapping[str, Any]) -> TargetTrialProposal | Non
     else:
         missing.append("grace_period")
 
+    indication = None
+    if population:
+        indication = _indication_concept((population["en"] or population["zh"]).strip())
+    confounders, adjustment_spans = _proposal_adjustments(study, wording)
+
     outcome = _fixed_outcome(question, study.get("outcome"), database)
     if outcome:
-        endpoint, span = outcome
-        covered.append(_outcome_span(question, endpoint, span, covered))
-        spec["outcome"] = {**add("outcome", wording.quote(*span)), "endpoint": endpoint.event_concept}
+        endpoint, primary, mentions = outcome
+        neighbors = [*covered, *adjustment_spans, *((item.start, item.end) for item in reading.elements)]
+        if population:
+            neighbors.append(population.span())
+        for candidate, mention in mentions:
+            covered.append(_outcome_span(
+                question, candidate, _mortality_span(question, mention),
+                [*neighbors, *(_mortality_span(question, item) for _, item in mentions if item != mention)],
+            ))
+        spec["outcome"] = {
+            **add("outcome", wording.quote(*_mortality_span(question, primary))),
+            "endpoint": endpoint.event_concept,
+        }
         add("outcome_origin", endpoint.time_origin, default=True)
     else:
         missing.append("outcome")
 
-    indication = None
-    if population:
-        indication = _indication_concept((population["en"] or population["zh"]).strip())
     criteria = []
     if population and indication:
         start, end = population.span()
@@ -525,13 +578,20 @@ def target_trial_proposal(study: Mapping[str, Any]) -> TargetTrialProposal | Non
     else:
         missing.append("eligibility")
 
-    confounders, adjustment_spans = _proposal_adjustments(study, wording)
     if confounders:
         covered.extend(adjustment_spans)
         add("adjustment", ", ".join(row["name"] for row in confounders))
         spec["confounders"] = confounders
     else:
         missing.append("adjustment")
+
+    method = _TRIAL_METHOD_SENTENCE.search(question)
+    if method and any(
+        item.element == "causal_method"
+        and (item.start, item.end) == method.span(method.lastgroup)
+        for item in reading.elements
+    ):
+        covered.append(method.span())
 
     unread_words = wording.unread(covered)
     if unread_words:

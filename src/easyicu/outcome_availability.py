@@ -486,7 +486,32 @@ def _match_mentions(match: re.Match[str]) -> tuple[StatedHorizonMention, ...]:
     )
 
 
-def stated_mortality_horizon_mentions(text: str) -> tuple[StatedHorizonMention, ...]:
+_MORTALITY_AFTER_HORIZON = re.compile(
+    r"[\s-]+(?:all[\s-]+cause[\s-]+)?(?:mortality|deaths?)"
+    r"|\s*(?:以内|内)?\s*的?\s*(?:全因\s*)?(?:死亡|病死)",
+    re.IGNORECASE,
+)
+_MORTALITY_BEFORE_HORIZON = re.compile(
+    rf"(?:mortality|deaths?)[\s-]+(?:rates?[\s-]+)?{_RELATION}",
+    re.IGNORECASE,
+)
+
+
+def _exact_mortality_match(match: re.Match[str]) -> bool:
+    groups = match.groupdict()
+    if groups.get("members") or groups.get("tail"):
+        return False
+    head_start, head_end = match.span("head")
+    if match.start() == head_start:
+        return _MORTALITY_AFTER_HORIZON.fullmatch(match.string[head_end:match.end()]) is not None
+    return match.end() == head_end and _MORTALITY_BEFORE_HORIZON.fullmatch(
+        match.string[match.start():head_start]
+    ) is not None
+
+
+def stated_mortality_horizon_mentions(
+    text: str, *, exact_mortality: bool = False,
+) -> tuple[StatedHorizonMention, ...]:
     """Every place ``text`` states a horizon for death or survival, in text order.
 
     A horizon is read only next to its endpoint word: "28-day mortality",
@@ -499,6 +524,10 @@ def stated_mortality_horizon_mentions(text: str) -> tuple[StatedHorizonMention, 
     a landmark ("alive at 24 hours"), nor a horizon an exclusion names
     ("deaths within 24 hours were excluded", "Exclusion criteria: death
     within 24 hours").
+
+    With ``exact_mortality``, each mention must name its own mortality endpoint.
+    Lists that share an endpoint word, survival, follow-up, and deaths in a
+    specific care setting require a separate interpretation.
     """
 
     source = str(text or "")
@@ -525,6 +554,7 @@ def stated_mortality_horizon_mentions(text: str) -> tuple[StatedHorizonMention, 
         mention
         for match, floor in zip(matches, floors)
         if not _excluded(source, match.start(), match.end(), floor, sections)
+        and (not exact_mortality or _exact_mortality_match(match))
         for mention in _match_mentions(match)
     )
     return tuple(sorted(mentions, key=lambda mention: (mention.start, mention.end)))

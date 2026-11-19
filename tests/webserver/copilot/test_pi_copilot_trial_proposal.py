@@ -105,8 +105,8 @@ def test_missing_clinical_details_are_one_clarification(study):
     ("removed_en", "removed_zh", "missing"),
     [
         (
-            " versus not starting it within 10 hours",
-            "与这10小时内不开始相比，",
+            "start sample therapy within 10 hours versus not starting it within 10 hours ",
+            "10小时内开始示例治疗，与这10小时内不开始相比，",
             ["treatment", "strategies", "grace_period"],
         ),
         (
@@ -123,13 +123,43 @@ def test_incomplete_causal_questions_show_a_clarification(
     # Name the causal method so the reader still runs when a trial element is removed.
     zh = "示例" in study["question"]
     study["question"] += "采用目标试验模拟。" if zh else " Use target trial emulation."
+    assert target_trial_card.target_trial_card(study, None)["state"] == "proposal"
     removed = removed_zh if zh else removed_en
     assert study["question"].count(removed) == 1
     study["question"] = study["question"].replace(removed, "", 1)
     card = target_trial_card.target_trial_card(study, None)
     assert card["state"] == "clarification"
-    assert card["proposal"]["missing"] == [*missing, "unread_words"]
+    assert card["proposal"]["missing"] == missing
     assert card["proposal"]["digest"] is None
+
+
+@pytest.mark.parametrize("extra", [False, True])
+def test_trailing_method_sentence_covers_only_the_standalone_cue(complete_trial, monkeypatch, extra):
+    study = complete_trial
+    zh = "示例" in study["question"]
+    if zh:
+        study["question"] += "使用目标试验模拟并报告分层结果。" if extra else "使用目标试验模拟。"
+    else:
+        study["question"] += (
+            " Apply target-trial emulation and report subgroup results." if extra
+            else " Apply target-trial emulation."
+        )
+    proposal = owner.target_trial_proposal(study)
+    if extra:
+        assert proposal.statement is None
+        assert "unread_words" in proposal.missing
+        assert any(("分层结果" if zh else "subgroup results") in words for words in proposal.unread_words)
+    else:
+        from dataclasses import replace
+
+        assert proposal.statement is not None
+        assert proposal.unread_words == []
+        reading = owner.causal_trial_reading(study["question"])
+        without_method = replace(
+            reading, elements=tuple(item for item in reading.elements if item.element != "causal_method"),
+        )
+        monkeypatch.setattr(owner, "causal_trial_reading", lambda _: without_method)
+        assert owner.target_trial_proposal(study).missing == ["unread_words"]
 
 
 @pytest.mark.parametrize(
@@ -225,7 +255,8 @@ def test_population_requires_a_bare_indication(study, synthetic_treatment, popul
         ("outcome", "{term} after discharge", "{term}从出院起算", False),
         ("outcome", "{term} counted starting at extubation", "拔管后{term}", False),
         ("outcome", "from ICU admission to extubation, {term}", "自入ICU后第2日起{term}", False),
-        ("outcome", "from ICU admission, {term}", "自入ICU起{term}", True),
+        ("outcome", "from ICU admission, {term}", "自入ICU后起算，{term}", False),
+        ("outcome", "from ICU admission {term}", "自入ICU起{term}", True),
         ("outcome", "{term} from ICU admission", "{term}自入ICU起算", True),
         ("outcome", "{term} after ICU admission", "入住ICU后{term}", True),
         ("grace_period", "from intubation, {term}", "自插管起{term}", False),
@@ -576,15 +607,52 @@ def test_only_missing_adjustment_is_requested_on_the_same_card(study, monkeypatc
     assert card["proposal"]["missing"] == ["adjustment"]
 
 
-def test_confirmed_horizon_selects_the_primary_when_two_are_mentioned():
-    from easyicu.webserver import target_trial_proposal as owner
+@pytest.mark.parametrize(
+    ("primary_en", "primary_zh"),
+    [("365-day mortality", "365天死亡率"), ("mortality at 365 days", "365日全因死亡率")],
+)
+def test_confirmed_horizon_selects_the_primary_when_two_are_mentioned(complete_trial, primary_en, primary_zh):
+    study = complete_trial
+    zh = "示例" in study["question"]
+    first, primary = ("90天死亡率", primary_zh) if zh else ("90-day mortality", primary_en)
+    question = study["question"]
+    join = "和" if zh else " and "
+    study["question"] = question.replace(first, first + join + primary, 1)
+    assert owner.target_trial_proposal(study).statement is None
+    study["outcome"] = "In-hospital mortality"
+    assert owner.target_trial_proposal(study).statement is None
+    study["outcome"] = "365-day survival"
+    assert owner.target_trial_proposal(study).statement is None
+    study["outcome"] = primary
+    proposal = owner.target_trial_proposal(study)
+    assert proposal.statement is not None
+    assert proposal.unread_words == []
+    assert proposal.statement.spec.outcome.endpoint == "mort_365d"
+    assert next(row["value"] for row in proposal.elements if row["key"] == "outcome") == primary
 
-    question = "Assess 90-day mortality and 365-day mortality."
-    assert owner._fixed_outcome(question, "", "miiv") is None
-    assert owner._fixed_outcome(question, "In-hospital mortality", "miiv") is None
-    endpoint, span = owner._fixed_outcome(question, "365-day mortality", "miiv")
-    assert endpoint.horizon_days == 365
-    assert question[slice(*span)] == "365-day mortality"
+
+@pytest.mark.parametrize(
+    ("secondary_en", "secondary_zh"),
+    [
+        ("90-day survival", "90天生存"),
+        ("90-day in-hospital mortality", "90天院内死亡率"),
+        ("90-day mortality from intubation", "90天死亡率自插管后起算"),
+        ("90-day", "90天"),
+    ],
+)
+def test_confirmed_horizon_leaves_inexact_secondary_endpoints_unread(
+    complete_trial, secondary_en, secondary_zh,
+):
+    study = complete_trial
+    zh = "示例" in study["question"]
+    first, primary = ("90天死亡率", "365天死亡率") if zh else ("90-day mortality", "365-day mortality")
+    secondary = secondary_zh if zh else secondary_en
+    join = "和" if zh else " and "
+    study["question"] = study["question"].replace(first, secondary + join + primary, 1)
+    study["outcome"] = primary
+    proposal = owner.target_trial_proposal(study)
+    assert proposal.statement is None
+    assert "unread_words" in proposal.missing
 
 
 _REVIEW_EN = (
@@ -595,6 +663,34 @@ _REVIEW_EN = (
 _REVIEW_ZH = (
     "在疑似感染患者中，以入ICU后第8小时为时间零点，10小时内开始示例治疗，"
     "与这10小时内不开始相比，比较90天死亡率，调整年龄。"
+)
+
+
+_ORIGIN_THEFT = (
+    (
+        False, _REVIEW_EN.replace(" for 90-day mortality", ", 90-day mortality"),
+        "not starting it within 10 hours", "after ICU admission",
+    ),
+    (
+        False, _REVIEW_EN.replace(" versus", ", 90-day mortality, versus").replace(" for 90-day mortality", ""),
+        "starting sample therapy within 10 hours", "after ICU admission",
+    ),
+    (
+        False, _REVIEW_EN.replace(" for 90-day mortality, adjusted for age", ", adjusted for age, 90-day mortality"),
+        "adjusted for age", "after ICU admission",
+    ),
+    (
+        True, _REVIEW_ZH.replace("比较90天死亡率，调整年龄", "调整年龄，90天死亡率"),
+        "调整年龄", "自入ICU后起算",
+    ),
+    (
+        True, _REVIEW_ZH.replace("10小时内开始", "比较90天死亡率10小时内开始").replace("比较90天死亡率，", ""),
+        "90天死亡率", "入ICU后",
+    ),
+    (
+        False, _REVIEW_EN.replace(" for 90-day mortality", " 90-day mortality"),
+        "not starting it within 10 hours", "after ICU admission",
+    ),
 )
 
 
@@ -654,6 +750,17 @@ def test_review_residual_words_stop_compilation(synthetic_treatment, original, r
     }
 
 
+@pytest.mark.parametrize(("zh", "question", "term", "origin"), _ORIGIN_THEFT)
+def test_review_origin_between_elements_stays_unread(synthetic_treatment, zh, question, term, origin):
+    start = question.index(term)
+    altered = _insert_origin(question, start + len(term), origin, zh)
+    proposal = owner.target_trial_proposal(_review_study(altered, zh))
+    assert proposal is not None
+    assert proposal.statement is None
+    assert "unread_words" in proposal.missing
+    assert any(origin in fragment for fragment in proposal.unread_words)
+
+
 @pytest.mark.parametrize(
     ("zh", "suffix"),
     [
@@ -680,6 +787,7 @@ def test_adjustment_quote_cannot_cover_a_population_or_origin(synthetic_treatmen
     [
         (False, "compare starting", "90-day mortality after ICU admission, compare starting"),
         (True, "10小时内开始", "比较入住ICU后90天死亡率，10小时内开始"),
+        (True, "10小时内开始", "比较入住ICU后的90天死亡率，10小时内开始"),
         (True, "比较90天死亡率，调整年龄", "调整年龄后比较90天死亡率"),
         (True, "比较90天死亡率，调整年龄", "在调整年龄后，比较90天死亡率"),
         (True, "比较90天死亡率", "比较90天死亡率自入ICU后起算"),
@@ -704,29 +812,76 @@ def test_outcome_and_adjustment_do_not_bleed_into_other_elements(
     assert (endpoint.horizon_days, endpoint.time_origin) == (90, "icu_admission")
 
 
+_BOUNDARY_TERMS = {
+    False: (
+        "In patients with suspected infection", "time zero at hour 8 after ICU admission",
+        "starting sample therapy within 10 hours", "sample therapy",
+        "not starting it within 10 hours", "90-day mortality", "adjusted for age",
+    ),
+    True: (
+        "在疑似感染患者中", "入ICU后第8小时为时间零点", "10小时内开始示例治疗",
+        "示例治疗", "这10小时内不开始", "90天死亡率", "调整年龄",
+    ),
+}
+
+
 @pytest.mark.parametrize(
-    ("zh", "question", "terms"),
-    [
-        (False, _REVIEW_EN, (
-            "In patients with suspected infection", "time zero at hour 8 after ICU admission",
-            "starting sample therapy within 10 hours", "sample therapy",
-            "not starting it within 10 hours", "90-day mortality", "adjusted for age",
-        )),
-        (True, _REVIEW_ZH, (
-            "在疑似感染患者中", "入ICU后第8小时为时间零点", "10小时内开始示例治疗",
-            "示例治疗", "这10小时内不开始", "90天死亡率", "调整年龄",
-        )),
-    ],
+    ("zh", "question"), [(False, _REVIEW_EN), (True, _REVIEW_ZH)],
 )
-def test_non_connectives_cannot_compile_at_any_element_boundary(synthetic_treatment, zh, question, terms):
+def test_non_connectives_cannot_compile_at_any_element_boundary(synthetic_treatment, zh, question):
     assert owner.target_trial_proposal(_review_study(question, zh)).statement
-    for term in terms:
+    for term in _BOUNDARY_TERMS[zh]:
         start = question.index(term)
         for boundary in (start, start + len(term)):
             for words in ("zzz", "5 days", "except", "除了", "转运"):
                 altered = question[:boundary] + f" {words} " + question[boundary:]
                 result = owner.target_trial_proposal(_review_study(altered, zh))
                 assert result is None or result.statement is None, (term, boundary, words)
+
+
+def _insert_origin(question, boundary, origin, zh):
+    phrase = origin if zh and origin == "自入ICU后起算" else f" {origin}"
+    following = question[boundary:]
+    if not zh and following and following[0].isalnum():
+        phrase += " "
+    return question[:boundary] + phrase + following
+
+
+def _trial_timing(statement):
+    spec = statement.spec
+    endpoint = owner.fixed_horizon_mortality_endpoint(spec.outcome.endpoint)
+    return (
+        spec.time_zero.hours_after_icu_admission, spec.grace_period.hours,
+        endpoint.horizon_days, endpoint.time_origin,
+    )
+
+
+@pytest.mark.parametrize(
+    ("zh", "question", "ambiguous_term", "ambiguous_origin"),
+    [
+        (False, _REVIEW_EN, None, None),
+        (True, _REVIEW_ZH, None, None),
+        *_ORIGIN_THEFT,
+    ],
+)
+def test_origin_insertions_preserve_trial_timing_or_stop(
+    synthetic_treatment, zh, question, ambiguous_term, ambiguous_origin,
+):
+    baseline = _trial_timing(owner.target_trial_proposal(_review_study(question, zh)).statement)
+    origins = ("after ICU admission", "自入ICU后起算", "from intubation", "入ICU后")
+    for term in _BOUNDARY_TERMS[zh]:
+        start = question.index(term)
+        end = start + len(term)
+        for boundary in (start, end):
+            for origin in origins:
+                altered = _insert_origin(question, boundary, origin, zh)
+                proposal = owner.target_trial_proposal(_review_study(altered, zh))
+                statement = proposal.statement if proposal is not None else None
+                case = (term, boundary, origin, altered)
+                assert statement is None or _trial_timing(statement) == baseline, case
+                if term == ambiguous_term and boundary == end and origin == ambiguous_origin:
+                    assert statement is None, case
+                    assert any(origin in fragment for fragment in proposal.unread_words), case
 
 
 @pytest.mark.parametrize(
