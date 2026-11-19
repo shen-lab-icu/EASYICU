@@ -984,8 +984,14 @@ def _neutral_materialization_scope(
     if raw_modules is None or (
         isinstance(raw_modules, (list, tuple)) and not raw_modules
     ):
+        # The scope is the modules of the package the run materializes: a
+        # raw official-Demo folder's are its raw tables, so a signed choice
+        # reads its registered export's (B12, UX leg 3 en 2026-11-19: the
+        # round-2 launch scoped to raw tables had no stay-level denominator).
         try:
-            described = dataio.describe_source_tables(export_path, planning_metadata_only=True)
+            described = dataio.describe_source_tables(
+                bound_source_authority_path(export_path, study), planning_metadata_only=True
+            )
         except Exception:  # noqa: BLE001 - scope default must never mask the
             described = {}  # owner's own manifest/inventory error below
         available = [

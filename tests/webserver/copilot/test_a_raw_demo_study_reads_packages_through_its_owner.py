@@ -181,7 +181,9 @@ def test_the_owner_compares_the_bound_path_as_a_path(choice, chosen, monkeypatch
 # bound_source_authority_path / bound_source_planning_concepts, or a raw folder
 # is diverted first. REGISTERED: only a registry row, a validated prepared
 # binding or a full_reviewed package reaches it. REFUSES: a raw folder gets a
-# typed refusal, by contract. The S1506 sweep table records the evidence.
+# typed refusal, by contract. FOLDER: describes the folder itself (a source
+# listing, or that the bound folder still holds tables); its modules never
+# scope a run (B12). The S1506 sweep table records the evidence.
 _READERS = frozenset({
     "build_available_catalog", "open_export_package", "inspect_export_layout",
     "validate_research_pipeline_source", "prepared_export_manifest_path", "index_export_package",
@@ -190,6 +192,8 @@ _READERS = frozenset({
     # Wrappers that take a path or a study view: their callers are classified too.
     "_data_foundation_profile", "_source_groups_stays_at", "bound_source_planning_concepts",
     "bound_source_authority_path",
+    # B12: a folder description whose modules scope a run.
+    "describe_source_tables",
 })
 _CLASSIFIED = {
     ("agent_pipeline_runs.py", "_metadata_only_planning_catalog", "build_available_catalog"): (1, "OWNER"),
@@ -222,6 +226,8 @@ _CLASSIFIED = {
     ("research_append_source.py", "registered_source_changed", "validate_research_pipeline_source"): (1, "REGISTERED"),
     ("research_launch_resume.py", "_development_resume_launch_scope", "validate_research_pipeline_source"): (1, "REGISTERED"),
     ("research_launch_scientific.py", "_bound_source_column", "build_available_catalog"): (1, "OWNER"),
+    ("research_launch_scientific.py", "_neutral_materialization_scope", "bound_source_authority_path"): (1, "OWNER"),
+    ("research_launch_scientific.py", "_neutral_materialization_scope", "describe_source_tables"): (1, "OWNER"),
     ("research_launch_scientific.py", "_data_foundation_profile", "build_available_catalog"): (1, "OWNER"),
     ("research_launch_scientific.py", "_first_icu_stay_for_cohort", "resolve_study_first_icu_stay"): (1, "OWNER"),
     ("research_launch_scientific.py", "_first_icu_stay_per_hospitalization_for_cohort", "resolve_study_first_icu_stay_per_hospitalization"): (1, "OWNER"),
@@ -235,9 +241,12 @@ _CLASSIFIED = {
     ("research_resume_package.py", "_package_offer_verdict", "validate_research_pipeline_source"): (1, "REGISTERED"),
     ("research_resume_package.py", "prepared_package_identity", "prepared_export_manifest_path"): (1, "REGISTERED"),
     ("research_run_submission.py", "_with_repeated_stays_default", "resolve_study_patient_grouping"): (1, "OWNER"),
+    ("research_run_submission.py", "submit_research_run", "describe_source_tables"): (1, "FOLDER"),
     ("research_run_submission.py", "submit_research_run", "prepared_export_manifest_path"): (1, "OWNER"),
     ("research_run_submission.py", "submit_research_run", "validate_research_pipeline_source"): (2, "REGISTERED"),
     ("run_population_proof.py", "verified_first_stay_applied", "open_export_package"): (1, "REGISTERED"),
+    ("sources.py", "_autodiscovered_paths.describe", "describe_source_tables"): (1, "FOLDER"),
+    ("sources.py", "_source_from_path", "describe_source_tables"): (1, "FOLDER"),
     ("scientific_runtime_projection.py", "export_kdigo_strict_derivation_available", "open_export_package"): (1, "OWNER"),
     ("source_identity_authority.py", "resolve_study_first_icu_stay", "resolve_study_patient_grouping"): (1, "OWNER"),
     ("source_identity_authority.py", "resolve_study_patient_grouping", "resolve_patient_grouping_authority"): (1, "OWNER"),
@@ -289,4 +298,4 @@ def test_every_package_or_identity_reader_is_classified():
         f"why a raw Demo folder cannot reach them), with their call counts: {new}"
     )
     assert not sorted(expected.keys() - sites.keys()), "a classified reader is gone; drop its row"
-    assert {cls for _count, cls in _CLASSIFIED.values()} <= {"OWNER", "REGISTERED", "REFUSES"}
+    assert {cls for _count, cls in _CLASSIFIED.values()} <= {"OWNER", "REGISTERED", "REFUSES", "FOLDER"}

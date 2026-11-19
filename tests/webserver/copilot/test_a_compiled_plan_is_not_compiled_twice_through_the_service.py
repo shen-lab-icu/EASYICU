@@ -318,6 +318,53 @@ def test_the_round_two_plan_reads_the_registered_export_not_the_raw_folder(choic
     assert launch.bound_source_authority_path(str(choice.paths.raw), unsigned) == str(choice.paths.raw)
 
 
+def test_the_round_two_scope_is_the_registered_exports_modules(choice, runs, monkeypatch):
+    # B12 (UX leg 3 en, 80e0455cf): after the reconfirmation the study had no
+    # modules, so the launch defaulted the scope from the raw folder's tables
+    # and the profile found no stay-level denominator. The default scope is
+    # the registered export's modules.
+    from easyicu.webserver import dataio
+    from easyicu.webserver import research_launch_scientific as launch
+    from easyicu.webserver import research_pipeline_run_preparation as preparation
+
+    first = runs.launch(study_contexts.get_context(choice.study["id"]), "run-a")
+    _compile(choice, first)
+    # The compile left the study with no modules, as in the walk.
+    study_contexts.upsert_context({"id": choice.study["id"], "modules": []})
+    study = _reconfirm(choice)
+    assert not study.get("modules")
+    real = dataio.describe_source_tables
+    assert "demographics" not in (real(str(choice.paths.raw), planning_metadata_only=True).get("modules") or [])
+    described = []
+
+    def describe(path, **kwargs):
+        described.append(str(path))
+        if str(path) == str(choice.paths.export):
+            return {"ok": True, "modules": ["outcome", "demographics"], "files": []}
+        return real(path, **kwargs)
+
+    monkeypatch.setattr(dataio, "describe_source_tables", describe)
+    request = preparation.ResearchPipelineLaunchRequest(
+        export_path=str(choice.paths.raw), study_context=study, project_root=str(choice.paths.raw.parent / "projects"),
+        provider={"provider": "openai"}, provider_environment={}, credential_source="pi_verified",
+        literature_search_authorized=False, plan_revision_source_run_id="", execution_resume_source_run_id="",
+        development_resume_source_job_id="", budget_mode="planner_canary", runner_image=None)
+    scientific = preparation._prepare_scientific_launch(request)
+    assert str(choice.paths.export) in described and str(choice.paths.raw) not in described
+    assert scientific.materialization_study["modules"] == ["demographics", "outcome"]
+    # Without a resolving choice the bound folder is described as before.
+    described.clear()
+    unsigned = {**study, "demo_planning_authority_ref": ""}
+    assert launch._neutral_materialization_scope(unsigned, export_path=str(choice.paths.raw))["modules"] != ["demographics", "outcome"]
+    assert described == [str(choice.paths.raw)]
+    # A scope that still has no demographics stops with its data step.
+    from easyicu.webserver.pi_copilot.projections import project_job
+
+    job = project_job({"id": "b12_job", "kind": "agent-run", "status": "failed",
+                       "error": "research_pipeline_stay_denominator_unavailable"})
+    assert [action["kind"] for action in job["next_actions"]] == ["reexport_data"]
+
+
 def test_a_launch_on_an_unreadable_package_names_it_and_offers_its_reexport(choice, runs, monkeypatch):
     # B11 card: a bound folder that is not a readable package stops with the
     # launch's typed intake stop, not the bare intake code. The card says what

@@ -1,4 +1,4 @@
-/* B11: a launch on an unreadable package names it and its re-export. */
+/* B11/B12: a launch on an unreadable package, or one without demographics, names it and its re-export. */
 'use strict';
 const assert = require('node:assert/strict');
 const { test } = require('node:test');
@@ -22,7 +22,12 @@ for (const language of ['zh', 'en']) {
     assert.notEqual(text, runFailureText('easyicu_unlisted_stop'));
     assert.match(text, language === 'zh' ? /数据包校验.*重新准备数据/ : /did not pass EasyICU's package checks.*Prepare the data again/);
   });
-  for (const code of ['research_pipeline_manifest_invalid', 'research_pipeline_manifest_required']) {
+  test(`${language}: B12: a scope without demographics names it and its re-export`, () => {
+    const text = runFailureText('research_pipeline_stay_denominator_unavailable');
+    assert.notEqual(text, runFailureText('easyicu_unlisted_stop'));
+    assert.match(text, language === 'zh' ? /人口学.*重新准备数据/ : /no demographics.*Prepare the data again/);
+  });
+  for (const code of ['research_pipeline_manifest_invalid', 'research_pipeline_manifest_required', 'research_pipeline_stay_denominator_unavailable']) {
     test(`${language}: ${code}: the job stop's primary choice is the re-export`, () => {
       const stop = modules.require('runStop').create({
         tr, runFailureText, canAct: () => true, workflow: () => ({ next_action_code: code }),

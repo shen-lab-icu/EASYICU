@@ -305,7 +305,6 @@ _EDIT_CODES = frozenset(
         "research_pipeline_runner_image_mismatch",
         "research_pipeline_schema_validation_failed",
         "research_pipeline_scientific_authority_refused",
-        "research_pipeline_stay_denominator_unavailable",
         "research_pipeline_target_outcome_materialization_unavailable",
         "research_pipeline_target_trial_plans_on_data",
         "research_pipeline_target_trial_window_unreadable",
@@ -446,6 +445,8 @@ STOP_POLICIES = {
         "research_pipeline_export_cohort_mismatch",
         "research_pipeline_outcome_outside_configured_modules",
         "research_pipeline_primary_exposure_outside_configured_modules",
+        # The run counts stays from demographics; the data owner adds it (B12).
+        "research_pipeline_stay_denominator_unavailable",
         "research_pipeline_target_outside_configured_modules",
         "windowed_summary_materialization_window_mismatch",
     }, "data_extraction"),
