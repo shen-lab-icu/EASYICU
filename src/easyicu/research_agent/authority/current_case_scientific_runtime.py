@@ -825,6 +825,23 @@ class LandmarkCategoricalAssociationRuntimeAuthority(_AuthorityBase):
         default=None, exclude_if=lambda value: value is None
     )
 
+    @property
+    def exposure_term_codings(self) -> tuple[str, ...]:
+        """The primary exposure term codings this contract accepts, published first.
+
+        Two levels are one treatment contrast against the signed reference
+        whatever the exposure's type, and the host's own landmark family
+        template codes them ``binary`` (UX leg 3, 2026-11-19: a two-group
+        first-day lactate was refused on re-plan). ``categorical`` stays valid
+        for two levels; more levels are ``categorical`` only.
+        """
+
+        if self.exposure_kind == "binary":
+            return ("binary",)
+        if len(self.exposure_levels) == 2:
+            return ("binary", "categorical")
+        return ("categorical",)
+
     @model_validator(mode="after")
     def _closed_contract(self) -> "LandmarkCategoricalAssociationRuntimeAuthority":
         if len(self.exposure_levels) != len(set(self.exposure_levels)):
@@ -1042,7 +1059,7 @@ class LandmarkCategoricalAssociationRuntimeAuthority(_AuthorityBase):
             "exposure_term": {
                 "name": self.exposure_column,
                 "role": "exposure",
-                "coding": "binary" if self.exposure_kind == "binary" else "categorical",
+                "coding": self.exposure_term_codings[0],
                 "reference_level_index": self.exposure_levels.index(
                     self.exposure_reference_level
                 ),
@@ -1091,7 +1108,6 @@ class LandmarkCategoricalAssociationRuntimeAuthority(_AuthorityBase):
             for term in (requirement.model_terms or ())
             if term.role == "exposure"
         ]
-        expected_coding = "binary" if self.exposure_kind == "binary" else "categorical"
         issues: list[str] = []
         if requirement.outcome_type != "binary":
             issues.append("outcome_type")
@@ -1109,7 +1125,7 @@ class LandmarkCategoricalAssociationRuntimeAuthority(_AuthorityBase):
             issues.append("exposure_reference_level")
         if requirement.primary_contrast_level != self.primary_contrast_level:
             issues.append("primary_contrast_level")
-        if len(exposure_terms) != 1 or exposure_terms[0].coding != expected_coding:
+        if len(exposure_terms) != 1 or exposure_terms[0].coding not in self.exposure_term_codings:
             issues.append("exposure_coding")
         if issues:
             raise CurrentCaseScientificAuthorityError(
@@ -1279,7 +1295,6 @@ class LandmarkCategoricalAssociationRuntimeAuthority(_AuthorityBase):
         exposure_terms = [
             term for term in (requirement.model_terms or ()) if term.role == "exposure"
         ]
-        expected_coding = "binary" if self.exposure_kind == "binary" else "categorical"
         issues: list[str] = []
         if step.planned_analysis_role != "primary":
             issues.append("planned_analysis_role")
@@ -1308,7 +1323,7 @@ class LandmarkCategoricalAssociationRuntimeAuthority(_AuthorityBase):
             issues.append("exposure_reference_level")
         if requirement.primary_contrast_level != self.primary_contrast_level:
             issues.append("primary_contrast_level")
-        if len(exposure_terms) != 1 or exposure_terms[0].coding != expected_coding:
+        if len(exposure_terms) != 1 or exposure_terms[0].coding not in self.exposure_term_codings:
             issues.append("exposure_coding")
         if issues:
             raise CurrentCaseScientificAuthorityError(
