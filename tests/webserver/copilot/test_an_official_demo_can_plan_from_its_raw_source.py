@@ -346,3 +346,31 @@ def test_restoring_a_turn_never_replays_demo_source_authority(choice):
     )
     assert not restored.get("demo_planning_authority_ref")
     assert resolve_choice(restored) is None
+
+
+def test_a_stated_first_stay_is_signed_with_the_choice_so_the_launch_keeps_it(choice, monkeypatch):
+    # The question states the first ICU stay and the study has no scope yet.
+    # On a source that orders a patient's stays (MIMIC-IV) the first plan is
+    # drafted on each patient's first stay, which the all-stays export does
+    # not hold. Choosing the raw source saves that scope with its signed
+    # receipt, so the launch's own first-stay default changes nothing.
+    from easyicu.webserver.pi_copilot import population_preparation
+    from easyicu.webserver.pi_copilot.demo_planning_authority import resolve_choice
+
+    def first_stay(study):
+        cohort = dict(study.get("cohort") or {})
+        return None if cohort else {"cohort": {**cohort, "exclude_readmissions": True}}
+
+    monkeypatch.setattr(population_preparation, "stated_first_stay_planning_default", first_stay)
+    study = study_contexts.upsert_context({"id": choice.study["id"], "cohort": {}})
+    assert bound_export_cohort_refusal(study, study["data_source"]["path"]) is None
+    resolved = resolve_demo_planning_source(study)
+    assert resolved is not None  # offered on the drafted study's mismatch
+    choice.record.binding = choice.service._binding_for_context(study)
+    choice.service.authorize_data_source(choice.record.session_id, **{
+        **choice.body, "expected_revision": study["revision"], "offer_sha256": resolved.offer["offer_sha256"],
+    })
+    updated = study_contexts.get_context(study["id"])
+    assert updated["cohort"] == {"exclude_readmissions": True}
+    assert population_preparation.study_for_first_plan(updated) is updated
+    assert resolve_choice(updated) == sources.registered_source_identity(str(choice.paths.export))
