@@ -1117,10 +1117,8 @@
     const queued = state.firstQuestion;
     state.firstQuestion = null;
     if (!queued || Date.now() - queued.at > FIRST_QUESTION_MS || projectId() !== expectedId) return;
-    await startEntry();
-    if (projectId() !== expectedId) return;
-    // No model yet: keep the question pending so the next conversation here opens with it.
-    if (!state.session) { try { window.sessionStorage.setItem('easyicu.skillHub.question', queued.text); } catch (_) {} render(); return; }
+    await startEntry({ pendingQuestion: queued.text });
+    if (projectId() !== expectedId || !state.session) return;
     state.draft = queued.text;
     render();
     await sendMessage();
@@ -1674,7 +1672,7 @@
     const prompt = studySetupReviewPrompt(state.workflow);
     await sendText(prompt, ['configure'], undefined, true, 'host_prompt');
   }
-  async function startEntry() { return SESSION_NAVIGATION.startEntry(); }
+  async function startEntry(options) { return SESSION_NAVIGATION.startEntry(options); }
   async function stopMessage() {
     if (!state.session || !state.busy) return;
     try {

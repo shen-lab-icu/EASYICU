@@ -235,7 +235,8 @@
       if (!state.busy) reloadSessionsForLanguage();
     }
 
-    async function startEntry() {
+    async function startEntry(options = {}) {
+      const expectedProjectId = projectId();
       state.taskDraft = '';
       setShell('pi');
       const preview = MODULES.optional('preview');
@@ -262,8 +263,14 @@
       // New conversation reuses an empty draft this project already has instead of adding
       // another one to the rail; a session is only created when none is free.
       const emptyDraft = state.sessions.find(row => STUDY_WORKSPACE.isEmptyConversation(row));
-      if (emptyDraft) { await openSession(emptyDraft.session_id); return; }
-      await createSession();
+      if (emptyDraft) await openSession(emptyDraft.session_id);
+      else await createSession();
+      // No model yet: a question asked on the first screen waits as this
+      // project's pending question, which the next conversation opens with.
+      if (options.pendingQuestion && !state.session && expectedProjectId === projectId()) {
+        try { window.sessionStorage.setItem('easyicu.skillHub.question', options.pendingQuestion); } catch (_) {}
+        render();
+      }
     }
     return { createSession, renameSession, removeSession, loadProjectSessions,
       reloadSessionsForLanguage, handleLanguageChange, startEntry };

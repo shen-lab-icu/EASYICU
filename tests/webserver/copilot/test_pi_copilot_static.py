@@ -103,7 +103,7 @@ def test_pi_shell_assets_are_explicitly_wired_before_guided_owner() -> None:
     assert "js/screens-guided-pi-project.js?v=20261026-projects1" in index
     assert "js/screens-guided-pi-data-consent.js?v=20261102-demo2" in index
     assert "js/screens-guided-pi-data-binding.js?v=20261029-journey3" in index
-    assert "js/screens-guided-pi-session-navigation.js?v=20261111-s872" in index
+    assert "js/screens-guided-pi-session-navigation.js?v=20261119-firstq2" in index
     assert "js/screens-guided-pi-session-view.js?v=20261111-s872" in index
     assert index.index("js/screens-guided-pi-session-view.js") < index.index(
         "js/screens-guided-pi.js"
@@ -141,7 +141,7 @@ def test_pi_shell_assets_are_explicitly_wired_before_guided_owner() -> None:
     assert "js/screens-guided-pi-quick-answers.js?v=20261117-distribution1" in index
     assert "js/screens-guided-pi-childjob.js?v=20261026-recovered1" in index
     assert "js/screens-guided-pi-error-text.js?v=20261119-convmodel1" in index
-    assert "js/screens-guided-pi.js?v=20261119-firstq1" in index
+    assert "js/screens-guided-pi.js?v=20261119-firstq2" in index
     assert "js/screens-guided.js?v=20261117-startup1" in index
     assert (
         "js/screens-guided-project-continuity.js?v=20260813-project-continuity1"
@@ -4055,7 +4055,7 @@ def test_empty_research_session_prioritizes_the_conversation_entry() -> None:
         "const emptySessionFocused =", 1
     )[1].split("const main =", 1)[0]
     navigation = _read("js/screens-guided-pi-session-navigation.js")
-    start_entry = navigation.split("async function startEntry()", 1)[1].split(
+    start_entry = navigation.split("async function startEntry(options = {})", 1)[1].split(
         "async function stopMessage()", 1
     )[0]
     assert "if (preview && preview.close) preview.close();" in start_entry
@@ -6668,7 +6668,7 @@ def test_latest_idea_exploration_turn_hides_unrelated_project_continuation_cards
     assert "return { transcriptMessages, latestTurnCompletedIdeaExploration," in transcript
     index = _read("index.html")
     assert "screens-guided-pi-transcript.js?v=20261030-preparation1" in index
-    assert "screens-guided-pi.js?v=20261119-firstq1" in index
+    assert "screens-guided-pi.js?v=20261119-firstq2" in index
 
 
 def test_idea_mining_receipt_is_presented_in_the_conversation_without_a_card() -> None:
