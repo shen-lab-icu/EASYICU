@@ -211,8 +211,9 @@ _READERS = frozenset({
     # Wrappers that take a path or a study view: their callers are classified too.
     "_data_foundation_profile", "_source_groups_stays_at", "bound_source_planning_concepts",
     "bound_source_authority_path",
-    # B12: a folder description whose modules scope a run.
-    "describe_source_tables",
+    # B12: a folder description whose modules scope a run, and the wrapper
+    # that scopes it from a study view (Carbon b12r1).
+    "describe_source_tables", "_neutral_materialization_scope",
 })
 _CLASSIFIED = {
     ("agent_pipeline_runs.py", "_metadata_only_planning_catalog", "build_available_catalog"): (1, "OWNER"),
@@ -256,6 +257,7 @@ _CLASSIFIED = {
     ("research_multi_extraction.py", "prepare_source", "prepared_export_manifest_path"): (1, "OWNER"),
     ("research_multi_extraction.py", "prepare_source", "validate_research_pipeline_source"): (1, "REGISTERED"),
     ("research_multi_pipeline.py", "PipelineDatabaseOwner._plan", "validate_research_pipeline_source"): (1, "REGISTERED"),
+    ("research_pipeline_run_preparation.py", "_prepare_scientific_launch", "_neutral_materialization_scope"): (1, "OWNER"),
     ("research_pipeline_run_preparation.py", "_prepare_scientific_launch", "validate_research_pipeline_source"): (1, "REGISTERED"),
     ("research_plan_revision.py", "load_prepared_plan_revision", "validate_research_pipeline_source"): (1, "REGISTERED"),
     ("research_resume_package.py", "_package_offer_verdict", "validate_research_pipeline_source"): (1, "REGISTERED"),

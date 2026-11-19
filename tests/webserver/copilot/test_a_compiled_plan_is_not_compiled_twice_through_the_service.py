@@ -400,16 +400,48 @@ def test_the_round_two_plan_reads_the_registered_export_not_the_raw_folder(choic
     assert launch.bound_source_authority_path(str(choice.paths.raw), unsigned) == str(choice.paths.raw)
 
 
+def _native_export(export):
+    # Carbon b12r1: the registered export as the real describer reads it, a
+    # native manifest with its column-metadata sidecar (demographics only).
+    import json
+
+    import pandas as pd
+
+    from easyicu.concept.export_metadata import build_export_file_metadata_binding
+    from easyicu.concept.metadata_sidecar import EXPORT_PHYSICAL_SCOPE, ColumnMetadataSidecar, write_content_addressed_sidecar
+    from easyicu.resources import load_dictionary
+    from tests.support.published_export import record_member_digests
+
+    frame = pd.DataFrame({"patientunitstayid": [1, 2], "age": [40, 60]})
+    frame.to_parquet(export / "demographics.parquet", index=False)
+    binding = build_export_file_metadata_binding(
+        relative_path="demographics.parquet", module="demographics", frame=frame,
+        concept_ids=["age"], database="eicu_demo", database_class_prefixes=("eicu_demo", "eicu"),
+        dictionary=load_dictionary(include_sofa2=True))
+    reference = write_content_addressed_sidecar(export, ColumnMetadataSidecar(
+        source_database="eicu_demo", source_database_class_prefixes=("eicu_demo", "eicu"),
+        scope=EXPORT_PHYSICAL_SCOPE, files=(binding,)))
+    manifest = json.loads((export / "_manifest.json").read_text())
+    manifest.update({
+        "concept_selection": {"mode": "explicit", "modules": {"demographics": ["age"]}},
+        "files": [{"file": "demographics.parquet", "module": "demographics", "rows": 2, "concepts": 1,
+                   "concept_ids": ["age"], "column_metadata_columns": list(binding.columns)}],
+        "column_metadata": reference.to_dict()})
+    (export / "_manifest.json").write_text(json.dumps(manifest))
+    record_member_digests(export)
+
+
 def test_the_round_two_scope_is_the_registered_exports_modules(choice, runs, monkeypatch):
     # B12 (UX leg 3 en, 80e0455cf): after the reconfirmation the study had no
     # modules, so the launch defaulted the scope from the raw folder's tables
     # and the profile found no stay-level denominator. The default scope is
-    # the registered export's modules.
-    _plain_columns(monkeypatch)
+    # the registered export's modules, read by the real describer.
     from easyicu.webserver import dataio
     from easyicu.webserver import research_launch_scientific as launch
     from easyicu.webserver import research_pipeline_run_preparation as preparation
 
+    _plain_columns(monkeypatch)
+    _native_export(choice.paths.export)
     first = runs.launch(study_contexts.get_context(choice.study["id"]), "run-a")
     _compile(choice, first)
     # The compile left the study with no modules, as in the walk.
@@ -418,12 +450,11 @@ def test_the_round_two_scope_is_the_registered_exports_modules(choice, runs, mon
     assert not study.get("modules")
     real = dataio.describe_source_tables
     assert "demographics" not in (real(str(choice.paths.raw), planning_metadata_only=True).get("modules") or [])
+    assert real(str(choice.paths.export), planning_metadata_only=True)["modules"] == ["demographics"]
     described = []
 
     def describe(path, **kwargs):
         described.append(str(path))
-        if str(path) == str(choice.paths.export):
-            return {"ok": True, "modules": ["outcome", "demographics"], "files": []}
         return real(path, **kwargs)
 
     monkeypatch.setattr(dataio, "describe_source_tables", describe)
@@ -434,11 +465,11 @@ def test_the_round_two_scope_is_the_registered_exports_modules(choice, runs, mon
         development_resume_source_job_id="", budget_mode="planner_canary", runner_image=None)
     scientific = preparation._prepare_scientific_launch(request)
     assert str(choice.paths.export) in described and str(choice.paths.raw) not in described
-    assert scientific.materialization_study["modules"] == ["demographics", "outcome"]
+    assert scientific.materialization_study["modules"] == ["demographics"]
     # Without a resolving choice the bound folder is described as before.
     described.clear()
     unsigned = {**study, "demo_planning_authority_ref": ""}
-    assert launch._neutral_materialization_scope(unsigned, export_path=str(choice.paths.raw))["modules"] != ["demographics", "outcome"]
+    assert launch._neutral_materialization_scope(unsigned, export_path=str(choice.paths.raw))["modules"] != ["demographics"]
     assert described == [str(choice.paths.raw)]
     # A scope that still has no demographics stops with its data step.
     from easyicu.webserver.pi_copilot.projections import project_job
