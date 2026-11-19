@@ -531,10 +531,10 @@
         host.render();
         // Confirming a source again continues the plan the settings change
         // was for (the card says "continue"); a first choice does not.
+        // A first plan keeps its own holds (mined ideas, quick answers).
         const next = workflowCode();
-        if (reconfirming && FRESH_PLAN_CODES.has(next) && next !== 'provider_ready_to_generate_plan') {
-          return startFormalPlanGeneration(next);
-        }
+        if (reconfirming && next === 'provider_ready_to_generate_plan') return continueSystemOwnedPlanProgression();
+        if (reconfirming && FRESH_PLAN_CODES.has(next)) return startFormalPlanGeneration(next);
         return true;
       } catch (error) {
         startedTransitions.delete(offer.offer_sha256);

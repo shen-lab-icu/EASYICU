@@ -451,7 +451,10 @@ def submit_research_run(
     clock.mark("readiness")
     from easyicu.webserver.pi_copilot.demo_planning_source import raw_choice_needs_reconfirmation
 
-    if raw_choice_needs_reconfirmation(study_context):
+    # Only a launch that reads the study's own data source; a deferred stage
+    # or an execution resume keeps the package its sealed plan bound.
+    if (_deferred_binding is None and not request.execution_resume_source_run_id
+            and raw_choice_needs_reconfirmation(study_context)):
         # Without its signed choice the raw folder would be validated as an
         # export package (manifest_marker_missing): the Copilot workflow
         # offers the same choice again instead (UX leg 3, 2026-11-19).

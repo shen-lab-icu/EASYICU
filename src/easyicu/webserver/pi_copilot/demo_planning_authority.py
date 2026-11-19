@@ -78,13 +78,13 @@ def _source_study_sha256(study: Mapping[str, Any]) -> str:
 
 def publish_choice(*, study: Mapping[str, Any], new_source: Mapping[str, Any],
                    confirmations: Mapping[str, Any], offer_sha256: str,
-                   drafted_scope: Mapping[str, Any] | None = None) -> str:
+                   drafted_scope: Mapping[str, Any] | None = None, again: bool = False) -> str:
     source = study.get("data_source") or {}
     facts = _source_facts(str(source.get("path") or ""), str(new_source.get("path") or ""),
                           str(new_source.get("database") or ""))
     from .demo_planning_source import resolve_demo_planning_source
 
-    rechecked = resolve_demo_planning_source(study)
+    rechecked = resolve_demo_planning_source(study, again=again)
     if (rechecked is None or rechecked.raw_path != new_source.get("path")
             or not hmac.compare_digest(str(rechecked.offer.get("offer_sha256") or ""), offer_sha256)
             or _source_facts(str(source.get("path") or ""), str(new_source.get("path") or ""),
@@ -168,7 +168,7 @@ def prior_choice_export(study: Mapping[str, Any]) -> str | None:
     raw_sha = hashlib.sha256(raw.encode()).hexdigest()
     try:
         names = [name for name in os.listdir(_private_directory()) if _RECEIPT_NAME.fullmatch(name)]
-    except (OSError, ValueError):
+    except (OSError, ValueError, AuthorityFilesystemError):
         return None
     if len(names) > _MAX_RECEIPTS:
         return None

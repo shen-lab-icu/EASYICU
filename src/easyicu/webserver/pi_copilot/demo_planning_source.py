@@ -32,7 +32,7 @@ class DemoPlanningSource:
     offer: Mapping[str, Any]
 
 
-def resolve_demo_planning_source(study: Mapping[str, Any]) -> DemoPlanningSource | None:
+def resolve_demo_planning_source(study: Mapping[str, Any], *, again: bool = False) -> DemoPlanningSource | None:
     """Offer only a pinned cache export whose exact raw provenance still holds.
 
     The offer binds the study revision and the source receipts, not any client
@@ -52,7 +52,11 @@ def resolve_demo_planning_source(study: Mapping[str, Any]) -> DemoPlanningSource
         return None
     try:
         refusal = bound_export_cohort_refusal(_planning_study(study), str(export_path))
-        if refusal is None or refusal.code != "research_pipeline_export_cohort_mismatch":
+        # A first choice answers a population the export does not hold. Asked
+        # again (``again``), the settings may since match that export: the
+        # same raw choice still serves; an unexecutable cohort never does.
+        if (refusal.code != "research_pipeline_export_cohort_mismatch" if refusal is not None
+                else not again):
             return None
         marker = demo_source_storage.read_marker(paths.prepared_marker, candidate)
         if (export_path.resolve() != export_path
@@ -136,7 +140,7 @@ def _reconfirmation_study(study: Mapping[str, Any]) -> Mapping[str, Any] | None:
 def resolve_demo_planning_reconfirmation(study: Mapping[str, Any]) -> DemoPlanningSource | None:
     """The same raw choice offered again on the current configuration, if it still holds."""
     offer_study = _reconfirmation_study(study)
-    return None if offer_study is None else resolve_demo_planning_source(offer_study)
+    return None if offer_study is None else resolve_demo_planning_source(offer_study, again=True)
 
 def bind_demo_planning_source(
     record: PiSessionRecord,
@@ -158,8 +162,9 @@ def bind_demo_planning_source(
         )
     # An already-chosen study whose choice a configuration write cleared is
     # offered the same choice again, from the export its receipt named.
-    offer_study = _reconfirmation_study(study) or study
-    resolved = resolve_demo_planning_source(offer_study)
+    reconfirmation = _reconfirmation_study(study)
+    offer_study = reconfirmation or study
+    resolved = resolve_demo_planning_source(offer_study, again=reconfirmation is not None)
     if (resolved is None or not isinstance(offer_sha256, str) or not offer_sha256
             or not hmac.compare_digest(str(resolved.offer["offer_sha256"]), offer_sha256)):
         raise PiCopilotError(
@@ -180,7 +185,8 @@ def bind_demo_planning_source(
     drafted_scope = {"cohort": drafted["cohort"]} if drafted.get("cohort") != study.get("cohort") else {}
     try:
         authority_ref = publish_choice(study=offer_study, new_source=new_source, confirmations=confirmations,
-                                       offer_sha256=offer_sha256, drafted_scope=drafted_scope)
+                                       offer_sha256=offer_sha256, drafted_scope=drafted_scope,
+                                       again=reconfirmation is not None)
         return study_contexts.upsert_context(
             {"id": study["id"], "data_source": new_source, "confirmations": confirmations,
              "demo_planning_authority_ref": authority_ref, **drafted_scope},

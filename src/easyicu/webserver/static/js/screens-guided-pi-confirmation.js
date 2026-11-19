@@ -185,8 +185,8 @@
             'The current export uses a different population. Its verified original Demo data are available. Choose them to generate a candidate plan for this study; data preparation and analysis remain subject to their separate reviews.',
             '现有导出的人群与本研究不同。已找到并核验同一官方 Demo 的原始数据；选择后可按本研究生成候选计划，数据准备和分析仍需随后分别审阅。',
           ) : again ? tr(
-            'The original official Demo data can no longer be verified. Prepare data for this study, or choose another validated source.',
-            '无法再次核验同一官方 Demo 的原始数据。请按本研究条件准备数据，或选择其他已验证的数据源。',
+            'The earlier data source choice cannot be offered again for the current study settings. Check the study’s cohort, prepare data for this study, or choose another validated source.',
+            '当前研究设置下无法再次提供之前的数据源选择。请核对研究人群，按本研究条件准备数据，或选择其他已验证的数据源。',
           ) : tr(
             'This export does not match the study population. Request extraction for this study or choose another validated source.',
             '当前导出不符合本研究的人群条件。请按本研究条件请求提取，或选择其他已验证的数据源。',

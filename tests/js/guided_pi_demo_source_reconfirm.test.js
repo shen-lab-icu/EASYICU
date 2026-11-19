@@ -103,3 +103,17 @@ test('the confirmation does not continue when the settings changed again meanwhi
   await ui.actions.confirmWorkflow(ui.confirmation.workflowConfirmation());
   assert.ok(!ui.state.calls.includes('plan'));
 });
+
+test('a first plan after confirming again continues, keeping its own holds', async () => {
+  // Carbon b6 3: the button says "continue" on a study that has no plan yet.
+  const ui = screen();
+  ui.state.after = { next_action_code: 'provider_ready_to_generate_plan' };
+  await ui.actions.confirmWorkflow(ui.confirmation.workflowConfirmation());
+  assert.ok(ui.state.calls.includes('plan'));
+
+  const held = screen();
+  held.state.after = { next_action_code: 'provider_ready_to_generate_plan' };
+  held.state.session.idea_exploration_open = true;
+  await held.actions.confirmWorkflow(held.confirmation.workflowConfirmation());
+  assert.ok(!held.state.calls.includes('plan'), 'mined ideas still wait for a choice');
+});

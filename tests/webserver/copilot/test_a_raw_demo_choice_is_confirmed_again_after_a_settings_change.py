@@ -62,7 +62,7 @@ def _launch(study):
 
 
 @pytest.mark.parametrize("change", sorted(SETTINGS_CHANGES))
-def test_a_settings_change_lands_on_the_confirmation_card_not_the_export_validator(choice, chosen, change):
+def test_a_settings_change_lands_on_the_confirmation_card_not_the_export_validator(choice, chosen, change, monkeypatch):
     changed = _changed(choice, chosen, change)
     assert not changed.get("demo_planning_authority_ref")
     assert changed["data_source"]["path"] == str(choice.paths.raw)
@@ -86,10 +86,64 @@ def test_a_settings_change_lands_on_the_confirmation_card_not_the_export_validat
     assert confirmed["revision"] == changed["revision"] + 1
     assert confirmed["data_source"]["path"] == str(choice.paths.raw)
     for key, value in SETTINGS_CHANGES[change].items():
-        if key != "confirmations":
+        if key == "confirmations":
+            # The applied settings stay; only the extraction flag is reset.
+            assert {**value, "extraction_completed": False}.items() <= confirmed["confirmations"].items()
+        else:
             assert confirmed[key] == changed[key]
     assert not demo_planning_source.raw_choice_needs_reconfirmation(confirmed)
-    assert _workflow(confirmed).next_action_code != CODE
+    assert _workflow(confirmed).next_action_code == "provider_ready_to_generate_plan"
+    _assert_launch_passes_the_refusal(confirmed, monkeypatch)
+
+
+class _PastTheRefusal(Exception):
+    pass
+
+
+def _past_the_refusal(monkeypatch):
+    # Every launch reads the package manifest next; reaching it means the
+    # source refusal let this launch through.
+    def reached(_path):
+        raise _PastTheRefusal
+
+    monkeypatch.setattr(research_run_submission.dataio, "prepared_export_manifest_path", reached)
+    monkeypatch.setattr(research_run_submission, "_with_stated_first_stay", lambda study: study)
+    monkeypatch.setattr(research_run_submission, "_with_repeated_stays_default", lambda study, path: study)
+
+
+def _assert_launch_passes_the_refusal(study, monkeypatch):
+    _past_the_refusal(monkeypatch)
+    with pytest.raises(_PastTheRefusal):
+        _launch(study)
+
+
+def test_settings_that_now_match_the_earlier_export_can_still_confirm_the_raw_choice(choice, chosen, monkeypatch):
+    """Carbon b6 1a: the earlier export holding the new cohort is no reason for a dead end."""
+    study_contexts.upsert_context({"id": chosen["id"], "cohort": {}})
+    changed = study_contexts.get_context(chosen["id"])
+    choice.record.binding = choice.service._binding_for_context(changed)
+    assert demo_planning_source.raw_choice_needs_reconfirmation(changed)
+    # A first choice would not be offered on these settings.
+    assert demo_planning_source.resolve_demo_planning_source(demo_planning_source._reconfirmation_study(changed)) is None
+    offer = _workflow(changed).bound_export_cohort_refusal["planning_source"]
+    choice.service.authorize_data_source(choice.record.session_id, **{
+        **choice.body, "expected_revision": changed["revision"], "offer_sha256": offer["offer_sha256"],
+    })
+    confirmed = study_contexts.get_context(changed["id"])
+    assert resolve_choice(confirmed) is not None
+    _assert_launch_passes_the_refusal(confirmed, monkeypatch)
+
+
+def test_a_deferred_or_resumed_execution_is_not_refused_here(choice, chosen, monkeypatch):
+    """Carbon b6 2: only a launch that reads the study's own source is refused."""
+    changed = _changed(choice, chosen, "outcome")
+    resumed = research_run_submission.ResearchRunSubmissionRequest(
+        study_context_id=changed["id"], provider="mock", credential_source="", external_llm_opt_in=False,
+        intent="reviewed_analysis", planner_start_mode="fresh", execution_resume_source_run_id="run-sealed",
+    )
+    _past_the_refusal(monkeypatch)
+    with pytest.raises(_PastTheRefusal):
+        research_run_submission.submit_research_run(resumed)
 
 
 def test_a_researcher_edit_after_the_reconfirmation_still_ends_it(choice, chosen):
