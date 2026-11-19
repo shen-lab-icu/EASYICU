@@ -104,21 +104,66 @@ def test_exact_columns_bind_against_the_official_export_or_wait_for_a_package(ch
         study_context_update._execution_catalog(chosen, {}, chosen["data_source"])
 
 
-def test_clearing_exact_columns_reads_no_catalog():
-    # Carbon b11r1: only an update that binds a concept reads the package.
-    assert not study_context_update._execution_binds_columns({})
-    assert not study_context_update._execution_binds_columns({"outcome": None, "covariates": []})
-    assert study_context_update._execution_binds_columns({"covariates": ["age"]})
+@pytest.mark.parametrize("execution", [{}, {"primary_exposure": None}, {"outcome": None, "covariates": []}])
+def test_clearing_exact_columns_reads_no_catalog(monkeypatch, execution):
+    # Carbon b11r1/b11r2: only an update that binds a concept reads the
+    # package; clearing columns on a broken package still saves.
+    from easyicu.webserver.pi_copilot import tools as tool_module
+    from easyicu.webserver.pi_copilot.contracts import AuthorityBinding, PiSessionRecord, ToolExecutionContext
+
+    current = {
+        "id": "study-clear-columns", "revision": 2,
+        "question": "Is lactate associated with mortality?", "active_job_id": None,
+        "data_source": {"path": "/private/full-export", "database": "miiv"},
+        "modules": ["demographics", "outcome"],
+        # Retained columns are merged into the update and bound again, so
+        # they read the catalog as before; a clear that leaves none does not.
+        "execution_concepts": {},
+    }
+
+    def unreadable(_path):
+        raise ExportPackageError("synthetic", code="manifest_file_missing")
+
+    writes = []
+    monkeypatch.setattr(catalog_owner, "build_available_catalog", unreadable)
+    monkeypatch.setattr(tool_module, "_bound_context", lambda binding: dict(current))
+    monkeypatch.setattr(tool_module.study_contexts, "upsert_context",
+                        lambda raw, **_kw: writes.append(dict(raw)) or {**current, **raw, "revision": 3})
+    def context():
+        return ToolExecutionContext(
+            data_handling="zero_retention_declared",
+            session=PiSessionRecord(session_id="pi-clear-columns", binding=AuthorityBinding(
+                study_context_id=current["id"], study_revision=current["revision"])),
+            allowed_actions={"configure"},
+        )
+
+    result = tool_module.execute_tool("easyicu_update_study_context", {"execution_concepts": execution}, context())
+    assert result["code"] == "study_context_updated", result
+    assert writes and "execution_concepts" in writes[0]
+    # Binding a concept on that package still refuses with the package error.
+    with pytest.raises(ExportPackageError):
+        tool_module.execute_tool("easyicu_update_study_context", {"execution_concepts": {"outcome": "death"}}, context())
 
 
-def test_the_owner_compares_the_bound_path_as_a_path(choice, chosen):
-    # Carbon b11r1: "~" or a trailing separator is the same bound folder.
-    raw = chosen["data_source"]["path"]
-    assert launch.bound_source_authority_path(raw + "/", chosen) == str(choice.paths.export)
-    home = str(Path.home())
-    if raw.startswith(home):
-        assert launch.bound_source_authority_path("~" + raw[len(home):], chosen) == str(choice.paths.export)
+def test_the_owner_compares_the_bound_path_as_a_path(choice, chosen, monkeypatch):
+    # Carbon b11r1/b11r2: "~" or a trailing separator is the same bound folder;
+    # an empty path is never the bound folder.
+    raw = Path(chosen["data_source"]["path"])
+    monkeypatch.setenv("HOME", str(raw.parent))
+    assert launch.bound_source_authority_path(str(raw) + "/", chosen) == str(choice.paths.export)
+    assert launch.bound_source_authority_path("~/" + raw.name, chosen) == str(choice.paths.export)
+    assert launch.bound_source_planning_concepts({"path": "~/" + raw.name}) == launch.bound_source_planning_concepts(
+        {"path": str(raw)})
     assert launch.bound_source_planning_concepts({}) == set()
+    # A converted (non-Demo) folder under "~" is planned on its menu too.
+    converted = raw.parent / "converted_miiv"
+    converted.mkdir()
+    (converted / "icustays.csv").write_text("stay_id\n")
+    menu = launch.bound_source_planning_concepts({"path": str(converted), "database": "miiv"})
+    assert menu and launch.bound_source_planning_concepts({"path": "~/converted_miiv", "database": "miiv"}) == menu
+    dot = {**chosen, "data_source": {**chosen["data_source"], "path": "."}}
+    assert launch.bound_source_authority_path("", dot) == ""
+    assert launch.bound_source_authority_path("   ", dot) == "   "
 
 
 # Every call in src/easyicu/webserver that opens a path as an export package

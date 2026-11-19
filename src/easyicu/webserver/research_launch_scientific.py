@@ -2021,10 +2021,12 @@ def bound_source_authority_path(export_path: str, study: Mapping[str, Any]) -> s
     source = study.get("data_source")
     bound = _clean_text(source.get("path"), 2_000) if isinstance(source, Mapping) else ""
 
+    target = _clean_text(export_path, 2_000)
+
     def same(value: str) -> str:
         return os.path.normpath(os.path.expanduser(value))
 
-    return source_authority_export_path(study) if bound and same(bound) == same(_clean_text(export_path, 2_000)) else export_path
+    return source_authority_export_path(study) if bound and target and same(bound) == same(target) else export_path
 
 
 def _data_foundation_profile(
