@@ -29,7 +29,7 @@
         tr('The primary outcome of this study is: ', '本研究的主要结局是：'),
       ],
       // The confirmed Demo choice changed with its source; this conversation
-      // cannot choose again, so the action opens a new project (M2).
+      // cannot choose again, so the action opens a new project.
       source: [
         tr('New project for the Demo', '新建项目重新选择 Demo'),
         '',

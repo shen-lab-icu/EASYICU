@@ -52,6 +52,12 @@ ALLOWED_SITES = {
     # Native database + root readers (no source object is passed in).
     "easyicu/scores/aki_profiles.py::rrt_source_receipt": _REGISTRY_SAME,
     "easyicu/scores/comorbidity.py::_build_datasource": _REGISTRY_SAME,
+    # Synthetic acceptance source: no data source exists yet; the packaged table
+    # schema names the columns of the synthetic archive it writes.
+    "easyicu/synthetic_desktop_source.py::_archive_bytes": (
+        "builds a synthetic archive from the packaged eicu_demo table schema; no source "
+        "object exists and no caller root is paired with it"
+    ),
     # Web host flows over registered sources (registry configurations).
     "easyicu/webserver/dataio.py::runner": _REGISTRY_SAME,
     "easyicu/webserver/pi_copilot/source_concept_reference.py::source_concept_reference": _REGISTRY_SAME,
