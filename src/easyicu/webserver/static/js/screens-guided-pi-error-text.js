@@ -263,6 +263,9 @@
       if (error.code === 'codex_auth_model_unavailable') {
         return tr('That model is no longer available for this Codex account. Refresh the account model list.', '该 Codex 账户已无法使用这个模型，请刷新账户模型列表。');
       }
+      if (error.code === 'codex_auth_model_conversation_unsupported' || error.code === 'pi_model_not_found') {
+        return tr('This EasyICU version cannot hold a conversation with that account model yet. Choose another account model for this connection and try again.', '当前版本的 EasyICU 还不能用这个账户模型进行对话。请为这个连接换一个账户模型后重试。');
+      }
       if (error.code === 'codex_auth_url_invalid') {
         return tr('The sign-in link was blocked because it is not a valid OpenAI authorization address.', '登录链接不是有效的 OpenAI 授权地址，已被拦截。');
       }

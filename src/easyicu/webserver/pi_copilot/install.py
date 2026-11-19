@@ -317,6 +317,28 @@ def preferred_app_dir() -> Path:
     return installed if installed.exists() else packaged_app_dir()
 
 
+_PI_CODEX_MODEL_REGISTRY = "node_modules/@earendil-works/pi-ai/dist/providers/data/openai-codex.json"
+
+
+def codex_conversation_models(app_dir: Optional[Path] = None) -> Optional[frozenset[str]]:
+    """Account models the conversation runtime can load; None when unknown.
+
+    The Pi runtime resolves a ChatGPT-account model only from its own bundled
+    registry and fails closed for any other name, while the account catalog
+    can already list newer models. Callers use this set to keep the
+    conversation on a model it can start.
+    """
+
+    try:
+        payload = json.loads(
+            (Path(app_dir or preferred_app_dir()) / _PI_CODEX_MODEL_REGISTRY).read_text(encoding="utf-8")
+        )
+        models = payload["openai-codex-responses"]
+    except (OSError, KeyError, TypeError, ValueError):
+        return None
+    return frozenset(str(model) for model in models) if isinstance(models, Mapping) else None
+
+
 def _installer_environment(source: Mapping[str, str]) -> dict[str, str]:
     allowed = {"PATH", "HOME", "TMPDIR", "TEMP", "LANG", "LC_ALL", "LC_CTYPE"}
     return {
@@ -438,6 +460,7 @@ __all__ = [
     "PI_PACKAGE_VERSION",
     "PI_RUNTIME_REVISION",
     "RUNTIME_MANIFEST_FILE",
+    "codex_conversation_models",
     "install_runtime",
     "main",
     "packaged_app_dir",

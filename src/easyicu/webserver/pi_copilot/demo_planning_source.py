@@ -13,6 +13,7 @@ from easyicu.webserver import dataio, demo_source_storage, study_contexts
 from easyicu.webserver.research_launch_scientific import bound_export_cohort_refusal
 
 from .contracts import PiCopilotError, PiSessionRecord
+from .population_preparation import study_for_first_plan
 
 ACTION = "use_official_demo_raw_for_plan"
 
@@ -44,7 +45,7 @@ def resolve_demo_planning_source(study: Mapping[str, Any]) -> DemoPlanningSource
     if candidate.database != database:
         return None
     try:
-        refusal = bound_export_cohort_refusal(study, str(export_path))
+        refusal = bound_export_cohort_refusal(study_for_first_plan(study), str(export_path))
         if refusal is None or refusal.code != "research_pipeline_export_cohort_mismatch":
             return None
         marker = demo_source_storage.read_marker(paths.prepared_marker, candidate)
@@ -117,12 +118,17 @@ def bind_demo_planning_source(
     from .demo_planning_authority import publish_choice
 
     new_source = {"path": resolved.raw_path, "database": resolved.database, "label": resolved.label}
+    # The choice is signed on the study a first plan is drafted on; the launch
+    # would otherwise add the question's stated first-stay scope afterwards
+    # and find this receipt stale.
+    drafted = study_for_first_plan({**study, "data_source": new_source})
+    drafted_scope = {"cohort": drafted["cohort"]} if drafted.get("cohort") != study.get("cohort") else {}
     try:
         authority_ref = publish_choice(study=study, new_source=new_source, confirmations=confirmations,
-                                       offer_sha256=offer_sha256)
+                                       offer_sha256=offer_sha256, drafted_scope=drafted_scope)
         return study_contexts.upsert_context(
             {"id": study["id"], "data_source": new_source, "confirmations": confirmations,
-             "demo_planning_authority_ref": authority_ref},
+             "demo_planning_authority_ref": authority_ref, **drafted_scope},
             expected_revision=expected_revision, require_revision=True, lifecycle_write=False,
             _server_demo_planning_authority_write=True,
         )

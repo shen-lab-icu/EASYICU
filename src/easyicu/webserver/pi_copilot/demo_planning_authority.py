@@ -74,7 +74,8 @@ def _source_study_sha256(study: Mapping[str, Any]) -> str:
 
 
 def publish_choice(*, study: Mapping[str, Any], new_source: Mapping[str, Any],
-                   confirmations: Mapping[str, Any], offer_sha256: str) -> str:
+                   confirmations: Mapping[str, Any], offer_sha256: str,
+                   drafted_scope: Mapping[str, Any] | None = None) -> str:
     source = study.get("data_source") or {}
     facts = _source_facts(str(source.get("path") or ""), str(new_source.get("path") or ""),
                           str(new_source.get("database") or ""))
@@ -86,7 +87,8 @@ def publish_choice(*, study: Mapping[str, Any], new_source: Mapping[str, Any],
             or _source_facts(str(source.get("path") or ""), str(new_source.get("path") or ""),
                              str(new_source.get("database") or "")) != facts):
         raise ValueError("demo_planning_source_changed")
-    proposed = {**dict(study), "data_source": dict(new_source), "confirmations": dict(confirmations)}
+    proposed = {**dict(study), **dict(drafted_scope or {}),
+                "data_source": dict(new_source), "confirmations": dict(confirmations)}
     body = {"schema_version": "easyicu.demo-planning-source-choice/1",
             "study_id": study["id"], "revision": study["revision"] + 1,
             "scientific_configuration_sha256": _source_study_sha256(proposed),

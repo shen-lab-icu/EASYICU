@@ -1026,15 +1026,26 @@ class PiCopilotService(SkillAttachmentService, QuickAnswerService):
         legacy_official_demo = bool(
             profile is not None and profile.is_public and sources.is_official_demo_source(source)
         )
+        # Release facts come from the registration: a bound official demo is
+        # named as its release, never as the family's reference release.
+        demo_release = ""
+        if profile is not None and profile.is_public and not legacy_official_demo:
+            registered = sources.registered_source_identity(str(source.get("path") or ""))
+            row = registered.to_dict() if registered is not None else {}
+            if row and sources.is_official_demo_source(row):
+                demo_release = sources.source_reader_label(row)
         return PiSessionDataSourceReference(
             source_id=str(source.get("source_id") or source.get("id") or "").strip()
             or None,
             label=str(
-                profile.display_name if profile is not None and not legacy_official_demo else source.get("label") or ""
+                demo_release or (
+                    profile.display_name if profile is not None and not legacy_official_demo
+                    else source.get("label") or ""
+                )
             ).strip()[:160]
             or None,
             database=database[:80] or None,
-            reference_release=None if legacy_official_demo else str(
+            reference_release=None if legacy_official_demo or demo_release else str(
                 source.get("reference_release")
                 or (profile.reference_release if profile is not None else "")
             ).strip()[:80]
@@ -2817,10 +2828,17 @@ class PiCopilotService(SkillAttachmentService, QuickAnswerService):
             active_tool_context = tool_context
             if active_tool_context is None:
                 raise RuntimeError("pi_message_tool_context_missing")
-            conversation_gateway = self._conversation_gateway(
-                record,
-                refresh_account=True,
-            )
+            try:
+                conversation_gateway = self._conversation_gateway(
+                    record,
+                    refresh_account=True,
+                )
+            except Exception:
+                # The account or model connection failed before the turn
+                # began; release the session so the next message can start.
+                with self._lock:
+                    self._busy_sessions.discard(record.session_id)
+                raise
             with self._lock:
                 self._active_message_jobs[record.session_id] = job.id
 

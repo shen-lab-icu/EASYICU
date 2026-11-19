@@ -236,6 +236,16 @@
   async function registerWorkspaceSource(path, opts) {
     const body = { path: path, active: true, crossdb: true };
     Object.assign(body, opts || {});
+    // A folder already registered is selected, not registered again: a fresh
+    // registration drops its name and an official demo's release receipt.
+    const reg = registry(), key = String(path || '').replace(/[\\/]+$/, '');
+    const known = !body.label && (reg.sources || []).find(s => s && s.ok && s.path === key);
+    if (known) {
+      const crossdb = Array.isArray(reg.crossdb_paths) ? reg.crossdb_paths.slice() : [];
+      if (body.crossdb && !crossdb.includes(key)) crossdb.push(key);
+      return saveWorkspaceRegistry(Object.assign({ sources: [{ path: key, label: known.label }], crossdb_paths: crossdb },
+        body.active ? { active_path: key, active_source: 'registered_source' } : {}));
+    }
     return setRegistry(await postJSON('/api/workspaces/register', body));
   }
   async function renameWorkspaceSource(path, label) {

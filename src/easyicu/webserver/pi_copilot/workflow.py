@@ -63,7 +63,7 @@ from .contracts import (
 from .plan_projection import project_plan_conversation_preview
 from .exposure_group_notes import project_exposure_groups
 from .question_requirement_notes import exposure_arrangement_offer, project_question_requirement_notes
-from .population_preparation import current_population_preparation
+from .population_preparation import current_population_preparation, study_for_first_plan
 from .population_acceptance import current_population_acceptance
 from .survival_plan_decision import SurvivalLandmarkDecision, pending_survival_decision
 from .source_adjustments import current_source_adjustments
@@ -1883,9 +1883,11 @@ def build_project_workflow_projection(
         continuing_review_choices=plan_review_progress.has_pending_choices(
             study, latest_run or {}, review,
         ),
-        # The launch reads the study's bound export by this same path.
+        # The launch reads the study's bound export by this same path, and
+        # drafts a first plan on the study's stated first-stay scope.
         export_cohort_refusal=bound_export_cohort_refusal(
-            study, str(bound_source.get("path") or "").strip()
+            study if latest_run else study_for_first_plan(study),
+            str(bound_source.get("path") or "").strip(),
         ),
         target_trial_compile=trial_compile,
     )

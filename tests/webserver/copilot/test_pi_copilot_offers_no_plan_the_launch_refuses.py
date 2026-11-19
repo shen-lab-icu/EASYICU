@@ -287,3 +287,29 @@ def test_an_unsaved_proposed_outcome_is_asked_before_the_plan(tmp_path: Path) ->
     # Without a question the study is not one outcome away from its plan.
     unasked = {key: value for key, value in proposed.items() if key != "question"}
     assert _snapshot(unasked, None).next_action_code != "study_primary_outcome_confirmation_required"
+
+
+def test_a_first_plan_is_checked_on_the_first_stay_scope_its_question_states(tmp_path: Path) -> None:
+    # The launch drafts a first plan on the first-stay scope the question
+    # states, then refuses an all-stays export. The workflow read the study
+    # without that scope, offered the plan, and every click was refused.
+    from easyicu.webserver.pi_copilot.population_preparation import study_for_first_plan
+
+    export_path = tmp_path / "export"
+    study = _planning_study(export_path)
+    study["question"] = "From the first ICU admission, compare 28-day mortality between sepsis definitions."
+    _write_export(export_path, compile_study_cohort(study), current_rule=True)
+
+    assert bound_export_cohort_refusal(study, str(export_path)) is None
+    drafted = study_for_first_plan(study)
+    assert drafted["cohort"]["exclude_readmissions"] is True
+    assert bound_export_cohort_refusal(drafted, str(export_path)) == ExportCohortRefusal(
+        code="research_pipeline_export_cohort_mismatch",
+        reason_codes=("registered_export_cohort_mismatch",),
+    )
+    # A question without a stated first stay is drafted unchanged.
+    plain = _planning_study(export_path)
+    assert study_for_first_plan(plain) is plain
+
+    workflow_source = Path(workflow_owner.__file__).read_text(encoding="utf-8")
+    assert "study if latest_run else study_for_first_plan(study)" in workflow_source

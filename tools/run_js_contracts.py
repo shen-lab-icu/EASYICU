@@ -90,6 +90,7 @@ CONTRACTS: dict[str, list[str]] = {
     "composer_keyboard.test.js": ["composer-keyboard.js"],
     "app_boot_watchdog.test.js": ["app-boot-watchdog.js", "app.js"],
     "app_route_transition_bound.test.js": ["app.js", "api.js"],
+    "registered_source_reselect.test.js": ["api.js"],
     "guided_startup_typed_stop.test.js": ["screens-guided-startup.js"],
     "copilot_history.test.js": [],
     "guided_pi_audit_recovery_choices.test.js": [],

@@ -153,6 +153,8 @@ def _isolated_sessions(
         "CodexAppServerRuntime",
         _FakeRuntime,
     )
+    # Unknown conversation registry: every listed account model stays usable.
+    monkeypatch.setattr(codex_account_sessions, "_conversation_models", lambda: None)
     yield
     codex_account_sessions.shutdown_all()
 
@@ -518,3 +520,59 @@ def test_conversation_catalog_requires_the_saved_account_to_remain_authenticated
     with pytest.raises(codex_account_sessions.CodexAccountSessionError) as caught:
         codex_account_sessions.discovered_models_for_binding(binding)
     assert caught.value.code == "codex_auth_login_required"
+
+
+def _signed_in_request_with_newer_default(monkeypatch: pytest.MonkeyPatch) -> Request:
+    # The account catalog leads with a model the conversation runtime cannot load.
+    _FakeRuntime.model_rows = [
+        {"model": "gpt-9-synthetic", "hidden": False, "isDefault": True},
+        {"model": "gpt-5.6-sol", "hidden": False, "isDefault": False},
+    ]
+    monkeypatch.setattr(
+        codex_account_sessions,
+        "_conversation_models",
+        lambda: frozenset({"gpt-5.6-luna", "gpt-5.6-sol", "gpt-5.6-terra"}),
+    )
+    response = Response()
+    codex_account_sessions.start_login(_request(), response)
+    _FakeRuntime.logged_in = True
+    return _request(_cookie_from_response(response))
+
+
+def test_catalog_marks_account_models_the_conversation_cannot_load(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    request = _signed_in_request_with_newer_default(monkeypatch)
+
+    rows = {row["id"]: row for row in codex_account_sessions.models(request)["models"]}
+
+    assert rows["gpt-9-synthetic"]["is_default"] is True
+    assert rows["gpt-9-synthetic"]["conversation_supported"] is False
+    assert rows["gpt-5.6-sol"]["conversation_supported"] is True
+    # With no explicit choice the conversation starts on a model it can load.
+    assert codex_account_sessions.validated_model_for_request(request, "") == "gpt-5.6-sol"
+
+
+def test_starting_a_conversation_on_an_unloadable_model_names_the_reason(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    request = _signed_in_request_with_newer_default(monkeypatch)
+    binding = codex_account_sessions.binding_for_request(request)
+
+    with pytest.raises(codex_account_sessions.CodexAccountSessionError) as caught:
+        codex_account_sessions.validated_model_for_request(request, "gpt-9-synthetic")
+    assert caught.value.code == "codex_auth_model_conversation_unsupported"
+    with pytest.raises(codex_account_sessions.CodexAccountSessionError) as caught:
+        codex_account_sessions.pi_conversation_environment_for_binding(binding, model="gpt-9-synthetic")
+    assert caught.value.code == "codex_auth_model_conversation_unsupported"
+    assert codex_account_sessions.discovered_models_for_binding(binding) == ["gpt-5.6-sol"]
+
+
+def test_conversation_registry_is_read_from_the_runtime_bundle(tmp_path: Path) -> None:
+    from easyicu.webserver.pi_copilot import install
+
+    assert install.codex_conversation_models(tmp_path) is None
+    registry = tmp_path / install._PI_CODEX_MODEL_REGISTRY
+    registry.parent.mkdir(parents=True)
+    registry.write_text('{"openai-codex-responses": {"gpt-5.6-sol": {}, "gpt-5.5": {}}}')
+    assert install.codex_conversation_models(tmp_path) == frozenset({"gpt-5.6-sol", "gpt-5.5"})
