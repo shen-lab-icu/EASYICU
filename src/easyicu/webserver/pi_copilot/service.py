@@ -2818,10 +2818,17 @@ class PiCopilotService(SkillAttachmentService, QuickAnswerService):
             active_tool_context = tool_context
             if active_tool_context is None:
                 raise RuntimeError("pi_message_tool_context_missing")
-            conversation_gateway = self._conversation_gateway(
-                record,
-                refresh_account=True,
-            )
+            try:
+                conversation_gateway = self._conversation_gateway(
+                    record,
+                    refresh_account=True,
+                )
+            except Exception:
+                # The account or model connection failed before the turn
+                # began; release the session so the next message can start.
+                with self._lock:
+                    self._busy_sessions.discard(record.session_id)
+                raise
             with self._lock:
                 self._active_message_jobs[record.session_id] = job.id
 

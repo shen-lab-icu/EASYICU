@@ -6518,3 +6518,44 @@ def test_plan_review_run_projection_cannot_be_mistaken_for_executed_analysis(
     assert "paused at the human plan-review gate" in result["summary"]
     assert "analysis has not executed" in result["summary"]
     assert result["details"]["run"]["analysis_executed"] is False
+
+
+def test_a_failed_account_connection_does_not_wedge_the_conversation(
+    tmp_path: Path,
+    study_state: dict[str, Any],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # The account server failed while the turn was opening its connection.
+    # The session stayed "busy" and every later message was refused with
+    # pi_session_busy until the app restarted.
+    gateway = FakeGateway()
+    service = PiCopilotService(store_path=tmp_path / "sessions.json", gateway=gateway)
+    session_id = service.create_session(
+        project_id="project-account-failure", external_llm_opt_in=True,
+    )["session"]["session_id"]
+    real_gateway = service._conversation_gateway
+    failures = iter([PiCopilotError("codex_auth_app_server_request_failed", "synthetic", status_code=409)])
+
+    def flaky(record, **kwargs):
+        # Only the turn's own account refresh fails, as it did live.
+        failure = next(failures, None) if kwargs.get("refresh_account") else None
+        if failure is not None:
+            raise failure
+        return real_gateway(record, **kwargs)
+
+    monkeypatch.setattr(service, "_conversation_gateway", flaky)
+
+    def finish(submitted):
+        deadline = time.monotonic() + 3
+        while time.monotonic() < deadline:
+            job = service_module.jobs.MANAGER.get(submitted["job_id"])
+            if job and job.status != "running":
+                return job
+            time.sleep(0.01)
+        return None
+
+    failed = finish(service.send_message(session_id, project_id="project-account-failure", message="First try."))
+    assert failed is not None and failed.status == "failed"
+    assert session_id not in service._busy_sessions
+    retried = finish(service.send_message(session_id, project_id="project-account-failure", message="Second try."))
+    assert retried is not None and retried.status == "done"
