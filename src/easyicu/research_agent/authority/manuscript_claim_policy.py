@@ -8,7 +8,7 @@ or mutates EvidenceStore state.
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 import re
 from typing import Callable, Mapping, Optional, Sequence
 
@@ -822,6 +822,59 @@ _METHOD_FACT_PLACES = {
 }
 
 
+def _abstract_section_label(prefix: str, content: str) -> str:
+    match = _ABSTRACT_LABEL_RE.match(content) or INLINE_SECTION_LABEL_RE.search(prefix)
+    return match.group("label").casefold() if match else ""
+
+
+@dataclass(frozen=True)
+class _ScaffoldScope:
+    section: str = ""
+    subsection: str = ""
+    findings_depth: int | None = None
+    in_abstract: bool = False
+    abstract_findings: bool = True
+
+    def after_line(self, line: str, kind: str) -> _ScaffoldScope:
+        if kind != "heading":
+            if self.in_abstract and kind in {"prose", "structural"}:
+                label = _abstract_section_label(*_split_markdown_structure_prefix(line))
+                if label:
+                    return replace(
+                        self,
+                        abstract_findings=label not in {"background", "methods", "背景", "方法"},
+                    )
+            return self
+
+        stripped = line.strip()
+        prefix, content = _split_markdown_heading_prefix(stripped)
+        name = _normalized_heading(content)
+        depth = prefix.count("#")
+        section, subsection = self.section, self.subsection
+        if re.fullmatch(r"##\s+.+", stripped):
+            section, subsection = stripped, ""
+        elif re.fullmatch(r"###\s+.+", stripped):
+            subsection = stripped
+
+        findings_depth = self.findings_depth
+        in_abstract = self.in_abstract
+        abstract_findings = self.abstract_findings
+        if (
+            in_abstract and findings_depth is not None and depth > findings_depth
+            and name in {"background", "methods", "results", "findings", "conclusion", "conclusions"}
+        ):
+            abstract_findings = name not in {"background", "methods"}
+        elif name in _FINDINGS_HEADINGS:
+            findings_depth = depth
+            in_abstract = name in {"abstract", "摘要"}
+            abstract_findings = True
+        elif findings_depth is not None and depth <= findings_depth and name in _CONTEXT_HEADINGS:
+            findings_depth = None
+            in_abstract = False
+
+        return _ScaffoldScope(section, subsection, findings_depth, in_abstract, abstract_findings)
+
+
 def filter_evidence_bound_scaffold(
     scaffold: str,
     *,
@@ -839,10 +892,7 @@ def filter_evidence_bound_scaffold(
     executed_spans = frozenset(
         _hour_span(*span) for fact in method_facts for span in fact.executed_hour_spans
     )
-    section = subsection = ""
-    findings_depth: int | None = None
-    in_abstract = False
-    abstract_findings = True
+    scope = _ScaffoldScope()
     for region in manuscript_regions(scaffold):
         block = scaffold[region.start:region.end]
         opaque = region.kind in {"fence", "html"}
@@ -852,32 +902,25 @@ def filter_evidence_bound_scaffold(
             filtered_lines.append("")
             continue
         first_claim, first_line = len(filtered_claims), len(filtered_lines)
+        candidate_scope = scope
         for raw_line in block.splitlines() if opaque else (block,):
             line = raw_line.rstrip()
             stripped = line.strip()
-            if line in method_lines and (section, subsection) == _METHOD_FACT_PLACES[
+            if line in method_lines and (scope.section, scope.subsection) == _METHOD_FACT_PLACES[
                 method_lines[line]
             ]:
                 filtered_lines.append(line)
                 continue
             structure_prefix, content = _split_markdown_structure_prefix(line)
+            if not opaque:
+                candidate_scope = scope.after_line(line, region.kind)
             # A top-level abstract label remains even if its entire body fails admission.
             abstract_label_line = (
                 structure_prefix.rstrip()
-                if in_abstract and region.kind == "prose"
+                if scope.in_abstract and region.kind == "prose"
                 and INLINE_SECTION_LABEL_RE.fullmatch(structure_prefix.strip())
                 else ""
             )
-            # Neutral labels may already have been separated from their claim/body
-            # by the Markdown owner. They still determine the findings boundary.
-            abstract_label = (
-                _ABSTRACT_LABEL_RE.match(content)
-                or INLINE_SECTION_LABEL_RE.search(structure_prefix)
-            )
-            if not opaque and in_abstract and abstract_label is not None:
-                abstract_findings = abstract_label.group("label").casefold() not in {
-                    "background", "methods", "背景", "方法"
-                }
             if is_method_fact_candidate(line):
                 rejected = content.strip() if abstract_label_line else stripped
                 unsupported_scientific_claims.append(rejected)
@@ -887,36 +930,17 @@ def filter_evidence_bound_scaffold(
             if stripped.startswith(("```", "~~~")) or not stripped:
                 filtered_lines.append(line)
                 continue
+            abstract_label = _abstract_section_label(structure_prefix, content)
             heading_prefix, heading_content = _split_markdown_heading_prefix(content)
             heading_requires_claim = False
             if heading_prefix:
                 name = _normalized_heading(heading_content)
-                depth = heading_prefix.count("#")
-                if region.kind == "heading":
-                    if re.fullmatch(r"##\s+.+", stripped):
-                        section, subsection = stripped, ""
-                    elif re.fullmatch(r"###\s+.+", stripped):
-                        subsection = stripped
-                    if (
-                        in_abstract and findings_depth is not None and depth > findings_depth
-                        and name in {"background", "methods", "results", "findings", "conclusion", "conclusions"}
-                    ):
-                        abstract_findings = name not in {"background", "methods"}
-                    elif name in _FINDINGS_HEADINGS:
-                        findings_depth = depth
-                        in_abstract = name in {"abstract", "摘要"}
-                        abstract_findings = True
-                    elif (
-                        findings_depth is not None and depth <= findings_depth
-                        and name in _CONTEXT_HEADINGS
-                    ):
-                        findings_depth = None
-                        in_abstract = False
                 # A quoted context heading can survive inside the current section.
                 quoted_heading = region.kind == "structural" and ">" in structure_prefix
                 restricted_heading = (
-                    findings_depth is not None and name not in _RESULT_STRUCTURE_HEADINGS
-                    and not ((in_abstract or quoted_heading) and name in _CONTEXT_HEADINGS)
+                    candidate_scope.findings_depth is not None
+                    and name not in _RESULT_STRUCTURE_HEADINGS
+                    and not ((candidate_scope.in_abstract or quoted_heading) and name in _CONTEXT_HEADINGS)
                     and _CAPTION_LABEL_RE.fullmatch(heading_content) is None
                 )
                 if not restricted_heading and not _heading_requires_evidence(heading_content):
@@ -926,9 +950,11 @@ def filter_evidence_bound_scaffold(
                 structure_prefix += heading_prefix
                 content = heading_content
             restricted_line = bool(
-                (findings_depth is not None and (not in_abstract or abstract_findings))
-                or (abstract_label is not None and abstract_label.group("label").casefold()
-                    in {"results", "findings", "conclusion", "conclusions", "结果", "结论"})
+                (
+                    candidate_scope.findings_depth is not None
+                    and (not candidate_scope.in_abstract or candidate_scope.abstract_findings)
+                )
+                or abstract_label in {"results", "findings", "conclusion", "conclusions", "结果", "结论"}
                 or _CAPTION_LABEL_RE.match(content)
             )
             if not content.strip():
@@ -1019,7 +1045,7 @@ def filter_evidence_bound_scaffold(
                     filtered_claims.append(rejected)
                     continue
                 if _looks_result_like_sentence(sentence):
-                    if section == "## Methods" and _carries_numeric_value(sentence):
+                    if candidate_scope.section == "## Methods" and _carries_numeric_value(sentence):
                         # Numeric method details are admitted only through an exact
                         # host-registered ManuscriptMethodFact (handled above).
                         # A generic evidence id proves that an artifact exists; it
@@ -1050,7 +1076,7 @@ def filter_evidence_bound_scaffold(
             previous_line = filtered_lines[-1].strip() if filtered_lines else ""
             at_paragraph_start = not previous_line or bool(re.match(r"^#{1,6}\s", previous_line))
             if (
-                not opaque and section == "## Methods" and subsection == "### Variables"
+                not opaque and (scope.section, scope.subsection) == ("## Methods", "### Variables")
                 and not structure_prefix and at_paragraph_start and kept
             ):
                 # The same context rule used by explicit evidence repair also
@@ -1073,6 +1099,13 @@ def filter_evidence_bound_scaffold(
             # Apply the admission checks inside the block without borrowing
             # section state or emitting a partially edited fence or HTML block.
             filtered_lines[first_line:] = [block if len(filtered_claims) == first_claim else ""]
+        elif retained_line := filtered_lines[-1]:
+            # Edited lines can keep only a label or lose it with the rejected body.
+            # Commit the transition represented by the emitted Markdown.
+            scope = (
+                candidate_scope if retained_line == line
+                else scope.after_line(retained_line, region.kind)
+            )
     return ScaffoldPolicyResult(
         scaffold="\n".join(filtered_lines).strip() + "\n",
         filtered_sentences=tuple(filtered_claims),
