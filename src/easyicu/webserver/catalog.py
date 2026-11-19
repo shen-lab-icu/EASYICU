@@ -123,6 +123,38 @@ def _declared_databases(key: str, definitions: Dict[str, Any]) -> list[str]:
     ]
 
 
+def _structurally_unavailable(definitions: Dict[str, Any]) -> Dict[str, list[str]]:
+    """Databases where a concept cannot be computed by design, per score owner.
+
+    ``scores.sofa2_aggregate`` names the SOFA-2 organ domains a database has no
+    source for (SICdb records no GCS, so no SOFA-2 CNS); the total and every
+    concept built on it are then unavailable there too, never imputed. The
+    catalog's declared list is a union over inputs and would otherwise show
+    such a database as mapped.
+    """
+    from easyicu.scores.sofa2_aggregate import (
+        SOFA2_STRUCTURALLY_UNAVAILABLE_COMPONENTS_BY_DATABASE as BY_DATABASE,
+    )
+
+    def dependencies(key: str, seen: frozenset[str]) -> set[str]:
+        found: set[str] = set()
+        definition = definitions.get(key) or {}
+        for field in ("concepts", "depends_on", "alias_of"):
+            values = definition.get(field) or []
+            for value in [values] if isinstance(values, str) else values:
+                if value not in seen:
+                    found |= {value} | dependencies(value, seen | {value})
+        return found
+
+    unavailable: Dict[str, list[str]] = {}
+    for key in definitions:
+        closure = dependencies(key, frozenset({key})) | {key}
+        databases = [db for db, components in BY_DATABASE.items() if closure & set(components)]
+        if databases:
+            unavailable[key] = sorted(databases)
+    return unavailable
+
+
 def _coverage_metadata(
     concept_dict: Dict[str, Any],
     definitions: Optional[Dict[str, Any]] = None,
@@ -151,8 +183,11 @@ def _coverage_metadata(
         "dataAudited": 0,
     }
 
+    structural = _structurally_unavailable(definitions)
     for key in concept_dict:
         declared = _declared_databases(key, definitions)
+        unavailable_in = [db for db in structural.get(key, ()) if db in declared]
+        declared = [db for db in declared if db not in unavailable_in]
         definition = definitions.get(key) or {}
         direct = any(mappings for mappings in (definition.get("sources") or {}).values())
         unsupported = not declared and key in OUTCOME_CONCEPT_SUPPORTED_DATABASES
@@ -173,6 +208,8 @@ def _coverage_metadata(
         if unsupported:
             receipt = structural_outcome_unavailability(key, cc.SUPPORTED_DB_KEYS[0])
             entry["unavailable_reason"] = receipt.reason_code
+        if unavailable_in:
+            entry["structurally_unavailable"] = unavailable_in
         if key in audit:
             entry["data_audit_databases"] = int(audit[key])
             summary["dataAudited"] += 1

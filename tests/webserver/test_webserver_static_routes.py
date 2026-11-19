@@ -2038,10 +2038,10 @@ def test_native_dictionary_distinguishes_mapping_audit_from_export_coverage(monk
     assert ".cov-badge.unaudited" in deepdive_css
     assert "data-catalog.js?v=20261028-readm1" in index_html
     assert "api.js?v=20261117-boot1" in index_html
-    assert "screens-dict.js?v=20261112-viz1" in index_html
+    assert "screens-dict.js?v=20261119-structural1" in index_html
     # A listed concept without declared lineage (SOFA-2) reads as no raw-source mapping.
     assert "error.code === 'concept_not_found'" in _static_js("screens-dict.js")
-    assert "deepdive.css?v=20261028-unsup1" in index_html
+    assert "deepdive.css?v=20261119-structural1" in index_html
 
 
 def test_native_ui_uses_verification_terms_instead_of_gate_literal_translations() -> (

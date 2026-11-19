@@ -103,6 +103,7 @@
 .cov-badge .cov-dbs i { padding: 2px 3px; border-radius: 3px; font: 600 10px/1.1 var(--font-mono); font-style: normal; color: var(--ink-4); background: var(--surface-2); opacity: .5; }
 .cov-badge .cov-dbs i.on { opacity: 1; color: var(--ok); background: var(--ok-soft); }
 .cov-badge .cov-dbs i.on.sub { color: var(--warn); background: var(--warn-soft); }
+.cov-badge .cov-dbs i.na { opacity: 1; color: var(--bad, #c0392b); background: transparent; text-decoration: line-through; }
 .cov-badge .cov-kind, .cov-badge .cov-audit { font-size: 10.5px; color: var(--ink-3); }
 .cov-badge .cov-audit { color: var(--warn); }
 .cov-badge.none { color: var(--ink-4); font-family: var(--font-mono); }
