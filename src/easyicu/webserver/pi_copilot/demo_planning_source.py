@@ -10,6 +10,7 @@ from typing import Any, Mapping
 
 from easyicu.research_agent.canonical_json import canonical_sha256
 from easyicu.webserver import dataio, demo_source_storage, study_contexts
+from easyicu.webserver.demo_source_contracts import SOURCES
 from easyicu.webserver.research_launch_scientific import bound_export_cohort_refusal
 
 from .contracts import PiCopilotError, PiSessionRecord
@@ -91,6 +92,52 @@ def resolve_demo_planning_source(study: Mapping[str, Any]) -> DemoPlanningSource
         return None
 
 
+def raw_choice_needs_reconfirmation(study: Mapping[str, Any]) -> bool:
+    """A study bound to an official Demo's raw folder without a choice that resolves.
+
+    Only the signed choice lets a plan read that folder; without it a launch
+    would validate the raw folder as an export package and stop
+    (manifest_marker_missing). The coordinate, not a full verification, marks
+    the folder, so a raw folder that no longer verifies is still caught here.
+    """
+    source = study.get("data_source")
+    if not isinstance(source, Mapping):
+        return False
+    raw = str(source.get("path") or "")
+    if not raw:
+        return False
+    candidate = Path(raw).expanduser().absolute()
+    if not any(candidate == demo_source_storage.source_paths(spec).raw for spec in SOURCES):
+        return False
+    from easyicu.research_agent.authority.filesystem import AuthorityFilesystemError
+    from .demo_planning_authority import resolve_choice
+
+    try:
+        return resolve_choice(study) is None
+    except (ValueError, OSError, KeyError, TypeError, dataio.ExportCohortError, AuthorityFilesystemError):
+        return True
+
+
+def _reconfirmation_study(study: Mapping[str, Any]) -> Mapping[str, Any] | None:
+    """The study as its earlier choice was offered: bound to the receipt's export."""
+    source = study.get("data_source")
+    if not isinstance(source, Mapping) or study.get("active_job_id"):
+        return None
+    if not raw_choice_needs_reconfirmation(study):
+        return None
+    from .demo_planning_authority import prior_choice_export
+
+    export = prior_choice_export(study)
+    if export is None:
+        return None
+    return {**dict(study), "data_source": {**dict(source), "path": export}}
+
+
+def resolve_demo_planning_reconfirmation(study: Mapping[str, Any]) -> DemoPlanningSource | None:
+    """The same raw choice offered again on the current configuration, if it still holds."""
+    offer_study = _reconfirmation_study(study)
+    return None if offer_study is None else resolve_demo_planning_source(offer_study)
+
 def bind_demo_planning_source(
     record: PiSessionRecord,
     study: Mapping[str, Any],
@@ -109,7 +156,10 @@ def bind_demo_planning_source(
             "pi_demo_planning_source_stale",
             "The study changed. Refresh before choosing its official Demo source.", status_code=409,
         )
-    resolved = resolve_demo_planning_source(study)
+    # An already-chosen study whose choice a configuration write cleared is
+    # offered the same choice again, from the export its receipt named.
+    offer_study = _reconfirmation_study(study) or study
+    resolved = resolve_demo_planning_source(offer_study)
     if (resolved is None or not isinstance(offer_sha256, str) or not offer_sha256
             or not hmac.compare_digest(str(resolved.offer["offer_sha256"]), offer_sha256)):
         raise PiCopilotError(
@@ -129,7 +179,7 @@ def bind_demo_planning_source(
     drafted = _planning_study({**study, "data_source": new_source})
     drafted_scope = {"cohort": drafted["cohort"]} if drafted.get("cohort") != study.get("cohort") else {}
     try:
-        authority_ref = publish_choice(study=study, new_source=new_source, confirmations=confirmations,
+        authority_ref = publish_choice(study=offer_study, new_source=new_source, confirmations=confirmations,
                                        offer_sha256=offer_sha256, drafted_scope=drafted_scope)
         return study_contexts.upsert_context(
             {"id": study["id"], "data_source": new_source, "confirmations": confirmations,

@@ -543,7 +543,7 @@ def _stop_card_cases():
         })
     for code in (
         "agent_plan_configuration_required", "agent_plan_revision_nonconvergent",
-        "bound_export_cohort_invalid", "bound_export_cohort_mismatch",
+        "bound_export_cohort_invalid", "bound_export_cohort_mismatch", "demo_planning_source_reconfirm_required",
         "failed_pipeline_execution_retry_available", "failed_pipeline_execution_retry_futile",
         "failed_pipeline_requires_fresh_plan", "plan_configuration_superseded",
         "plan_execution_upgrade_required", "plan_review_not_resumable",

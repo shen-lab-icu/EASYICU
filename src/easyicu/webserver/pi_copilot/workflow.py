@@ -335,6 +335,23 @@ def _study_with_registered_source_identity(
     }
 
 
+def _demo_source_reconfirmation(study: Mapping[str, Any]) -> Optional[Dict[str, Any]]:
+    """The raw official-Demo choice to confirm again, or ``None`` when none is needed.
+
+    ``{}`` (no offer) when the choice cannot be offered again; the card then
+    names the other ways forward.
+    """
+    from .demo_planning_source import (
+        raw_choice_needs_reconfirmation,
+        resolve_demo_planning_reconfirmation,
+    )
+
+    if not study or study.get("active_job_id") or not raw_choice_needs_reconfirmation(study):
+        return None
+    offer = resolve_demo_planning_reconfirmation(study)
+    return {"planning_source": dict(offer.offer)} if offer is not None else {}
+
+
 def _source_boundary_review(study: Mapping[str, Any], registry: Mapping[str, Any],
                             study_id: str) -> Optional[Mapping[str, Any]]:
     """Current bound source's limitations; fail closed on ambiguity or drift."""
@@ -439,6 +456,7 @@ def build_research_workflow_snapshot(
     execution_retry: Optional[Mapping[str, Any]] = None,
     export_cohort_refusal: Optional[ExportCohortRefusal] = None,
     target_trial_compile: Optional[Mapping[str, Any]] = None,
+    demo_source_reconfirmation: Optional[Mapping[str, Any]] = None,
 ) -> ResearchWorkflowSnapshot:
     """Compile owner receipts into one deterministic Copilot workflow state."""
 
@@ -1090,8 +1108,14 @@ def build_research_workflow_snapshot(
     # keeps the package its sealed plan bound.  A fresh plan the launch would
     # refuse is not offered: the study's cohort is extracted, or another
     # source chosen, first.
+    # A raw official-Demo study whose signed choice a configuration write
+    # cleared plans only after the researcher confirms that source again
+    # (demo_planning_source.raw_choice_needs_reconfirmation); the launch
+    # refuses it otherwise.
     export_cohort_reason_code = (
-        ""
+        "demo_planning_source_reconfirm_required"
+        if demo_source_reconfirmation is not None
+        else ""
         if export_cohort_refusal is None
         else "bound_export_cohort_invalid"
         if export_cohort_refusal.code == "research_pipeline_export_cohort_invalid"
@@ -1444,6 +1468,12 @@ def build_research_workflow_snapshot(
         ),
         bound_export_cohort_refusal=(
             {
+                "code": "demo_planning_source_reconfirm_required", "reason_codes": [],
+                **({"planning_source": dict(demo_source_reconfirmation["planning_source"])}
+                   if demo_source_reconfirmation.get("planning_source") else {}),
+            }
+            if demo_source_reconfirmation is not None
+            else {
                 "code": export_cohort_refusal.code,
                 "reason_codes": list(export_cohort_refusal.reason_codes),
                 **({"planning_source": dict(planning_source.offer)} if planning_source else {}),
@@ -1924,6 +1954,7 @@ def build_project_workflow_projection(
             str(bound_source.get("path") or "").strip(),
         ),
         target_trial_compile=trial_compile,
+        demo_source_reconfirmation=_demo_source_reconfirmation(study),
     )
     snapshot = build_research_workflow_snapshot(**snapshot_inputs)
     snapshot = snapshot.model_copy(update={

@@ -167,21 +167,32 @@
       // belongs to that exact plan, not the session's latest run binding.
       const reviewedPlanRunId = String(workflow.plan_review_summary && workflow.plan_review_summary.run_id || '');
       const code = String(workflow.next_action_code || '');
-      if (code === 'bound_export_cohort_mismatch') {
+      // The same official Demo's raw data, chosen first or confirmed again
+      // after a change to the study settings ended the earlier choice.
+      if (code === 'bound_export_cohort_mismatch' || code === 'demo_planning_source_reconfirm_required') {
+        const again = code === 'demo_planning_source_reconfirm_required';
         const offer = (workflow.bound_export_cohort_refusal || {}).planning_source;
         const available = Boolean(offer && offer.action === 'use_official_demo_raw_for_plan'
           && offer.offer_sha256 && offer.expected_revision);
         return {
           code, grants: [], nonApprovable: !available,
-          title: tr('Plan from the same official Demo source', '使用同一官方 Demo 的原始数据规划'),
-          note: available ? tr(
+          title: again ? tr('Confirm the data source again', '再确认一次数据源')
+            : tr('Plan from the same official Demo source', '使用同一官方 Demo 的原始数据规划'),
+          note: available && again ? tr(
+            'The study settings were updated. Confirm the data source once more to continue.',
+            '研究设置已更新，请再确认一次数据源后继续。',
+          ) : available ? tr(
             'The current export uses a different population. Its verified original Demo data are available. Choose them to generate a candidate plan for this study; data preparation and analysis remain subject to their separate reviews.',
             '现有导出的人群与本研究不同。已找到并核验同一官方 Demo 的原始数据；选择后可按本研究生成候选计划，数据准备和分析仍需随后分别审阅。',
+          ) : again ? tr(
+            'The original official Demo data can no longer be verified. Prepare data for this study, or choose another validated source.',
+            '无法再次核验同一官方 Demo 的原始数据。请按本研究条件准备数据，或选择其他已验证的数据源。',
           ) : tr(
             'This export does not match the study population. Request extraction for this study or choose another validated source.',
             '当前导出不符合本研究的人群条件。请按本研究条件请求提取，或选择其他已验证的数据源。',
           ),
-          approve: tr('Use the original Demo data for planning', '使用同源原始数据规划'),
+          approve: again ? tr('Confirm the data source and continue', '确认数据源并继续')
+            : tr('Use the original Demo data for planning', '使用同源原始数据规划'),
           editLabel: tr('Prepare data for this cohort', '按本研究人群准备数据'),
         };
       }
@@ -1459,7 +1470,7 @@
       if (['study_family_database_out_of_scope', 'study_family_reading_disagreement'].includes(workflow.next_action_code)) {
         return stopActionCopy({ kind: 'rephrase_in_scope' }, tr).draft;
       }
-      if (workflow.next_action_code === 'bound_export_cohort_mismatch') return tr(
+      if (['bound_export_cohort_mismatch', 'demo_planning_source_reconfirm_required'].includes(workflow.next_action_code)) return tr(
         'I want to prepare data for this study’s current cohort. Please show the extraction requirements.',
         '我想按本研究现有的人群条件准备数据，请列出提取要求。',
       );

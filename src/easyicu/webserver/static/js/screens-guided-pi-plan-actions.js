@@ -501,7 +501,9 @@
       const session = host.session() || {};
       const binding = session.binding || {};
       const api = host.api();
-      if (workflow.next_action_code !== 'bound_export_cohort_mismatch'
+      const code = String(workflow.next_action_code || '');
+      const reconfirming = code === 'demo_planning_source_reconfirm_required';
+      if ((code !== 'bound_export_cohort_mismatch' && !reconfirming)
         || !offer || offer.action !== 'use_official_demo_raw_for_plan'
         || offer.study_id !== binding.study_context_id
         || offer.expected_revision !== binding.study_revision
@@ -527,6 +529,12 @@
         // no extraction, Provider or analysis action is started here.
         host.setBusy(false);
         host.render();
+        // Confirming a source again continues the plan the settings change
+        // was for (the card says "continue"); a first choice does not.
+        const next = workflowCode();
+        if (reconfirming && FRESH_PLAN_CODES.has(next) && next !== 'provider_ready_to_generate_plan') {
+          return startFormalPlanGeneration(next);
+        }
         return true;
       } catch (error) {
         startedTransitions.delete(offer.offer_sha256);
@@ -619,7 +627,9 @@
         await host.loadWorkflow();
         host.setBusy(false);
         host.render();
-        if (payload && payload.next_action === 'fresh_plan') {
+        // A raw official-Demo study confirms its source again first (its card).
+        if (payload && payload.next_action === 'fresh_plan'
+          && workflowCode() !== 'demo_planning_source_reconfirm_required') {
           return startFormalPlanGeneration(
             'plan_configuration_superseded', {automatic: true},
           );
@@ -926,7 +936,8 @@
         await quickAnswerAction(confirmation);
         return;
       }
-      if (confirmation.code === 'bound_export_cohort_mismatch') {
+      if (confirmation.code === 'bound_export_cohort_mismatch'
+        || confirmation.code === 'demo_planning_source_reconfirm_required') {
         await useOfficialDemoPlanningSource();
         return;
       }

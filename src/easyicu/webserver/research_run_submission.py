@@ -449,6 +449,18 @@ def submit_research_run(
         )
 
     clock.mark("readiness")
+    from easyicu.webserver.pi_copilot.demo_planning_source import raw_choice_needs_reconfirmation
+
+    if raw_choice_needs_reconfirmation(study_context):
+        # Without its signed choice the raw folder would be validated as an
+        # export package (manifest_marker_missing): the Copilot workflow
+        # offers the same choice again instead (UX leg 3, 2026-11-19).
+        _reject({
+            "error": "demo_planning_source_reconfirm_required",
+            "message": "Confirm the official Demo data source again before planning on the updated study settings.",
+            "owner": "easyicu.webserver.pi_copilot.demo_planning_source",
+            "next_action_code": "demo_planning_source_reconfirm_required",
+        }, status_code=409)
     if (_deferred_binding is None and _controlled_candidate is None
             and request.intent == "candidate_plan" and request.planner_start_mode == "fresh"
             and request.plan_change_request is None

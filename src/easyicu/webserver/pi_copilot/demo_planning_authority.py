@@ -5,11 +5,13 @@ from __future__ import annotations
 import hashlib
 import hmac
 import json
+import os
+import re
 import secrets
 from pathlib import Path
 from typing import Any, Mapping
 
-from easyicu.research_agent.authority.filesystem import AnchoredDirectory
+from easyicu.research_agent.authority.filesystem import AnchoredDirectory, AuthorityFilesystemError
 from easyicu.research_agent.canonical_json import canonical_json
 from easyicu.research_agent.research_context.export_selection import SourceIdentity
 from easyicu.webserver import dataio, demo_source_storage, sources, study_contexts
@@ -140,6 +142,52 @@ def resolve_choice(study: Mapping[str, Any]) -> Any:
     if any(body.get(key) != value for key, value in facts.items()):
         raise ValueError("demo_planning_source_changed")
     return identity
+
+
+_RECEIPT_NAME = re.compile(r"demo-planning-([0-9a-f]{64})\.json")
+_MAX_RECEIPTS = 4096
+
+
+def prior_choice_export(study: Mapping[str, Any]) -> str | None:
+    """The registered export named by this study's latest signed raw choice.
+
+    A write that changes the scientific configuration clears the choice
+    (study_contexts) while the study keeps the raw path, e.g. applying a
+    reviewed plan's configuration (UX leg 3, 2026-11-19). The researcher's
+    earlier receipt for the same study and raw folder names the export the
+    choice was offered from, so the choice can be offered again on the
+    current configuration. This grants nothing: only a new confirmation
+    signs a new receipt. Unreadable receipts are skipped; too many, or none,
+    is no offer.
+    """
+    source = study.get("data_source") or {}
+    raw = str(source.get("path") or "") if isinstance(source, Mapping) else ""
+    study_id = study.get("id")
+    if not raw or not study_id:
+        return None
+    raw_sha = hashlib.sha256(raw.encode()).hexdigest()
+    try:
+        names = [name for name in os.listdir(_private_directory()) if _RECEIPT_NAME.fullmatch(name)]
+    except (OSError, ValueError):
+        return None
+    if len(names) > _MAX_RECEIPTS:
+        return None
+    latest = None
+    for name in names:
+        try:
+            body = _signed_body(_RECEIPT_NAME.fullmatch(name).group(1))
+            identity = SourceIdentity.from_record(body.get("identity"))
+        except (ValueError, OSError, KeyError, TypeError, AuthorityFilesystemError):
+            continue
+        revision = body.get("revision")
+        if (body.get("schema_version") != "easyicu.demo-planning-source-choice/1"
+                or body.get("study_id") != study_id or body.get("raw_path_sha256") != raw_sha
+                or type(revision) is not int or identity is None
+                or identity.database != str(source.get("database") or "")):
+            continue
+        if latest is None or revision > latest[0]:
+            latest = (revision, identity)
+    return None if latest is None else sources.stored_source_path_for_identity(latest[1])
 
 
 def follow_launch_timing(before: Mapping[str, Any], landmark_patch: Mapping[str, Any]) -> str:
