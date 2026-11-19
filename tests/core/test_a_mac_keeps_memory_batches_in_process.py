@@ -41,6 +41,15 @@ def test_load_concepts_keeps_its_resolver_scope():
     assert not hasattr(concepts._memory_policy_isolates_batches, "__wrapped__")
 
 
+def test_only_darwin_keeps_batches_in_process(monkeypatch):
+    # Carbon b8r2: every other case replaces this check, so test it directly.
+    import sys
+
+    for platform, kept in (("darwin", True), ("linux", False), ("win32", False)):
+        monkeypatch.setattr(sys, "platform", platform)
+        assert concepts._platform_keeps_batches_in_process() is kept
+
+
 @pytest.mark.parametrize("gib,patients", [(8, 5_000), (16, 73_000), (64, 200_000)])
 def test_macos_keeps_batches_in_process_where_linux_isolates_them(on, gib, patients):
     on("linux", gib)
