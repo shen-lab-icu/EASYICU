@@ -1114,14 +1114,10 @@ def _enclosing_scope(
     parents: dict[ast.AST, ast.AST],
     *,
     include_comprehensions: bool = False,
-    include_arguments: bool = False,
 ) -> ast.AST:
     child = None
     while (parent := parents.get(node)) is not None:
-        if isinstance(parent, (ast.FunctionDef, ast.AsyncFunctionDef)):
-            if node in parent.body or (include_arguments and node is parent.args):
-                return parent
-        elif isinstance(parent, ast.ClassDef):
+        if isinstance(parent, (ast.ClassDef, ast.FunctionDef, ast.AsyncFunctionDef)):
             if node in parent.body:
                 return parent
         elif isinstance(parent, ast.Lambda) and node is parent.body:
@@ -1135,15 +1131,45 @@ def _enclosing_scope(
     return node
 
 
+def _item_site_contexts(
+    nodes: list[ast.AST], aliases: dict[str, str]
+) -> tuple[dict[ast.AST, ast.FunctionDef | ast.AsyncFunctionDef], set[ast.AST]]:
+    default_declarations = {}
+    non_constructors = set()
+    type_alias = getattr(ast, "TypeAlias", ())
+    for node in nodes:
+        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
+            for default in (*node.args.defaults, *node.args.kw_defaults):
+                if default is not None:
+                    default_declarations.update(dict.fromkeys(ast.walk(default), node))
+            excluded = node.returns
+        elif isinstance(node, (ast.arg, ast.AnnAssign)):
+            excluded = node.annotation
+        elif isinstance(node, type_alias):
+            excluded = node.value
+        elif (
+            isinstance(node, ast.Call)
+            and len(node.args) >= 2
+            and _qualified_name(node.func, aliases)
+            in {"isinstance", "issubclass", "builtins.isinstance", "builtins.issubclass"}
+        ):
+            excluded = node.args[1]
+        else:
+            continue
+        if excluded is not None:
+            non_constructors.update(ast.walk(excluded))
+    return default_declarations, non_constructors
+
+
 def _item_construction_sites(source: str) -> list[tuple[int, tuple[int, ...]]]:
     tree = ast.parse(source)
     aliases = _import_aliases(tree)
-    parents = {
-        child: node for node in ast.walk(tree) for child in ast.iter_child_nodes(node)
-    }
+    nodes = list(ast.walk(tree))
+    parents = {child: node for node in nodes for child in ast.iter_child_nodes(node)}
+    default_declarations, non_constructors = _item_site_contexts(nodes, aliases)
     constructors = []
-    io_by_scope: dict[ast.AST, list[int]] = defaultdict(list)
-    for node in ast.walk(tree):
+    io_by_scope: dict[ast.AST, set[ast.Call]] = defaultdict(set)
+    for node in nodes:
         if isinstance(node, ast.Call):
             name = _qualified_name(node.func, aliases)
         elif isinstance(node, (ast.Name, ast.Attribute)) and isinstance(
@@ -1156,33 +1182,44 @@ def _item_construction_sites(source: str) -> list[tuple[int, tuple[int, ...]]]:
             if (
                 name.rsplit(".", 1)[-1] == "HeldOutItem"
                 and isinstance(parent, ast.Attribute)
-                and parent.attr == "from_dict"
+                and node is parent.value
             ):
-                # Count the full factory reference once.
+                # Attribute access alone does not use the class as a factory.
                 continue
         else:
             continue
-        scope = _enclosing_scope(node, parents, include_arguments=True)
+        scope = _enclosing_scope(node, parents)
         while isinstance(scope, ast.Lambda):
-            scope = _enclosing_scope(scope, parents, include_arguments=True)
+            scope = _enclosing_scope(scope, parents)
+        scopes = [scope]
+        if node in default_declarations:
+            # Defaults execute in the enclosing scope and feed the declared function.
+            scopes.append(default_declarations[node])
         if isinstance(node, ast.Call) and _is_io_call(name):
-            io_by_scope[scope].append(node.lineno)
-        owner = parents.get(scope)
+            for scope in scopes:
+                io_by_scope[scope].add(node)
+        if node in non_constructors:
+            continue
         if (
             name.split(".")[-1] == "HeldOutItem"
             or name.split(".")[-2:] == ["HeldOutItem", "from_dict"]
             or (
                 isinstance(node, ast.Call)
                 and name == "cls"
-                and isinstance(scope, _FUNCTION_SCOPES)
-                and isinstance(owner, ast.ClassDef)
-                and owner.name == "HeldOutItem"
+                and any(
+                    isinstance(scope, _FUNCTION_SCOPES)
+                    and isinstance(owner := parents.get(scope), ast.ClassDef)
+                    and owner.name == "HeldOutItem"
+                    for scope in scopes
+                )
             )
         ):
-            constructors.append((node.lineno, scope))
-    return sorted(
-        (line, tuple(sorted(io_by_scope[scope]))) for line, scope in constructors
-    )
+            constructors.append((node.lineno, scopes))
+    sites = []
+    for line, scopes in constructors:
+        calls = set().union(*(io_by_scope[scope] for scope in scopes))
+        sites.append((line, tuple(sorted(call.lineno for call in calls))))
+    return sorted(sites)
 
 
 def test_item_construction_outside_reader_owners_is_free_of_io() -> None:
@@ -1232,6 +1269,114 @@ def test_item_construction_detects_io_in_default_arguments() -> None:
         "    return Record.from_dict(raw)\n"
     )
     assert _item_construction_sites(source) == [(3, (2,))]
+
+
+@pytest.mark.parametrize("keyword_only", ["", "*, "], ids=["positional", "keyword-only"])
+def test_item_construction_matches_enclosing_io_from_a_default(keyword_only: str) -> None:
+    source = (
+        "from example import HeldOutItem as Record\n"
+        "def load_row():\n"
+        "    raw = staging_source.read_text()\n"
+        f"    def cached({keyword_only}item=Record.from_dict(raw)):\n"
+        "        return item\n"
+        "    return cached()\n"
+    )
+    assert _item_construction_sites(source) == [(4, (3,))]
+
+
+@pytest.mark.parametrize("keyword_only", ["", "*, "], ids=["positional", "keyword-only"])
+def test_item_construction_matches_default_io_from_the_enclosing_scope(
+    keyword_only: str,
+) -> None:
+    source = (
+        "from example import HeldOutItem as Record\n"
+        f"def read_raw({keyword_only}raw=staging_source.read_text()):\n"
+        "    return raw\n"
+        "item = Record.from_dict(read_raw())\n"
+    )
+    assert _item_construction_sites(source) == [(4, (2,))]
+
+
+def test_item_construction_matches_io_in_both_default_argument_scopes() -> None:
+    source = (
+        "raw = staging_source.read_text()\n"
+        "async def cache_row(*, item=HeldOutItem.from_dict(raw)):\n"
+        "    cache.read_bytes()\n"
+        "    return item\n"
+    )
+    assert _item_construction_sites(source) == [(2, (1, 3))]
+
+
+@pytest.mark.parametrize(
+    "source",
+    [
+        pytest.param(
+            "from __future__ import annotations\n"
+            "def save(row: HeldOutItem):\n"
+            "    staging_source.read_text()\n",
+            id="parameter-annotation",
+        ),
+        pytest.param(
+            "staging_source.read_text()\n"
+            "def cached() -> tuple[HeldOutItem, str]:\n"
+            "    return row, label\n",
+            id="return-annotation",
+        ),
+        pytest.param(
+            "def cache_label():\n"
+            "    row: HeldOutItem = staging_source.read_text()\n",
+            id="assignment-annotation",
+        ),
+        pytest.param(
+            "raw = staging_source.read_text()\nHeldOutItem.validate(raw)\n",
+            id="other-method",
+        ),
+        pytest.param(
+            "raw = staging_source.read_text()\nversion = models.HeldOutItem.SCHEMA_VERSION\n",
+            id="class-attribute",
+        ),
+        pytest.param(
+            "def load_row():\n"
+            "    raw = staging_source.read_text()\n"
+            "    return isinstance(raw, HeldOutItem)\n",
+            id="isinstance-classinfo",
+        ),
+        pytest.param(
+            "import builtins as checks\n"
+            "raw = staging_source.read_text()\n"
+            "matches = checks.issubclass(type(raw), (str, HeldOutItem))\n",
+            id="issubclass-classinfo",
+        ),
+    ],
+)
+def test_item_construction_allows_non_constructor_references(source: str) -> None:
+    assert _item_construction_sites(source) == []
+
+
+def test_item_construction_allows_type_aliases(monkeypatch: pytest.MonkeyPatch) -> None:
+    source = (
+        "raw = staging_source.read_text()\n"
+        "type CachedRow = tuple[HeldOutItem, str]\n"
+    )
+    if hasattr(ast, "TypeAlias"):
+        assert _item_construction_sites(source) == []
+        return
+
+    # Python 3.11 cannot parse type statements. Supply the 3.12 AST shape.
+    class TypeAlias(ast.stmt):
+        _fields = ("name", "type_params", "value")
+
+    tree = ast.parse(source.replace("type CachedRow", "CachedRow"))
+    assignment = tree.body[-1]
+    assert isinstance(assignment, ast.Assign)
+    tree.body[-1] = TypeAlias(
+        name=assignment.targets[0], type_params=[], value=assignment.value
+    )
+    with monkeypatch.context() as patch:
+        patch.setattr(ast, "TypeAlias", TypeAlias, raising=False)
+        patch.setattr(ast, "parse", lambda _source: tree)
+        sites = _item_construction_sites(source)
+    assert sites == []
 
 
 def test_item_construction_allows_io_in_a_different_function() -> None:
