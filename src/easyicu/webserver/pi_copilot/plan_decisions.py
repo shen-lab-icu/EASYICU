@@ -351,6 +351,19 @@ def _landmark_axis_columns(outcome: str) -> Dict[str, str]:
     }
 
 
+def landmark_followup_axis_available(outcome: str) -> bool:
+    """Whether the host materializes the follow-up axis a landmark on ``outcome`` needs.
+
+    Only in-hospital death has a source-bound follow-up column today
+    (``hospital_followup_time_hours``).  A landmark on any other outcome would
+    name a column no owner produces, and the launch gate would refuse the
+    compiled study with no way on (B2, 11-19 walk: mort_28d).  The question
+    and post-baseline landmarks already apply this rule by outcome.
+    """
+
+    return _landmark_axis_columns(outcome)["observation_duration"] == "hospital_followup_time_hours"
+
+
 def landmark_timing_specification(
     *, outcome: str, landmark_hours: float, spec_id: str
 ) -> Dict[str, Any]:
@@ -778,6 +791,7 @@ def plan_decision_context(
         "timing_profile": (
             "fixed_24h_landmark"
             if _fixed_24h_landmark_candidate(plan, study)
+            and landmark_followup_axis_available(coordinates["outcome"])
             else "unspecified_post_baseline"
         ),
     }
@@ -1585,6 +1599,12 @@ def compile_agent_plan_configuration(
     )
 
     if "POST_BASELINE_EXPOSURE_TIMING_NOT_CLOSED" in codes:
+        if fixed_window and not landmark_followup_axis_available(coordinates["outcome"]):
+            raise PlanDecisionError(
+                "agent_plan_landmark_not_compilable",
+                "No owner materializes the follow-up axis a landmark on this outcome needs.",
+                details={"outcome": coordinates["outcome"]},
+            )
         if not fixed_window:
             window = landmark_study.get("time_window")
             raise PlanDecisionError(
@@ -1948,7 +1968,7 @@ def compile_plan_decision(
     )
 
     if option == "landmark_24h":
-        if not fixed_24h_landmark:
+        if not fixed_24h_landmark or not landmark_followup_axis_available(outcome):
             raise PlanDecisionError(
                 "plan_decision_option_not_applicable",
                 "A 24-hour landmark requires a design read over a "
