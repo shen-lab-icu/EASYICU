@@ -1,4 +1,7 @@
-"""Keep benchmark question sources within the reviewed scope."""
+"""Detect accidental source-access drift in the frozen vocabulary set.
+
+The runtime read guard and Rule 10 enforce source access beyond these checks.
+"""
 
 from __future__ import annotations
 
@@ -88,7 +91,7 @@ _PREREGISTRATION_PATHS = (
 )
 _BENCHMARK_DIRECTORY = "figure2_icu_agent_v2"
 _DATA_FILENAMES = {PurePosixPath(path).name for path in _REVIEWED_DATA_PATHS}
-_TEXT_TOKEN = re.compile(r"""[^\s"'`<>{}\[\](),;]+""")
+_TEXT_TOKEN = re.compile(r"""[^\s"'`<>{}\[\](),;=|]+""")
 _FILE_EXTENSION = re.compile(r"\.[a-z0-9]+$", re.IGNORECASE)
 _PATH_TYPES = {
     "Path",
@@ -109,6 +112,7 @@ _VALUE_TRANSFORMS = {
     "expanduser",
     "format",
     "fspath",
+    "get",
     "join",
     "lower",
     "lstrip",
@@ -508,6 +512,10 @@ def _module_name(path: str) -> str:
 
 _OWNER_MODULES = frozenset(
     _module_name(path) for path in _REVIEWED_OWNERS if path.endswith(".py")
+) | frozenset(
+    _module_name(path.removeprefix("tools/"))
+    for path in _REVIEWED_OWNERS
+    if path.startswith("tools/") and path.endswith(".py")
 )
 _QUESTION_SOURCE_MODULES = {
     "tools.benchmark_question_sources",
@@ -569,41 +577,100 @@ def _python_vocabulary_violations(
     bindings: dict[ast.AST, dict[str, list[ast.expr]]] = defaultdict(
         lambda: defaultdict(list)
     )
+    declarations: dict[ast.AST, dict[str, ast.Global | ast.Nonlocal]] = defaultdict(
+        dict
+    )
+    member_writes: list[tuple[ast.Name, ast.expr]] = []
     for node in nodes:
         if isinstance(node, _FUNCTION_SCOPES):
             bindings[node].update(_parameters(node.args))
+        if isinstance(node, (ast.Global, ast.Nonlocal)):
+            scope = _enclosing_scope(node, parents)
+            declarations[scope].update((name, node) for name in node.names)
         for target, value in _assignments(node):
-            for name in ast.walk(target):
-                if isinstance(name, ast.Name) and isinstance(name.ctx, ast.Store):
-                    bindings[scopes[name]][name.id].append(value)
+            for part in ast.walk(target):
+                if isinstance(part, ast.Name) and isinstance(part.ctx, ast.Store):
+                    bindings[scopes[part]][part.id].append(value)
+                elif isinstance(part, (ast.Attribute, ast.Subscript)) and isinstance(
+                    part.ctx, ast.Store
+                ):
+                    root = part.value
+                    while isinstance(root, (ast.Attribute, ast.Subscript)):
+                        root = root.value
+                    if isinstance(root, ast.Name):
+                        member_writes.append((root, value))
+
+    def outer_scope(scope: ast.AST) -> ast.AST:
+        scope = _enclosing_scope(scope, parents, include_comprehensions=True)
+        # Class bodies have local names, but do not form enclosing lexical scopes.
+        while isinstance(scope, ast.ClassDef):
+            scope = _enclosing_scope(scope, parents, include_comprehensions=True)
+        return scope
+
+    def nonlocal_scope(scope: ast.AST, name: str) -> ast.AST:
+        enclosing = outer_scope(scope)
+        candidate = enclosing
+        while candidate is not tree:
+            if (
+                isinstance(candidate, _FUNCTION_SCOPES)
+                and name in bindings[candidate]
+                and name not in declarations.get(candidate, {})
+            ):
+                return candidate
+            candidate = outer_scope(candidate)
+        return enclosing
+
+    declared_scopes = {
+        scope: {
+            name: tree if isinstance(node, ast.Global) else nonlocal_scope(scope, name)
+            for name, node in names.items()
+        }
+        for scope, names in declarations.items()
+    }
+    for scope, names in declared_scopes.items():
+        for name, target_scope in names.items():
+            if target_scope is not scope and name in bindings[scope]:
+                bindings[target_scope][name].extend(bindings[scope].pop(name))
 
     def binding_scope(name: ast.Name) -> ast.AST:
         scope = scopes[name]
-        while scope is not tree and name.id not in bindings[scope]:
-            scope = _enclosing_scope(scope, parents, include_comprehensions=True)
+        while scope is not tree:
+            declared = declared_scopes.get(scope, {}).get(name.id)
+            if declared is not None:
+                return declared
+            if name.id in bindings[scope]:
+                return scope
+            scope = outer_scope(scope)
         return scope
 
     def assigned_value(name: ast.Name) -> ast.expr | None:
         values = bindings[binding_scope(name)].get(name.id, [])
         return values[0] if len(values) == 1 else None
 
+    def resolve_literal(node: ast.expr, active: frozenset[ast.AST]) -> ast.expr | None:
+        if node in active:
+            return None
+        active = active | {node}
+        if isinstance(node, ast.Name):
+            value = assigned_value(node)
+            return resolve_literal(value, active) if value is not None else None
+        if isinstance(node, ast.Subscript):
+            if isinstance(node.slice, ast.Constant):
+                container = resolve_literal(node.value, active)
+                if container is not None:
+                    value = _subscript_value(container, node.slice.value)
+                    if value is not None:
+                        return resolve_literal(value, active)
+            return None
+        return node
+
     def string_value(node: ast.expr, active: frozenset[ast.AST] = frozenset()) -> str:
         if isinstance(node, ast.Constant) and isinstance(node.value, str):
             return node.value
-        if isinstance(node, ast.Subscript) and isinstance(node.slice, ast.Constant):
-            container = node.value
-            while isinstance(container, ast.Name):
-                binding = assigned_value(container)
-                if binding is None or binding in active:
-                    return ""
-                active = active | {binding}
-                container = binding
-            value = _subscript_value(container, node.slice.value)
-            return string_value(value, active) if value is not None else ""
-        if isinstance(node, ast.Name):
-            value = assigned_value(node)
-            if value is not None and value not in active:
-                return string_value(value, active | {value})
+        if isinstance(node, (ast.Name, ast.Subscript)):
+            value = resolve_literal(node, active)
+            return string_value(value, active | {node}) if value is not None else ""
+        active = active | {node}
         if isinstance(node, ast.JoinedStr):
             return "".join(
                 (string_value(value.value, active) or "{value}")
@@ -614,8 +681,8 @@ def _python_vocabulary_violations(
         if isinstance(node, ast.BinOp) and isinstance(node.op, ast.Add):
             left = string_value(node.left, active)
             right = string_value(node.right, active)
-            if left and right:
-                return left + right
+            if left or right:
+                return (left or "{value}") + (right or "{value}")
         return ""
 
     documented = _documented_vocabulary(review, expressions, bindings[tree])
@@ -644,7 +711,7 @@ def _python_vocabulary_violations(
         | {
             node
             for node, value in literals.items()
-            if value and (_is_bare_marker(value) or _names_benchmark(value))
+            if value and (_has_source_marker(value) or _names_benchmark(value))
         }
     )
     tainted: set[tuple[ast.AST, str]] = set()
@@ -662,13 +729,20 @@ def _python_vocabulary_violations(
             pending.extend(_value_inputs(node, aliases))
         return False
 
+    taint_inputs = {
+        (scope, name): list(values)
+        for scope, names in bindings.items()
+        for name, values in names.items()
+    }
+    # A member store taints its root but does not replace the root's literal value.
+    for root, value in member_writes:
+        taint_inputs.setdefault((binding_scope(root), root.id), []).append(value)
+
     while True:
         new = {
-            (scope, name)
-            for scope, names in list(bindings.items())
-            for name, values in names.items()
-            if (scope, name) not in tainted
-            and any(uses_source(value) for value in values)
+            binding
+            for binding, values in taint_inputs.items()
+            if binding not in tainted and any(uses_source(value) for value in values)
         }
         if not new:
             break
@@ -798,6 +872,103 @@ def test_vocabulary_python_rejects_a_benchmark_directory_default() -> None:
 
 
 @pytest.mark.parametrize(
+    ("root", "body", "line"),
+    [
+        (
+            "directory",
+            "class FixtureReader:\n"
+            "    directory = 'staging'\n"
+            "    def load(self):\n"
+            "        return (directory / 'summary.csv').read_text()",
+            5,
+        ),
+        (
+            "directory",
+            "class FixtureReader:\n"
+            "    directory = 'staging'\n"
+            "    rows = [(directory / name).read_text() for name in ['summary.csv']]",
+            4,
+        ),
+        (
+            "source_root",
+            "directory = Path('staging')\n"
+            "def configure():\n"
+            "    global directory\n"
+            "    directory = source_root\n"
+            "def load():\n"
+            "    return (directory / 'summary.csv').read_text()",
+            7,
+        ),
+        (
+            "source_root",
+            "def outer():\n"
+            "    directory = Path('staging')\n"
+            "    def wrapper():\n"
+            "        def configure():\n"
+            "            nonlocal directory\n"
+            "            directory = source_root\n"
+            "    return (directory / 'summary.csv').read_text()",
+            8,
+        ),
+    ],
+    ids=["method", "class-comprehension", "global", "nonlocal"],
+)
+def test_vocabulary_python_resolves_source_bindings_across_scopes(
+    root: str, body: str, line: int
+) -> None:
+    source = f"{root} = Path('benchmarks') / '{_BENCHMARK_DIRECTORY}'\n{body}"
+    assert _vocabulary_violations(
+        source, "tools/example.py", _VocabularyReview("ORDINARY_IO_NO_HO")
+    ) == [f"line {line}: benchmark-derived IO"]
+
+
+@pytest.mark.parametrize(
+    ("expression", "expected"),
+    [
+        (
+            "open(staging_prefix + 'HeLd' + 'OuT_archive.csv')",
+            ["path literal", "benchmark-derived IO"],
+        ),
+        (
+            f"(Path('benchmarks') / ' {_SOURCE_MARKERS[1]} '.strip()).read_text()",
+            ["benchmark-derived IO"],
+        ),
+    ],
+    ids=["partial-concatenation", "trimmed-marker"],
+)
+def test_vocabulary_python_rejects_io_with_transformed_markers(
+    expression: str, expected: list[str]
+) -> None:
+    assert _vocabulary_violations(
+        expression, "tools/example.py", _VocabularyReview("ORDINARY_IO_NO_HO")
+    ) == sorted(f"line 1: {violation}" for violation in expected)
+
+
+@pytest.mark.parametrize(
+    "body",
+    [
+        "reader.location = source_root / 'summary.csv'\n    return reader.location.read_text()",
+        "settings['input'] = source_root / 'summary.csv'\n    return settings['input'].read_text()",
+        "location = LABELS.get('staging')\n    return open(location)",
+    ],
+    ids=["attribute-store", "subscript-store", "dictionary-get"],
+)
+def test_vocabulary_python_propagates_sources_through_member_access(body: str) -> None:
+    labels = {"staging": (_SOURCE_MARKERS[0], "synthetic")}
+    source = (
+        f"LABELS = {labels!r}\n"
+        f"source_root = Path('benchmarks') / '{_BENCHMARK_DIRECTORY}'\n"
+        f"def load(reader, settings):\n    {body}"
+    )
+    review = _VocabularyReview(
+        "ORDINARY_IO_NO_HO", constants={"LABELS.staging": labels["staging"]}
+    )
+    assert _vocabulary_violations(source, "tools/example.py", review) == [
+        "line 5: benchmark-derived IO"
+    ]
+
+
+@pytest.mark.parametrize(
     "source",
     [
         f"example = 'fixtures/{_SOURCE_MARKERS[0].title()}_demo.json'",
@@ -816,10 +987,18 @@ def test_vocabulary_python_rejects_path_literals(source: str) -> None:
     )
 
 
-def test_vocabulary_python_rejects_a_documented_label_used_as_a_path() -> None:
+@pytest.mark.parametrize("nested", [False, True], ids=["tuple", "nested-tuple"])
+def test_vocabulary_python_rejects_a_documented_label_used_as_a_path(
+    nested: bool,
+) -> None:
     tokens = (_SOURCE_MARKERS[1].upper(),)
-    source = f"TOKENS = {tokens!r}\nexample = Path('fixtures') / TOKENS[0]"
-    review = _VocabularyReview("VOCAB_ONLY", constants={"TOKENS": tokens})
+    if nested:
+        source = f"LABELS = {{'staging': {tokens!r}}}\nexample = Path('fixtures') / LABELS['staging'][0]"
+        selector = "LABELS.staging"
+    else:
+        source = f"TOKENS = {tokens!r}\nexample = Path('fixtures') / TOKENS[0]"
+        selector = "TOKENS"
+    review = _VocabularyReview("VOCAB_ONLY", constants={selector: tokens})
     assert _vocabulary_violations(source, "tools/example.py", review) == [
         "line 2: path literal"
     ]
@@ -832,6 +1011,10 @@ def test_vocabulary_python_rejects_a_documented_label_used_as_a_path() -> None:
         "from benchmarks import figure2_icu_agent_v2 as benchmark",
         "from tests.research_agent.core import test_validity_signals as owner",
         "from . import import_canonical9_to_agent_projects",
+        pytest.param(
+            "import import_canonical9_to_agent_projects as staging_loader",
+            id="bare-tools-owner",
+        ),
         "from tools.benchmark_question_sources import load_questions as load",
         "from .benchmark_question_sources import *",
         "from tools import benchmark_question_sources as sources",
@@ -894,6 +1077,23 @@ def test_vocabulary_text_rejects_benchmark_paths(suffix: str) -> None:
     ) == ["benchmark path literal"]
 
 
+@pytest.mark.parametrize(
+    "source",
+    [
+        f"--staging-input=benchmarks/{_SOURCE_MARKERS[0]}_synthetic.csv",
+        f"--staging-rubric={next(name for name in sorted(_DATA_FILENAMES) if 'rubric' in name)}",
+        f"|staging|benchmarks/{_SOURCE_MARKERS[1]}_synthetic.csv|",
+    ],
+    ids=["input-option", "rubric-option", "compact-table"],
+)
+def test_vocabulary_text_rejects_paths_next_to_option_and_table_delimiters(
+    source: str,
+) -> None:
+    assert _vocabulary_violations(
+        source, "synthetic.md", _VocabularyReview("VOCAB_ONLY")
+    ) == ["benchmark path literal"]
+
+
 @pytest.mark.parametrize("suffix", [".md", ".json", ".csv"])
 def test_vocabulary_allows_plain_mentions(suffix: str) -> None:
     source = {
@@ -914,10 +1114,14 @@ def _enclosing_scope(
     parents: dict[ast.AST, ast.AST],
     *,
     include_comprehensions: bool = False,
+    include_arguments: bool = False,
 ) -> ast.AST:
     child = None
     while (parent := parents.get(node)) is not None:
-        if isinstance(parent, (ast.ClassDef, ast.FunctionDef, ast.AsyncFunctionDef)):
+        if isinstance(parent, (ast.FunctionDef, ast.AsyncFunctionDef)):
+            if node in parent.body or (include_arguments and node is parent.args):
+                return parent
+        elif isinstance(parent, ast.ClassDef):
             if node in parent.body:
                 return parent
         elif isinstance(parent, ast.Lambda) and node is parent.body:
@@ -940,18 +1144,36 @@ def _item_construction_sites(source: str) -> list[tuple[int, tuple[int, ...]]]:
     constructors = []
     io_by_scope: dict[ast.AST, list[int]] = defaultdict(list)
     for node in ast.walk(tree):
-        if not isinstance(node, ast.Call):
+        if isinstance(node, ast.Call):
+            name = _qualified_name(node.func, aliases)
+        elif isinstance(node, (ast.Name, ast.Attribute)) and isinstance(
+            node.ctx, ast.Load
+        ):
+            parent = parents.get(node)
+            if isinstance(parent, ast.Call) and node is parent.func:
+                continue
+            name = _qualified_name(node, aliases)
+            if (
+                name.rsplit(".", 1)[-1] == "HeldOutItem"
+                and isinstance(parent, ast.Attribute)
+                and parent.attr == "from_dict"
+            ):
+                # Count the full factory reference once.
+                continue
+        else:
             continue
-        scope = _enclosing_scope(node, parents)
-        name = _qualified_name(node.func, aliases)
-        if _is_io_call(name):
+        scope = _enclosing_scope(node, parents, include_arguments=True)
+        while isinstance(scope, ast.Lambda):
+            scope = _enclosing_scope(scope, parents, include_arguments=True)
+        if isinstance(node, ast.Call) and _is_io_call(name):
             io_by_scope[scope].append(node.lineno)
         owner = parents.get(scope)
         if (
             name.split(".")[-1] == "HeldOutItem"
             or name.split(".")[-2:] == ["HeldOutItem", "from_dict"]
             or (
-                name == "cls"
+                isinstance(node, ast.Call)
+                and name == "cls"
                 and isinstance(scope, _FUNCTION_SCOPES)
                 and isinstance(owner, ast.ClassDef)
                 and owner.name == "HeldOutItem"
@@ -986,6 +1208,30 @@ def test_item_construction_detects_io_in_the_same_function(constructor: str) -> 
         f"    return {constructor}(data)\n"
     )
     assert _item_construction_sites(source) == [(4, (3,))]
+
+
+@pytest.mark.parametrize(
+    "factory",
+    ["Record", "Record.from_dict", "lambda row: Record.from_dict(row)"],
+    ids=["class-callable", "factory-callable", "lambda-factory"],
+)
+def test_item_construction_detects_callables_used_with_io(factory: str) -> None:
+    source = (
+        "from example import HeldOutItem as Record\n"
+        "def load_rows():\n"
+        "    rows = staging_source.read_text()\n"
+        f"    return list(map({factory}, rows))\n"
+    )
+    assert _item_construction_sites(source) == [(4, (3,))]
+
+
+def test_item_construction_detects_io_in_default_arguments() -> None:
+    source = (
+        "from example import HeldOutItem as Record\n"
+        "def build_row(raw=staging_source.read_text()):\n"
+        "    return Record.from_dict(raw)\n"
+    )
+    assert _item_construction_sites(source) == [(3, (2,))]
 
 
 def test_item_construction_allows_io_in_a_different_function() -> None:
