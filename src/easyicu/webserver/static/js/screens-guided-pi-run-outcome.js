@@ -18,6 +18,41 @@
       'manuscript_draft.json': ['View report draft and revision status', '查看报告草稿与修订状态'],
       'scientific_readiness.json': ['View scientific review', '查看科学审阅'],
     };
+    const deliveryLabels = {
+      manuscript_pdf: ['PDF', 'PDF'],
+      article_preview: ['Online preview', '在线预览'],
+      references: ['References', '参考文献'],
+    };
+    const deliveryDispositions = run => Array.isArray(run?.deliverable_dispositions)
+      ? run.deliverable_dispositions.filter(row => row && Object.hasOwn(deliveryLabels, row.kind)) : [];
+    const previewExcluded = run => deliveryDispositions(run).some(row =>
+      row.kind === 'article_preview' && row.reason_code === 'excluded_by_user');
+
+    function articleRunPrompt(run) {
+      const items = deliveryDispositions(run)
+        .filter(row => row.next_action === 'article' && row.reason_code === 'first_result_delivery_requires_article')
+        .map(row => tr(...deliveryLabels[row.kind])).join(tr(', ', '、'));
+      return items ? tr(
+        `Start a separate article run for this study with ${items}.`,
+        `请为这项研究另行启动论文任务，并提供${items}。`,
+      ) : '';
+    }
+
+    function renderDeliveryDispositions(run) {
+      const rows = deliveryDispositions(run).flatMap(({ kind, reason_code: reason }) => {
+        const name = tr(...deliveryLabels[kind]);
+        const note = reason === 'excluded_by_user' ? tr('Excluded at your request.', '按你的选择省略。')
+          : reason === 'first_result_delivery_requires_article'
+            ? tr('This run produces first results only. This item requires a separate article run.',
+              '本次仅生成首轮分析结果。此交付物需要另行启动论文任务。')
+            : '';
+        return note ? [`<li data-deliverable-disposition="${esc(kind)}"><strong>${esc(name)}</strong> ${esc(note)}</li>`] : [];
+      });
+      if (!rows.length) return '';
+      const forward = articleRunPrompt(run) ? `<button type="button" class="btn sm"
+        data-gpi-article-run>${esc(tr('Extend to a full article', '扩展成完整论文'))}</button>` : '';
+      return `<ul>${rows.join('')}</ul>${forward}`;
+    }
     let activeReviewTab = 0;
     const dismissedFollowUps = new Set();
     const answerOwner = window.EasyICU.guidedPi.optional('runAnswer');
@@ -175,10 +210,14 @@
       addReport('full_analysis_report.json', 'Study overview', '研究总览');
       add('result_tables.json', 'Result tables', '结果表');
       if (latestRun.figure_count !== 0) add('figure_gallery.json', 'Figures', '图表');
-      if (latestRun.manuscript_ready === true || latestRun.report_revision_ready === true) {
+      if ((latestRun.manuscript_ready === true && !previewExcluded(latestRun)) || latestRun.report_revision_ready === true) {
         addReport('article_report.json', 'Article', '文章');
       }
-      add('literature_evidence.json', 'References', '文献');
+      if (resources.some(row => row.artifact === 'manuscript_scaffold.bib')) {
+        add('manuscript_scaffold.bib', 'References', '文献');
+      } else {
+        add('literature_evidence.json', 'References', '文献');
+      }
       if (latestRun.report_revision_pdf_ready === true) add('manuscript_revision.pdf', 'Current PDF', '当前 PDF');
       else if (latestRun.manuscript_ready === true && latestRun.report_revision_ready !== true) {
         add('manuscript_scaffold.pdf', 'Manuscript PDF', '稿件 PDF');
@@ -193,13 +232,13 @@
       const files = (Array.isArray(latestRun.artifact_refs) ? latestRun.artifact_refs : [])
         .filter(row => row && row.run_id === latestRun.run_id
           && (/^[A-Za-z0-9_.-]+\.json$/.test(String(row.artifact || ''))
-            || ['manuscript_revision.pdf', 'manuscript_scaffold.pdf'].includes(row.artifact)))
+            || ['manuscript_revision.pdf', 'manuscript_scaffold.pdf', 'manuscript_scaffold.bib'].includes(row.artifact)))
         .filter(row => row.artifact !== 'manuscript_scaffold.pdf'
           || latestRun.report_revision_ready !== true)
         .filter(row => row.artifact !== 'manuscript_revision.pdf'
           || latestRun.report_revision_pdf_ready === true);
       const preferred = ['result_tables.json', 'figure_gallery.json', 'manuscript_revision.pdf',
-        'scientific_readiness.json', 'manuscript_draft.json', 'literature_evidence.json'];
+        'manuscript_scaffold.bib', 'scientific_readiness.json', 'manuscript_draft.json', 'literature_evidence.json'];
       files.sort((left, right) => {
         const leftRank = preferred.indexOf(left.artifact);
         const rightRank = preferred.indexOf(right.artifact);
@@ -228,14 +267,15 @@
         if (!/^[a-f0-9]{64}$/.test(String(row.sha256 || ''))) return '';
         const client = typeof api === 'function' ? api() : null;
         if (!client || typeof projectId !== 'function') return '';
-        const url = row.artifact.endsWith('.pdf') && client.piCopilotResearchDocumentUrl
+        const isPdf = row.artifact.endsWith('.pdf');
+        const isBibliography = row.artifact === 'manuscript_scaffold.bib';
+        const url = (isPdf || isBibliography) && client.piCopilotResearchDocumentUrl
           ? client.piCopilotResearchDocumentUrl(projectId(), row.run_id, row.artifact, row.sha256)
           : row.artifact.endsWith('.json') && client.piCopilotResearchArtifactDownloadUrl
             ? client.piCopilotResearchArtifactDownloadUrl(projectId(), row.run_id, row.artifact, row.sha256) : '';
-        const isPdf = row.artifact.endsWith('.pdf');
-        const name = isPdf ? row.artifact : row.artifact.replace(/\.json$/, '.review.json');
+        const name = isPdf || isBibliography ? row.artifact : row.artifact.replace(/\.json$/, '.review.json');
         const title = isPdf ? tr('Download PDF', '下载 PDF')
-          : tr('Download safe review copy', '下载脱敏审阅副本');
+          : isBibliography ? tr('Download', '下载') : tr('Download safe review copy', '下载脱敏审阅副本');
         return url ? `<a class="gpi-result-download" href="${esc(url)}" download="${esc(name)}" aria-label="${esc(title + ' ' + row.artifact)}" title="${title}">${iconHtml('download', 14)}</a>` : '';
       };
       const contracts = window.EU_GUIDED_CONTRACTS || {};
@@ -261,7 +301,7 @@
 
     // Files a reader opens; everything else in the run is audit and provenance.
     const READER_FILES = new Set(['result_tables.json', 'figure_gallery.json', 'manuscript_revision.pdf',
-      'manuscript_scaffold.pdf', 'manuscript_draft.json', 'literature_evidence.json',
+      'manuscript_scaffold.pdf', 'manuscript_draft.json', 'manuscript_scaffold.bib', 'literature_evidence.json',
       'scientific_readiness.json', 'agent_plan.json', 'cohort_summary.json']);
 
     function resourceIcon(row) {
@@ -278,6 +318,7 @@
         'figure_gallery.json': tr('Browse analysis figures', '浏览本次分析图件'),
         'article_report.json': tr('Read the evidence-bound draft', '阅读证据绑定正文'),
         'literature_evidence.json': tr('Retrieved references and evidence', '检索文献与证据记录'),
+        'manuscript_scaffold.bib': tr('BibTeX bibliography for download', '可下载的 BibTeX 参考文献'),
         'manuscript_revision.pdf': tr('Current report for download', '当前修订版，可下载'),
         'manuscript_scaffold.pdf': tr('Manuscript draft for download', '稿件草稿，可下载'),
       };
@@ -477,7 +518,7 @@
         if (analysisReport) detailActions.push(resourceButton(
           analysisReport, tr('View complete analysis report', '查看完整分析报告'),
         ));
-        if (manuscriptReady && articleReport) detailActions.push(resourceButton(
+        if (articleReport && (latestRun.report_revision_ready === true || (manuscriptReady && !previewExcluded(latestRun)))) detailActions.push(resourceButton(
           articleReport, tr('View article report with figures', '查看含图文章报告'),
         ));
         if (technicalReport) detailActions.push(resourceButton(
@@ -565,6 +606,7 @@
           ${lead}
           ${APPEND ? APPEND.render(latestRun) : ''}
           ${manuscriptNotice}
+          ${renderDeliveryDispositions(latestRun)}
           ${renderDeliverables(latestRun, workflow)}
           ${figureNote}
           <div class="gpi-run-outcome-actions gpi-run-outcome-primary">${primaryActions.join('')}</div>
@@ -613,7 +655,7 @@
     }
 
     return Object.freeze({ render, renderShelf, renderReviewAction, collection, resultsAvailable,
-      followUps, dismissFollowUp, selectReviewTab, loadScientificReview, openData,
+      followUps, dismissFollowUp, selectReviewTab, loadScientificReview, openData, articleRunPrompt,
       retryAnswer: (latestRun, workflow) => loadAnswer(latestRun, workflow, true),
       proposeAppend: kind => APPEND?.propose(kind) });
   }

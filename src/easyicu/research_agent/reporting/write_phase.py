@@ -699,6 +699,9 @@ def _persist_manuscript_provenance_artifact(
     untraced_numerics: Sequence[str] | None = None,
 ) -> None:
     """Persist the path-free number -> JSON -> code/data reader contract."""
+    if isinstance(plan, AnalysisPlan) and plan.deliverables is not None:
+        if "article_preview" not in plan.deliverables.requested:
+            return
 
     try:
         payload = build_manuscript_reader(
@@ -3062,8 +3065,10 @@ def _publish_and_audit_manuscript(
     requested = host_delivery_owners(plan.model_dump(mode="json")) if isinstance(plan, AnalysisPlan) else {}
     written: set[str] = set()
     pdf_requested = "manuscript_pdf" in requested
+    selection = getattr(plan, "deliverables", None)
+    export_bibtex = "references" in requested or (selection is None and pipeline._enable_latex)
     bib_path = run_dir / "manuscript_scaffold.bib"
-    if pipeline._enable_latex or pdf_requested or "references" in requested:
+    if export_bibtex:
         try:
             if manuscript_citable_keys(literature):
                 bib_path.write_text(render_bibtex(literature), encoding="utf-8")
@@ -3122,6 +3127,7 @@ def _publish_and_audit_manuscript(
                 authors=manuscript_authors or ["EasyICU research-agent"],
                 bibliography=literature,
                 bibliography_basename=bib_basename,
+                inline_bibliography=not export_bibtex,
                 venue_template=pipeline._latex_venue_template,
                 figures=figure_projection.figures,
                 figure_context=[note["text"] for note in figure_projection.context_notes],
@@ -3141,7 +3147,7 @@ def _publish_and_audit_manuscript(
                     producer="pipeline",
                     generation_mode="system",
                 )
-            if pdf_requested or (getattr(plan, "deliverables", None) is None and pipeline._enable_pdf_render):
+            if pdf_requested or (selection is None and pipeline._enable_pdf_render):
                 bib_full = bib_path if bib_path.name in written else None
                 pdf_result = render_pdf_for_run(
                     tex_path=tex_path,

@@ -2845,16 +2845,12 @@ class ResearchAgentPipeline:
         validate_plan_against_adjustment_authority(plan=plan, context=agent_context)
         self._scientific_runtime_authorities.validate_plan(plan)
         if not reused_prior_plan:
-            from .contracts.product_files import PlanDeliverables
-            from .planning.requirement_typing.delivery import (
-                bind_confirmed_host_delivery, bind_requested_host_delivery,
-            )
+            from .planning.requirement_typing.delivery import bind_run_deliverables
 
-            selection = self._config.bound_plan_deliverables
-            if selection is None:
-                plan = bind_requested_host_delivery(plan, question=context.research_question)
-            else:
-                plan = bind_confirmed_host_delivery(plan, PlanDeliverables.model_validate(selection))
+            plan = bind_run_deliverables(
+                plan, question=context.research_question, defaults=self._config.default_plan_deliverables,
+                edit=self._config.bound_plan_deliverables,
+            )
         plan_path = (
             migrated_plan_path or reused_plan_path or (run_dir / "analysis_plan.json")
         )

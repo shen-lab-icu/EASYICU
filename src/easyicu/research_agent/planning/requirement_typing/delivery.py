@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from typing import TYPE_CHECKING, Literal, Sequence
+from typing import TYPE_CHECKING, Literal, Mapping, Sequence
 
 from ...contracts.claim_ceiling import first_result
 from ...contracts.descriptive_execution import exposure_outcome_distribution_execution_verdict
@@ -10,7 +10,7 @@ from ...contracts.model_terms import PreparationRefusal, preparation_for_step
 from ...contracts.primary_cohort import primary_analysis_cohort_producer_uses_universe
 from ...contracts.prediction_subgroup import prediction_subgroup_step_matches
 from ...contracts.product_files import (
-    DeliverableKind, DeliveryRequest, HOST_DELIVERY_KINDS, PlanDeliverables, RUN_DELIVERY_SCHEMA_VERSION,
+    DeliverableKind, DeliveryRequest, HOST_DELIVERY_KINDS, HostDeliveryKind, PlanDeliverables, RUN_DELIVERY_SCHEMA_VERSION,
     delivery_requests, host_delivery_coverage, host_delivery_owners,
 )
 from ...contracts.product_identity import is_canonical_typed_product_token, typed_product
@@ -135,11 +135,17 @@ def _owns(kind: PlanDeliverableKind, step: AnalysisStep, plan: AnalysisPlan) -> 
     )
 
 
-def prefill_plan_deliverables(question: str) -> PlanDeliverables:
+def prefill_plan_deliverables(
+    question: str, *, defaults: Sequence[HostDeliveryKind] = (),
+) -> PlanDeliverables:
     requests = delivery_requests(question)
     check = tuple(kind for kind, state in requests.items() if state is DeliveryRequest.CHECK)
     return PlanDeliverables(
-        requested=tuple(kind for kind, state in requests.items() if state is DeliveryRequest.REQUESTED),
+        requested=tuple(
+            kind for kind, state in requests.items()
+            if state is DeliveryRequest.REQUESTED or (state is DeliveryRequest.UNMENTIONED and kind in defaults)
+        ),
+        excluded=tuple(kind for kind, state in requests.items() if state is DeliveryRequest.NOT_REQUESTED),
         check=check, confirmed=not check, source="detector_prefill",
     )
 
@@ -171,6 +177,28 @@ def bind_confirmed_host_delivery(plan: AnalysisPlan, selection: PlanDeliverables
 def bind_requested_host_delivery(plan: AnalysisPlan, *, question: str | None = None) -> AnalysisPlan:
     """Initialize a fresh candidate with the host's reading of the original question."""
     return bind_confirmed_host_delivery(plan, prefill_plan_deliverables(question or plan.research_question))
+
+
+def bind_run_deliverables(
+    plan: AnalysisPlan, *, question: str, defaults: Sequence[HostDeliveryKind] | None,
+    edit: Mapping[str, object] | None,
+) -> AnalysisPlan:
+    """Apply tier defaults and record what the human changed on the review card."""
+    first = first_result(plan)
+    prefill = prefill_plan_deliverables(question, defaults=() if first else defaults or ())
+    if edit is None:
+        return bind_confirmed_host_delivery(plan, prefill)
+
+    edited = PlanDeliverables.model_validate(edit).requested
+    omitted = set(prefill.requested) - set(edited)
+    deferred = omitted if first else set()
+    excluded = (set(prefill.excluded) | set(prefill.check) | omitted) - set(edited) - deferred
+    selection = PlanDeliverables(
+        requested=edited, confirmed=True, source="user_edit",
+        deferred=tuple(kind for kind in HOST_DELIVERY_KINDS if kind in deferred),
+        excluded=tuple(kind for kind in HOST_DELIVERY_KINDS if kind in excluded),
+    )
+    return bind_confirmed_host_delivery(plan, selection)
 
 
 def planned_run_delivery_evidence(

@@ -22,6 +22,7 @@ from typing import Iterable
 
 from ..contracts.claim_ceiling import first_result
 from ..contracts.product_files import (
+    FIRST_RESULT_DELIVERY_STOP,
     HOST_DELIVERY_CLARIFICATION,
     HOST_DELIVERY_CLARIFICATION_MESSAGE,
     HOST_DELIVERY_KINDS,
@@ -34,7 +35,6 @@ from .question_requirements import (
     question_requirements_on_plan_under_review,
 )
 
-FIRST_RESULT_DELIVERY_STOP = "first_result_delivery_requires_article"
 DELIVERY_APPROVAL_STOPS = (HOST_DELIVERY_CLARIFICATION, FIRST_RESULT_DELIVERY_STOP)
 
 PLAN_APPROVAL_STOPS: tuple[str, ...] = (

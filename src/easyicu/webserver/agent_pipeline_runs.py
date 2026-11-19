@@ -169,7 +169,9 @@ from easyicu.webserver.research_launch_resume import (
     _DevelopmentResumeAcquisition,
     _slug,
 )
-from easyicu.webserver.research_launch_runtime import _submission_profile_ref, recorded_submission_profile_ref
+from easyicu.webserver.research_launch_runtime import (
+    _submission_profile_ref, recorded_submission_profile_ref, reviewed_article_deliverable_defaults,
+)
 from easyicu.webserver.study_intent import explicit_outcome_concepts
 from easyicu.webserver.research_launch_scientific import (
     _analysis_requires_longitudinal_trajectory,
@@ -5210,7 +5212,9 @@ def _write_projection(
         _read_json(run_dir / "evidence" / "evidence_index.json", []) if run_dir else []
     )
     evidence_count = len(evidence_index) if isinstance(evidence_index, list) else 0
-    from easyicu.research_agent.contracts.product_files import host_delivery_owners, recorded_host_delivery_owners
+    from easyicu.research_agent.contracts.product_files import (
+        host_delivery_omissions, host_delivery_owners, recorded_host_delivery_owners,
+    )
     from easyicu.research_agent.reporting.completion import host_delivery_checks_apply
 
     delivery_active = (
@@ -5225,6 +5229,9 @@ def _write_projection(
         ]}))
     planned_pdf = "manuscript_pdf" in delivery_owners
     explicit_delivery = isinstance(plan.get("deliverables"), Mapping)
+    omissions = host_delivery_omissions(plan)
+    if omissions and pending is None and gate["analysis_outcome"]["status"] == "completed":
+        gate["deliverable_dispositions"] = omissions
     try:
         pdf_receipt, manuscript_documents = _validated_manuscript_documents(
             None if (planned_pdf and not delivery_active) or (explicit_delivery and not planned_pdf) else run_dir
@@ -5420,6 +5427,9 @@ def _write_projection(
     }
     if explicit_delivery and "article_preview" not in delivery_owners:
         payloads.pop("manuscript_draft.json")
+    if pending is None and any(row["kind"] == "references" for row in omissions):
+        payloads.pop("literature_evidence.json")
+        (wrapper_dir / "literature_evidence.json").unlink(missing_ok=True)
     from .data_provenance_projection import load_data_provenance_projection
     payloads["data_provenance.json"] = load_data_provenance_projection(run_dir)
     system_figure_gallery = None
@@ -8440,6 +8450,11 @@ def make_research_pipeline_run_runner(
                 bound_preplan_literature=bound_preplan_literature,
                 bound_plan_revision_contract=(bound_plan_revision_contract or None),
                 bound_plan_deliverables=study.get("plan_deliverables"),
+                default_plan_deliverables=(
+                    None if analysis_only_execution else reviewed_article_deliverable_defaults(
+                        submission_profile, budget_mode=selected_budget_mode,
+                    )
+                ),
                 bound_population_requirements=(
                     bound_population_requirements.model_dump(mode="json")
                     if bound_population_requirements is not None else None

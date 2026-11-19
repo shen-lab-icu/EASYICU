@@ -26,6 +26,7 @@ from types import MappingProxyType
 from typing import Any, Dict, Literal, Mapping, Optional, Sequence, Union
 
 from ..authority.secret_redaction import is_sensitive_key, string_contains_secret
+from ..contracts.product_files import HostDeliveryKind
 from ..planning.cohort_contract import CohortSelectionMode
 from ..providers.prompt_budget import DEFAULT_MAX_PROMPT_TOKENS
 
@@ -44,6 +45,7 @@ _ADDITIVE_FIELDS = frozenset(
         "bound_exposure_groupings",
         "bound_population_requirements",
         "bound_target_trial",
+        "default_plan_deliverables",
         "enable_exposure_grouping",
         "generate_manuscript",
         "execution_tier",
@@ -476,6 +478,7 @@ class PipelineConfig:
     # supplying it. Only plan-owned findings may appear here.
     bound_plan_revision_contract: Optional[str] = None
     bound_plan_deliverables: Optional[Dict[str, Any]] = None
+    default_plan_deliverables: tuple[HostDeliveryKind, ...] | None = None
     # Host-issued content from an accepted metadata-only candidate, separate
     # from the prompt seed. Persisted/hashed so fresh planning and recovery
     # cannot silently forget a baseline requirement.
@@ -747,6 +750,16 @@ class PipelineConfig:
             if selection.source != "user_edit" or not self.require_human_plan_review:
                 raise ValueError("Edited deliverables require a human-reviewed plan.")
             object.__setattr__(self, "bound_plan_deliverables", selection.model_dump(mode="json"))
+        if self.default_plan_deliverables is not None:
+            from ..contracts.product_files import HOST_DELIVERY_KINDS
+
+            defaults = tuple(self.default_plan_deliverables)
+            if (
+                not self.require_human_plan_review or any(kind not in HOST_DELIVERY_KINDS for kind in defaults)
+                or len(defaults) != len(set(defaults))
+            ):
+                raise ValueError("Deliverable defaults require a human-reviewed plan and distinct host delivery kinds.")
+            object.__setattr__(self, "default_plan_deliverables", defaults)
         if self.bound_analysis_inputs is not None:
             from ..planning.accepted_analysis_inputs import AcceptedAnalysisInputs
 

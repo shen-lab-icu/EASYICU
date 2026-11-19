@@ -746,7 +746,8 @@ def _project_job(
                 result.get("research_input_state")
             ),
             "artifact_refs": artifact_refs,
-            **{key: gate[key] for key in ("analysis_outcome", "manuscript_outcome") if key in gate},
+            **{key: gate[key] for key in ("analysis_outcome", "manuscript_outcome", "deliverable_dispositions")
+               if key in gate},
             "gate_status": stable_code(gate.get("status")),
             "gate_reason_code": stable_code(gate.get("reason")),
             **gate_detail_projection(gate.get("detail")),
@@ -1108,6 +1109,7 @@ def project_run_outcome(
                 "manuscript_ready",
                 "analysis_outcome",
                 "manuscript_outcome",
+                "deliverable_dispositions",
                 "report_revision_ready",
                 "report_revision_pdf_ready",
                 "analysis_results_available",

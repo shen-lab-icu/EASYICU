@@ -15,7 +15,7 @@ from pathlib import Path
 from types import MappingProxyType
 from typing import Literal, Mapping, Sequence
 
-from pydantic import BaseModel, ConfigDict, model_validator
+from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 
 FIGURE_SUFFIXES = frozenset({".png", ".svg", ".pdf", ".tif", ".tiff"})
@@ -242,6 +242,7 @@ HOST_DELIVERY_CLARIFICATION_MESSAGE = "Choose which deliverables to include on t
 class DeliveryRequest(Enum):
     REQUESTED = "requested"
     NOT_REQUESTED = "not_requested"
+    UNMENTIONED = "unmentioned"
     CHECK = "check"
 
 
@@ -251,6 +252,8 @@ class PlanDeliverables(BaseModel):
     model_config = ConfigDict(extra="forbid", frozen=True)
     requested: tuple[HostDeliveryKind, ...]
     check: tuple[HostDeliveryKind, ...] = ()
+    excluded: tuple[HostDeliveryKind, ...] = Field(default=(), exclude_if=lambda value: not value)
+    deferred: tuple[HostDeliveryKind, ...] = Field(default=(), exclude_if=lambda value: not value)
     confirmed: bool
     source: Literal["detector_prefill", "user_edit"]
 
@@ -258,7 +261,7 @@ class PlanDeliverables(BaseModel):
     def _consistent(self) -> PlanDeliverables:
         if self.confirmed == bool(self.check) or (self.check and self.source == "user_edit"):
             raise ValueError("A confirmed deliverable set cannot have unresolved choices.")
-        kinds = (*self.requested, *self.check)
+        kinds = (*self.requested, *self.check, *self.excluded, *self.deferred)
         if len(kinds) != len(set(kinds)):
             raise ValueError("Each deliverable must have one state.")
         return self
@@ -317,7 +320,11 @@ def delivery_requests(question: str) -> dict[HostDeliveryKind, DeliveryRequest]:
                 previous = decisions.get(kind, verdict)
                 decisions[kind] = verdict if previous is verdict else DeliveryRequest.CHECK
             negated_delivery |= bool(exclusion and objects)
-    return {kind: decisions.get(kind, DeliveryRequest.NOT_REQUESTED) for kind in HOST_DELIVERY_KINDS}
+    return {kind: decisions.get(kind, DeliveryRequest.UNMENTIONED) for kind in HOST_DELIVERY_KINDS}
+
+
+FIRST_RESULT_DELIVERY_STOP = "first_result_delivery_requires_article"
+DELIVERY_EXCLUDED_BY_USER = "excluded_by_user"
 
 
 HOST_DELIVERY_RECEIPT = "host_delivery_receipt.json"
@@ -339,6 +346,22 @@ def confirmed_host_delivery_kinds(plan: Mapping[str, object]) -> tuple[HostDeliv
     if not isinstance(requested, (tuple, list)):
         return ()
     return tuple(kind for kind in HOST_DELIVERY_KINDS if kind in requested)
+
+
+def host_delivery_omissions(plan: Mapping[str, object]) -> list[dict[str, str]]:
+    """Project the individual omissions sealed with the approved selection."""
+    selection = plan.get("deliverables")
+    if not isinstance(selection, Mapping) or selection.get("confirmed") is not True:
+        return []
+    omitted = []
+    for field, reason in (("excluded", DELIVERY_EXCLUDED_BY_USER), ("deferred", FIRST_RESULT_DELIVERY_STOP)):
+        kinds = selection.get(field)
+        if isinstance(kinds, (list, tuple)):
+            omitted.extend(
+                {"kind": kind, "reason_code": reason, **({"next_action": "article"} if field == "deferred" else {})}
+                for kind in HOST_DELIVERY_KINDS if kind in kinds
+            )
+    return omitted
 
 
 def host_delivery_owners(plan: Mapping[str, object]) -> dict[HostDeliveryKind, str]:

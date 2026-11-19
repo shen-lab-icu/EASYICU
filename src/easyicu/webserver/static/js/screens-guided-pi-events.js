@@ -196,6 +196,12 @@
           if (prompt) void prepareNewTaskFollowUp(prompt);
           return;
         }
+        if (event.target.closest('[data-gpi-article-run]')) {
+          if (state.busy || state.childJobId || !state.session || state.session.stale?.stale) return;
+          const text = RUN_OUTCOME.articleRunPrompt(state.latestRun);
+          if (text) prepareEntryCompose({ text, intent: '', origin: 'host_prompt' });
+          return;
+        }
         const dismissFollowUp = event.target.closest('[data-gpi-followup-dismiss]');
         if (dismissFollowUp) {
           if (RUN_OUTCOME.dismissFollowUp(dismissFollowUp.dataset.gpiFollowupDismiss, state.latestRun, state.workflow)) render();
