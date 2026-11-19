@@ -189,10 +189,6 @@
           'Which available clinical endpoint and time horizon should this study use?',
           '这项研究应使用哪个当前数据可支持的临床结局及时间范围？',
         ),
-        SURVIVAL_LANDMARK_OWNER_NOT_SEALED: tr(
-          'When should survival follow-up start, and what endpoint and follow-up period should the study use?',
-          '生存随访应从何时开始？本研究应使用哪个结局和多长的随访时间？',
-        ),
         POST_BASELINE_EXPOSURE_TIMING_NOT_CLOSED: tr(
           'Should the revised study use a prespecified landmark/time-varying design, or remain descriptive?',
           '修订后的研究应采用预先设定的 landmark／时变设计，还是仅保留描述性分析？',
