@@ -1152,7 +1152,7 @@ def test_a_plan_without_a_dependence_estimator_compiles_the_first_stay_populatio
             _ONE_STAY,
             "agent_plan_every_stay_commitment_unexecutable",
         ),
-        ({"preset": "all_icu"}, False, _ONE_STAY, "agent_plan_first_stay_coordinate_unavailable"),
+        ({"preset": "all_icu"}, False, _ONE_STAY, "agent_plan_one_stay_coordinate_unavailable"),
         (
             {"preset": "all_icu"},
             True,

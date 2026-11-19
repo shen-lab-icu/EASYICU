@@ -50,6 +50,14 @@ for (const language of ['zh', 'en']) {
     assert.equal(owner.workflowConfirmation().nonApprovable, true);
   });
 
+  test(`${language}: a study that keeps every stay is told to ask for a repeated-stay method (Carbon b9)`, () => {
+    const html = card(language, 'agent_plan_one_stay_coordinate_unavailable').workflowConfirmationHtml();
+    assert.ok(html.includes(language === 'zh' ? '研究保留全部 ICU 入住' : 'The study keeps every ICU stay'));
+    assert.ok(html.includes(language === 'zh' ? '改用能处理同一患者多次入住的方法' : 'a method accounting for repeated ICU stays'));
+    assert.ok(!html.includes(COPY[language].note), 'no exit that would repeat the refusal');
+    assert.ok(!html.includes(COPY[language].promised));
+  });
+
   test(`${language}: another refusal keeps its own reason and the cohort choice note`, () => {
     const html = card(language, 'agent_plan_patient_grouping_unavailable').workflowConfirmationHtml();
     assert.ok(html.includes(COPY[language].promised));

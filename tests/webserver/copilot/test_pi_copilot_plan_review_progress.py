@@ -548,7 +548,7 @@ def test_a_clustering_plan_gets_the_first_stay_population_only_with_its_coordina
     if not first_stay_proven:
         with pytest.raises(PiCopilotError) as raised:
             apply()
-        assert raised.value.code == "agent_plan_first_stay_coordinate_unavailable"
+        assert raised.value.code == "agent_plan_one_stay_coordinate_unavailable"
         assert written == []
         return
     result = apply()

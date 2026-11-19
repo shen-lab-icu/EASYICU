@@ -1625,8 +1625,10 @@ def compile_agent_plan_configuration(
                 "The study keeps every ICU stay, but no step of this plan can carry patient-level dependence; keeping each patient's first ICU stay needs the researcher's decision.",
             )
         if first_stay_coordinate_available is not True:
+            # Its own code: the study keeps every stay, so its exit is a plan
+            # that accounts for repeated stays (Carbon b9).
             raise PlanDecisionError(
-                "agent_plan_first_stay_coordinate_unavailable",
+                "agent_plan_one_stay_coordinate_unavailable",
                 "The plan needs one ICU stay per patient, but the selected source cannot prove which stay came first.",
             )
         if codes != (_ONE_STAY_POPULATION_FINDING,):

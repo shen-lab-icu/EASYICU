@@ -41,6 +41,7 @@ function screen(language = 'zh', { offer = true } = {}) {
     authorizePiCopilotDataSource: async (id, body) => { state.calls.push({ id, body }); },
     loadStudyContext: async () => { state.calls.push('study'); return { id: 'study-1', revision: 8, question: 'q', data_source: { path: 'raw', database: 'miiv' } }; },
     startAgentRun: async () => { state.calls.push('plan'); return { job_id: 'job-1' }; },
+    applyPiCopilotAgentPlanConfiguration: async () => { state.calls.push('configure'); return { next_action: 'fresh_plan' }; },
   };
   const known = {
     tr: (en, zh) => (language === 'zh' ? zh : en), esc: String, iconHtml: () => '', resourceButton: () => '',
@@ -117,3 +118,20 @@ test('a first plan after confirming again continues, keeping its own holds', asy
   await held.actions.confirmWorkflow(held.confirmation.workflowConfirmation());
   assert.ok(!held.state.calls.includes('plan'), 'mined ideas still wait for a choice');
 });
+
+// Carbon b9 2: applying the plan settings (for example narrowing to first
+// stays) ends a raw Demo choice; the revision waits for its card instead of
+// starting on a raw folder that no longer resolves.
+for (const [after, starts] of [[CODE, false], ['plan_configuration_superseded', true]]) {
+  test(`after the plan settings apply, the revision ${starts ? 'starts' : 'waits for the data-source card'}`, async () => {
+    const ui = screen();
+    ui.state.session.binding.run_id = 'run-1';
+    ui.state.workflow = { next_action_code: 'agent_plan_configuration_required' };
+    ui.state.after = after === CODE
+      ? { next_action_code: CODE, bound_export_cohort_refusal: { code: CODE, reason_codes: [] } }
+      : { next_action_code: after };
+    await ui.actions.continueSystemOwnedPlanProgression();
+    assert.ok(ui.state.calls.includes('configure'));
+    assert.equal(ui.state.calls.includes('plan'), starts);
+  });
+}

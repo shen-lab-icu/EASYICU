@@ -566,7 +566,7 @@
         reason: typeof host.runFailureText === 'function'
           ? String(host.runFailureText(configurationError) || '') : configurationError,
         // B9: a first-stay rule the source cannot order offers no choice below.
-        note: configurationError === 'agent_plan_first_stay_coordinate_unavailable' ? tr(
+        note: ['agent_plan_first_stay_coordinate_unavailable', 'agent_plan_one_stay_coordinate_unavailable'].includes(configurationError) ? tr(
           'The plan and its scientific review are saved; analysis has not started.',
           '计划及其科学审阅已保存，分析尚未开始。',
         ) : tr(

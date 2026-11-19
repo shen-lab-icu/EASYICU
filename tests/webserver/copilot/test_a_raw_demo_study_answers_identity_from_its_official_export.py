@@ -44,6 +44,21 @@ def test_without_a_choice_that_resolves_the_bound_path_is_kept(choice, chosen):
     assert launch.source_authority_export_path(stale) == str(choice.paths.raw)
 
 
+def test_launch_asks_the_official_export_for_the_first_stay_per_hospitalization(choice, chosen, monkeypatch):
+    # Carbon b9: the eICU Demo's hospital-level first stay reads the same export.
+    asked = []
+
+    def resolve(*, export_path, database):
+        asked.append(export_path)
+        return None
+
+    monkeypatch.setattr(source_identity_authority, "resolve_study_first_icu_stay_per_hospitalization", resolve)
+    assert chosen["cohort"]["first_icu_stay_per_hospitalization"] is True
+    with pytest.raises(launch.ResearchPipelineRunError):
+        launch._first_icu_stay_per_hospitalization_for_cohort(chosen)
+    assert asked == [str(choice.paths.export)]
+
+
 def test_an_export_study_is_untouched(choice):
     assert launch.source_authority_export_path(choice.study) == str(choice.paths.export)
 
