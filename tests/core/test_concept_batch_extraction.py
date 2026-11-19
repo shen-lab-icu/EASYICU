@@ -345,6 +345,9 @@ def test_concept_batch_routes_under_inprocess_override(
     total = ram_gib * 1024**3
     memory = psutil.virtual_memory()._replace(total=total, available=total)
     monkeypatch.setattr(psutil, "virtual_memory", lambda: memory)
+    # The RAM rule as Linux/Windows run it; macOS keeps batches in-process (S1458).
+    policy = concept_api._memory_policy_isolates_batches
+    monkeypatch.setattr(concept_api, "_memory_policy_isolates_batches", lambda n, **_: policy(n, platform="linux"))
     ids = list(range(1, count + 1))
     all_stays = reason.startswith("all-stays")
     concepts = ["hr", "aki"] if reason == "special-concept" else ["hr"]
