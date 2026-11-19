@@ -249,6 +249,85 @@ def test_retained_abstract_label_updates_scope_when_its_body_is_rejected() -> No
 
 
 @pytest.mark.parametrize(
+    ("active_label", "discarded_label", "next_label", "retains_next"),
+    [
+        ("Results", "Methods: ", "", False),
+        ("Methods", "Results: ", "", True),
+        ("Methods", "", "Results: ", False),
+        ("Methods", "", "Table 1: ", False),
+        ("Results", "", "Methods: ", True),
+        ("Methods", "Table 1: ", "", True),
+    ],
+    ids=[
+        "discarded-methods", "discarded-results", "exposed-results", "exposed-caption",
+        "exposed-methods", "discarded-caption",
+    ],
+)
+def test_first_retained_sentence_determines_region_scope(
+    active_label, discarded_label, next_label, retains_next,
+) -> None:
+    retained = f"## Abstract\n\n**{active_label}:**"
+    rejected = f"{discarded_label}Archive volume shrank by 37% (p = 0.002)."
+    following = f"{next_label}The migration tool shuffled archived records {{evidence:archive_log}}."
+    resolve_evidence = {"archive_log"}.__contains__
+    filtered = filter_evidence_bound_scaffold(
+        f"{retained}\n\n{rejected} {following}",
+        resolve_claim=_resolver, resolve_evidence=resolve_evidence,
+    )
+
+    assert filter_evidence_bound_scaffold(
+        filtered.scaffold, resolve_claim=_resolver, resolve_evidence=resolve_evidence,
+    ).scaffold == filtered.scaffold
+    assert filtered.scaffold == (f"{retained}\n\n{following}" if retains_next else retained) + "\n"
+    assert filtered.filtered_sentences == ((rejected,) if retains_next else (rejected, following))
+
+
+def test_first_retained_sentence_locks_scope_for_the_rest_of_the_region() -> None:
+    scaffold = (
+        "## Abstract\n\n**Results:**\n\n"
+        "Methods: The archivist reviewed the staging directory. "
+        "Results: The migration tool shuffled archived records [@migration_review].\n"
+    )
+    filtered = filter_evidence_bound_scaffold(scaffold, resolve_claim=_resolver)
+
+    assert filter_evidence_bound_scaffold(
+        filtered.scaffold, resolve_claim=_resolver,
+    ).scaffold == filtered.scaffold == scaffold
+    assert filtered.filtered_sentences == ()
+
+
+def test_exposed_caption_is_restricted_after_an_outer_methods_label() -> None:
+    retained = "## Abstract\n\n**Methods:**"
+    rejected = "Archive volume shrank by 37% (p = 0.002)."
+    caption = "Table 1: The migration tool shuffled archived records {evidence:archive_log}."
+    resolve_evidence = {"archive_log"}.__contains__
+    filtered = filter_evidence_bound_scaffold(
+        f"{retained} {rejected} {caption}",
+        resolve_claim=_resolver, resolve_evidence=resolve_evidence,
+    )
+
+    assert filter_evidence_bound_scaffold(
+        filtered.scaffold, resolve_claim=_resolver, resolve_evidence=resolve_evidence,
+    ).scaffold == filtered.scaffold == f"{retained}\n"
+    assert filtered.filtered_sentences == (rejected, caption)
+
+
+@pytest.mark.parametrize(("outer", "inner"), [("Results", "Methods"), ("Methods", "Results")])
+def test_outer_abstract_label_overrides_leading_body_label(outer, inner) -> None:
+    retained = f"## Abstract\n\n**{inner}:**\n\n**{outer}:**"
+    body = f"{inner}: The migration tool shuffled archived records [@migration_review]."
+    followup = "The archivist moved the index [@migration_review]."
+    scaffold = f"{retained} {body}\n\n{followup}\n"
+    filtered = filter_evidence_bound_scaffold(scaffold, resolve_claim=_resolver)
+
+    assert filter_evidence_bound_scaffold(
+        filtered.scaffold, resolve_claim=_resolver,
+    ).scaffold == filtered.scaffold
+    assert filtered.scaffold == (scaffold if outer == "Methods" else f"{retained}\n")
+    assert filtered.filtered_sentences == (() if outer == "Methods" else (body, followup))
+
+
+@pytest.mark.parametrize(
     "prefix",
     ["**Results:** ", "**Conclusions:** ", "> - **Results:** ", "**结果：** "],
 )

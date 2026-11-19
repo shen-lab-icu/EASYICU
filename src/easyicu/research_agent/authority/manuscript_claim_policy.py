@@ -510,7 +510,19 @@ def _canonical_duplicate_claim_token(
 
 
 def _split_sentences(text: str) -> list[str]:
-    sentences = [text[sentence.start:sentence.end] for sentence in prose_sentences(text)]
+    sentences: list[str] = []
+    caption_start: int | None = None
+    for span in prose_sentences(text):
+        sentence = text[span.start:span.end]
+        if caption_start is not None:
+            sentences.append(text[caption_start:span.end])
+            caption_start = None
+        elif _CAPTION_LABEL_RE.fullmatch(sentence):
+            caption_start = span.start
+        else:
+            sentences.append(sentence)
+    if caption_start is not None:
+        sentences.append(text[caption_start:].rstrip())
     # Keep malformed syntax available to the authority check when an
     # annotation lies outside the visible prose ranges.
     if _contains_malformed_authority_placeholder(text) and not any(
@@ -823,7 +835,7 @@ _METHOD_FACT_PLACES = {
 
 
 def _abstract_section_label(prefix: str, content: str) -> str:
-    match = _ABSTRACT_LABEL_RE.match(content) or INLINE_SECTION_LABEL_RE.search(prefix)
+    match = INLINE_SECTION_LABEL_RE.search(prefix) or _ABSTRACT_LABEL_RE.match(content)
     return match.group("label").casefold() if match else ""
 
 
@@ -930,7 +942,6 @@ def filter_evidence_bound_scaffold(
             if stripped.startswith(("```", "~~~")) or not stripped:
                 filtered_lines.append(line)
                 continue
-            abstract_label = _abstract_section_label(structure_prefix, content)
             heading_prefix, heading_content = _split_markdown_heading_prefix(content)
             heading_requires_claim = False
             if heading_prefix:
@@ -949,14 +960,6 @@ def filter_evidence_bound_scaffold(
                 heading_requires_claim = True
                 structure_prefix += heading_prefix
                 content = heading_content
-            restricted_line = bool(
-                (
-                    candidate_scope.findings_depth is not None
-                    and (not candidate_scope.in_abstract or candidate_scope.abstract_findings)
-                )
-                or abstract_label in {"results", "findings", "conclusion", "conclusions", "结果", "结论"}
-                or _CAPTION_LABEL_RE.match(content)
-            )
             if not content.strip():
                 filtered_lines.append(line)
                 continue
@@ -976,20 +979,24 @@ def filter_evidence_bound_scaffold(
                 filtered_lines.append(abstract_label_line)
                 continue
             sentences = _split_sentences(content)
-            if (
-                len(sentences) == 1
-                and not heading_requires_claim
-                and not _looks_result_like_sentence(sentences[0])
-                and not _looks_qualitative_scientific_assertion(sentences[0])
-                and not _contains_malformed_authority_placeholder(sentences[0])
-                and _SCIENTIFIC_CLAIM_TOKEN_RE.search(sentences[0]) is None
-                and (not restricted_line or _neutral_findings_text(sentences[0]))
-                and not _states_unexecuted_window(sentences[0], executed_spans)
-            ):
-                filtered_lines.append(line)
-                continue
+            sentence_scope = not opaque and region.kind != "heading"
             kept: list[str] = []
             for sentence in sentences:
+                if not kept:
+                    leading_content = sentence if sentence_scope else content
+                    if sentence_scope:
+                        candidate_scope = scope.after_line(
+                            structure_prefix + sentence, region.kind,
+                        )
+                    abstract_label = _abstract_section_label(structure_prefix, leading_content)
+                    restricted_line = bool(
+                        (
+                            candidate_scope.findings_depth is not None
+                            and (not candidate_scope.in_abstract or candidate_scope.abstract_findings)
+                        )
+                        or abstract_label in {"results", "findings", "conclusion", "conclusions", "结果", "结论"}
+                        or _CAPTION_LABEL_RE.match(leading_content)
+                    )
                 if _states_unexecuted_window(sentence, executed_spans):
                     # An executed design states the windows the analysis ran on
                     # (exact Methods facts); any other window is not the analysis.
@@ -997,6 +1004,17 @@ def filter_evidence_bound_scaffold(
                     removed.append(rejected)
                     filtered_claims.append(rejected)
                     continue
+                if (
+                    len(sentences) == 1
+                    and not heading_requires_claim
+                    and not _looks_result_like_sentence(sentence)
+                    and not _looks_qualitative_scientific_assertion(sentence)
+                    and not _contains_malformed_authority_placeholder(sentence)
+                    and _SCIENTIFIC_CLAIM_TOKEN_RE.search(sentence) is None
+                    and (not restricted_line or _neutral_findings_text(sentence))
+                ):
+                    kept.append(content)
+                    break
                 literature_background = bool(
                     not restricted_line
                     and _has_nonnumeric_literature_context(sentence)
@@ -1091,7 +1109,7 @@ def filter_evidence_bound_scaffold(
                         kept.pop(0)
                         removed.append(dependent)
                         filtered_claims.append(dependent)
-            kept_content = " ".join(part for part in kept if part).strip()
+            kept_content = " ".join(kept)
             filtered_lines.append(
                 f"{structure_prefix}{kept_content}" if kept_content else abstract_label_line
             )
