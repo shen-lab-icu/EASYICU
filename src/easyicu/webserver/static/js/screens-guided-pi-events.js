@@ -484,8 +484,13 @@
             state.error = tr('Research Agent currently requires an OpenAI Chat Completions-compatible API connection.', 'Research Agent 当前需要 OpenAI Chat Completions 兼容 API 连接。');
             render(); return;
           }
+          // A conversation keeps the connection it was created with, so a
+          // switch to another connection starts a conversation on it; the
+          // researcher's turns never go out on a connection they left.
+          const leftSession = state.session && ((state.session.research_provider || {}).provider === 'codex')
+            !== (state.researchProvider === 'codex');
           Promise.resolve(finishProviderSetup()).then(() => {
-            if (!state.showSetup && !state.session && projectId()) void createSession();
+            if (!state.showSetup && (!state.session || leftSession) && projectId()) void createSession();
           });
           return;
         }

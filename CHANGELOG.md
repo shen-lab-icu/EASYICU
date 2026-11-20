@@ -84,6 +84,12 @@ The full list of changes since 0.1.0 is in the v0.1.3 release notes. Recorded he
   stops the extraction with a typed reason. On MIMIC the plan card's first-stay row
   names the same scope.
 
+- Switching the model connection in setup (for example from a saved API connection to
+  the ChatGPT account) while a conversation is open now starts a conversation on the
+  chosen connection. Before, the open conversation stayed on the connection it was
+  created with, so the next messages went to the model and account you had just left.
+  The earlier conversation stays in the project.
+
 ## 0.1.0 — 2026-11-11 — first public pre-release
 
 ### Highlights
