@@ -110,7 +110,7 @@ for (const language of ['zh', 'en']) {
       esc: value => String(value).replaceAll('&', '&amp;').replaceAll('<', '&lt;').replaceAll('>', '&gt;'),
       iconHtml: () => '', resourceButton: resource => `<a data-resource="${resource.artifact}"></a>`,
       sessionIsStale: () => false, busy: () => false,
-      session: () => ({ binding: { run_id: 'run_guard_1' } }),
+      session: () => ({ binding: { run_id: 'run_guard_1' }, ...(item.session || {}) }),
       workflow: () => ({ next_action_code: item.code, ...(item.workflow || {}), plan_review_summary: { run_id: 'run_guard_1', ...item.summary } }),
     });
     let confirmation; let html;
@@ -138,6 +138,19 @@ def _render(tmp_path: Path) -> list[dict]:
     cases += [{"code": code, "variant": f"prepared_nothing:{name}", "summary": {},
                "workflow": {"preparation_read_no_data": True, "execution_input_available": available}}
               for code in _codes() for name, available in (("no_package", False), ("package", True))]
+    # S1577 (m35): the conversation's preparation of this candidate already
+    # ended (here: failed in seconds before writing a run), yet the workflow
+    # offers the same step again.
+    for status, candidate in (("failed", "run_guard_1"), ("done", "run_guard_1"), ("running", "run_guard_1"), ("failed", "run_other_1")):
+        session = {"conversation_replay": {"turns": [{
+            "kind": "host_action", "action_code": "prepare_analysis_data", "status": status, "child_job_id": "job_guard_1",
+            "action_key": f"plan:{'a' * 16}:{candidate}:plan_execution_upgrade_required"}]},
+            "archived_child_jobs": [{"job_id": "job_guard_1", "kind": "agent-run", "run_id": None,
+                                     "status": "running" if status == "running" else status,
+                                     "error_code": "codex_auth_app_server_request_failed" if status == "failed" else None}]}
+        for name, available in (("no_package", False), ("package", True)):
+            cases += [{"code": code, "variant": f"turn:{status}:{candidate}:{name}", "summary": {},
+                       "workflow": {"execution_input_available": available}, "session": session} for code in _codes()]
     cases_path = tmp_path / "cases.json"
     cases_path.write_text(json.dumps(cases), encoding="utf-8")
     result = run_node(node, _SCRIPT, str(OWNER.resolve()), str(cases_path), check=False, timeout=120)
@@ -272,3 +285,34 @@ def test_a_preparation_that_read_no_data_never_returns_the_same_card(rendered, v
         else:
             assert ("The last preparation read no data" if language == "en" else "上次数据准备没有读到数据") in row["html"]
             assert any("data-gpi-confirm-action" in button for button in enabled)
+
+
+_ENDED = {"zh": "上次数据准备未完成", "en": "The last data preparation did not finish"}
+
+
+@pytest.mark.parametrize("status", ["failed", "done"])
+def test_a_preparation_that_ended_without_a_run_never_returns_the_same_card(rendered, status) -> None:
+    # S1577: m35 failed in two seconds (a transient model-service sign-in error)
+    # before writing a run, and the card came back unchanged with no failure
+    # line. Any ended preparation of the shown candidate changes the card.
+    for name in ("no_package", "package"):
+        rows = [r for r in rendered if r["code"] == "plan_execution_upgrade_required"
+                and r["variant"] == f"turn:{status}:run_guard_1:{name}"]
+        assert {r["language"] for r in rows} == {"zh", "en"}
+        for row in rows:
+            language = row["language"]
+            assert _FIRST_TIME[language] not in row["html"], (name, language)
+            enabled = [button for button in row["buttons"] if " disabled" not in button]
+            if name == "package":
+                assert _ENDED[language] in row["html"]
+                assert sum("data-gpi-confirm-action" in button for button in enabled) == 1
+                assert _PREPARED[language][2] in row["html"]  # "prepare data again"
+            else:
+                assert _NO_DATA[language] in row["html"] and _EXTRACT[language] in row["html"]
+                assert len(enabled) == 1 and "data-gpi-confirm-edit" in enabled[0]
+
+
+@pytest.mark.parametrize("variant", ["turn:running:run_guard_1:package", "turn:failed:run_other_1:package"])
+def test_a_running_or_other_candidates_preparation_leaves_the_card(rendered, variant) -> None:
+    for row in (r for r in rendered if r["code"] == "plan_execution_upgrade_required" and r["variant"] == variant):
+        assert _FIRST_TIME[row["language"]] in row["html"] and _ENDED[row["language"]] not in row["html"]

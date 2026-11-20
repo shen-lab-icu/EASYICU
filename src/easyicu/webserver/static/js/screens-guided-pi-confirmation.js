@@ -418,11 +418,17 @@
           { kind: 'research_artifact', run_id: reviewedPlanRunId, artifact: 'literature_evidence.json', label: tr('Literature evidence', '文献依据'), media_type: 'application/json' },
         ],
       };
+      // S1574/S1577: this candidate's preparation already ended (no data read, or failed before a run): never the same card again.
+      const endedTurn = (host.session()?.conversation_replay?.turns || []).filter(turn => turn?.kind === 'host_action' && turn.action_code === 'prepare_analysis_data'
+        && String(turn.action_key || '').split(':')[2] === reviewedPlanRunId).at(-1);
+      const endedJob = ['done', 'failed', 'cancelled'].includes(endedTurn?.status) ? archivedJobs.find(job => job?.job_id === endedTurn.child_job_id) || {} : null;
+      const endedReason = endedJob?.status === 'failed' && String(host.runFailureText?.(endedJob.error_code) || '');
+      const preparedNothing = Boolean(workflow.preparation_read_no_data || endedJob);
       // B18: a raw source has no package to prepare from; extract it first.
       if (code === 'plan_execution_upgrade_required' && workflow.execution_input_available === false) return {
         code, grants: [], nonApprovable: true, primaryEdit: true, showPlanPreview: true,
         editLabel: tr('Ask to extract this study’s data', '在对话中请求提取本研究数据'),
-        title: workflow.preparation_read_no_data ? tr('The last data preparation read no data; extract this study’s data first', '上次数据准备没有读到数据，需先提取本研究数据')
+        title: preparedNothing ? tr('The last data preparation read no data; extract this study’s data first', '上次数据准备没有读到数据，需先提取本研究数据')
           : tr('Candidate plan ready; this study’s data must be extracted first', '候选研究计划已生成，需先提取本研究数据'),
         note: tr(
           'This study’s data source is raw database files with no extracted analysis package, so no data can be prepared from it and the plan would only be made on metadata again. Extract the data for this study’s population in the conversation; the plan is then made again on that package.',
@@ -432,7 +438,7 @@
         reviewResources: reviewedPlanRunId ? [{ kind: 'research_artifact', run_id: reviewedPlanRunId, artifact: 'agent_plan.json', label: tr('Open the complete plan', '打开完整计划'), media_type: 'application/json' }] : [],
       };
       if (code === 'plan_execution_upgrade_required') {
-        const retryPreparation = Boolean(workflow.preparation_read_no_data) || (workflow.latest_attempt_failure
+        const retryPreparation = preparedNothing || (workflow.latest_attempt_failure
           && workflow.latest_attempt_failure.candidate_run_id === reviewedPlanRunId
           && workflow.latest_attempt_failure.checkpoint_resume_available === false);
         return {
@@ -454,7 +460,8 @@
         note: workflow.preparation_read_no_data ? tr(
           'The last preparation read no data: it ran on metadata only, so no cohort was built. The study’s source now has an extracted package; prepare the data again from it.',
           '上次数据准备没有读到数据：它只用了元数据，没有生成队列。本研究的数据源现在已有提取好的数据包，请据此重新准备数据。',
-        ) : retryPreparation ? tr(
+        ) : endedJob ? tr(`The last data preparation did not finish.${endedReason ? ` ${endedReason}` : ''} Your candidate is saved; preparing the data again is safe.`,
+          `上次数据准备未完成。${endedReason || ''}候选方案已保留，可以放心重新准备数据。`) : retryPreparation ? tr(
           'Plan generation did not finish. Your candidate is saved. Prepare the data again, then review the new plan.',
           '这次计划生成未完成。候选方案已保留，请重新准备数据，再核对新计划。',
         ) : tr(

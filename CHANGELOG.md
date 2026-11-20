@@ -53,6 +53,10 @@ The full list of changes since 0.1.0 is in the v0.1.3 release notes. Recorded he
   no data, and offers extraction or, when the source now has a package, preparing again
   from it. B18 does not come from the B15 candidate change; it is the budget a raw
   source resolves to.
+- A data preparation that stopped before it wrote a run (for example a brief model-service
+  sign-in failure) no longer leaves the same "Confirm plan and prepare data" card with no
+  failure line. The card says the last preparation did not finish, gives the reason, and
+  offers "Prepare data again" (or extraction on a source with no package).
 
 ## 0.1.0 — 2026-11-11 — first public pre-release
 
