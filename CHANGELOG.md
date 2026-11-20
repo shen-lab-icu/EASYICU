@@ -20,6 +20,10 @@ The full list of changes since 0.1.0 is in the v0.1.3 release notes. Recorded he
   just confirmed (B16). The default for repeated ICU stays is no longer written into a
   study whose signed choice it would void, so the run does not ask you to confirm the
   demo source again.
+- Behavior change since 0.1.2: the BibTeX file (`manuscript_scaffold.bib`) is a plan
+  deliverable ("references"). A run writes it when the plan's confirmed deliverables
+  include references, for example when the question asks for a bibliography. Otherwise
+  the LaTeX manuscript keeps an inline bibliography and no separate `.bib` is written.
 
 ## 0.1.0 — 2026-11-11 — first public pre-release
 

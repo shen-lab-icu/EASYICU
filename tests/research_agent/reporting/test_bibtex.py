@@ -468,9 +468,11 @@ def test_unknown_markdown_literature_key_fails_closed(ra):
 
 
 def test_pipeline_writes_bib_alongside_tex(ra, synthetic_cohort, tmp_path: Path):
+    # The .bib is a plan deliverable ("references"): a question that asks for a
+    # bibliography gets one beside the .tex.
     pipeline = ra.ResearchAgentPipeline(workdir=tmp_path, llm=ra.MockLLMClient())
     result = pipeline.run(
-        question="Is admission SOFA-2 associated with ICU mortality?",
+        question="Is admission SOFA-2 associated with ICU mortality? Include a bibliography.",
         cohort=synthetic_cohort,
         cohort_name="bibtex_test",
         database="miiv",
@@ -493,6 +495,27 @@ def test_pipeline_writes_bib_alongside_tex(ra, synthetic_cohort, tmp_path: Path)
     bib_keys = set(re.findall(r"@\w+\{([^,]+),", bib_text))
     missing = [k for k in cite_keys if k not in bib_keys]
     assert not missing, f"\\cite keys absent from .bib: {missing}"
+
+
+def test_pipeline_without_requested_references_inlines_the_bibliography(
+    ra, synthetic_cohort, tmp_path: Path,
+):
+    # Unrequested references are not exported as a separate .bib; the .tex
+    # stays self-contained with an inline bibliography.
+    pipeline = ra.ResearchAgentPipeline(workdir=tmp_path, llm=ra.MockLLMClient())
+    result = pipeline.run(
+        question="Is admission SOFA-2 associated with ICU mortality?",
+        cohort=synthetic_cohort,
+        cohort_name="bibtex_test",
+        database="miiv",
+        target_outcome="death",
+    )
+    run_dir = Path(result.workdir)
+    tex = run_dir / "manuscript_scaffold.tex"
+    assert tex.exists(), "manuscript_scaffold.tex must be written"
+    assert not (run_dir / "manuscript_scaffold.bib").exists()
+    tex_text = tex.read_text(encoding="utf-8")
+    assert r"\bibliography{manuscript_scaffold}" not in tex_text
 
 
 def test_inline_bibliography_only_prints_cited_records_in_first_citation_order():
