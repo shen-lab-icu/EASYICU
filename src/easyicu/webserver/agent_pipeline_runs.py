@@ -2306,6 +2306,11 @@ def _metadata_only_planning_acquisition(
             )
         required_concepts = (*required_concepts, *required_coverage.available)
         operationalized_columns = (*operationalized_columns, *required.operationalized_columns)
+    # The zero-row schema also carries the operationalized columns (below):
+    # a study coordinate that is one of them (a reviewed candidate's
+    # aggregated exposure, e.g. ``lact_max`` of ``lact``) is carried even
+    # though no menu entry is named after it (B15, UX leg 3 en 2026-11-20).
+    carried_columns = {str(column or "").strip() for column in operationalized_columns}
     # A study coordinate no menu entry resolves to fails every plan whatever
     # the model selects (the check after selection below): stop before the
     # selection call. The availability owner says whose gap it is: the source
@@ -2313,7 +2318,7 @@ def _metadata_only_planning_acquisition(
     absent_coordinates = [
         value
         for value in dict.fromkeys(str(item or "").strip() for item in required_coordinates)
-        if value and not assess_coverage([value], catalog).sufficient
+        if value and value not in carried_columns and not assess_coverage([value], catalog).sufficient
     ]
     if absent_coordinates:
         from easyicu.research_agent.concept_availability import explain_concept_availability
@@ -2466,7 +2471,7 @@ def _metadata_only_planning_acquisition(
         for value in dict.fromkeys(
             str(item or "").strip() for item in required_coordinates
         )
-        if value and value not in selected
+        if value and value not in selected and value not in carried_columns
     ]
     blocked_reason_code = (
         "concept_selection_failed"

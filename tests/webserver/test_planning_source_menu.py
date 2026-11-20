@@ -235,7 +235,7 @@ def test_a_study_coordinate_the_schema_cannot_carry_stops_before_the_planner(
         lambda _: AvailableCatalog(source="export", concepts=typed),
     )
 
-    def run(coordinates, output):
+    def run(coordinates, output, **kwargs):
         return owner._metadata_only_planning_acquisition(
             database="eicu", export_path="/metadata", question="Flag and death.",
             llm=ScriptedMockLLMClient([json.dumps({
@@ -244,6 +244,7 @@ def test_a_study_coordinate_the_schema_cannot_carry_stops_before_the_planner(
             })]),
             output_dir=tmp_path / output,
             required_coordinates=coordinates,
+            **kwargs,
         )
 
     from easyicu.research_agent import concept_availability
@@ -284,6 +285,20 @@ def test_a_study_coordinate_the_schema_cannot_carry_stops_before_the_planner(
     assert not carried.blocked
     assert {"exposure_flag_v2", "death"} <= set(
         pq.read_schema(carried.universe_path).names
+    )
+
+    # B15 (UX leg 3 en, 2026-11-20): a reviewed candidate's aggregated exposure
+    # (``lact_max`` of ``lact``) is an operationalized column the zero-row
+    # schema carries, so it is not an unrecognized study coordinate.
+    operationalized = run(("exposure_flag_v2_max", "death"), "operationalized",
+                          operationalized_columns=("exposure_flag_v2_max",))
+    assert not operationalized.blocked
+    assert {"exposure_flag_v2_max", "exposure_flag_v2", "death"} <= set(
+        pq.read_schema(operationalized.universe_path).names
+    )
+    # The same name the schema does not carry still stops before selection.
+    assert run(("exposure_flag_v2_max", "death"), "not-operationalized").blocked_reason_code == (
+        "study_coordinate_unrecognized"
     )
 
 
