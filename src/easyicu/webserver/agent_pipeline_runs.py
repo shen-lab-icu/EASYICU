@@ -7282,10 +7282,11 @@ def _cleanup_recovery_after_projection(
     if gate.get("reason") not in EXECUTION_RETRY_REPLAYABLE_GATE_REASONS:
         from easyicu.webserver.research_append_source import retain_completed_append_source
 
-        retain_completed_append_source(wrapper_dir=wrapper_dir, projection=projection)
+        sealed = retain_completed_append_source(wrapper_dir=wrapper_dir, projection=projection)
         manuscript = gate.get("manuscript_outcome")
-        if not (isinstance(manuscript, Mapping)
-                and manuscript.get("reason_code") == WRITER_TRANSPORT_UNAVAILABLE):
+        # A seal that failed keeps the seed, so the source can be sealed again (B34).
+        if sealed != "failed" and not (isinstance(manuscript, Mapping)
+                                       and manuscript.get("reason_code") == WRITER_TRANSPORT_UNAVAILABLE):
             _remove_local_recovery(wrapper_dir)
 
 

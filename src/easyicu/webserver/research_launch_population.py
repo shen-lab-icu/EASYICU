@@ -81,7 +81,7 @@ def sealed_candidate_population_mode(
     from pathlib import Path
 
     from easyicu.research_agent.planning.cohort_predicate_domain import authorized_population_mode
-    from easyicu.research_agent.schema import ResearchContext
+    from easyicu.research_agent.research_context.typed import parse_research_context_json
 
     relative = str(capsule.get("context_relative_path") or "")
     path = Path(inner_run) / relative
@@ -93,7 +93,8 @@ def sealed_candidate_population_mode(
         return stated_mode
     if hashlib.sha256(raw).hexdigest() != str(capsule.get("context_sha256") or ""):
         return stated_mode
-    context = ResearchContext.model_validate_json(raw)
+    # A candidate run may write its typed context (V2/V3); only the versioned owner reads every version (B34).
+    context = parse_research_context_json(raw)
     return authorized_population_mode(stated_mode, context)
 
 def prepare_source_population(study: Mapping[str, Any]) -> dict[str, Any]:

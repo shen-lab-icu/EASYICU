@@ -9,7 +9,9 @@ from .agent_review_recovery import _locked, _write
 from .attention_service import publish_append_review
 from .research_append_run import append_run_for_id, propose_append_run
 from .research_append_history import resolve_result_source
-from .research_append_source import read_json, registered_source_changed
+from .research_append_source import (
+    SEAL_FAILED_REASON, read_json, registered_source_changed, reseal_append_source, seal_failure,
+)
 
 
 def _option(kind, *, available=False, detail=""):
@@ -30,9 +32,17 @@ def append_options(service, *, project_id, run_id):
     followups = result_followups(service, project_id=project_id, run_id=run_id)
     # Project authorization happens even when the old run has no append seal.
     row = service._research_run_row(project_id, run_id)
+    wrapper = Path(row["project_dir"])
+    # A seal that failed at completion is made again from its kept seed (B34).
+    reseal_append_source(wrapper, run_id=run_id)
     try:
-        source, predecessor = resolve_result_source(Path(row["project_dir"]), run_id=run_id, study_id=row["study_id"])
+        source, predecessor = resolve_result_source(wrapper, run_id=run_id, study_id=row["study_id"])
     except (ValueError, OSError, KeyError):
+        failure = seal_failure(wrapper, run_id=run_id)
+        if failure is not None:
+            # A baseline-association result whose seal failed says so, with its reason.
+            return dict(run_id=run_id, source_run_sha256=None, options=[], unavailable_reason=SEAL_FAILED_REASON,
+                        unavailable_detail=str(failure.get("detail") or ""), followups=followups)
         # Only sealed baseline-association results accept additions; others
         # get one plain reason instead of a roster of options that cannot run.
         return dict(run_id=run_id, source_run_sha256=None, options=[], unavailable_reason="result_append_source_unavailable",

@@ -19,6 +19,7 @@ from easyicu.research_agent.authority.typed_binding import _resolve_typed_input_
 from easyicu.research_agent.canonical_json import canonical_sha256
 from easyicu.research_agent.orchestration.human_review_checkpoint import HumanReviewCheckpoint
 from easyicu.research_agent.planning.scientific_review import PlanScientificReview
+from easyicu.research_agent.research_context.typed import parse_research_context_json
 from easyicu.research_agent.schema import AnalysisPlan, ResearchContext
 
 SEAL_NAME = "result_append_source.json"
@@ -66,7 +67,9 @@ def _approved_source(run_dir: Path):
         raise ValueError("Source input capsule changed.")
     capsule = read_json(capsule_path)
     verified = load_verified_run_input_capsule(run_dir=run_dir, scientific_identity=capsule["scientific_identity"])
-    context = ResearchContext.model_validate_json(verified.context_evidence_path.read_bytes())
+    # An executed run writes its typed context (V2/V3, with materialized_inputs);
+    # only the versioned owner reads every version (B34, UX 2026-11-20).
+    context = parse_research_context_json(verified.context_evidence_path.read_bytes())
     return checkpoint, plans[0], context, verified
 
 
@@ -174,26 +177,67 @@ def load_append_source(wrapper: Path) -> AppendSource:
     return AppendSource(wrapper, run_dir, seal, plan, context, baseline, PlanScientificReview.model_validate(seal["review"]))
 
 
-def retain_completed_append_source(*, wrapper_dir, projection):
-    """Completion hook: retain source authority, never reopen a finished run."""
+SEAL_FAILURE_NAME = "result_append_source_failure.json"
+SEAL_FAILED_REASON = "result_append_source_seal_failed"
+
+
+def retain_completed_append_source(*, wrapper_dir, projection) -> str:
+    """Completion hook: retain source authority, never reopen a finished run.
+
+    Returns ``"sealed"``, ``"not_applicable"`` (no baseline-association seed)
+    or ``"failed"``.  A failed seal is never swallowed (B34, S1745): the
+    wrapper records its typed reason, and the caller keeps the recovery seed
+    so the seal can be made again (``reseal_append_source``).
+    """
     from easyicu.webserver.agent_review_recovery import WebReviewRecoveryError, load_recovery_seed
 
     try:
         seed = load_recovery_seed(wrapper_dir)
     except WebReviewRecoveryError:
-        return
+        return "not_applicable"
     if seed is None:
-        return
+        return "not_applicable"
     baseline = seed.pipeline_config.get("current_case_scientific_runtime_authority")
     if not baseline or baseline.get("authority_kind") != "baseline_adjusted_association":
-        return
-    run_dir = Path(wrapper_dir) / "pipeline" / str(projection["run_id"])
+        return "not_applicable"
+    wrapper = Path(wrapper_dir)
+    run_id = str(projection["run_id"])
     try:
-        seal_completed_source(wrapper=Path(wrapper_dir), run_dir=run_dir, study=seed.study,
+        seal_completed_source(wrapper=wrapper, run_dir=wrapper / "pipeline" / run_id, study=seed.study,
                               baseline=baseline, prepared_package_binding=seed.prepared_package_binding)
-    except (ValueError, OSError, KeyError):
-        # Failed or unsupported sources remain available through their owner.
-        return
+    except (ValueError, OSError, KeyError) as exc:
+        from easyicu.webserver.agent_review_recovery import _write
+
+        _write(wrapper / SEAL_FAILURE_NAME, {
+            "schema_version": "easyicu.result_append_source_failure/1", "run_id": run_id,
+            "reason_code": SEAL_FAILED_REASON, "error_type": type(exc).__name__,
+            "detail": " ".join(str(exc).split())[:300],
+        })
+        return "failed"
+    try:
+        (wrapper / SEAL_FAILURE_NAME).unlink()
+    except FileNotFoundError:
+        pass
+    return "sealed"
+
+
+def seal_failure(wrapper_dir, *, run_id) -> dict[str, Any] | None:
+    """The recorded seal failure of this run, if its seal could not be made."""
+    path = Path(wrapper_dir) / SEAL_FAILURE_NAME
+    try:
+        record = read_json(path)
+    except (OSError, ValueError):
+        return None
+    if not isinstance(record, dict) or record.get("run_id") != run_id or record.get("reason_code") != SEAL_FAILED_REASON:
+        return None
+    return record
+
+
+def reseal_append_source(wrapper_dir, *, run_id) -> str:
+    """Make a failed seal again from the kept recovery seed; nothing else changes."""
+    if seal_failure(wrapper_dir, run_id=run_id) is None:
+        return "not_applicable"
+    return retain_completed_append_source(wrapper_dir=wrapper_dir, projection={"run_id": run_id})
 
 
 def registered_source_changed(source: AppendSource, study) -> bool:

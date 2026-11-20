@@ -8,7 +8,8 @@ from easyicu.research_agent.authority.runtime_artifacts import verified_run_evid
 from easyicu.research_agent.canonical_json import canonical_sha256
 from easyicu.research_agent.orchestration.human_review_checkpoint import HumanReviewCheckpoint, load_checkpoint
 from easyicu.research_agent.planning.scientific_review import PlanScientificReview
-from easyicu.research_agent.schema import AnalysisPlan, ResearchContext
+from easyicu.research_agent.research_context.typed import parse_research_context_json
+from easyicu.research_agent.schema import AnalysisPlan
 from . import study_contexts
 from .research_append_source import contained, read_json
 from .research_multi_contracts import MultiDatabaseError, ReviewedRun
@@ -25,7 +26,8 @@ def read_review(wrapper, run_id, study):
     if sha256_of_file(run_dir / "run_input_capsule.json") != checkpoint.run_input_capsule_sha256:
         raise MultiDatabaseError("multi_database_input_changed")
     verified = load_verified_run_input_capsule(run_dir=run_dir, scientific_identity=capsule["scientific_identity"])
-    context = ResearchContext.model_validate_json(verified.context_evidence_path.read_bytes())
+    # A run writes its typed context (V2/V3); only the versioned owner reads every version (B34).
+    context = parse_research_context_json(verified.context_evidence_path.read_bytes())
     plan = AnalysisPlan.model_validate(checkpoint.plan_handoff["plan"])
     evidence = EvidenceStore(run_dir)
     record = evidence.get("scientific_plan_review")

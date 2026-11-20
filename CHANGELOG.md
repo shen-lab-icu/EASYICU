@@ -177,6 +177,13 @@ The full list of changes since 0.1.0 is in the v0.1.3 release notes. Recorded he
   condition nowhere (for example on an export without its column) is named on the
   plan card, and a recorded decision to take every patient that contradicts the
   question is shown on the card with both statements, for you to resolve.
+- "Extend to a full article" appears again on a finished baseline association study
+  (B34). Recording a finished run as the source for additions read its research context
+  with an older format and failed on every executed run, so no result could be extended,
+  and the failure was dropped silently. It now reads every context version. If the
+  source still cannot be recorded, the result card says why, the run's recovery record
+  is kept, and the source is recorded again the next time the result opens. The
+  multi-database review and the candidate population check read run contexts the same way.
 
 ## 0.1.0 — 2026-11-11 — first public pre-release
 

@@ -48,6 +48,13 @@
       const rows = offered.filter(row => !picks.some(pick => pick.delta.kind === row.kind));
       const notice = valid && current.source_run_sha256
         ? tr('Additions use the same data version as this result.', '追加分析沿用这次结果的数据版本。') : '';
+      if (valid && !offered.length && current.unavailable_reason === 'result_append_source_seal_failed') {
+        const detail = String(current.unavailable_detail || '').slice(0, 300);
+        return `<div class="gpi-result-append" data-append-run="${esc(run.run_id)}"><p>${esc(tr(
+          `EasyICU could not record this result as the source for additions, so “Extend to a full article” and other additions are unavailable for it${detail ? ` (${detail})` : ''}. Its recovery record is kept and the source is tried again each time this result opens.`,
+          `EasyICU 未能把这次结果登记为追加分析的来源，因此暂时不能“扩展成完整论文”或做其他追加${detail ? `（${detail}）` : ''}。恢复记录已保留，每次打开该结果时会重新尝试。`,
+        ))}</p></div>`;
+      }
       if (valid && !offered.length && current.unavailable_reason === 'result_append_source_unavailable') {
         return `<div class="gpi-result-append" data-append-run="${esc(run.run_id)}"><p>${esc(tr('This kind of result cannot take one-click additions; ask for a new analysis in the conversation.', '这类结果暂不支持一键追加分析；可以在对话里提出新的分析。'))}</p></div>`;
       }
