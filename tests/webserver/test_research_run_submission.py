@@ -641,3 +641,57 @@ def test_deferred_stage_uses_original_task_and_durable_submission(start_gate_lau
     assert seen == [receipt.job_id] and row['calls'] == []
     assert row['controlled_candidate_job_id'] == 'candidate' and row['deferred_stage_job_id'] == receipt.job_id
     assert row['status'] == 'paused' and row['deferred_stage_no_send'] is True
+
+
+def _prepare_request(source_run_id: str = "run-candidate"):
+    # The "Confirm plan and prepare data" submission (plan_execution_upgrade_required).
+    return research_run_submission.ResearchRunSubmissionRequest(
+        study_context_id="study-start-gate", provider="mock", credential_source="pi_verified",
+        external_llm_opt_in=False, intent="reviewed_analysis", planner_start_mode="auto",
+        plan_revision_source_run_id=source_run_id,
+    )
+
+
+def test_preparing_data_from_a_raw_source_is_refused_not_run_again_on_metadata(
+    start_gate_launch, monkeypatch,
+) -> None:
+    # B18: with no extracted package the run would only plan on metadata again
+    # and the same card would come back; the submission says why instead.
+    monkeypatch.setattr(research_run_submission, "load_prepared_plan_revision", lambda **_: None)
+    enqueued = Mock()
+    monkeypatch.setattr(research_run_submission, "_submit_job", enqueued)
+
+    with pytest.raises(research_run_submission.ResearchRunSubmissionError) as refused:
+        research_run_submission.submit_research_run(_prepare_request(), authorize=start_gate_launch.callbacks.authorize)
+
+    assert refused.value.status_code == 409
+    assert refused.value.detail["error"] == research_run_submission.EXTRACTED_PACKAGE_REQUIRED
+    enqueued.assert_not_called()
+
+
+def test_preparing_data_from_an_extracted_package_is_not_refused(start_gate_launch, tmp_path, monkeypatch) -> None:
+    monkeypatch.setattr(research_run_submission, "load_prepared_plan_revision", lambda **_: None)
+    monkeypatch.setattr(research_run_submission.dataio, "prepared_export_manifest_path", lambda _: tmp_path / "manifest.json")
+    monkeypatch.setattr(research_run_submission.dataio, "validate_research_pipeline_source", lambda *_, **__: None)
+
+    try:
+        research_run_submission.submit_research_run(_prepare_request(), authorize=start_gate_launch.callbacks.authorize)
+    except research_run_submission.ResearchRunSubmissionError as exc:
+        assert exc.detail.get("error") != research_run_submission.EXTRACTED_PACKAGE_REQUIRED, exc.detail
+
+
+@pytest.mark.parametrize("manifest, development, expected", [
+    (False, None, False), (True, None, True), (False, "1", True),
+])
+def test_execution_input_is_available_exactly_when_a_prepare_reads_data(
+    monkeypatch, tmp_path, manifest, development, expected,
+) -> None:
+    if development is None:
+        monkeypatch.delenv("EASYICU_DEVELOPMENT_REVIEWED_EXECUTION", raising=False)
+    else:
+        monkeypatch.setenv("EASYICU_DEVELOPMENT_REVIEWED_EXECUTION", development)
+    monkeypatch.setattr(research_run_submission.dataio, "prepared_export_manifest_path",
+                        lambda _: tmp_path / "manifest.json" if manifest else None)
+    study = {"data_source": {"path": str(tmp_path / "source"), "database": "miiv"}}
+    assert research_run_submission.execution_input_available(study) is expected
+    assert research_run_submission.execution_input_available({"data_source": {}}) is False

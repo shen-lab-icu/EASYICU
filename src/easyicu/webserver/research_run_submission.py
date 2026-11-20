@@ -181,6 +181,31 @@ def _reject(detail: Mapping[str, Any], *, status_code: int = 400) -> None:
     raise ResearchRunSubmissionError(detail, status_code=status_code)
 
 
+#: A reviewed candidate's data cannot be prepared from its study's source (B18).
+EXTRACTED_PACKAGE_REQUIRED = "research_pipeline_prepare_requires_extracted_package"
+
+
+def execution_input_available(study: Mapping[str, Any]) -> bool:
+    """Whether preparing a reviewed candidate's data can read the study's source.
+
+    The same decision a submission makes (:func:`research_pipeline_budget_mode_for_source`
+    for a reviewed analysis): an extracted package with a manifest, or the
+    development reviewed-execution mode. A raw source has neither.
+    """
+
+    source = study.get("data_source")
+    path = str(source.get("path") or "") if isinstance(source, Mapping) else ""
+    if not path:
+        return False
+    try:
+        manifest = dataio.prepared_export_manifest_path(Path(path).expanduser())
+        return research_pipeline_budget_mode_for_source(
+            prepared_manifest=manifest, metadata_only_planning_authorized=False,
+        ) != "planner_canary"
+    except (OSError, ValueError, ResearchRunSubmissionError):
+        return False
+
+
 def server_research_pipeline_budget_mode() -> str:
     """Resolve the server-owned development launch mode."""
 
@@ -623,6 +648,18 @@ def submit_research_run(
                 # from a neighbouring export or an older plan's approval.
                 budget_mode = revision.budget_mode
                 runner_kwargs["budget_mode"] = budget_mode
+            if (_deferred_binding is None and request.intent == "reviewed_analysis"
+                    and budget_mode == "planner_canary"):
+                # B18: preparing a reviewed candidate's data needs a package the
+                # run can read. A raw database source has none, so the run would only plan on metadata again and
+                # offer the same step. Refuse it with its reason instead.
+                _reject({
+                    "error": EXTRACTED_PACKAGE_REQUIRED,
+                    "message": "This study's data source has no extracted analysis package yet. "
+                               "Extract the data for this study's population first.",
+                    "owner": "easyicu.webserver.research_run_submission",
+                    "next_action_code": "plan_execution_upgrade_required",
+                }, status_code=409)
         if execution_resume_source_run_id:
             runner_kwargs["execution_resume_source_run_id"] = (
                 execution_resume_source_run_id

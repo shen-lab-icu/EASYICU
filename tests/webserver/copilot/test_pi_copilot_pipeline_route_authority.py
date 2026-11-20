@@ -458,6 +458,30 @@ def test_planner_only_plan_requests_package_bound_regeneration() -> None:
     assert by_id["analysis"].reason_code == "plan_execution_upgrade_required"
 
 
+@pytest.mark.parametrize("available", [False, True])
+def test_planner_only_plan_says_whether_its_source_can_be_prepared(monkeypatch, available) -> None:
+    # B18: on a raw source the upgrade cannot read data, so the card must
+    # offer extraction instead of a preparation that only plans again.
+    from easyicu.webserver import research_run_submission
+
+    seen = []
+    monkeypatch.setattr(research_run_submission, "execution_input_available",
+                        lambda study: seen.append(study) or available)
+    study = _complete_study()
+    digest = study_context_owner.scientific_configuration_sha256(study)
+    snapshot = build_research_workflow_snapshot(
+        study=study, active_export_present=True, active_job=None,
+        latest_run={"run_type": "full", "run_id": "run-preview-only", "engine": "easyicu.research_agent.pipeline",
+                    "gate_status": "blocked", "run_status": "human_review_pending",
+                    "pending_review_reason_codes": ["operator_plan_approval_required"],
+                    "artifact_names": ["agent_plan.json", "source_run_manifest.json"]},
+        plan_review_authority={"run_id": "run-preview-only", "resumable_here": True,
+                               "scientific_configuration_sha256": digest, "budget_mode": "planner_canary"},
+    )
+    assert snapshot.next_action_code == "plan_execution_upgrade_required"
+    assert snapshot.execution_input_available is available and seen
+
+
 def test_legacy_scientific_review_requests_fresh_plan_without_reextracting() -> None:
     study = _complete_study()
     digest = study_context_owner.scientific_configuration_sha256(study)

@@ -152,6 +152,10 @@ class ResearchWorkflowSnapshot(BaseModel):
     plan_decision: Optional[SurvivalLandmarkDecision] = None
     plan_conversation_preview: Optional[Mapping[str, Any]] = None
     plan_execution_ready: bool = False
+    #: Whether preparing a reviewed candidate's data can read the study's
+    #: source (research_run_submission.execution_input_available); a raw
+    #: source must be extracted first (B18).
+    execution_input_available: bool = True
     analysis_validation_retry_available: bool = False
     #: The Writer never reached the model service; the sealed analysis may be
     #: written up again without rerunning it.
@@ -444,6 +448,12 @@ def _patient_first_stay_substitutes(study: Mapping[str, Any]) -> Optional[List[s
     database = str(source.get("database") or "") if isinstance(source, Mapping) else ""
     substitutes = patient_first_icu_stay_substitutes(database)
     return list(substitutes) if substitutes else None
+
+
+def _execution_input_available(study: Mapping[str, Any]) -> bool:
+    from easyicu.webserver.research_run_submission import execution_input_available
+
+    return execution_input_available(study)
 
 
 def build_research_workflow_snapshot(
@@ -1461,6 +1471,10 @@ def build_research_workflow_snapshot(
         study_setup_receipt=project_study_setup_receipt(study_row),
         plan_review_summary=plan_review_summary,
         plan_execution_ready=plan_execution_ready,
+        execution_input_available=(
+            plan_review_reason_code != "plan_execution_upgrade_required"
+            or _execution_input_available(study_row)
+        ),
         analysis_validation_retry_available=(analysis_validation_retry_available),
         report_rewrite_available=report_rewrite_available,
         latest_attempt_failure=latest_attempt_failure,

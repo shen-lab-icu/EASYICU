@@ -42,6 +42,12 @@ The full list of changes since 0.1.0 is in the v0.1.3 release notes. Recorded he
   owner can close, or an automatic revision that has stopped) no longer shows no
   buttons at all. It says why in one sentence and offers "Request changes (back to
   the conversation)".
+- On a raw database source with no extracted analysis package, a candidate plan no
+  longer offers "Confirm plan and prepare data" (B18). Preparing from raw files read no
+  data, so the run only planned again on metadata and the same card came back. The card
+  now says the study's data must be extracted first and offers to ask for that
+  extraction in the conversation; a direct submission of that preparation is refused
+  with `research_pipeline_prepare_requires_extracted_package`.
 
 ## 0.1.0 — 2026-11-11 — first public pre-release
 

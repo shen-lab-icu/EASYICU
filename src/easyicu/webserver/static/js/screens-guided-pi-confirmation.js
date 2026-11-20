@@ -418,6 +418,18 @@
           { kind: 'research_artifact', run_id: reviewedPlanRunId, artifact: 'literature_evidence.json', label: tr('Literature evidence', '文献依据'), media_type: 'application/json' },
         ],
       };
+      // B18: a raw source has no package to prepare from; extract it first.
+      if (code === 'plan_execution_upgrade_required' && workflow.execution_input_available === false) return {
+        code, grants: [], nonApprovable: true, primaryEdit: true, showPlanPreview: true,
+        editLabel: tr('Ask to extract this study’s data', '在对话中请求提取本研究数据'),
+        title: tr('Candidate plan ready; this study’s data must be extracted first', '候选研究计划已生成，需先提取本研究数据'),
+        note: tr(
+          'This study’s data source is raw database files with no extracted analysis package, so no data can be prepared from it and the plan would only be made on metadata again. Extract the data for this study’s population in the conversation; the plan is then made again on that package.',
+          '本研究的数据源是原始数据库文件，还没有提取好的分析数据包，无法从中准备数据，继续只会再次仅凭元数据规划。请在对话中按本研究人群提取数据；数据包就绪后会据此重新生成计划。',
+        ),
+        reviewMaterialsTitle: tr('View the plan and review evidence', '查看计划与审阅依据'),
+        reviewResources: reviewedPlanRunId ? [{ kind: 'research_artifact', run_id: reviewedPlanRunId, artifact: 'agent_plan.json', label: tr('Open the complete plan', '打开完整计划'), media_type: 'application/json' }] : [],
+      };
       if (code === 'plan_execution_upgrade_required') {
         const retryPreparation = workflow.latest_attempt_failure
           && workflow.latest_attempt_failure.candidate_run_id === reviewedPlanRunId
@@ -1437,7 +1449,8 @@
       if (['study_family_database_out_of_scope', 'study_family_reading_disagreement'].includes(workflow.next_action_code)) {
         return stopActionCopy({ kind: 'rephrase_in_scope' }, tr).draft;
       }
-      if (['bound_export_cohort_mismatch', 'demo_planning_source_reconfirm_required'].includes(workflow.next_action_code)) return tr(
+      if (['bound_export_cohort_mismatch', 'demo_planning_source_reconfirm_required'].includes(workflow.next_action_code)
+        || (workflow.next_action_code === 'plan_execution_upgrade_required' && workflow.execution_input_available === false)) return tr(
         'I want to prepare data for this study’s current cohort. Please show the extraction requirements.',
         '我想按本研究现有的人群条件准备数据，请列出提取要求。',
       );

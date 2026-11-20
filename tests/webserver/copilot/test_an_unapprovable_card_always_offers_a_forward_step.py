@@ -111,7 +111,7 @@ for (const language of ['zh', 'en']) {
       iconHtml: () => '', resourceButton: resource => `<a data-resource="${resource.artifact}"></a>`,
       sessionIsStale: () => false, busy: () => false,
       session: () => ({ binding: { run_id: 'run_guard_1' } }),
-      workflow: () => ({ next_action_code: item.code, plan_review_summary: { run_id: 'run_guard_1', ...item.summary } }),
+      workflow: () => ({ next_action_code: item.code, ...(item.workflow || {}), plan_review_summary: { run_id: 'run_guard_1', ...item.summary } }),
     });
     let confirmation; let html;
     try { confirmation = owner.workflowConfirmation(); html = owner.workflowConfirmationHtml(); }
@@ -131,6 +131,9 @@ def _render(tmp_path: Path) -> list[dict]:
         pytest.skip("Node.js is unavailable")
     cases = [{"code": code, "variant": name, "summary": summary}
              for code in _codes() for name, summary in _variants()]
+    # B18: a candidate whose source has no extracted package (raw files).
+    cases += [{"code": code, "variant": "source:no_package", "summary": {},
+               "workflow": {"execution_input_available": False}} for code in _codes()]
     cases_path = tmp_path / "cases.json"
     cases_path.write_text(json.dumps(cases), encoding="utf-8")
     result = run_node(node, _SCRIPT, str(OWNER.resolve()), str(cases_path), check=False, timeout=120)
@@ -213,3 +216,30 @@ def test_a_card_whose_only_control_is_disabled_is_caught() -> None:
     buttons = ['<button class="btn primary sm" type="button" data-gpi-confirm-action disabled>']
     assert not any(attribute in button and " disabled" not in button
                    for button in buttons for attribute in FORWARD)
+
+
+_EXTRACT = {"zh": "在对话中请求提取本研究数据", "en": "Ask to extract this study’s data"}
+_PREPARED = {"zh": ("请确认数据准备", "确认方案并准备数据", "重新准备数据"),
+             "en": ("confirm data preparation", "Confirm plan and prepare data", "Prepare data again")}
+
+
+def test_a_candidate_whose_source_has_no_package_never_offers_preparation(rendered) -> None:
+    # S1573/B18: preparing from raw files yields no data and the run only
+    # plans on metadata again. The card must not offer preparation as if it
+    # would succeed; it says why and offers the one step that works.
+    rows = [r for r in rendered if r["code"] == "plan_execution_upgrade_required"
+            and r["variant"] == "source:no_package"]
+    assert {r["language"] for r in rows} == {"zh", "en"}
+    for row in rows:
+        language = row["language"]
+        enabled = [button for button in row["buttons"] if " disabled" not in button]
+        assert row["nonApprovable"]
+        assert len(enabled) == 1 and "data-gpi-confirm-edit" in enabled[0], (language, enabled)
+        assert _EXTRACT[language] in row["html"]
+        assert not any(phrase in row["html"] for phrase in _PREPARED[language]), language
+
+
+def test_a_candidate_whose_source_has_a_package_still_offers_preparation(rendered) -> None:
+    for row in (r for r in rendered if r["code"] == "plan_execution_upgrade_required" and r["variant"] == "empty"):
+        assert any("data-gpi-confirm-action" in button and " disabled" not in button for button in row["buttons"])
+        assert _EXTRACT[row["language"]] not in row["html"]
