@@ -204,8 +204,9 @@ class _Sites(ast.NodeVisitor):
         if keys:
             # ``runner_kwargs = {"export_path": path, ...}`` (Carbon b14r3).
             # Every assignment adds to what the name may carry, so a branch
-            # cannot narrow it (Carbon b14r4).
-            self.keys[-1][name] = self.keys[-1].get(name, set()) | keys
+            # cannot narrow it (Carbon b14r4), nor an opaque value it already
+            # carried (Carbon b14r5).
+            self.keys[-1][name] = self._prior_keys(name) | keys
         elif keys is None and name in self.keys[-1]:
             # An opaque rebind of a kwargs dict carries unknown keys.
             self.keys[-1][name] = self.keys[-1][name] | {None}
@@ -215,17 +216,22 @@ class _Sites(ast.NodeVisitor):
             # ``source = study.get("data_source") or {}`` (Carbon b14r1).
             self.maps[-1].add(name)
 
+    def _prior_keys(self, name: str) -> set:
+        return self.keys[-1].get(name, {None} if name in self.tainted[-1] else set())
+
     def _store_key(self, target: ast.AST, value: ast.AST) -> None:
         # ``kwargs["label"] = export_path`` / ``kwargs |= {...}`` (Carbon b14r4).
         # A nested mapping (``patch["data_source"] = {"path": ...}``) is not a
         # path argument; it is read through ``["data_source"]`` instead.
+        if not (isinstance(target, ast.Subscript) and isinstance(target.value, ast.Name)):
+            return
+        key = target.slice.value if isinstance(target.slice, ast.Constant) else None
         nested = isinstance(value, ast.Dict) or (
             isinstance(value, ast.Call) and isinstance(value.func, ast.Name) and value.func.id == "dict")
-        if isinstance(target, ast.Subscript) and isinstance(target.value, ast.Name) and not nested:
+        if not (nested and key == "data_source"):
             if _path_value(value, self.tainted[-1], self.maps[-1]):
                 name = target.value.id
-                key = target.slice.value if isinstance(target.slice, ast.Constant) else None
-                self.keys[-1][name] = self.keys[-1].get(name, set()) | {key}
+                self.keys[-1][name] = self._prior_keys(name) | {key}
                 self.tainted[-1].add(name)
 
     def visit_AugAssign(self, node) -> None:
@@ -812,12 +818,22 @@ def test_the_sweep_follows_text_paths_payloads_and_binds():
         "    merged |= {'label': export_path}\n"
         "    reader_p(**merged)\n"
         "    reader_q(**dict(**stored))\n"
+        "    if cond:\n"
+        "        late = str(export_path)\n"
+        "    else:\n"
+        "        late = {'export_path': export_path}\n"
+        "    reader_r(**late)\n"
+        "    payload = {}\n"
+        "    payload['options'] = {'path': export_path}\n"
+        "    reader_s(payload)\n"
     )}, bindings)
     assert bindings[("synthetic.py", "outer", "reader_m")] == {("kw", "label"), ("kw", "export_path")}
     assert bindings[("synthetic.py", "outer", "reader_n")] == {("kw", "export_path"), ("kw", "**")}
     assert bindings[("synthetic.py", "outer", "reader_o")] == {("kw", "export_path"), ("kw", "label")}
     assert bindings[("synthetic.py", "outer", "reader_p")] == {("kw", "export_path"), ("kw", "label")}
     assert bindings[("synthetic.py", "outer", "reader_q")] == {("kw", "export_path"), ("kw", "label")}
+    assert bindings[("synthetic.py", "outer", "reader_r")] == {("kw", "export_path"), ("kw", "**")}
+    assert bindings[("synthetic.py", "outer", "reader_s")] == {("pos", 0)}
 
 
 def test_a_pass_row_must_reach_a_path_parameter_by_its_slot():
