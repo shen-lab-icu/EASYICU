@@ -4,7 +4,23 @@ import pytest
 
 from easyicu import resources
 from easyicu.research_agent import concept_availability as availability
+from easyicu.research_agent.acquisition import catalog as catalog_owner
 from easyicu.research_agent.acquisition.catalog import build_database_capability_catalog
+
+# Every cache on the menu's source-read path: a test file that ran earlier in
+# the same worker must not change the counts read here (full Linux batch at
+# d810aadd1, -n 6 --dist loadfile: one dictionary read instead of two).
+_SOURCE_READ_CACHES = (
+    availability._explain_concept_availability_cached,
+    availability.concept_records_one_value_per_stay,
+    availability.stay_level_concept_category,
+    catalog_owner._methodology_dictionary,
+)
+
+
+def _clear_source_read_caches():
+    for cached in _SOURCE_READ_CACHES:
+        cached.cache_clear()
 
 
 @pytest.fixture
@@ -23,9 +39,9 @@ def source_reads(monkeypatch):
 
     monkeypatch.setattr(resources, "load_dictionary", read_dictionary)
     monkeypatch.setattr(resources, "load_data_sources", read_registry)
-    availability._explain_concept_availability_cached.cache_clear()
+    _clear_source_read_caches()
     yield counts
-    availability._explain_concept_availability_cached.cache_clear()
+    _clear_source_read_caches()
 
 
 def test_a_snapshot_preserves_direct_derived_and_blocked_capabilities(source_reads):
