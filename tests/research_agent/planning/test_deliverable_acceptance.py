@@ -303,7 +303,7 @@ def _publish(tmp_path, monkeypatch, context, plan, evidence, config, findings, l
     return _status(tmp_path, context, plan, stop, True)
 
 
-def _render(latest, language, *, session_condition="ready"):
+def _render(latest, language, *, session_condition="ready", offered=True):
     node = shutil.which("node")
     assert node
     shell = _read("js/screens-guided-pi.js")
@@ -317,6 +317,11 @@ def _render(latest, language, *, session_condition="ready"):
       eval({_read("js/api.js")!r});
       eval({_read("js/html-escape.js")!r});
       eval({_read("js/screens-guided-pi-resources.js")!r});
+      const proposed = [];
+      // B26: the article button asks the result-append owner, faked here.
+      window.EasyICU.guidedPi.declare('resultAppend', {{create: () => ({{load() {{}}, render: () => '',
+        offers: (run, kind) => {json.dumps(offered)} && kind === 'article',
+        propose: kind => {{ proposed.push(kind); return Promise.resolve(false); }}}})}});
       eval({_read("js/screens-guided-pi-run-outcome.js")!r});
       eval({_read("js/screens-guided-pi-events.js")!r});
       const condition = {session_condition!r};
@@ -347,17 +352,15 @@ def _render(latest, language, *, session_condition="ready"):
       {outcome_wiring}
       const owner = RUN_OUTCOME;
       const html = owner.render(latest, workflow);
-      const button = html.match(/<button[^>]*data-gpi-article-run[^>]*>/);
+      const button = html.match(/<button[^>]*data-gpi-result-append="article"[^>]*>/);
       if (button) {{
-        window.EU_GUIDED_PI_EVENTS.create({{state, projectId, RUN_OUTCOME:owner, render() {{}}}}).wire();
-        handlers.click({{target:{{closest: selector => selector === '[data-gpi-article-run]' ? button[0] : null}}}});
+        window.EU_GUIDED_PI_EVENTS.create({{state, projectId, RUN_OUTCOME:owner, render() {{}}, loadStatus() {{}}}}).wire();
+        const target = {{dataset: {{gpiResultAppend: 'article'}}}};
+        handlers.click({{target:{{closest: selector => selector === '[data-gpi-result-append]' ? target : null}}}});
       }}
       process.stdout.write(JSON.stringify({{
         html, rows:owner.collection(latest, workflow), shelf:owner.renderShelf(latest, workflow),
-        articlePrompt:owner.articleRunPrompt?.(latest), labels,
-        articleClick:state.followUpDraft ? {{
-          draft:state.draft, intent:state.pendingEntryIntent, origin:state.followUpDraft.origin,
-        }} : null,
+        labels, articleClick:proposed.length ? {{proposed, draft:state.draft}} : null,
       }}));
     """, check=False)
     assert js.returncode == 0, js.stderr
@@ -634,9 +637,8 @@ def test_delivery_request(tmp_path, monkeypatch, tier, language, kind, wording):
             assert ("按你的选择省略" if zh else "Excluded at your request") in message.group(1)
         else:
             assert ("本次仅生成首轮分析结果" if zh else "This run produces first results only") in message.group(1)
-            assert "data-gpi-article-run" in visible["html"]
-            assert LABELS[kind][zh] in visible["articlePrompt"]
-            assert visible["articleClick"]["draft"] == visible["articlePrompt"]
+            assert 'data-gpi-result-append="article"' in visible["html"]
+            assert visible["articleClick"] == {"proposed": ["article"], "draft": ""}
     else:
         assert not latest.get("deliverable_dispositions")
 
@@ -743,7 +745,7 @@ def test_first_result_names_all_deliverables_deferred_by_the_tier(tmp_path, monk
     assert {row["kind"] for row in latest["deliverable_dispositions"]} == set(HOST_DELIVERY_KINDS)
     assert {row["reason_code"] for row in latest["deliverable_dispositions"]} == {"first_result_delivery_requires_article"}
     assert all(f'data-deliverable-disposition="{kind}"' in result["html"] for kind in HOST_DELIVERY_KINDS)
-    assert all(names[0] in result["articlePrompt"] for names in LABELS.values())
+    assert result["articleClick"] == {"proposed": ["article"], "draft": ""}
 
 
 REVIEW_QUESTIONS = (
@@ -858,7 +860,7 @@ def test_scope_switch_keeps_the_card_dispositions(tmp_path, monkeypatch, languag
     }
     visible = _render(latest, language)
     assert ("扩展成完整论文" if zh else "Extend to a full article") in visible["html"]
-    assert "PDF" in visible["articlePrompt"]
+    assert visible["articleClick"] == {"proposed": ["article"], "draft": ""}
 
 
 @pytest.mark.parametrize("language", ("en", "zh"))
@@ -1071,7 +1073,7 @@ def _deferred_result():
 @pytest.mark.parametrize("condition", ("busy", "child", "missing", "stale"))
 def test_extend_article_is_disabled_when_unavailable(language, condition):
     visible = _render(_deferred_result(), language, session_condition=condition)
-    assert re.search(r"<button[^>]+data-gpi-article-run[^>]+\bdisabled\b", visible["html"])
+    assert re.search(r'<button[^>]+data-gpi-result-append="article"[^>]+\bdisabled\b', visible["html"])
     assert visible["articleClick"] is None
 
 
@@ -1085,12 +1087,9 @@ def test_acceptance_reaches_download_and_article_click(language):
         visible.get("shelf", ""),
     )
     visible = _render(_deferred_result(), language)
-    button = re.search(r"<button[^>]+data-gpi-article-run[^>]*>", visible["html"])
+    button = re.search(r'<button[^>]+data-gpi-result-append="article"[^>]*>', visible["html"])
     assert button and " disabled" not in button.group()
-    zh = language == "zh"
-    assert visible["articleClick"] == {
-        "draft": ("请为这项研究另行启动论文任务，并提供PDF。" if zh else
-                  "Start a separate article run for this study with PDF."),
-        "intent": "",
-        "origin": "host_prompt",
-    }
+    # B26: the click asks the append owner; it drafts no request granting nothing.
+    assert visible["articleClick"] == {"proposed": ["article"], "draft": ""}
+    unoffered = _render(_deferred_result(), language, offered=False)
+    assert "data-gpi-result-append" not in unoffered["html"] and unoffered["articleClick"] is None

@@ -90,7 +90,13 @@
         return false;
       } finally { busy = false; }
     }
-    return Object.freeze({ load, render, propose });
+    // Whether this run's additions offer ``kind`` now (the run-outcome card's
+    // article button asks before it renders).
+    function offers(run, kind) {
+      return Boolean(current && current.project === projectId() && run && current.run_id === run.run_id
+        && current.source_run_sha256 && current.options.some(row => row.kind === kind && row.available));
+    }
+    return Object.freeze({ load, render, propose, offers });
   }
   window.EasyICU.guidedPi.declare('resultAppend', { create });
 })();

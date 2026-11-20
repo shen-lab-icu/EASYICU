@@ -103,6 +103,22 @@ The full list of changes since 0.1.0 is in the v0.1.3 release notes. Recorded he
   lack but Data Extraction defines still reports the extraction it needs. The message
   for a grouping that cannot be formed on the data no longer assumes the question is at
   fault.
+- A plan no longer silently studies every input row when the question names a narrower
+  population (for example "septic patients") and the plan neither reads nor selects on
+  it. Such a plan is not approvable: it goes back to the model to state the population
+  as a condition, and a condition that cannot be applied is shown on the plan card as
+  not applied.
+- When the question both groups stays by a measured value and names that value in its
+  wording (for example "maximum lactate on the first ICU day above 2 mmol/L"), the plan
+  no longer also turns the same words into an inclusion condition that cannot be
+  applied and asks you to accept it as a limitation (B25). The model is asked again; if
+  it repeats the error, planning stops as a planning error that points to "Generate a
+  fresh plan".
+- "Extend to a full article" on a first-result card now prepares this study's article
+  extension for review, the same as the matching follow-up suggestion (B26). Before, it
+  only drafted a request into the conversation that started nothing, and the reply said
+  no article run had begun. The button appears only when the study's result can take an
+  article extension.
 
 ## 0.1.0 — 2026-11-11 — first public pre-release
 

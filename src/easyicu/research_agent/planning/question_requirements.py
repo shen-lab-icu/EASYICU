@@ -1230,6 +1230,15 @@ def _judge(
         if any(columns & reads(step) for columns in denoted)
     )
     if item.kind == "definition":
+        if not reading and not _defines_the_population(plan, denoted, relatives):
+            # A question word that defines nothing the plan reads or selects
+            # (a target population such as "septic patients" over an
+            # all-row cohort) would be silently dropped: the plan answers
+            # another population.  Not covered, so the plan goes back.
+            return JudgedRequirement(
+                item, "not_covered", QUESTION_REQUIREMENT_APPROVAL_STOPS["not_covered"],
+                host_judged=True,
+            )
         return JudgedRequirement(
             item, "definition_only", DEFINITION_REASON, reading_step_ids=reading
         )
@@ -1842,6 +1851,33 @@ def question_requirement_findings(
     return findings
 
 
+def _defines_the_population(
+    plan: AnalysisPlan,
+    denoted: Sequence[frozenset[str]],
+    relatives: Callable[[str], frozenset[str]],
+) -> bool:
+    """Whether the plan's population leaves room for the definition's words.
+
+    Only a plan that claims every input row as its population can drop a
+    population word silently (leg 3, S1713: "septic patients" over an
+    all-row cohort).  There, a predicate on one of the concepts, applied or
+    kept as documentation of what the source already applied, states it, and
+    a criterion the plan cannot apply is on the card as not applied.  A plan
+    that selects rows by predicates is judged as before.
+    """
+
+    cohort = getattr(plan, "cohort", None)
+    if cohort is None or getattr(cohort, "selection_mode", None) != "all_input_rows":
+        return True
+    if getattr(cohort, "unapplied_population_criteria", ()):
+        return True
+    named = [
+        relatives(str(predicate.concept_id)) | {str(predicate.concept_id)}
+        for predicate in (*cohort.inclusion, *cohort.exclusion)
+    ]
+    return any(columns & selected for columns in denoted for selected in named)
+
+
 def _stated(entry: JudgedRequirement) -> str:
     item = entry.requirement
     if entry.clauses:
@@ -1862,7 +1898,11 @@ def _stated(entry: JudgedRequirement) -> str:
         else f"no primary step reports a {item.effect_measure.replace('_', ' ')}"
         if item.effect_measure is not None
         else (
-            f"no step that compares models on the same rows reads {', '.join(item.concepts)}"
+            f"no analysis step reads {', '.join(item.concepts)} and no population "
+            "condition selects on it, so the plan would study another population than "
+            "the question names; state it as a population condition"
+            if item.kind == "definition"
+            else f"no step that compares models on the same rows reads {', '.join(item.concepts)}"
             if item.kind == "benchmark"
             else (
                 f"no subgroup step reads {', '.join(item.concepts)}"

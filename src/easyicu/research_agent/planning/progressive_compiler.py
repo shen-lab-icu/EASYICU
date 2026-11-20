@@ -653,6 +653,77 @@ _FIRST_STAY_KINDS = {
 }
 
 
+def _refuse_criteria_restating_a_grouping(
+    spec: PopulationSpec, context: ResearchContext
+) -> None:
+    """A population criterion never restates the study's exposure grouping (B25).
+
+    The grouping phase stages the groups the study compares before the plan is
+    outlined.  A criterion over a grouping's own variable, or over its measured
+    concept at one of its thresholds, would keep only some of those groups: the
+    Planner read the grouping's words twice.  It goes back to the Planner.
+    """
+
+    from ..contracts.exposure_group_rules import (
+        EXPOSURE_GROUP_LABELS_KEY,
+        grouping_rule_values,
+    )
+
+    staged = [
+        item
+        for item in context.cohort.provenance.get(EXPOSURE_GROUP_LABELS_KEY, ()) or ()
+        if isinstance(item, Mapping) and item.get("variable") and item.get("concept")
+    ]
+    if not staged:
+        return
+    variables = {str(item["variable"]): item for item in staged}
+    thresholds: dict[str, set[float]] = {}
+    for item in staged:
+        parameters = item.get("parameters")
+        if not isinstance(parameters, Mapping):
+            continue
+        try:
+            values = grouping_rule_values(parameters)
+        except Exception:  # noqa: BLE001 - an unreadable rule adds no threshold
+            continue
+        window = parameters.get("window")
+        hours = (
+            set()
+            if not isinstance(window, Mapping)
+            else {float(window["start_hours"]), float(window["end_hours"])}
+        )
+        thresholds.setdefault(str(item["concept"]), set()).update(
+            value for level in values.values() for value in level if value not in hours
+        )
+    for index, criterion in enumerate(spec.criteria):
+        named = [
+            str(value)
+            for value in (
+                getattr(criterion, "concepts_all_of", None)
+                or [getattr(criterion, "concept", None)]
+            )
+            if value
+        ]
+        grouped = next((name for name in named if name in variables), None)
+        if grouped is None and getattr(criterion, "kind", None) == "measurement":
+            concept = str(criterion.concept)
+            if float(criterion.value) in thresholds.get(concept, set()):
+                grouped = next(
+                    name for name, item in variables.items()
+                    if str(item["concept"]) == concept
+                )
+        if grouped is None:
+            continue
+        raise _fail(
+            "progressive_population_restates_exposure_grouping",
+            f"criterion {criterion.id} ({criterion.quote!r}) restates the study's "
+            f"exposure grouping {grouped}, which already splits the stays it "
+            "compares on these words: as a population condition it would keep only "
+            "some of the groups. Omit it; the grouping forms the comparison.",
+            path=f"cohort.population_spec.criteria[{index}]",
+        )
+
+
 def _stated_population_spec(
     cohort_intent: ProgressiveCohortIntent,
     *,
@@ -704,6 +775,7 @@ def _stated_population_spec(
             + _population_quote_source_excerpt(criterion.quote, source_texts),
             path=f"cohort.population_spec.criteria[{index}].quote",
         )
+    _refuse_criteria_restating_a_grouping(spec, context)
     # A first-stay criterion typed with the other scope than the study's
     # setting, from words that do not themselves name that scope (a note, or
     # an unqualified "first ICU stay"), is the Planner's typing: it repairs it.

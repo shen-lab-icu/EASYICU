@@ -35,15 +35,11 @@
     const emptyBibliography = run => deliveryDispositions(run).some(row =>
       row.kind === 'references' && row.reason_code === 'no_citable_references');
 
-    function articleRunPrompt(run) {
-      const items = deliveryDispositions(run)
-        .filter(row => row.next_action === 'article' && row.reason_code === 'first_result_delivery_requires_article')
-        .map(row => tr(...deliveryLabels[row.kind])).join(tr(', ', '、'));
-      return items ? tr(
-        `Start a separate article run for this study with ${items}.`,
-        `请为这项研究另行启动论文任务，并提供${items}。`,
-      ) : '';
-    }
+    // A deferred deliverable goes forward only through the result-append
+    // owner's article extension (B26): never as a drafted request that grants
+    // nothing.
+    const articleDeferred = run => deliveryDispositions(run).some(row =>
+      row.next_action === 'article' && row.reason_code === 'first_result_delivery_requires_article');
 
     function renderDeliveryDispositions(run) {
       const notes = {
@@ -61,8 +57,8 @@
         return note ? [`<li data-deliverable-disposition="${esc(kind)}"><strong>${esc(name)}</strong> ${esc(note)}</li>`] : [];
       });
       if (!rows.length) return '';
-      const forward = articleRunPrompt(run) ? `<button type="button" class="btn sm"
-        data-gpi-article-run${canPreview?.() ? '' : ' disabled'}>${esc(tr('Extend to a full article', '扩展成完整论文'))}</button>` : '';
+      const forward = articleDeferred(run) && APPEND?.offers?.(run, 'article') ? `<button type="button" class="btn sm"
+        data-gpi-result-append="article"${canPreview?.() ? '' : ' disabled'}>${esc(tr('Extend to a full article', '扩展成完整论文'))}</button>` : '';
       return `<ul>${rows.join('')}</ul>${forward}`;
     }
     let activeReviewTab = 0;
@@ -674,7 +670,7 @@
     }
 
     return Object.freeze({ render, renderShelf, renderReviewAction, collection, resultsAvailable,
-      followUps, dismissFollowUp, selectReviewTab, loadScientificReview, openData, articleRunPrompt,
+      followUps, dismissFollowUp, selectReviewTab, loadScientificReview, openData,
       retryAnswer: (latestRun, workflow) => loadAnswer(latestRun, workflow, true),
       proposeAppend: kind => APPEND?.propose(kind) });
   }

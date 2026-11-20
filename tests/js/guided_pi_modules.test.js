@@ -258,8 +258,12 @@ assert.equal(Object.isFrozen(modules.require('preview')), true);
   // the question, and both stops name the fresh-plan action.
   const unanswered = runFailure('research_pipeline_progressive_compile_failed', { code: 'exposure_grouping_unanswered' });
   assert.doesNotMatch(unanswered, /[Cc]hange/);
+  // B25 (S1713): a population that restates the grouping is the Planner's error.
+  const restated = runFailure('research_pipeline_progressive_compile_failed', { code: 'progressive_population_restates_exposure_grouping' });
+  assert.match(restated, /This is a planning error, not a problem with your question/);
+  assert.match(runFailureZh('research_pipeline_progressive_compile_failed', { code: 'progressive_population_restates_exposure_grouping' }), /这是规划出错/);
   assert.doesNotMatch(runFailureZh('research_pipeline_progressive_compile_failed', { code: 'exposure_grouping_unanswered' }), /修改/);
-  ['exposure_grouping_unanswered', 'exposure_group_not_applied'].forEach(code => {
+  ['exposure_grouping_unanswered', 'exposure_group_not_applied', 'progressive_population_restates_exposure_grouping'].forEach(code => {
     assert.match(runFailure('research_pipeline_progressive_compile_failed', { code }), /Generate a fresh plan/);
     assert.match(runFailureZh('research_pipeline_progressive_compile_failed', { code }), /重新生成新计划/);
   });
