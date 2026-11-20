@@ -1203,13 +1203,26 @@ def test_every_study_variant_reaching_an_owner_is_classified():
         "or, only for a researcher's pending change, list it as NO_AUTHORITY; a variant authority is never allowed")
 
 
+def _carries_launch_study(node: ast.AST, function: ast.AST, parameter: str) -> bool:
+    """``node`` is the held launch study itself, or the checked launch study derived from it."""
+
+    if isinstance(node, ast.Name):
+        return node.id == parameter or node.id in _checked_owner_locals(function, parameter)
+    return (isinstance(node, ast.Call) and _callee(node) == "source_authority_owner_study"
+            and any(isinstance(argument, ast.Name) and argument.id == parameter
+                    for argument in (*node.args, *(keyword.value for keyword in node.keywords))))
+
+
 def authority_forwarding_violations(sources: dict[str, str]) -> list[tuple[str, str, str, int]]:
-    """Calls that drop the launch study a function was handed (Carbon b17).
+    """Calls that drop the launch study a function was handed (Carbon b17, b18).
 
     A function with a ``source_study`` / ``authority_study`` parameter hands it
-    (or the checked launch study derived from it) to every study-keyed callee
-    it calls, including a ``**kwargs`` router; the owners themselves are
-    checked by ``study_owner_violations``.
+    to every study-keyed callee it calls, a ``**kwargs`` router and an owner
+    included (only an owner's own delegation to another owner is left to
+    ``study_owner_violations``). The argument bound to the callee's authority
+    keyword must be the parameter or its checked launch study itself, not
+    None, a swap or an expression; a call with no authority keyword passes the
+    launch study as its study.
     """
 
     keyed = study_keyed_functions(sources)
@@ -1219,17 +1232,17 @@ def authority_forwarding_violations(sources: dict[str, str]) -> list[tuple[str, 
         if not held:
             continue
         for call in _own_nodes(function):
-            if not (isinstance(call, ast.Call) and _callee(call) in keyed and _callee(call) not in STUDY_OWNERS):
+            callee = _callee(call) if isinstance(call, ast.Call) else None
+            if callee not in keyed or (function.name in STUDY_OWNERS and callee in STUDY_OWNERS):
                 continue
-            names = {node.id for argument in (*call.args, *(keyword.value for keyword in call.keywords))
-                     for node in ast.walk(argument) if isinstance(node, ast.Name)}
-            for keyword in call.keywords:
-                if keyword.arg in AUTHORITY_KEYWORDS and isinstance(keyword.value, ast.Constant) \
-                        and keyword.value.value is None:
-                    names.add("<None>")
-            if any(not names & ({parameter} | _checked_owner_locals(function, parameter))
-                   for parameter in held) or "<None>" in names:
-                violations.append((rel, function.name, _callee(call), call.lineno))
+            authorities = [keyword.value for keyword in call.keywords if keyword.arg in AUTHORITY_KEYWORDS]
+            studies = _keyed_arguments(call, keyed[callee] - {("kw", name) for name in AUTHORITY_KEYWORDS})
+            for parameter in held:
+                carried = (all(_carries_launch_study(value, function, parameter) for value in authorities)
+                           if authorities else
+                           any(_carries_launch_study(value, function, parameter) for value in studies))
+                if not carried:
+                    violations.append((rel, function.name, callee, call.lineno))
     return sorted(set(violations))
 
 
@@ -1242,10 +1255,20 @@ def test_a_function_handed_the_launch_study_forwards_it():
         "    reads_kw(source_study=source_study, **coordinates)\n"
         "    reads_kw(**coordinates)\n"
         "    reads_kw(source_study=None, **coordinates)\n"
+        "    _first_icu_stay_for_cohort(**coordinates)\n"
         "def checked(study, source_study=None):\n"
         "    owner_study = source_authority_owner_study(study, source_study, code='x')\n"
         "    reads_kw(study=study, source_study=owner_study)\n"
-    )}) == [("synthetic.py", "router", "reads_kw", 5), ("synthetic.py", "router", "reads_kw", 6)]
+        "    reads_kw(study=owner_study)\n"
+        "    reads_kw(study=owner_study, source_study=study)\n"
+        "    reads_kw(study=study, source_study=source_study if study else None)\n"
+        "    reads_kw(study=study, source_study={**source_study, 'data_source': 'other'})\n"
+        "    source_authority_export_path(source_authority_owner_study(study, source_study, code='x'))\n"
+        "    source_authority_export_path(study)\n"
+    )}) == [("synthetic.py", "checked", "reads_kw", 12), ("synthetic.py", "checked", "reads_kw", 13),
+            ("synthetic.py", "checked", "reads_kw", 14), ("synthetic.py", "checked", "source_authority_export_path", 16),
+            ("synthetic.py", "router", "_first_icu_stay_for_cohort", 7), ("synthetic.py", "router", "reads_kw", 5),
+            ("synthetic.py", "router", "reads_kw", 6)]
 
 
 def test_the_variant_sweep_follows_a_variant_through_a_forwarding_function():
