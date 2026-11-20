@@ -319,14 +319,15 @@ def native_planning_metadata(*, export_path: Path, database: str | None = None):
             raise ExportCohortError(
                 "research_pipeline_manifest_invalid", _research_pipeline_intake_diagnostic(intake_error)
             ) from exc
-        # Whether the package declares typed column metadata at all: one that
-        # declares none is not drift (callers may leave names as is), while a
-        # declared sidecar that cannot be verified always is.
-        declared_metadata = isinstance(manifest, dict) and "column_metadata" in manifest
         name = manifest.get("database") if isinstance(manifest, dict) else None
         if (not isinstance(name, str) or not name
                 or (database and normalize_database_name(name) != normalize_database_name(database))):
             raise ValueError("native metadata database mismatch")
+        # Only a manifest of this database states whether it declares typed
+        # column metadata: one that declares none is not drift (callers may
+        # leave names as is); a declared sidecar that cannot be verified, or a
+        # manifest that is malformed or of another database, always is.
+        declared_metadata = "column_metadata" in manifest
         inventory = declared_native_export_inventory(export_path=root,
             expected_manifest_sha256=hashlib.sha256(raw).hexdigest(), expected_database=name)
         declared = _declared_typed_export_columns(export_path=root, inventory=inventory)

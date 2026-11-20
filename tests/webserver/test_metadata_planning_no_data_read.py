@@ -92,6 +92,25 @@ def test_a_package_that_declares_no_column_metadata_is_named_as_is_and_never_sna
     assert resolver('death') == 'death'
 
 
+@pytest.mark.parametrize('manifest_defect', ['wrong_database', 'no_database', 'not_an_object'])
+def test_a_package_declaring_no_metadata_still_refuses_a_malformed_or_foreign_manifest(tmp_path, monkeypatch, manifest_defect):
+    # Carbon b28r: "declares no column metadata" is read only from a manifest
+    # of this database; a malformed or foreign one fails before any fallback.
+    from easyicu.research_agent.acquisition import catalog
+
+    source = typed_export(tmp_path / 'synthetic-export', database='eicu_demo')
+    manifest_path = source / '_manifest.json'
+    manifest = json.loads(manifest_path.read_text())
+    manifest.pop('column_metadata')
+    if manifest_defect == 'no_database':
+        manifest.pop('database')
+    manifest_path.write_text('[]' if manifest_defect == 'not_an_object' else json.dumps(manifest))
+    monkeypatch.setattr(catalog, 'build_available_catalog', lambda *_: pytest.fail('must not fall back to data snapshot'))
+    with pytest.raises(ResearchPipelineRunError) as error:
+        owner._bound_source_column(str(source), database='miiv' if manifest_defect == 'wrong_database' else 'eicu_demo')
+    assert error.value.code == 'research_pipeline_planning_native_metadata_invalid'
+
+
 def test_an_unreadable_package_is_named_as_is_and_never_snapshotted(tmp_path, monkeypatch):
     # Carbon b28: a package whose manifest cannot be read (not drift of
     # declared metadata) leaves names as is and never reaches the snapshot.
