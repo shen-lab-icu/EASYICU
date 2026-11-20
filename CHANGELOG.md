@@ -1,8 +1,20 @@
 # Changelog
 
-## 0.1.3 — unreleased (release candidate)
+## 0.1.3 — 2026-11-20 — pre-release
 
 The full list of changes since 0.1.0 is in the v0.1.3 release notes. Recorded here:
+
+- Known limit: in 0.1.3, "Extend to a full article" on a first result adds paper-level
+  analyses only; it writes no manuscript, PDF or references. For a paper, ask for one in
+  your question. A paper needs the container runtime (Docker with the EasyICU runner
+  image); without Docker, 0.1.3 gives first-round tables and figures only, and a requested
+  paper stops with a card that names Docker and the runner image. The addition's result card now says this instead of describing a
+  manuscript draft that was never written.
+- Known limit: a simple descriptive question may be planned as a full study and stop
+  because a manuscript figure needs at least two data-backed panels; ask it as one direct
+  numerical question about the selected data, which EasyICU answers with a quick-answer
+  card (planned for 0.1.4). Right after a page load, "Use this data" may fail with an
+  "Authority changed" banner; click "Rebind current state", then choose "Use this data" again.
 
 - On the official demo's raw data with a first-ICU-stay cohort, the next run after you
   confirm the demo source again no longer stops at once because "the first-stay
@@ -233,6 +245,8 @@ The full list of changes since 0.1.0 is in the v0.1.3 release notes. Recorded he
   restriction, when no wording of yours states it and the data cannot verify it, is now
   taken off before the next plan and the plan card says so. Asking in 提出修改 to remove a
   first-stay restriction now removes it.
+- The analysis runner image uses duckdb 1.5.6, the version the release tests ran under
+  (both runner locks are pinned to it).
 
 ## 0.1.0 — 2026-11-11 — first public pre-release
 

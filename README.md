@@ -6,12 +6,54 @@
 
 [![Python 3.11–3.12](https://img.shields.io/badge/python-3.11%E2%80%933.12-blue.svg)](https://www.python.org/downloads/)
 [![License: GPL v3](https://img.shields.io/badge/License-GPLv3-blue.svg)](COPYING)
-[![Version](https://img.shields.io/badge/version-0.1.0-green.svg)](https://github.com/shen-lab-icu/easyicu)
+[![Version](https://img.shields.io/badge/version-0.1.3-green.svg)](https://github.com/shen-lab-icu/easyicu)
 [![Clinical mappings](https://img.shields.io/badge/clinical%20mappings-mapping--only-yellow.svg)](src/easyicu/data/clinical-contracts.json)
+
+[![Watch the 3-minute overview](docs/images/video_overview_thumbnail.jpg)](https://github.com/shen-lab-icu/easyicu/releases/download/v0.1.3/easyicu-0.1.3-overview-en.mp4)
+
+▶ [Watch the overview (English, 3:20)](https://github.com/shen-lab-icu/easyicu/releases/download/v0.1.3/easyicu-0.1.3-overview-en.mp4) · [中文版](https://github.com/shen-lab-icu/easyicu/releases/download/v0.1.3/easyicu-0.1.3-overview-zh.mp4). The values on screen in the video are schematic.
+
+## What EasyICU does
+
+You ask an ICU research question in plain language. EasyICU maps it to its
+clinical concept dictionary, builds the study population from your local ICU
+data, shows you the complete analysis plan to review, and then computes tables
+and figures on your own computer. Every script, table, statistic and figure is
+hashed into an evidence store; a manuscript reports only numbers that are bound
+to a registered result, and anything it cannot verify is held back.
+
+![EasyICU workflow: question, data, cohort, analysis, manuscript, PDF and references](docs/images/easyicu_workflow.svg)
+
+**Three ways to use it**
+
+| | Use it when | Start |
+|---|---|---|
+| **Desktop app** | You want to click through a study without installing Python. Without Docker it gives first-round tables and figures; a paper needs Docker (see below). | Installers on the [releases page](https://github.com/shen-lab-icu/easyicu/releases); see the [installation guide](docs/installation.md). |
+| **Web app from source** | You run EasyICU from a checkout in your local browser. | `./start_easyicu.sh` (or `start_easyicu.command` / `start_easyicu.bat`); see [Path A](#path-a-native-fastapi-web-interface). |
+| **Python API and CLI** | You script extraction and analysis in code or notebooks. | Install from this repository or the release wheel, then `import easyicu`; see [Path B](#path-b-python-api). |
+
+**Getting a paper.** If you want a manuscript with its PDF and references
+(.bib), say so in your question, for example "…, write it up as a paper with
+PDF and references". A paper needs the container runtime: Docker with the
+EasyICU runner image, as in the web app from source or on a server. Without
+Docker, 0.1.3 gives first-round tables and figures only, and the run says so.
+In 0.1.3, "Extend to a full article" on a finished first result adds
+paper-level analyses only; it does not write a manuscript.
+
+The official public demo databases (MIMIC-IV, MIMIC-III and eICU demos from
+PhysioNet) can be downloaded inside the app, so you can try every step before
+connecting your own data.
+
+**What stays local and what the model receives.** Extraction, review and
+analysis run on your computer, and patient-level rows stay there. When model
+calls are on, the configured model may receive your messages, the analysis plan
+and its code, variable names, error details, and summary statistics with very
+small counts hidden. The data tools block patient-level rows from model
+requests; do not paste patient records into messages.
 
 EasyICU is a Python toolkit for intensive care unit (ICU) data analysis. It provides unified access to the supported public ICU databases, automated extraction of hundreds of standardized clinical concepts, and a **web-based interface** for cohort definition, feature review, visualization, and export. Exact current counts are generated from the shipped registries in [the catalog summary](docs/catalog_summary.md), rather than copied into prose.
 
-> **Clinical evidence status:** version `0.1.0` is a software/API release label,
+> **Clinical evidence status:** version `0.1.3` is a software/API release label,
 > not a claim of database-specific clinical validation. The six full-concept
 > database mappings currently remain `mapping_only`; independent clinical
 > review and cross-database output-comparability validation are pending. The
@@ -213,53 +255,74 @@ These limits are written to the local
 
 ## Web Workflow At A Glance
 
-1. **Obtain ICU data** and place it in a local directory.
-2. **Validate Data Path** in the web app.
-3. If raw files are detected, use **Convert & Setup** to prepare the dataset.
-4. Define the research cohort, select features, and export the result.
-5. Use the built-in visualization and cohort analysis views for review.
+1. **Pick a data source.** Download an official public demo database inside
+   the app, or point EasyICU at your own local ICU export.
+2. **Ask your question** in the Guided Copilot conversation. Copilot maps it
+   to dictionary concepts and the study population.
+3. **Review the complete plan** (population, variables, methods) and approve it.
+4. **Read the result** on the run card: tables, figures, and how far the result
+   can be read. Ask for a paper up front if you want a manuscript, PDF and .bib.
 
-### Mode Selection
+The first two screenshots come from the built-in read-only demo, which replays
+one registered MIMIC-IV run without calling a model.
 
-On launch, EasyICU asks the user to pick a working mode. **Demo Mode** runs a guided tour against simulated ICU data with no tokens required; **Real Data Mode** connects to a local prepared dataset (or one of the supported public databases) and runs the full extraction-and-review workflow.
+### Copilot Conversation
 
-![Mode Selection](docs/images/01_mode_selection.jpg)
+Copilot shows what it is doing at each step, here mapping the question's
+variables to the selected data source before the plan is prepared.
 
-### Data Preparation
+![Copilot maps the question to the data source](docs/images/01_copilot_data_mapping.jpg)
 
-In Real Data Mode, EasyICU validates raw database directories and prepares them automatically for extraction. The web workflow detects unsupported raw layouts such as CSV / CSV.GZ / tar.gz, converts them to Parquet, applies database-specific optimizations, and prepares the structure needed by both the web interface and Python APIs.
+### Result And Its Reading Boundary
 
-### Patient Review — Modules and Features
+Each result says what the run computed and how far it can be read, here
+descriptive only: counts and proportions, with no adjusted estimate, test or
+confidence interval.
 
-The **Patient Review** tab loads concept tables by module (Vital Signs, Labs, SOFA, Sepsis, AKI, …) and lets reviewers inspect features, time series, per-patient summaries, and a built-in data-quality audit. Each module shows its mapped raw fields and concept-level definitions, with merged or single-feature preview modes.
+![A result card with its reading boundary](docs/images/02_copilot_claim_boundary.jpg)
 
-![Patient Review](docs/images/02_patient_review.jpg)
+### Skill Hub
 
-### Time Series Review — Clinical Lanes
+The Skill Hub lists research workflows, skills and method modules. Each workflow
+shows the inputs it needs and the outputs an approved plan can produce.
 
-The **Time Series** sub-tab supports Clinical Lanes (multi-feature dashboard with reference thresholds), Single Patient, and Multi-Patient Comparison views. Each chart overlays clinically meaningful thresholds — e.g. Tachycardia / Bradycardia on heart rate, Fever / Hypothermia on temperature, Thrombocytopenia on platelets — so reviewers can sanity-check trends at a glance.
+![Skill Hub](docs/images/03_skill_hub.jpg)
 
-![Time Series — Clinical Lanes](docs/images/03_clinical_lanes.jpg)
+### Data Dictionary
 
-### Cohort Statistics
+The data dictionary lists each clinical concept with its definition, unit and
+declared mapping per database. A declared mapping is not proof of equivalent
+clinical meaning in your data.
 
-The native **Cohort Statistics** view provides descriptive aggregates, coverage and eligibility review, a cohort snapshot, and SOFA-1 versus SOFA-2 reclassification when the required registered source modules are available. Generic group-comparison p-values, standardized mean differences (SMD), confidence intervals, and matched analyses are currently withheld by the native Cohort Review backend. The audited Kaplan–Meier module supports log-rank testing only when suitable timed outcomes are present. Demo displays and the illustration below do not establish that a statistic is available or reportable for a real project; check the source-specific capability status shown by the application.
-
-![Cohort Statistics](docs/images/04_cohort_statistics.jpg)
+![Data dictionary](docs/images/04_data_dictionary.jpg)
 
 ### Cross-Database Benchmark
 
-The **Cross-DB Benchmark** tab harmonizes a clinical concept across registered databases that actually declare a mapping for it and overlays their distributions for direct comparison — a key sanity check when a study aims to generalize across cohorts.
+The **Cross-DB Benchmark** tab harmonizes a clinical concept across registered
+databases that actually declare a mapping for it and overlays their
+distributions for direct comparison. "Benchmark" here is an exploratory
+comparison and quality-check view in the web interface; it is not a formal
+model leaderboard or an external benchmark result.
 
-![Cross-Database Benchmark](docs/images/06_cross_db_benchmark.jpg)
+### Data Preparation
+
+EasyICU validates raw database directories and prepares them for extraction. It
+detects raw layouts such as CSV / CSV.GZ / tar.gz, converts them to Parquet,
+applies database-specific optimizations, and prepares the structure used by both
+the web interface and the Python APIs.
 
 ## Visualization & Analysis
 
-Start a research workflow in **Guided Copilot** with a question and a selected data source. Review the complete prepared plan before execution. **Project Monitor** shows run status and evidence. The extraction workspace provides data preparation, patient review, time series, cohort statistics, and cross-database comparison tools. These views share the same prepared data and scientific execution owners.
+Start a research workflow in **Guided Copilot** with a question and a selected
+data source, and review the complete prepared plan before execution. The run
+card in the conversation shows status, files and evidence. The extraction
+workspace also offers patient review, time series, cohort statistics and
+cross-database comparison for expert direct entry. These views share the same
+prepared data and scientific execution owners.
 
-The Research Agent layer turns a question + prepared EasyICU data into an evidence-bound research output via a 4-stage pipeline — **Plan → Build → Analyze → Gate** — and only drafts the manuscript after the evidence gate passes:
-
-![Research Agent pipeline](docs/images/05_research_agent.jpg)
+The Research Agent layer turns a question plus prepared EasyICU data into an
+evidence-bound research output (**Plan → Build → Analyze → Gate**) and drafts a
+manuscript only when one is requested and the evidence gate passes.
 
 ## Evidence-Bound Research-Agent Layer
 

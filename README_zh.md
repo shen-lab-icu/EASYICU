@@ -6,12 +6,46 @@
 
 [![Python 3.11–3.12](https://img.shields.io/badge/python-3.11%E2%80%933.12-blue.svg)](https://www.python.org/downloads/)
 [![License: GPL v3](https://img.shields.io/badge/License-GPLv3-blue.svg)](COPYING)
-[![Version](https://img.shields.io/badge/version-0.1.0-green.svg)](https://github.com/shen-lab-icu/easyicu)
+[![Version](https://img.shields.io/badge/version-0.1.3-green.svg)](https://github.com/shen-lab-icu/easyicu)
 [![临床映射状态](https://img.shields.io/badge/clinical%20mappings-mapping--only-yellow.svg)](src/easyicu/data/clinical-contracts.json)
+
+[![观看 3 分钟介绍视频](docs/images/video_overview_thumbnail.jpg)](https://github.com/shen-lab-icu/easyicu/releases/download/v0.1.3/easyicu-0.1.3-overview-zh.mp4)
+
+▶ [观看介绍视频（中文，3:21）](https://github.com/shen-lab-icu/easyicu/releases/download/v0.1.3/easyicu-0.1.3-overview-zh.mp4) · [English](https://github.com/shen-lab-icu/easyicu/releases/download/v0.1.3/easyicu-0.1.3-overview-en.mp4)。视频画面中的数值仅为示意。
+
+## EasyICU 能做什么
+
+用自然语言提出一个 ICU 研究问题。EasyICU 把它对应到临床概念词典，在你本地的
+ICU 数据上构建研究人群，先给出完整的分析计划供你审阅，再在你自己的电脑上计算
+表格和图。每一个脚本、表格、统计量和图都以哈希登记进证据库；稿件只报告与已登记
+结果绑定的数字，无法核验的内容会被拦下。
+
+![EasyICU 工作流：问题、数据、队列、分析、稿件、PDF 与参考文献](docs/images/easyicu_workflow.svg)
+
+**三种使用方式**
+
+| | 适用情况 | 入口 |
+|---|---|---|
+| **桌面应用** | 不想安装 Python，直接点击完成一项研究。没有 Docker 时只给出表格和图形的首轮结果；论文需要 Docker（见下文）。 | [Releases 页面](https://github.com/shen-lab-icu/easyicu/releases)上的安装包；见[安装说明](docs/installation.md)。 |
+| **源码运行的 Web 应用** | 从代码仓库启动，在本地浏览器中使用。 | `./start_easyicu.sh`（或 `start_easyicu.command` / `start_easyicu.bat`）；见下文「路线 A」。 |
+| **Python API 与命令行** | 在脚本或 notebook 中编程完成提取与分析。 | 从本仓库或 release 的 wheel 安装，然后 `import easyicu`；见下文「路线 B」。 |
+
+**如何得到论文。** 如果需要论文稿及其 PDF 和参考文献（.bib），请在提问时就写明，
+例如「……，写成论文，并给出 PDF 和参考文献」。论文需要容器运行时：Docker 加 EasyICU
+运行镜像，即源码运行的 Web 应用或服务器。没有 Docker 时，0.1.3 只给出表格和图形的首轮
+结果，运行中会说明这一点。在 0.1.3 中，对已完成的首轮结果点击「扩展成完整论文」只补充
+论文级分析，不生成稿件。
+
+PhysioNet 官方公开的演示数据库（MIMIC-IV、MIMIC-III、eICU demo）可以在应用内下载，
+接入自己的数据前就能完整试用每一步。
+
+**哪些留在本机，模型会收到什么。** 抽取、审阅和分析都在你的电脑上运行，患者逐行记录留在本机。
+开启模型调用后，已配置的模型可能收到你的消息、分析计划及其代码、变量名称、错误详情，
+以及隐藏了极小计数的汇总统计。数据工具会阻止患者逐行记录进入模型请求；请勿在消息中粘贴患者记录。
 
 EasyICU 是一个面向重症监护室（ICU）数据分析的 Python 工具包。它统一接入支持的公开 ICU 数据库，支持数百种标准化临床概念的自动提取，并提供 **Web 可视化界面**，帮助用户完成队列定义、特征审阅、可视化分析与数据导出。当前精确数量由已发布 registry 自动生成，见[目录摘要](docs/catalog_summary.md)，不再在说明文字里手工复制。
 
-> **临床证据状态：**`0.1.0` 是软件/API 发布版本，不代表数据库特异性
+> **临床证据状态：**`0.1.3` 是软件/API 发布版本，不代表数据库特异性
 > 临床验证已经完成。原有六个全概念数据库的映射仍均为 `mapping_only`；
 > 独立临床复核与跨库输出可比性验证尚未完成。SOFA-2 已有算法级 golden
 > 与失败关闭边界测试，但这些测试不能替代逐数据库映射验证。新增的 NWICU、
@@ -191,53 +225,50 @@ Zigong 不是无选择的通用 ICU 队列。三者的脱敏时间偏移分别�
 
 ## Web 工作流总览
 
-1. **准备 ICU 数据**并放到本地目录。
-2. 在 Web 界面中执行 **Validate Data Path**。
-3. 如检测到原始文件，使用 **Convert & Setup** 完成数据准备。
-4. 定义研究队列、选择特征并导出结果。
-5. 使用内置可视化与队列分析页面进行审阅。
+1. **选择数据源。** 在应用内下载官方公开演示数据库，或指向你本地的 ICU 数据导出。
+2. **提出问题。** 在 Guided Copilot 对话中提问，Copilot 把问题对应到词典概念和研究人群。
+3. **审阅完整计划**（人群、变量、方法）并批准。
+4. **阅读结果。** 运行卡片给出表格、图，以及结果可以解读到什么程度。需要论文稿、PDF 和 .bib 时，请在提问时就写明。
 
-### 模式选择
+前两张截图来自内置的只读演示，它回放一次已登记的 MIMIC-IV 运行，不调用模型。
 
-启动后，EasyICU 先让用户选择工作模式。**Demo Mode（演示模式）** 基于模拟 ICU 数据进行向导式体验，无需任何 token；**Real Data Mode（真实数据模式）** 连接本地准备好的数据集（或任一支持的公开数据库），运行完整的提取与审阅工作流。
+### Copilot 对话
 
-![模式选择](docs/images/01_mode_selection.jpg)
+Copilot 会展示每一步在做什么，例如在准备计划之前，把问题中的变量对应到所选数据源。
 
-### 数据准备
+![Copilot 把问题对应到数据源](docs/images/01_copilot_data_mapping.jpg)
 
-在 Real Data Mode 中，EasyICU 自动校验原始数据库目录并完成提取前的准备。Web 工作流会识别 CSV / CSV.GZ / tar.gz 等原始布局，将其转换为 Parquet，执行数据库专用优化，并准备 Web 界面与 Python API 共用的数据结构。
+### 结果与解读边界
 
-### Patient Review — 模块与特征
+每个结果都会说明这次运行算了什么、可以解读到什么程度；这里是仅描述性：计数和比例，没有调整估计、检验或置信区间。
 
-**Patient Review（患者审阅）** Tab 按模块（生命体征、化验、SOFA、Sepsis、AKI 等）加载概念表，让审阅者检查特征、时间序列、单患者总结，以及内置的数据质量审计。每个模块都会展示其映射的原始字段和概念层定义，并支持「合并宽表」与「单特征」两种预览模式。
+![带解读边界的结果卡片](docs/images/02_copilot_claim_boundary.jpg)
 
-![Patient Review](docs/images/02_patient_review.jpg)
+### Skill Hub
 
-### 时间序列审阅 — Clinical Lanes
+Skill Hub 列出研究工作流、技能和方法模块。每个工作流都会说明需要哪些输入，以及批准后的计划可以产出哪些结果。
 
-**Time Series（时序）** 子标签支持 Clinical Lanes（多特征面板 + 临床阈值线）、Single Patient、Multi-Patient Comparison 三种视图。每张图都叠加了临床上有意义的阈值线 —— 例如心率上的 Tachycardia / Bradycardia，温度上的 Fever / Hypothermia，血小板上的 Thrombocytopenia —— 让审阅者一眼即可识别趋势是否需要进一步关注。
+![Skill Hub](docs/images/03_skill_hub.jpg)
 
-![Time Series — Clinical Lanes](docs/images/03_clinical_lanes.jpg)
+### 数据词典
 
-### Cohort Statistics
+数据词典列出每个临床概念的定义、单位以及在各数据库中声明的映射。声明的映射并不证明它在你的数据中具有等价的临床含义。
 
-**Cohort Statistics（队列统计）** Tab 输出分组对照表（含 p 值与 SMD）、覆盖度与入组审计、单页队列快照，以及 SOFA-1 vs SOFA-2 敏感性分析 —— 全部基于已准备的 Demo 或真实数据状态。下方的 Baseline Characteristics 表逐模块展示对照组数值，并标注 balanced / mild / large 的显著性等级。
+![数据词典](docs/images/04_data_dictionary.jpg)
 
-![Cohort Statistics](docs/images/04_cohort_statistics.jpg)
-
-### Cross-Database Benchmark
+### 跨库对照
 
 **Cross-DB Benchmark（跨库对照）** Tab 把同一临床概念在已注册且具备该概念映射的 ICU 数据库间标准化对齐，并叠加其分布以直接对比。这里的 "Benchmark" 是 Web 界面中的探索性对照与质量检查入口，不代表正式模型排行榜或外部 benchmark 结论。
 
-![Cross-Database Benchmark](docs/images/06_cross_db_benchmark.jpg)
+### 数据准备
+
+EasyICU 自动校验原始数据库目录并完成提取前的准备：识别 CSV / CSV.GZ / tar.gz 等原始布局，将其转换为 Parquet，执行数据库专用优化，并准备 Web 界面与 Python API 共用的数据结构。
 
 ## 可视化与分析
 
-从 **Guided Copilot** 提供研究问题并选择数据源，审阅 Agent 准备的完整计划后执行；**Project Monitor** 展示运行状态和证据。提取工作区提供数据准备、患者审阅、时间序列、队列统计和跨库对照。各视图复用同一份准备完成的数据和科学执行模块。
+在 **Guided Copilot** 中提出研究问题并选择数据源，执行前先审阅完整计划；对话中的运行卡片展示状态、文件和证据。提取工作区另外提供患者审阅、时间序列、队列统计和跨库对照，供专家直接进入。各视图复用同一份准备完成的数据和科学执行模块。
 
-Research Agent 把"问题 + EasyICU 准备好的数据"通过 4 阶段流水线 **Plan → Build → Analyze → Gate** 变成证据绑定的研究产物，并只在 Evidence Gate 通过后才生成可审稿件框架；它不是全自动论文写作或自主科学发现系统，也不是临床决策支持工具。
-
-![Research Agent pipeline](docs/images/05_research_agent.jpg)
+Research Agent 把"问题 + EasyICU 准备好的数据"通过 **Plan → Build → Analyze → Gate** 变成证据绑定的研究产物；只有在提问要求论文且 Evidence Gate 通过时才生成稿件。它不是全自动论文写作或自主科学发现系统，也不是临床决策支持工具。
 
 ## 证据绑定 Research-Agent 层
 
