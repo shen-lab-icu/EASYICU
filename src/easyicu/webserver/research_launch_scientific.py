@@ -199,54 +199,24 @@ def _choice_cause(exc: BaseException) -> str:
     return text if _CHOICE_CAUSE.fullmatch(text) else type(exc).__name__
 
 
-# Fields a launch derives on its own copy of the study (the materialization
-# scope; a discuss-only SIC gap). A researcher never sets them through a
-# choice, so they are the only differences a signed choice forgives.
-_LAUNCH_DERIVED_FIELDS = ("modules", "materialization_scope_source", "metadata_only_unresolved_capability_gap")
-
-
 def _signed_choice_resolution(study: Mapping[str, Any]) -> tuple[Any, str]:
     """The raw Demo choice's source identity for ``study``, or ``None`` and why.
 
-    The choice is signed on the study as stored. A launch works on copies of
-    it (the materialization study, the runner's candidate planning study)
-    whose launch-derived fields differ, so the signature reads as stale on
-    them (B14, UX leg 3 en, 2026-11-20). Such a copy is verified again with
-    only those fields restored from the stored study; every other field,
-    the id, the choice and the data source must be the copy's own and still
-    match the signature. A researcher's change (an update proposal, a saved
-    edit) is never forgiven: it reads as stale and the authorities refuse as
-    before (Carbon b15r2).
+    The choice is signed on the study's full scientific configuration, so it
+    answers only the study it was signed on. A launch's copies (the
+    materialization study, the runner's candidate planning study) and a
+    researcher's pending update read as stale here; a caller that holds such
+    a copy passes the launch study as its authority instead (B14, Carbon
+    b16: no reread of the stored study, which may have moved on).
     """
 
     from easyicu.research_agent.authority.filesystem import AuthorityFilesystemError
     from easyicu.webserver.pi_copilot.demo_planning_authority import resolve_choice
 
-    errors = (ValueError, OSError, KeyError, TypeError, AttributeError, dataio.ExportCohortError,
-              AuthorityFilesystemError)
     try:
         return resolve_choice(study), ""
-    except errors as exc:
-        cause = _choice_cause(exc)
-    study_id = _clean_text(study.get("id"), 200)
-    try:
-        stored = study_context_owner.get_context(study_id) if study_id else None
-    except study_context_owner.StudyContextError:
-        stored = None
-    if (stored is None or stored.get("demo_planning_authority_ref") != study.get("demo_planning_authority_ref")
-            or stored.get("data_source") != study.get("data_source")):
-        return None, cause
-    restored = dict(study)
-    for field in _LAUNCH_DERIVED_FIELDS:
-        if field in stored:
-            restored[field] = stored[field]
-        else:
-            restored.pop(field, None)
-    if restored == dict(study):
-        return None, cause
-    try:
-        return resolve_choice(restored), ""
-    except errors as exc:
+    except (ValueError, OSError, KeyError, TypeError, AttributeError, dataio.ExportCohortError,
+            AuthorityFilesystemError) as exc:
         return None, _choice_cause(exc)
 
 
@@ -258,8 +228,8 @@ def source_authority_export_path(study: Mapping[str, Any]) -> str:
     official export of the same raw source (B9, 2026-11-19: a first-stay
     raw Demo study could neither compile nor launch). Without a choice that
     resolves, the bound path stays, so the authorities refuse as before. A
-    variant of the stored study is answered by the stored study's choice
-    (``_signed_choice_resolution``, B14).
+    caller holding a copy of the launch study passes the launch study itself
+    (``authority_study`` / ``source_study``, B14).
     """
 
     source = study.get("data_source")
@@ -374,7 +344,7 @@ def _source_authority_cause(study: Mapping[str, Any]) -> Dict[str, Any]:
     return {"source_authority_cause": cause} if identity is None and cause else {}
 
 
-def _authority_owner_study(
+def source_authority_owner_study(
     study: Mapping[str, Any], authority_study: Optional[Mapping[str, Any]], *, code: str,
 ) -> Mapping[str, Any]:
     """The study whose source answers ``study``'s identity question.
@@ -388,7 +358,8 @@ def _authority_owner_study(
         return study
     if (not isinstance(authority_study, Mapping)
             or authority_study.get("data_source") != study.get("data_source")
-            or authority_study.get("demo_planning_authority_ref") != study.get("demo_planning_authority_ref")):
+            or authority_study.get("demo_planning_authority_ref") != study.get("demo_planning_authority_ref")
+            or authority_study.get("id") != study.get("id")):
         raise ResearchPipelineRunError(
             code, "The launch study and its variant do not bind the same source.",
             details={"first_icu_stay_reason_code": "authority_study_source_mismatch"},
@@ -415,7 +386,7 @@ def _first_icu_stay_for_cohort(
 
     if not primary_cohort.first_icu_stay_only(study.get("cohort")):
         return None
-    owner_study = _authority_owner_study(
+    owner_study = source_authority_owner_study(
         study, authority_study, code="research_pipeline_first_stay_restriction_unverified")
     source = owner_study.get("data_source")
     source = source if isinstance(source, Mapping) else {}
@@ -476,7 +447,7 @@ def _first_icu_stay_per_hospitalization_for_cohort(
     """
     if not primary_cohort.first_icu_stay_per_hospitalization_only(study.get("cohort")):
         return None
-    owner_study = _authority_owner_study(
+    owner_study = source_authority_owner_study(
         study, authority_study, code="research_pipeline_hospital_first_stay_restriction_unverified")
     source = owner_study.get("data_source")
     source = source if isinstance(source, Mapping) else {}
@@ -2201,8 +2172,10 @@ def _data_foundation_profile(
     allowed = set(modules)
     from easyicu.research_agent.intake.export_package import ExportPackageError
 
+    # A foreign or empty launch study never lends its source (Carbon b16).
+    owner_study = source_authority_owner_study(study, source_study, code="research_pipeline_source_authority_mismatch")
     try:
-        catalog = build_available_catalog(Path(bound_source_authority_path(export_path, source_study or study)).expanduser())
+        catalog = build_available_catalog(Path(bound_source_authority_path(export_path, owner_study)).expanduser())
     except ExportPackageError as exc:
         # The launch's typed intake stops (dataio owns the public diagnostic),
         # so the card names the problem and offers its extraction: a folder
@@ -2504,10 +2477,14 @@ def target_trial_launch_inputs(
     *,
     export_path: str,
     materialization_study: Mapping[str, Any],
+    source_study: Mapping[str, Any],
     spec: TargetTrialSpec,
     population_spec: PopulationSpec,
 ) -> TargetTrialLaunchInputs:
     """What a run of ``materialization_study`` acquires for ``spec``.
+
+    ``source_study`` is the launch study the materialization study was made
+    from; its signed source choice answers the source (B14, Carbon b16).
 
     The study's modules bound what can be read, as for any run; a concept the
     trial reads that they do not provide raises the launch's own typed error
@@ -2518,6 +2495,7 @@ def target_trial_launch_inputs(
     profile = _data_foundation_profile(
         export_path=export_path,
         study=materialization_study,
+        source_study=source_study,
         target=acquisition.target_outcome,
         require_target=True,
         require_primary_exposure=False,

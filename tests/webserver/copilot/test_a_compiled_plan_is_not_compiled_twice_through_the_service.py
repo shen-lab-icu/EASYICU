@@ -559,11 +559,15 @@ def test_a_launch_on_an_unreadable_package_names_it_and_offers_its_reexport(choi
         literature_search_authorized=False, plan_revision_source_run_id="", execution_resume_source_run_id="",
         development_resume_source_job_id="", budget_mode="planner_canary", runner_image=None)
     scientific = preparation._prepare_scientific_launch(request)
+    # A launch whose choice does not resolve (both the study and its copy
+    # unsigned; the copy always carries the launch study's choice, Carbon b16).
     unsigned = {**scientific.study, "demo_planning_authority_ref": ""}
+    assert scientific.materialization_study["demo_planning_authority_ref"] == scientific.study["demo_planning_authority_ref"]
+    unsigned_copy = {**scientific.materialization_study, "demo_planning_authority_ref": ""}
 
     def profile():
         return launch._data_foundation_profile(
-            export_path=str(choice.paths.raw), study=scientific.materialization_study,
+            export_path=str(choice.paths.raw), study=unsigned_copy,
             target=None, require_target=False, require_primary_exposure=False, source_study=unsigned)
 
     # A folder with no package marker needs this study's data extracted first

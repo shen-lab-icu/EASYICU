@@ -235,48 +235,58 @@ def test_the_launch_materialization_variant_asks_the_export_through_the_launch_s
         export_path=str(choice.paths.raw), study=variant, target="death", require_primary_exposure=False,
         covariates=("age",), source_study=study)
     assert asked == [str(choice.paths.export)] and profile["first_icu_stay"] is not None
-    # The owner answers a launch-derived copy through the stored study's
-    # choice: the variant alone and a planning grouping on it.
-    launch._first_icu_stay_for_cohort(variant)
+    # The signed choice answers only the study it was signed on (Carbon b16):
+    # the variant alone reads the raw folder and refuses with a category cause.
+    with pytest.raises(launch.ResearchPipelineRunError) as raised:
+        launch._first_icu_stay_for_cohort(variant)
+    assert raised.value.details["source_authority_cause"] == "demo_planning_authority_stale"
+    assert "/" not in raised.value.details["source_authority_cause"]
+    assert asked[-1] == str(choice.paths.raw)
+    assert launch._first_icu_stay_for_cohort(variant, authority_study=study) is not None
     assert asked[-1] == str(choice.paths.export)
     from easyicu.webserver import run_patient_grouping
 
     grouped = []
     monkeypatch.setattr(source_identity_authority, "resolve_study_patient_grouping",
                         lambda *, export_path, database: grouped.append(export_path))
-    run_patient_grouping.planning_patient_grouping(variant, bound=None, first_icu_stay_restricted=True)
+    # The runner's planning grouping reads the launch study (Carbon b15r2).
+    run_patient_grouping.planning_patient_grouping(study, bound=None, first_icu_stay_restricted=True)
     assert grouped and set(grouped) == {str(choice.paths.export)}
     from easyicu.webserver.pi_copilot import study_context_update
 
     read = []
     monkeypatch.setattr(catalog_owner, "build_available_catalog", lambda path: read.append(str(path)) or AvailableCatalog(
         source="synthetic-metadata-only", concepts=[]))
-    # A researcher's pending change is never forgiven (Carbon b15r2): a
-    # changed scientific field reads as stale and the raw folder stays,
-    # while a change outside the signed configuration still reads the export.
+    # A researcher's pending change is not answered by the signed choice: a
+    # changed scientific field (here also only ``modules``) reads the raw
+    # folder, while a change outside the signed configuration reads the export.
     study_context_update._execution_catalog(study, {"primary_exposure": "lactate", "covariates": ["age"]},
                                             study["data_source"])
+    assert study.get("modules") != variant["modules"]
+    study_context_update._execution_catalog(study, {"modules": variant["modules"]}, study["data_source"])
     study_context_update._execution_catalog(study, {"title": "Renamed"}, study["data_source"])
-    assert read == [str(choice.paths.raw), str(choice.paths.export)]
-    # A launch copy that also carries a researcher's change is not forgiven:
-    # only the launch-derived fields are restored before the signature check.
-    mixed = {**variant, "outcome": "hospital_mortality"}
-    with pytest.raises(launch.ResearchPipelineRunError) as raised:
-        launch._first_icu_stay_for_cohort(mixed)
-    assert raised.value.details["source_authority_cause"] == "demo_planning_authority_stale"
-    assert asked[-1] == str(choice.paths.raw)
-    # A variant on another source, or a stored choice that no longer holds,
-    # refuses as before and names the cause as a category only.
-    moved = {**variant, "data_source": {**variant["data_source"], "label": "another"}}
-    with pytest.raises(launch.ResearchPipelineRunError) as raised:
-        launch._first_icu_stay_for_cohort(moved)
-    assert raised.value.details["source_authority_cause"] == "demo_planning_authority_stale"
-    assert asked[-1] == str(choice.paths.raw)
+    assert read == [str(choice.paths.raw), str(choice.paths.raw), str(choice.paths.export)]
+    # The launch study lends its source only to a copy of itself: another
+    # source, another choice, another id or an empty study is refused.
+    others = (
+        {**study, "data_source": {**study["data_source"], "label": "another"}},
+        {**study, "demo_planning_authority_ref": "another"},
+        {**study, "id": "study_another"},
+        {},
+    )
+    for other in others:
+        with pytest.raises(launch.ResearchPipelineRunError) as raised:
+            launch._first_icu_stay_for_cohort(variant, authority_study=other)
+        assert raised.value.details["first_icu_stay_reason_code"] == "authority_study_source_mismatch"
+        with pytest.raises(launch.ResearchPipelineRunError) as raised:
+            launch._data_foundation_profile(
+                export_path=str(choice.paths.raw), study=variant, target="death", require_primary_exposure=False,
+                covariates=("age",), source_study=other)
+        assert raised.value.code == "research_pipeline_source_authority_mismatch"
+    # A stored study that moved on does not change what the launch study answers.
     study_contexts.upsert_context({"id": study["id"], "outcome": "hospital_mortality"})
-    with pytest.raises(launch.ResearchPipelineRunError) as raised:
-        launch._first_icu_stay_for_cohort(variant)
-    assert raised.value.details["source_authority_cause"] == "demo_planning_authority_stale"
-    assert "/" not in raised.value.details["source_authority_cause"]
+    assert launch._first_icu_stay_for_cohort(variant, authority_study=study) is not None
+    assert asked[-1] == str(choice.paths.export)
 
 
 def test_the_hospital_first_variant_asks_the_export_and_a_foreign_authority_is_refused(choice, chosen, monkeypatch):
@@ -308,3 +318,52 @@ def test_a_choice_cause_is_a_category_never_a_path():
     # A malformed study refuses with a category instead of crashing.
     identity, cause = launch._signed_choice_resolution({"id": "x", "demo_planning_authority_ref": "r", "data_source": "raw"})
     assert identity is None and cause
+
+
+def test_the_kdigo_remedy_asks_the_export_through_the_launch_study(choice, chosen, monkeypatch, tmp_path):
+    # Carbon b16: the runner hands the projection its candidate planning
+    # study (a launch copy); the KDIGO remedy reads the source through the
+    # launch study it is given, never the stored study, which may move on.
+    import pandas as pd
+
+    from easyicu.research_agent.planning.sensitivity_authority import PrespecifiedSensitivitySpec
+    from easyicu.webserver import scientific_runtime_projection as projection
+
+    study = _first_stay_reconfirmed(choice, chosen)
+    variant = {**study, "modules": ["demographics", "outcome"], "materialization_scope_source": "neutral_default"}
+    universe = tmp_path / "kdigo.parquet"
+    pd.DataFrame({
+        "aki_stage_max": pd.Series([0, 1], dtype="int64"),
+        "death": pd.Series([0, 1], dtype="int64"),
+        "death_time_hours": [float("nan"), 72.0],
+        "hospital_followup_time_hours": [96.0, 72.0],
+        "age": [50.0, 70.0],
+        "sex": ["F", "M"],
+    }).to_parquet(universe, index=False)
+    landmark = PrespecifiedSensitivitySpec.model_validate({
+        "spec_id": "landmark_24h", "axis": "timing", "strategy": "landmark", "landmark_hours": 24,
+        "require_alive_at_landmark": True, "exclude_negative_event_times": True,
+        "event_time_variable": "death_time_hours", "observation_duration_variable": "hospital_followup_time_hours",
+        "observation_duration_unit": "hours",
+    })
+    asked = []
+    monkeypatch.setattr(projection, "export_kdigo_strict_derivation_available",
+                        lambda path: asked.append(path) or True)
+
+    def remedy(**authority):
+        with pytest.raises(projection.WebScientificRuntimeProjectionError) as caught:
+            projection.compile_web_scientific_runtime_projection(
+                study=variant, sensitivity_specs=(landmark,), primary_exposure="aki_stage_max",
+                primary_exposure_source="aki_stage", target_outcome="death", declared_covariates=("age", "sex"),
+                covariate_operationalizations={}, target_is_event_status=True, universe_path=universe,
+                scientific_configuration_sha256="f" * 64, **authority)
+        assert caught.value.code == "web_kdigo_observability_authority_missing"
+        return asked[-1]
+
+    assert remedy(source_study=study) == str(choice.paths.export)
+    # The copy alone resolves no choice: its bound raw folder is asked.
+    assert remedy() == str(choice.paths.raw)
+    # A foreign launch study lends nothing.
+    assert remedy(source_study={**study, "id": "study_another"}) is None
+    study_contexts.upsert_context({"id": study["id"], "outcome": "hospital_mortality"})
+    assert remedy(source_study=study) == str(choice.paths.export)

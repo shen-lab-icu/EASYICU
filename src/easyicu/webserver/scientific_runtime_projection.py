@@ -230,9 +230,16 @@ _ROUTED_DESIGN_STRATEGIES = frozenset(
 
 
 def compile_web_scientific_runtime_projection(
-    *, exposure_groupings: PlanningRunGroupings | None = None, **coordinates: Any
+    *,
+    exposure_groupings: PlanningRunGroupings | None = None,
+    source_study: Mapping[str, Any] | None = None,
+    **coordinates: Any,
 ) -> WebScientificRuntimeProjection | None:
-    """Route only explicit typed specifications to their execution owner."""
+    """Route only explicit typed specifications to their execution owner.
+
+    ``source_study`` is the launch study when ``coordinates["study"]`` is a
+    copy of it; only a source-reading owner receives it (B14, Carbon b16).
+    """
     from .target_trial_runtime_projection import (
         compile_target_trial_runtime_projection,
     )
@@ -322,7 +329,7 @@ def compile_web_scientific_runtime_projection(
                 },
             )
         return compile_landmark_categorical_runtime_projection(
-            exposure_groupings=exposure_groupings, **landmark_coordinates
+            exposure_groupings=exposure_groupings, source_study=source_study, **landmark_coordinates
         )
     return compile_landmark_spline_runtime_projection(**landmark_coordinates)
 
@@ -870,6 +877,7 @@ def compile_landmark_categorical_runtime_projection(
     scientific_configuration_sha256: str,
     dependence: PlannedDependenceRequirement | None = None,
     exposure_groupings: PlanningRunGroupings | None = None,
+    source_study: Mapping[str, Any] | None = None,
 ) -> WebScientificRuntimeProjection | None:
     """Compile an ordered/categorical exposure through the verified logit adapter."""
 
@@ -926,6 +934,7 @@ def compile_landmark_categorical_runtime_projection(
     ):
         from easyicu.webserver.dataio import ExportCohortError
         from easyicu.webserver.research_launch_scientific import (
+            source_authority_owner_study,
             source_authority_export_path,
         )
         from easyicu.webserver.research_pipeline_run_errors import (
@@ -935,9 +944,15 @@ def compile_landmark_categorical_runtime_projection(
         # A raw official-Demo study's receipts live in its registered export,
         # not the raw folder (S1540 sweep, Carbon b14r1). This only words the
         # remedy: an export that cannot be resolved reads as not derivable and
-        # the typed stop below stands (Carbon b14r2).
+        # the typed stop below stands (Carbon b14r2). The launch study answers
+        # for its copy, and only when it binds the same source (Carbon b16).
         try:
-            remedy_export = source_authority_export_path(study) or None if isinstance(study, Mapping) else None
+            remedy_export = (
+                source_authority_export_path(source_authority_owner_study(
+                    study, source_study, code="web_kdigo_observability_authority_missing",
+                )) or None
+                if isinstance(study, Mapping) else None
+            )
         except (ResearchPipelineRunError, ExportCohortError, OSError, ValueError, KeyError, TypeError):
             remedy_export = None
         derivable = export_kdigo_strict_derivation_available(remedy_export)

@@ -8319,6 +8319,7 @@ def make_research_pipeline_run_runner(
                 runtime_projection = compile_web_scientific_runtime_projection(
                     exposure_groupings=bound_exposure_groupings,
                     study=candidate_planning_study,
+                    source_study=study,
                     sensitivity_specs=runtime_projection_specs,
                     primary_exposure=resolved_primary_exposure,
                     primary_exposure_source=runtime_primary_exposure_source,

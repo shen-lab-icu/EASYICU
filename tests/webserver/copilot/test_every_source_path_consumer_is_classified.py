@@ -950,6 +950,17 @@ def _owner_study_arguments(call: ast.Call) -> list[ast.AST]:
     return arguments
 
 
+def _checked_owner_locals(function: ast.AST, parameter: str) -> set[str]:
+    """Locals assigned ``source_authority_owner_study(..., <parameter>, ...)``: the checked launch study."""
+
+    return {target.id for node in ast.walk(function) if isinstance(node, ast.Assign)
+            and isinstance(node.value, ast.Call) and _callee(node.value) == "source_authority_owner_study"
+            and any(isinstance(name, ast.Name) and name.id == parameter
+                    for argument in (*node.value.args, *(kw.value for kw in node.value.keywords))
+                    for name in ast.walk(argument))
+            for target in node.targets if isinstance(target, ast.Name)}
+
+
 def study_owner_violations(sources: dict[str, str]) -> list[tuple[str, str, str, int]]:
     violations = []
     for rel, text in sources.items():
@@ -966,10 +977,12 @@ def study_owner_violations(sources: dict[str, str]) -> list[tuple[str, str, str,
                               if isinstance(node, ast.Attribute)}
                 # The owner is handed the launch's own study (as its study or
                 # its ``authority_study``), and never a known variant. A
-                # function handed ``authority_study`` forwards it (through its
-                # checked ``owner_study``).
-                if ("source_study" in parameters and "source_study" not in names) or (
-                        "authority_study" in parameters and not names & {"authority_study", "owner_study"}) or (
+                # function handed ``source_study`` / ``authority_study``
+                # forwards it, directly or through the checked launch study
+                # (``source_authority_owner_study``).
+                if any(parameter in parameters
+                       and not names & ({parameter} | _checked_owner_locals(function, parameter))
+                       for parameter in ("source_study", "authority_study")) or (
                         (names | attributes) & STUDY_VARIANTS):
                     violations.append((rel, function.name, _callee(call), call.lineno))
     return sorted(set(violations))
@@ -1000,19 +1013,25 @@ def test_the_study_owner_check_finds_b14s_shape():
 
 # S1546: other variant sources. A study-keyed function is an owner above, or
 # any webserver function that forwards one of its parameters into one (to a
-# fixed point, own nodes only). A *variant* is an expression that is one: a
-# known variant name or attribute, a dict merge that adds or overrides keys,
-# a variant builder's result, a local assigned one, or ``dict()`` of one
-# (plain copies are not). A forward through ``**coordinates`` (the KDIGO
-# projection) is not followed; the owner answers it at run time. Every call
-# that hands a variant to a study-keyed slot is classified:
+# fixed point, own nodes only, lambda bodies included). A *variant* is an
+# expression that is one: a known variant name or attribute, a dict merge
+# that adds or overrides keys (``{**s, **p}``, ``{**s, "k": v}``,
+# ``dict(s, **p)``, ``dict(s, k=v)``, ``s | p``), a copy of a variant
+# (``{**v}``, ``dict(v)``), a variant builder's result, or a local assigned
+# one (in the function or an enclosing one). The signed choice answers only
+# the study it was signed on, so no owner forgives a variant (Carbon b16).
+# Every call that hands a variant to a study-keyed slot is classified:
 # - AUTHORITY: the call also passes the launch study (``source_study`` /
-#   ``authority_study``, not None and not a variant);
-# - DERIVED: a launch-derived copy (materialization scope); the owner
-#   restores only ``_LAUNCH_DERIVED_FIELDS`` from the stored study and
-#   verifies the signature again (``_signed_choice_resolution``);
-# - PROPOSAL: a researcher's pending change; it is never forgiven, so a
-#   changed scientific field reads as stale and the bound path stays.
+#   ``authority_study``, not None and not a variant); the owner checks that
+#   it binds the same source, choice and id;
+# - NO_AUTHORITY: listed below only for a researcher's pending change (an
+#   update proposal), which must not be answered by the signed choice, so a
+#   changed scientific field reads the bound path;
+# - VARIANT_AUTHORITY: a variant passed as the authority; never allowed.
+# A function that takes ``**kwargs`` and splats a mapping into a study-keyed
+# callee takes that callee's keyword slots (the runtime projection's
+# ``**coordinates``); the KDIGO remedy takes the launch study as an explicit
+# ``source_study``.
 VARIANT_BUILDERS = frozenset({"_neutral_materialization_scope", "_planning_study"})
 AUTHORITY_KEYWORDS = frozenset({"source_study", "authority_study"})
 
@@ -1025,15 +1044,20 @@ def _is_variant(node: ast.AST, local_variants: frozenset[str] | set[str] = froze
     if isinstance(node, ast.Attribute):
         return node.attr in STUDY_VARIANTS
     if isinstance(node, ast.Dict):
-        # A merge that adds or overrides keys; ``{**study}`` and
-        # ``dict(study)`` are plain copies and resolve as the study does.
-        return any(key is None for key in node.keys) and len(node.keys) > 1
+        # A merge that adds or overrides keys, or a copy of a variant;
+        # ``{**study}`` alone is a plain copy and resolves as the study does.
+        return ((any(key is None for key in node.keys) and len(node.keys) > 1)
+                or any(key is None and _is_variant(value, local_variants)
+                       for key, value in zip(node.keys, node.values)))
+    if isinstance(node, ast.BinOp) and isinstance(node.op, ast.BitOr):
+        return True
     if isinstance(node, ast.Call):
         if _callee(node) in VARIANT_BUILDERS:
             return True
-        # ``dict(variant)`` copies a variant.
-        return (isinstance(node.func, ast.Name) and node.func.id == "dict" and len(node.args) == 1
-                and _is_variant(node.args[0], local_variants))
+        if isinstance(node.func, ast.Name) and node.func.id == "dict":
+            # ``dict(s, **p)`` / ``dict(s, k=v)`` merge; ``dict(variant)`` copies one.
+            return bool(node.keywords) or any(_is_variant(arg, local_variants) for arg in node.args)
+        return False
     if isinstance(node, ast.BoolOp):
         return any(_is_variant(value, local_variants) for value in node.values)
     if isinstance(node, ast.IfExp):
@@ -1042,21 +1066,25 @@ def _is_variant(node: ast.AST, local_variants: frozenset[str] | set[str] = froze
 
 
 def _own_nodes(function: ast.AST):
-    """A function's own nodes, without the bodies of functions nested in it."""
+    """A function's own nodes (lambda bodies included), without nested function defs."""
 
     stack = list(ast.iter_child_nodes(function))
     while stack:
         node = stack.pop()
         yield node
-        if not isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef, ast.Lambda)):
+        if not isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
             stack.extend(ast.iter_child_nodes(node))
 
 
-def _local_variants(function: ast.AST) -> set[str]:
-    """Locals assigned a variant (``proposal = {**current, **patch}``), to a fixed point."""
+def _local_variants(function: ast.AST, inherited: frozenset[str] = frozenset()) -> set[str]:
+    """Locals assigned a variant (``proposal = {**current, **patch}``), to a fixed point.
 
-    names: set[str] = set()
-    assignments = [node for node in _own_nodes(function) if isinstance(node, (ast.Assign, ast.AnnAssign))]
+    ``inherited`` are an enclosing function's variant locals a closure reads.
+    """
+
+    names: set[str] = set(inherited)
+    assignments = [node for node in _own_nodes(function)
+                   if isinstance(node, (ast.Assign, ast.AnnAssign, ast.NamedExpr))]
     changed = True
     while changed:
         changed = False
@@ -1070,14 +1098,29 @@ def _local_variants(function: ast.AST) -> set[str]:
     return names
 
 
+def _signature(function: ast.AST) -> tuple[list[str], set[str]]:
+    positional = [arg.arg for arg in (*function.args.posonlyargs, *function.args.args)]
+    if positional and positional[0] in {"self", "cls"}:
+        positional = positional[1:]
+    return positional, {*positional, *(arg.arg for arg in function.args.kwonlyargs)}
+
+
 def _functions(sources: dict[str, str]):
+    """Each function with the variant locals it sees (its own and its enclosing functions')."""
+
+    def visit(rel, node, inherited):
+        for child in ast.iter_child_nodes(node):
+            if isinstance(child, (ast.FunctionDef, ast.AsyncFunctionDef)):
+                positional, parameters = _signature(child)
+                # A parameter of the closure shadows an enclosing local.
+                variants = frozenset(_local_variants(child, frozenset(inherited - parameters)))
+                yield rel, child, positional, parameters, variants
+                yield from visit(rel, child, variants)
+            else:
+                yield from visit(rel, child, inherited)
+
     for rel, text in sources.items():
-        for function in ast.walk(ast.parse(text)):
-            if isinstance(function, (ast.FunctionDef, ast.AsyncFunctionDef)):
-                positional = [arg.arg for arg in (*function.args.posonlyargs, *function.args.args)]
-                if positional and positional[0] in {"self", "cls"}:
-                    positional = positional[1:]
-                yield rel, function, positional, {*positional, *(arg.arg for arg in function.args.kwonlyargs)}
+        yield from visit(rel, ast.parse(text), frozenset())
 
 
 def _keyed_arguments(call: ast.Call, slots: set) -> list[ast.AST]:
@@ -1092,10 +1135,16 @@ def study_keyed_functions(sources: dict[str, str]) -> dict[str, set]:
     changed = True
     while changed:
         changed = False
-        for _rel, function, positional, parameters in functions:
+        for _rel, function, positional, parameters, _variants in functions:
             for call in _own_nodes(function):
                 if not isinstance(call, ast.Call) or _callee(call) not in keyed:
                     continue
+                if function.args.kwarg is not None and any(keyword.arg is None for keyword in call.keywords):
+                    # ``**coordinates`` forwarded: the callee's keyword slots are this function's too.
+                    slots = {slot for slot in keyed[_callee(call)] if slot[0] == "kw"}
+                    if not slots <= keyed.setdefault(function.name, set()):
+                        keyed[function.name] |= slots
+                        changed = True
                 for argument in _keyed_arguments(call, keyed[_callee(call)]):
                     for name in (node.id for node in ast.walk(argument) if isinstance(node, ast.Name)):
                         if name in parameters:
@@ -1109,51 +1158,55 @@ def study_keyed_functions(sources: dict[str, str]) -> dict[str, set]:
 def variant_flows(sources: dict[str, str]) -> Counter:
     keyed = study_keyed_functions(sources)
     flows: Counter = Counter()
-    for rel, function, _positional, _parameters in _functions(sources):
-        variants = _local_variants(function)
+    for rel, function, _positional, _parameters, variants in _functions(sources):
         for call in _own_nodes(function):
             if not (isinstance(call, ast.Call) and _callee(call) in keyed):
                 continue
             authorities = [keyword.value for keyword in call.keywords if keyword.arg in AUTHORITY_KEYWORDS]
+            if any(_is_variant(value, variants) for value in authorities):
+                flows[(rel, function.name, _callee(call), "VARIANT_AUTHORITY")] += 1
+                continue
             if any(_is_variant(argument, variants) for argument in _keyed_arguments(call, keyed[_callee(call)])
                    if argument not in authorities):
-                # AUTHORITY only with a real launch study: not None, not a variant (Carbon b15r2).
+                # AUTHORITY only with a real launch study: not None (Carbon b15r2).
                 authority = any(not (isinstance(value, ast.Constant) and value.value is None)
-                                and not _is_variant(value, variants) for value in authorities)
-                flows[(rel, function.name, _callee(call), "AUTHORITY" if authority else "OWNER")] += 1
+                                for value in authorities)
+                flows[(rel, function.name, _callee(call), "AUTHORITY" if authority else "NO_AUTHORITY")] += 1
     return flows
 
 
-_VARIANT_FLOWS = {
+_VARIANT_FLOWS = Counter({
     # The runner's candidate planning study, with the launch study beside it.
-    ("agent_pipeline_runs.py", "runner", "_data_foundation_profile"): (2, "AUTHORITY"),
-    # The launch preparation's materialization study.
-    ("research_pipeline_run_preparation.py", "_prepare_scientific_launch", "_data_foundation_profile"): (1, "DERIVED"),
-    ("research_pipeline_run_preparation.py", "_prepare_scientific_launch", "target_trial_launch_inputs"): (1, "DERIVED"),
-    ("research_launch_scientific.py", "target_trial_launch_inputs", "_data_foundation_profile"): (1, "DERIVED"),
-    # A researcher's pending update (current study + patch).
-    ("pi_copilot/study_context_update.py", "_execution_catalog", "bound_source_authority_path"): (1, "PROPOSAL"),
-    ("pi_copilot/study_context_update.py", "_question_causal_design", "question_causal_design"): (1, "PROPOSAL"),
-    ("pi_copilot/study_context_update.py", "_question_design_variance", "descriptive_variance"): (1, "PROPOSAL"),
-    ("pi_copilot/study_context_update.py", "_question_family_design", "checked_family_design"): (1, "PROPOSAL"),
-    ("pi_copilot/study_context_update.py", "_question_family_design", "question_family_design"): (1, "PROPOSAL"),
-    ("pi_copilot/study_context_update.py", "update_study_context", "validate_analysis_design_for_execution"): (1, "PROPOSAL"),
-    ("study_contexts.py", "upsert_context", "_apply_attached_setup"): (1, "PROPOSAL"),
-}
+    ("agent_pipeline_runs.py", "runner", "_data_foundation_profile", "AUTHORITY"): 2,
+    # Its runtime projection (the KDIGO remedy, through ``**coordinates``).
+    ("agent_pipeline_runs.py", "runner", "compile_web_scientific_runtime_projection", "AUTHORITY"): 1,
+    # The launch preparation's materialization study, with the launch study.
+    ("research_pipeline_run_preparation.py", "_prepare_scientific_launch", "_data_foundation_profile", "AUTHORITY"): 1,
+    ("research_pipeline_run_preparation.py", "_prepare_scientific_launch", "target_trial_launch_inputs", "AUTHORITY"): 1,
+    ("research_launch_scientific.py", "target_trial_launch_inputs", "_data_foundation_profile", "AUTHORITY"): 1,
+    # A researcher's pending update (current study + patch): never answered
+    # by the signed choice; a changed scientific field reads the bound path.
+    ("pi_copilot/study_context_update.py", "_execution_catalog", "bound_source_authority_path", "NO_AUTHORITY"): 1,
+    ("pi_copilot/study_context_update.py", "_question_causal_design", "question_causal_design", "NO_AUTHORITY"): 1,
+    ("pi_copilot/study_context_update.py", "_question_design_variance", "descriptive_variance", "NO_AUTHORITY"): 1,
+    ("pi_copilot/study_context_update.py", "_question_family_design", "checked_family_design", "NO_AUTHORITY"): 1,
+    ("pi_copilot/study_context_update.py", "_question_family_design", "question_family_design", "NO_AUTHORITY"): 1,
+    ("pi_copilot/study_context_update.py", "update_study_context", "validate_analysis_design_for_execution", "NO_AUTHORITY"): 1,
+    ("study_contexts.py", "upsert_context", "_apply_attached_setup", "NO_AUTHORITY"): 1,
+})
 
 
 def test_every_study_variant_reaching_an_owner_is_classified():
     flows = variant_flows(_webserver_sources())
-    found = {(rel, function, callee): (count, kind) for (rel, function, callee, kind), count in flows.items()}
-    expected = {key: (count, "AUTHORITY" if kind == "AUTHORITY" else "OWNER")
-                for key, (count, kind) in _VARIANT_FLOWS.items()}
-    assert found == expected, (
-        "classify each new variant flow: a launch-derived copy (DERIVED), a researcher's pending change "
-        "(PROPOSAL), or a call that passes the launch study (AUTHORITY)?")
+    assert flows == _VARIANT_FLOWS, (
+        "classify each new variant flow: pass the launch study as source_study/authority_study (AUTHORITY), "
+        "or, only for a researcher's pending change, list it as NO_AUTHORITY; a variant authority is never allowed")
 
 
 def test_the_variant_sweep_follows_a_variant_through_a_forwarding_function():
     flows = variant_flows({"synthetic.py": (
+        "def _data_foundation_profile(study, source_study=None):\n"
+        "    return _first_icu_stay_for_cohort(study, authority_study=source_study)\n"
         "def reads(study):\n"
         "    return source_authority_export_path(study)\n"
         "def forwards(study, label):\n"
@@ -1163,19 +1216,45 @@ def test_the_variant_sweep_follows_a_variant_through_a_forwarding_function():
         "    forwards(study, 'x')\n"
         "    reads(materialization_study)\n"
         "    _data_foundation_profile(study=materialization_study, source_study=study)\n"
+        "    _data_foundation_profile(study=materialization_study)\n"
         "    proposal = {**study, **patch}\n"
         "    reads(proposal)\n"
         "    reads(dict(study))\n"
+        "    reads({**study})\n"
         "    reads(helper(materialization_study))\n"
         "    _first_icu_stay_for_cohort(materialization_study, authority_study=None)\n"
         "    _first_icu_stay_for_cohort(materialization_study, authority_study={**study, 'x': 1})\n"
+        "    _first_icu_stay_for_cohort(study, authority_study=proposal)\n"
+        "    callback = lambda: reads(materialization_study)\n"
         "    def inner():\n"
-        "        return reads(materialization_study)\n"
+        "        return reads(proposal)\n"
+        "def projects(*, source_study=None, **coordinates):\n"
+        "    return reads_kw(source_study=source_study, **coordinates)\n"
+        "def reads_kw(*, study, source_study=None):\n"
+        "    return _first_icu_stay_for_cohort(study, authority_study=source_study)\n"
+        "def runner(study):\n"
+        "    projects(study=candidate_planning_study, source_study=study)\n"
+        "    projects(study=candidate_planning_study)\n"
+        "def merges(study, patch):\n"
+        "    reads({**materialization_study})\n"
+        "    reads(dict(study, **patch))\n"
+        "    reads(dict(study, outcome='x'))\n"
+        "    reads(study | patch)\n"
+        "def shadows(study, patch):\n"
+        "    proposal = {**study, **patch}\n"
+        "    def inner(proposal):\n"
+        "        return reads(proposal)\n"
     )})
-    assert flows == Counter({("synthetic.py", "launch", "forwards", "OWNER"): 1,
-                             ("synthetic.py", "launch", "reads", "OWNER"): 2,
-                             ("synthetic.py", "launch", "_first_icu_stay_for_cohort", "OWNER"): 2,
-                             ("synthetic.py", "inner", "reads", "OWNER"): 1})
+    assert flows == Counter({("synthetic.py", "launch", "forwards", "NO_AUTHORITY"): 1,
+                             ("synthetic.py", "launch", "reads", "NO_AUTHORITY"): 3,
+                             ("synthetic.py", "launch", "_data_foundation_profile", "AUTHORITY"): 1,
+                             ("synthetic.py", "launch", "_data_foundation_profile", "NO_AUTHORITY"): 1,
+                             ("synthetic.py", "launch", "_first_icu_stay_for_cohort", "NO_AUTHORITY"): 1,
+                             ("synthetic.py", "launch", "_first_icu_stay_for_cohort", "VARIANT_AUTHORITY"): 2,
+                             ("synthetic.py", "inner", "reads", "NO_AUTHORITY"): 1,
+                             ("synthetic.py", "runner", "projects", "AUTHORITY"): 1,
+                             ("synthetic.py", "runner", "projects", "NO_AUTHORITY"): 1,
+                             ("synthetic.py", "merges", "reads", "NO_AUTHORITY"): 4})
     assert study_owner_violations({"synthetic.py": (
         "def launch(scientific):\n"
         "    return _first_icu_stay_for_cohort(scientific.materialization_study, authority_study=None)\n"
