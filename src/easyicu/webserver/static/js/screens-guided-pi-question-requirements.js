@@ -107,6 +107,16 @@
   function notesHtml(summary, { tr, esc, recordLink = () => '' }) {
     const notes = summary && summary.question_requirements;
     const lines = [];
+    // The study's recorded all-rows decision against the question's population.
+    const conflict = summary && Array.isArray(summary.question_population_conflict)
+      ? summary.question_population_conflict.filter(Boolean).map(words => clip(words, 80)) : [];
+    if (conflict.length) {
+      const words = conflict.join(tr(', ', '、'));
+      lines.push(tr(
+        `The study settings record that the study takes every patient, but the question restricts it to “${words}” patients. They disagree: say in the conversation which one the study uses, then generate the plan again.`,
+        `研究设置中记录了不限定人群（纳入全部患者），而题面限定为「${words}」患者，两者不一致。请在对话中说明以哪一个为准，再重新生成计划。`,
+      ));
+    }
     const readings = summary && summary.coordinate_readings;
     if (readings && readings.status === 'unavailable') lines.push(tr(
       'The source record for the plan’s automatically selected outcome and exposure could not be verified. Check these coordinates in the complete plan.',

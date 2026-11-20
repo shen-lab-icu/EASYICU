@@ -16,6 +16,28 @@ def stated_population_mode(study: Mapping[str, Any]) -> str | None:
 
     return primary_cohort.planning_selection_mode(primary_cohort.planner_selectable_cohort(study.get("cohort")))
 
+def question_population_mode(required_mode: str | None, *, study: Mapping[str, Any], question: str) -> str | None:
+    """Leave the population open when the question restricts it to a recorded condition.
+
+    A study bound to an export whose saved cohort states no criterion runs as
+    every input row, and that mode forbids the Planner from stating any
+    population criterion. A question such as 「在脓毒症 ICU 患者中」 names a
+    condition EasyICU records, which the plan must select on
+    (question_requirements, S1722), so every plan went back with no way to
+    answer (UX leg 3 on rc_78a, 2026-11-20). Such a launch now leaves the mode
+    to the Planner, as a metadata-only launch does. A researcher's recorded
+    eligibility decision stands; nothing here selects or approves a criterion.
+    """
+    if required_mode != "all_input_rows":
+        return required_mode
+    authority = study.get("cohort_eligibility_authority")
+    if isinstance(authority, Mapping) and authority.get("selection_state") in {"confirmed", "declined"}:
+        return required_mode
+    from .study_intent import stated_population_conditions
+
+    return None if stated_population_conditions(question) else required_mode
+
+
 def resolved_launch_population_mode(
     *, required_mode: str | None, question: str, database: str,
     acquisition: Any, declarations: Mapping[str, Any],

@@ -1848,9 +1848,24 @@ def _enrich_plan_review(
         plan_decisions.unlisted_question_population(study, summary.get("reviewed_population_spec"))
         if isinstance(summary, Mapping) else []
     )
+    # A recorded condition the plan selects on nowhere is named the same way,
+    # e.g. on an export without its column (S1743).
+    plan_payload = payloads.get("agent_plan.json")
+    unlisted += [
+        words for words in plan_decisions.unselected_question_conditions(study, plan_payload)
+        if words not in unlisted
+    ] if isinstance(summary, Mapping) else []
     if unlisted:
         snapshot = snapshot.model_copy(
-            update={"plan_review_summary": {**dict(summary), "question_population_unlisted": unlisted}}
+            update={"plan_review_summary": {**dict(summary), "question_population_unlisted": unlisted[:4]}}
+        )
+    # A recorded all-rows eligibility decision against the question's
+    # recorded condition: both statements go on the card (S1743).
+    summary = snapshot.plan_review_summary
+    conflict = plan_decisions.question_population_conflict(study) if isinstance(summary, Mapping) else []
+    if conflict:
+        snapshot = snapshot.model_copy(
+            update={"plan_review_summary": {**dict(summary), "question_population_conflict": conflict}}
         )
     # A first-stay setting the reviewed population does not list is named on
     # the card, so the study's cohort setting never restricts it silently.

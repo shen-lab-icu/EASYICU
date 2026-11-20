@@ -8521,7 +8521,11 @@ def make_research_pipeline_run_runner(
 
                 required_cohort_mode = stated_population_mode(study)
             else:
-                required_cohort_mode = _planner_cohort_selection_mode(study)
+                from .research_launch_population import question_population_mode
+
+                required_cohort_mode = question_population_mode(
+                    _planner_cohort_selection_mode(study), study=study, question=question,
+                )
             declarations = research_context_declarations(
                 replace(scientific, patient_grouping=patient_grouping), export_path=export_path, acquisition=acquisition,
                 source_identity=prepared.source_identity.to_dict() if prepared.source_identity is not None else None,

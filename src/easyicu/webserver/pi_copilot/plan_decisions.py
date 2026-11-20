@@ -1015,6 +1015,62 @@ def unlisted_question_population(
     ][:4]
 
 
+def unselected_question_conditions(study: Mapping[str, Any], plan: Any) -> list[str]:
+    """Recorded conditions the question restricts to that the plan selects on nowhere (S1743).
+
+    The requirement layer answers for a condition only when the run offers its
+    column; on an export without it the plan could study every row under a
+    sepsis label.  So the card names the condition (with the S1737 line) when
+    no cohort predicate reads one of its concepts and no unapplied criterion
+    already names it.  Read only; never an approval stop.
+    """
+
+    from easyicu.webserver.study_intent import stated_population_conditions
+
+    question = str(study.get("question") or "")
+    if not question.strip() or not isinstance(plan, Mapping) or not plan:
+        return []
+    cohort = plan.get("cohort")
+    cohort = cohort if isinstance(cohort, Mapping) else {}
+    read = {
+        str(predicate.get("concept_id") or "")
+        for side in ("inclusion", "exclusion")
+        for predicate in (cohort.get(side) if isinstance(cohort.get(side), list) else ())
+        if isinstance(predicate, Mapping)
+    }
+    unapplied = [
+        str(text).lower()
+        for text in (cohort.get("unapplied_population_criteria") or ())
+        if isinstance(text, str)
+    ]
+    named = []
+    for concepts, words in stated_population_conditions(question):
+        selected = any(column == concept or column.startswith(concept + "_")
+                       for column in read for concept in concepts)
+        if not selected and not any(words.lower() in text for text in unapplied) and words not in named:
+            named.append(words)
+    return named[:4]
+
+
+def question_population_conflict(study: Mapping[str, Any]) -> list[str]:
+    """Recorded conditions the question restricts to, against a recorded all-rows decision (S1743).
+
+    A researcher who recorded that the study takes every input row, while the
+    question restricts to a recorded condition, stated two things; the launch
+    keeps the recorded decision, so the card names both for the researcher to
+    resolve.  Read only.
+    """
+
+    from easyicu.webserver.study_intent import stated_population_conditions
+
+    authority = study.get("cohort_eligibility_authority")
+    if (not isinstance(authority, Mapping) or authority.get("selection_mode") != "all_input_rows"
+            or authority.get("selection_state") not in {"confirmed", "declined"}):
+        return []
+    return list(dict.fromkeys(words for _concepts, words in stated_population_conditions(
+        str(study.get("question") or ""))))[:4]
+
+
 def unlisted_first_stay_setting(
     study: Mapping[str, Any], reviewed_population_spec: Any,
 ) -> str | None:
@@ -2413,4 +2469,6 @@ __all__ = [
     "repeated_stays_system_default_route",
     "unlisted_first_stay_setting",
     "unlisted_question_population",
+    "unselected_question_conditions",
+    "question_population_conflict",
 ]

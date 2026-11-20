@@ -169,6 +169,14 @@ The full list of changes since 0.1.0 is in the v0.1.3 release notes. Recorded he
   same checks as before; nothing is signed until you click 确认数据源并继续. A folder
   whose export or raw receipts do not verify, or a folder that is not the official one,
   is still refused with no offer.
+- A question that restricts its patients to sepsis, AKI or mechanical ventilation (for
+  example 「在脓毒症 ICU 患者中」) can now be planned on a prepared export (B33). Before,
+  a study whose saved cohort stated no criterion made every plan take all input rows,
+  which left the plan no way to select on the condition, so every plan went back
+  unanswered. The plan now states the condition itself. A plan that selects on such a
+  condition nowhere (for example on an export without its column) is named on the
+  plan card, and a recorded decision to take every patient that contradicts the
+  question is shown on the card with both statements, for you to resolve.
 
 ## 0.1.0 — 2026-11-11 — first public pre-release
 
