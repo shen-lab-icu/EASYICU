@@ -1405,6 +1405,10 @@
     ],
     [
       "easyicu.research_agent.agents.progressive_planner",
+      "easyicu.research_agent.planning.requirement_coverage"
+    ],
+    [
+      "easyicu.research_agent.agents.progressive_planner",
       "easyicu.research_agent.planning.scientific_action_catalog"
     ],
     [
@@ -5125,6 +5129,10 @@
     ],
     [
       "easyicu.research_agent.execution.owner_declaration",
+      "easyicu.research_agent.execution.runners.landmark_categorical_association_executor"
+    ],
+    [
+      "easyicu.research_agent.execution.owner_declaration",
       "easyicu.research_agent.execution.runners.missingness_measurement_figure_executor"
     ],
     [
@@ -8793,6 +8801,10 @@
     ],
     [
       "easyicu.research_agent.facade",
+      "easyicu.research_agent.acquisition.catalog"
+    ],
+    [
+      "easyicu.research_agent.facade",
       "easyicu.research_agent.authority.evidence_store"
     ],
     [
@@ -10381,6 +10393,10 @@
     ],
     [
       "easyicu.research_agent.orchestration.config",
+      "easyicu.research_agent.contracts.product_files"
+    ],
+    [
+      "easyicu.research_agent.orchestration.config",
       "easyicu.research_agent.orchestration.profiles"
     ],
     [
@@ -10390,6 +10406,10 @@
     [
       "easyicu.research_agent.orchestration.config",
       "easyicu.research_agent.planning.baseline_requirements"
+    ],
+    [
+      "easyicu.research_agent.orchestration.config",
+      "easyicu.research_agent.planning.carried_population"
     ],
     [
       "easyicu.research_agent.orchestration.config",
@@ -10861,6 +10881,10 @@
     ],
     [
       "easyicu.research_agent.orchestration.progressive_planning",
+      "easyicu.research_agent.planning.prompt_projection"
+    ],
+    [
+      "easyicu.research_agent.orchestration.progressive_planning",
       "easyicu.research_agent.planning.question_interpretation"
     ],
     [
@@ -11201,6 +11225,10 @@
     ],
     [
       "easyicu.research_agent.orchestration.workflow",
+      "easyicu.research_agent.contracts.product_files"
+    ],
+    [
+      "easyicu.research_agent.orchestration.workflow",
       "easyicu.research_agent.contracts.runtime"
     ],
     [
@@ -11210,6 +11238,22 @@
     [
       "easyicu.research_agent.orchestration.workflow",
       "easyicu.research_agent.planning.population_review"
+    ],
+    [
+      "easyicu.research_agent.orchestration.workflow",
+      "easyicu.research_agent.planning.progressive_contract"
+    ],
+    [
+      "easyicu.research_agent.orchestration.workflow",
+      "easyicu.research_agent.planning.question_quote"
+    ],
+    [
+      "easyicu.research_agent.orchestration.workflow",
+      "easyicu.research_agent.planning.question_requirements"
+    ],
+    [
+      "easyicu.research_agent.orchestration.workflow",
+      "easyicu.research_agent.providers.structured_retry"
     ],
     [
       "easyicu.research_agent.orchestration.workflow",
@@ -11569,6 +11613,14 @@
     ],
     [
       "easyicu.research_agent.pipeline",
+      "easyicu.research_agent.planning.approval_stops"
+    ],
+    [
+      "easyicu.research_agent.pipeline",
+      "easyicu.research_agent.planning.carried_population"
+    ],
+    [
+      "easyicu.research_agent.pipeline",
       "easyicu.research_agent.planning.cohort_contract"
     ],
     [
@@ -11622,6 +11674,10 @@
     [
       "easyicu.research_agent.pipeline",
       "easyicu.research_agent.planning.progressive_contract"
+    ],
+    [
+      "easyicu.research_agent.pipeline",
+      "easyicu.research_agent.planning.requirement_coverage"
     ],
     [
       "easyicu.research_agent.pipeline",
@@ -11953,6 +12009,14 @@
     ],
     [
       "easyicu.research_agent.planning.approval_stops",
+      "easyicu.research_agent.contracts.claim_ceiling"
+    ],
+    [
+      "easyicu.research_agent.planning.approval_stops",
+      "easyicu.research_agent.contracts.product_files"
+    ],
+    [
+      "easyicu.research_agent.planning.approval_stops",
       "easyicu.research_agent.planning.population_compile"
     ],
     [
@@ -12154,6 +12218,18 @@
     [
       "easyicu.research_agent.planning.capability_registry",
       "easyicu.research_agent.trajectory.runtime_validation"
+    ],
+    [
+      "easyicu.research_agent.planning.carried_population",
+      "easyicu.research_agent.planning.population_review"
+    ],
+    [
+      "easyicu.research_agent.planning.carried_population",
+      "easyicu.research_agent.planning.population_shadow"
+    ],
+    [
+      "easyicu.research_agent.planning.carried_population",
+      "easyicu.research_agent.planning.population_spec"
     ],
     [
       "easyicu.research_agent.planning.cohort_eligibility",
@@ -13641,6 +13717,10 @@
     ],
     [
       "easyicu.research_agent.planning.progressive_compiler",
+      "easyicu.research_agent.contracts.exposure_group_rules"
+    ],
+    [
+      "easyicu.research_agent.planning.progressive_compiler",
       "easyicu.research_agent.contracts.figure_plan"
     ],
     [
@@ -13742,6 +13822,10 @@
     [
       "easyicu.research_agent.planning.progressive_compiler",
       "easyicu.research_agent.planning.population_compile"
+    ],
+    [
+      "easyicu.research_agent.planning.progressive_compiler",
+      "easyicu.research_agent.planning.population_provenance"
     ],
     [
       "easyicu.research_agent.planning.progressive_compiler",
@@ -14109,6 +14193,10 @@
     ],
     [
       "easyicu.research_agent.planning.question_requirements",
+      "easyicu.research_agent.planning.requirement_typing.source"
+    ],
+    [
+      "easyicu.research_agent.planning.question_requirements",
       "easyicu.research_agent.schema"
     ],
     [
@@ -14161,7 +14249,19 @@
     ],
     [
       "easyicu.research_agent.planning.requirement_coverage",
+      "easyicu.research_agent.contracts.claim_ceiling"
+    ],
+    [
+      "easyicu.research_agent.planning.requirement_coverage",
       "easyicu.research_agent.contracts.continuous_outcome_summary"
+    ],
+    [
+      "easyicu.research_agent.planning.requirement_coverage",
+      "easyicu.research_agent.contracts.descriptive_execution"
+    ],
+    [
+      "easyicu.research_agent.planning.requirement_coverage",
+      "easyicu.research_agent.contracts.model_terms"
     ],
     [
       "easyicu.research_agent.planning.requirement_coverage",
@@ -14169,7 +14269,19 @@
     ],
     [
       "easyicu.research_agent.planning.requirement_coverage",
+      "easyicu.research_agent.contracts.prediction_subgroup"
+    ],
+    [
+      "easyicu.research_agent.planning.requirement_coverage",
+      "easyicu.research_agent.contracts.primary_cohort"
+    ],
+    [
+      "easyicu.research_agent.planning.requirement_coverage",
       "easyicu.research_agent.contracts.product_files"
+    ],
+    [
+      "easyicu.research_agent.planning.requirement_coverage",
+      "easyicu.research_agent.contracts.product_identity"
     ],
     [
       "easyicu.research_agent.planning.requirement_coverage",
@@ -14178,6 +14290,10 @@
     [
       "easyicu.research_agent.planning.requirement_coverage",
       "easyicu.research_agent.planning.adjustment_authority"
+    ],
+    [
+      "easyicu.research_agent.planning.requirement_coverage",
+      "easyicu.research_agent.planning.question_quote"
     ],
     [
       "easyicu.research_agent.planning.requirement_coverage",
@@ -15733,11 +15849,19 @@
     ],
     [
       "easyicu.research_agent.reporting.completion",
+      "easyicu.research_agent.canonical_json"
+    ],
+    [
+      "easyicu.research_agent.reporting.completion",
       "easyicu.research_agent.contracts.execution_result"
     ],
     [
       "easyicu.research_agent.reporting.completion",
       "easyicu.research_agent.contracts.executor_stop"
+    ],
+    [
+      "easyicu.research_agent.reporting.completion",
+      "easyicu.research_agent.contracts.product_files"
     ],
     [
       "easyicu.research_agent.reporting.completion",
@@ -16861,6 +16985,10 @@
     ],
     [
       "easyicu.research_agent.reporting.write_phase",
+      "easyicu.research_agent.contracts.product_files"
+    ],
+    [
+      "easyicu.research_agent.reporting.write_phase",
       "easyicu.research_agent.contracts.runtime"
     ],
     [
@@ -17833,6 +17961,10 @@
     ],
     [
       "easyicu.research_agent.schema",
+      "easyicu.research_agent.contracts.product_files"
+    ],
+    [
+      "easyicu.research_agent.schema",
       "easyicu.research_agent.contracts.product_identity"
     ],
     [
@@ -18416,9 +18548,9 @@
   "metrics": {
     "cyclic_module_count": 0,
     "cyclic_scc_count": 0,
-    "edge_count": 4596,
+    "edge_count": 4629,
     "largest_scc_size": 0,
-    "module_count": 923,
+    "module_count": 924,
     "package_count": 43,
     "top_level_module_count": 39
   },
@@ -19002,6 +19134,7 @@
     "easyicu.research_agent.planning.benchmark_comparator": "planning/benchmark_comparator.py",
     "easyicu.research_agent.planning.capability_gap": "planning/capability_gap.py",
     "easyicu.research_agent.planning.capability_registry": "planning/capability_registry.py",
+    "easyicu.research_agent.planning.carried_population": "planning/carried_population.py",
     "easyicu.research_agent.planning.cohort_contract": "planning/cohort_contract.py",
     "easyicu.research_agent.planning.cohort_eligibility": "planning/cohort_eligibility.py",
     "easyicu.research_agent.planning.cohort_identity": "planning/cohort_identity.py",

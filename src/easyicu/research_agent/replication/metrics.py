@@ -251,7 +251,7 @@ def read_replication_estimate(run_dir, database: str) -> dict:
     from ..authority.typed_binding import _resolve_typed_input_evidence
     from ..canonical_json import canonical_sha256
     from ..orchestration.human_review_checkpoint import HumanReviewCheckpoint
-    from ..schema import AnalysisPlan, ResearchContext
+    from ..schema import AnalysisPlan
 
     run = Path(run_dir)
 
@@ -281,7 +281,9 @@ def read_replication_estimate(run_dir, database: str) -> dict:
         raise ValueError("replication_input_changed")
     capsule = read("run_input_capsule.json")
     verified = load_verified_run_input_capsule(run_dir=run, scientific_identity=capsule["scientific_identity"])
-    context = ResearchContext.model_validate_json(verified.context_evidence_path.read_bytes())
+    from ..research_context.typed import parse_research_context_json
+
+    context = parse_research_context_json(verified.context_evidence_path.read_bytes())
     if context.cohort.database != database:
         raise ValueError("replication_database_changed")
     from easyicu.databases.research_plan_requirements import plan_capability_decision

@@ -1276,6 +1276,10 @@
           'The study time window is not valid for this data.',
           '研究时间窗对这份数据无效。',
         ),
+        caller_bound_population_mode_conflict: tr(
+          'The run stopped: the population condition in the execution plan did not match the approved plan. Change the cohort to generate a new plan.',
+          '运行已停止：执行计划中的人群条件与已批准的计划不一致。请修改人群，重新生成计划。',
+        ),
         research_pipeline_package_binding_changed: tr(
           'The analysis data changed while the run was in progress, so the run stopped.',
           '运行期间分析数据发生了变化，本次运行已停止。',

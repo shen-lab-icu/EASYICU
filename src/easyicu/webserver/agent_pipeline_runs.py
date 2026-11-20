@@ -6142,6 +6142,9 @@ class _CandidatePlanMaterializationAuthority:
     source_time_axis: Any = None
     # The literature the candidate was planned on, bound by its checkpoint.
     preplan_literature: Optional[dict[str, Any]] = None
+    # The criteria the candidate stated but could not apply, carried into the
+    # execution plan by the host (planning.carried_population, S1751).
+    carried_population_limitations: Optional[dict[str, Any]] = None
 
 
 def _reviewed_candidate_literature(checkpoint: Mapping[str, Any]) -> Optional[dict[str, Any]]:
@@ -6167,6 +6170,21 @@ def _reviewed_candidate_literature(checkpoint: Mapping[str, Any]) -> Optional[di
             "The candidate plan's reviewed literature failed its checkpoint binding.",
         ) from exc
     return bundle.model_dump(mode="json") if bundle is not None else None
+
+
+def _candidate_population_limitations(cohort, checkpoint: Mapping[str, Any]) -> Optional[dict[str, Any]]:
+    """The candidate's unapplied criteria, with concepts from its sealed population review."""
+    from easyicu.research_agent.orchestration.human_review_checkpoint import HumanReviewCheckpoint
+    from easyicu.research_agent.planning.carried_population import candidate_population_limitations
+
+    try:
+        requests = HumanReviewCheckpoint.model_validate(checkpoint).requests
+    except ValueError:
+        # An unreadable review keeps every criterion, carried by its words alone.
+        requests = ()
+    return candidate_population_limitations(
+        cohort_unapplied=cohort.unapplied_population_criteria, review_requests=requests,
+    )
 
 
 def _require_no_unsigned_case_duration(review):
@@ -6650,6 +6668,7 @@ def _load_candidate_plan_materialization_authority(
         contract=_candidate_plan_contract(review=parsed_review, plan=plan),
         primary_cohort_selection_mode=candidate_cohort.selection_mode,
         primary_cohort_definition=candidate_cohort.to_dict(),
+        carried_population_limitations=_candidate_population_limitations(candidate_cohort, checkpoint),
         primary_exposure_aggregation=aggregation or None,
         baseline_requirements=baseline_requirements,
         population_requirements=population_requirements,
@@ -7633,6 +7652,7 @@ def make_research_pipeline_run_runner(
             if bound_change_request is not None else None
         )
         bound_analysis_inputs: Optional[AcceptedAnalysisInputs] = None
+        carried_population_limitations: Optional[dict[str, Any]] = None
         source_agent_plan_revision_codes: tuple[str, ...] = ()
         plan_revision_guard = None
         if prepared_revision is not None and prepared_revision.failed_execution_replan:
@@ -7661,6 +7681,7 @@ def make_research_pipeline_run_runner(
                 bound_baseline_requirements = candidate_authority.baseline_requirements
                 bound_population_requirements = candidate_authority.population_requirements
                 bound_analysis_inputs = candidate_authority.analysis_inputs
+                carried_population_limitations = candidate_authority.carried_population_limitations
                 foundation_profile = _data_foundation_profile(
                     export_path=export_path,
                     study=candidate_planning_study,
@@ -8508,8 +8529,11 @@ def make_research_pipeline_run_runner(
             elif candidate_authority is not None:
                 required_cohort_mode = candidate_authority.primary_cohort_selection_mode
                 if candidate_authority.primary_cohort_definition is not None:
-                    from .research_launch_population import prepared_candidate_selection_mode
+                    from .research_launch_population import carried_population_mode, prepared_candidate_selection_mode
 
+                    required_cohort_mode = carried_population_mode(
+                        required_cohort_mode, candidate_definition=candidate_authority.primary_cohort_definition,
+                    )
                     required_cohort_mode = prepared_candidate_selection_mode(
                         candidate_definition=candidate_authority.primary_cohort_definition,
                         required_mode=required_cohort_mode,
@@ -8576,6 +8600,7 @@ def make_research_pipeline_run_runner(
                     bound_population_requirements.model_dump(mode="json")
                     if bound_population_requirements is not None else None
                 ),
+                carried_unapplied_population_criteria=carried_population_limitations,
                 bound_baseline_requirements=(
                     bound_baseline_requirements.model_dump(mode="json")
                     if bound_baseline_requirements is not None

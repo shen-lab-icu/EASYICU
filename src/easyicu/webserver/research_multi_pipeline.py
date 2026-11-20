@@ -5,7 +5,8 @@ from pathlib import Path
 
 from easyicu.databases.research_approval import REVIEW_FIELD, DatabaseCapabilityReview
 from easyicu.research_agent.canonical_json import canonical_sha256
-from easyicu.research_agent.schema import AnalysisPlan, ResearchContext
+from easyicu.research_agent.research_context.typed import parse_research_context
+from easyicu.research_agent.schema import AnalysisPlan
 from . import agent_pipeline_runs, agent_runs, dataio, settings, study_contexts
 from .agent_review_recovery import _write
 from .demo_source_storage import egress_source_database, public_demo_egress_scope
@@ -22,7 +23,7 @@ from .research_run_submission import provider_environment_for_agent_run
 
 def source_result(design):
     return CompletedResult(design["run_id"], design["source_sha256"],
-        AnalysisPlan.model_validate(design["plan"]), ResearchContext.model_validate(design["context"]), frozenset(), ())
+        AnalysisPlan.model_validate(design["plan"]), parse_research_context(design["context"]), frozenset(), ())
 
 
 class PipelineDatabaseOwner:

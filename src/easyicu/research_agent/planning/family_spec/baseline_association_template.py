@@ -16,6 +16,7 @@ from pydantic import BaseModel, ConfigDict, Field, model_validator
 from ...authority.baseline_association_runtime import BaselineAssociationRuntimeAuthority, build_baseline_authority
 from ...contracts.association_execution import baseline_sensitivity_parent_step
 from ...contracts.model_terms import ModelTermSpec
+from ...research_context.typed import parse_research_context_json
 from ...schema import AnalysisPlan, AnalysisStep, ArtifactConsumptionContract, ResearchContext
 from ..sensitivity_authority import PrespecifiedSensitivitySpec
 from ..sensitivity_plan_shaping import ensure_prespecified_sensitivity_steps
@@ -475,7 +476,7 @@ class ResultAppendRuntimeAuthority(BaseModel):
     def compilation(self):
         return compile_result_append(
             kind=self.kind, source=AnalysisPlan.model_validate_json(self.source_plan_json),
-            context=ResearchContext.model_validate_json(self.source_context_json), authority=self.baseline,
+            context=parse_research_context_json(self.source_context_json), authority=self.baseline,
         )
 
     def validate_plan(self, plan: AnalysisPlan):

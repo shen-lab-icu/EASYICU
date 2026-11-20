@@ -2851,6 +2851,8 @@ class ResearchAgentPipeline:
                 plan, question=context.research_question, defaults=self._config.default_plan_deliverables,
                 edit=self._config.bound_plan_deliverables,
             )
+            from .planning.carried_population import bind_carried_population_limitations
+            plan = bind_carried_population_limitations(plan, self._config.carried_unapplied_population_criteria)
         plan_path = (
             migrated_plan_path or reused_plan_path or (run_dir / "analysis_plan.json")
         )

@@ -174,9 +174,10 @@ def _combined_meta_analysis(batch, record, card, targets, rows, reference, *, ha
         inputs.append(value)
     design = record["design"]
     if "plan" in design and "context" in design:
-        from easyicu.research_agent.schema import AnalysisPlan, ResearchContext
+        from easyicu.research_agent.research_context.typed import parse_research_context
+        from easyicu.research_agent.schema import AnalysisPlan
 
-        identity = estimand_identity(AnalysisPlan.model_validate(design["plan"]), ResearchContext.model_validate(design["context"]))
+        identity = estimand_identity(AnalysisPlan.model_validate(design["plan"]), parse_research_context(design["context"]))
     else:
         # Protocol implementations may supply their source identity directly;
         # never infer the reference from a majority of returned estimates.

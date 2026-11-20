@@ -184,6 +184,23 @@ The full list of changes since 0.1.0 is in the v0.1.3 release notes. Recorded he
   source still cannot be recorded, the result card says why, the run's recovery record
   is kept, and the source is recorded again the next time the result opens. The
   multi-database review and the candidate population check read run contexts the same way.
+- A population restriction you accepted as not applied (for example 「成人 ICU 患者」 that
+  the plan could not apply as written) is no longer lost when the analysis runs. The run
+  no longer binds the executed plan to every input row, so the plan states the
+  restriction again: applied when the prepared data can apply it, otherwise shown as not
+  applied. If the new plan neither applies nor lists it, EasyICU adds the accepted wording
+  to the plan's not-applied criteria, so the approval card, report and paper state it.
+  A plan card also names an adult population that the plan neither applies nor
+  lists, unless the study's saved cohort already bounds age.
+- 扩展成完整论文 (and a subgroup addition) works for results whose run recorded a typed
+  research context; it was refused with 「这次结果还不能追加分析」. The multi-database and
+  replication readers read those contexts the same way, and a refused addition now logs
+  its cause.
+- A study restricted to a recorded condition (for example sepsis) no longer stops at
+  确认方案并准备数据 when the plan names the condition by the export's columns for it
+  (maximum, count, measured flag, first time): each now reads as the condition itself.
+  If the executed plan's population still differs from the approved plan, the stop says
+  so in one line and offers 修改人群.
 
 ## 0.1.0 — 2026-11-11 — first public pre-release
 

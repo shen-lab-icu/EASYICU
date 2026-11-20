@@ -45,6 +45,7 @@ _ADDITIVE_FIELDS = frozenset(
         "bound_exposure_groupings",
         "bound_population_requirements",
         "bound_target_trial",
+        "carried_unapplied_population_criteria",
         "default_plan_deliverables",
         "enable_exposure_grouping",
         "generate_manuscript",
@@ -478,6 +479,10 @@ class PipelineConfig:
     # supplying it. Only plan-owned findings may appear here.
     bound_plan_revision_contract: Optional[str] = None
     bound_plan_deliverables: Optional[Dict[str, Any]] = None
+    # Host-issued from an accepted candidate: the population criteria it stated
+    # but could not apply. The execution plan keeps each one it neither applies
+    # nor lists (planning.carried_population, S1751).
+    carried_unapplied_population_criteria: Optional[Dict[str, Any]] = None
     default_plan_deliverables: tuple[HostDeliveryKind, ...] | None = None
     # Host-issued content from an accepted metadata-only candidate, separate
     # from the prompt seed. Persisted/hashed so fresh planning and recovery
@@ -743,6 +748,13 @@ class PipelineConfig:
                 self.bound_baseline_requirements
             )
             object.__setattr__(self, "bound_baseline_requirements", parsed.model_dump(mode="json"))
+        if self.carried_unapplied_population_criteria is not None:
+            from ..planning.carried_population import CarriedPopulationLimitations
+
+            if not self.require_human_plan_review:
+                raise ValueError("carried_unapplied_population_criteria requires require_human_plan_review")
+            carried = CarriedPopulationLimitations.model_validate(self.carried_unapplied_population_criteria)
+            object.__setattr__(self, "carried_unapplied_population_criteria", carried.model_dump(mode="json"))
         if self.bound_plan_deliverables is not None:
             from ..contracts.product_files import PlanDeliverables
 

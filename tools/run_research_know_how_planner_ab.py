@@ -53,6 +53,7 @@ from easyicu.research_agent.providers.factory import (  # noqa: E402
     _register_provider_wrapper,
     authorized_complete,
 )
+from easyicu.research_agent.research_context.typed import parse_research_context_json  # noqa: E402
 from easyicu.research_agent.schema import ResearchContext  # noqa: E402
 
 
@@ -277,7 +278,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         raise SystemExit("--max-provider-calls-per-trial must be at least 1")
     _load_env_file(args.env_file)
     raw_context = args.context_json.read_bytes()
-    context = ResearchContext.model_validate_json(raw_context)
+    context = parse_research_context_json(raw_context)
     out_dir = args.out_dir.resolve()
     if out_dir.exists() and any(out_dir.iterdir()):
         raise SystemExit(f"refusing non-empty output directory: {out_dir}")

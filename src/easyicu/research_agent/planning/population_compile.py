@@ -41,7 +41,7 @@ from contextvars import ContextVar
 from dataclasses import dataclass, replace
 from functools import lru_cache
 from types import MappingProxyType
-from typing import Any, Callable, Iterator, Literal, Mapping, Optional
+from typing import Any, Callable, Iterable, Iterator, Literal, Mapping, Optional
 
 from ..authority.declared_levels import closed_planning_levels_for
 from ..cohort.schema import (
@@ -818,7 +818,7 @@ def _plan_predicates(
         predicates = tuple(
             _status_predicate(reading, concept, _hours(criterion.window),
                               missing_policy=criterion.missing_policy)
-            for concept in criterion.concepts_all_of
+            for concept in _condition_concepts(reading, criterion.concepts_all_of)
         )
     elif isinstance(criterion, Measurement):
         side = "inclusion" if criterion.role == "include" else "exclusion"
@@ -903,6 +903,26 @@ def _resolve(reading: _Input, concept: str, aggregation: str) -> str:
             "predicate over it states no population.",
         )
     return column
+
+
+def _condition_concepts(reading: _Input, names: Iterable[str]) -> tuple[str, ...]:
+    """The concepts a condition names, read back from any derived column (B33b).
+
+    A planner may name a condition by the columns an export derives from one
+    event concept (``x_max``, ``x_n``, ``x_measured``, ``x_first_time``) rather
+    than by the concept.  Presence is a property of the concept, so each such
+    column stands for the concept it derives from, when the input records that
+    source and holds the concept; a name with no other source is kept as is.
+    """
+
+    concepts: list[str] = []
+    for name in names:
+        variable = reading.variables.get(name)
+        source = str(getattr(variable, "source_concept", None) or "") if variable is not None else ""
+        concept = source if source and source != name and source in reading.roster else name
+        if concept not in concepts:
+            concepts.append(concept)
+    return tuple(concepts)
 
 
 def _status_predicate(

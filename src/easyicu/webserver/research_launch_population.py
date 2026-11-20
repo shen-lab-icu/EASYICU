@@ -38,6 +38,24 @@ def question_population_mode(required_mode: str | None, *, study: Mapping[str, A
     return None if stated_population_conditions(question) else required_mode
 
 
+def carried_population_mode(required_mode: str | None, *, candidate_definition: Mapping[str, Any] | None) -> str | None:
+    """Leave the population open when the candidate carries a criterion it could not apply.
+
+    A reviewed candidate whose stated criterion was not applied (and whose
+    omission the researcher accepted) has every input row as its cohort.  The
+    execution Planner then re-plans on the prepared package; binding it to
+    every input row forbids it from stating any criterion, so the accepted
+    omission vanished from the executed plan and its report (UX on rc_512,
+    「成人 ICU 患者」, S1747).  The mode is left to the Planner, which restates the
+    criterion: applied when the package can apply it, otherwise not applied
+    again and shown.  Nothing here selects or approves a criterion.
+    """
+    if required_mode != "all_input_rows" or not isinstance(candidate_definition, Mapping):
+        return required_mode
+    unapplied = candidate_definition.get("unapplied_population_criteria")
+    return None if isinstance(unapplied, (list, tuple)) and any(unapplied) else required_mode
+
+
 def resolved_launch_population_mode(
     *, required_mode: str | None, question: str, database: str,
     acquisition: Any, declarations: Mapping[str, Any],

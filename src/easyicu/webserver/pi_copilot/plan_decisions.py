@@ -9,6 +9,7 @@ system-owned and never become extra instructions the researcher must write.
 from __future__ import annotations
 
 from dataclasses import dataclass
+import re
 from pathlib import Path
 from typing import Any, Dict, Mapping, Sequence
 
@@ -1049,7 +1050,17 @@ def unselected_question_conditions(study: Mapping[str, Any], plan: Any) -> list[
                        for column in read for concept in concepts)
         if not selected and not any(words.lower() in text for text in unapplied) and words not in named:
             named.append(words)
+    # An adult population is an age bound: the plan applies it, lists it as not
+    # applied, or the study's saved cohort bounds age (S1747).
+    adult = _ADULT_POPULATION.search(question)
+    saved = study.get("cohort") if isinstance(study.get("cohort"), Mapping) else {}
+    if (adult and "age" not in read and saved.get("age_min") is None
+            and not any(adult.group(0).lower() in text or "age" in text or "年龄" in text for text in unapplied)):
+        named.append(adult.group(0))
     return named[:4]
+
+
+_ADULT_POPULATION = re.compile(r"成人|成年|\badults?\b", re.IGNORECASE)
 
 
 def question_population_conflict(study: Mapping[str, Any]) -> list[str]:

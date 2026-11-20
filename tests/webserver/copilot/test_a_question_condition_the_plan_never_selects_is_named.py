@@ -69,7 +69,7 @@ def test_a_criterion_already_shown_as_not_applied_is_not_named_twice() -> None:
 def test_no_plan_or_no_condition_names_nothing() -> None:
     assert unselected_question_conditions({"question": _SEPSIS}, {}) == []
     assert unselected_question_conditions({"question": _SEPSIS}, None) == []
-    assert unselected_question_conditions({"question": "成人 ICU 患者中，乳酸与院内死亡"}, {"cohort": _ALL_ROWS}) == []
+    assert unselected_question_conditions({"question": "ICU 患者中，乳酸与院内死亡"}, {"cohort": _ALL_ROWS}) == []
 
 
 def _summary(study: dict[str, Any], plan: dict[str, Any]) -> dict[str, Any]:
