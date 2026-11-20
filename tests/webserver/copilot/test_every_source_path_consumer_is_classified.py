@@ -461,6 +461,8 @@ _CLASSIFIED = {
     ('first_observed_deferred_recipe.py', 'build_pending_first_observed_review', '_declared_typed_export_columns'): (1, 'REGISTERED'),
     ('first_observed_run_guard.py', 'host_first_observed_review_scope.verify', 'verify_prepared_first_observed_population'): (1, 'REGISTERED'),
     ('first_observed_run_guard.py', 'host_first_observed_review_scope.verify_independence', '_restriction_from_cohort'): (1, 'REGISTERED'),
+    # S1639: the same run-local cohort path, read only to see that a metadata-only planning cohort has no materializer yet.
+    ('first_observed_run_guard.py', 'host_first_observed_review_scope.verify_independence', 'load_verified_materialized_cohort_authority'): (1, 'REGISTERED'),
     ('first_observed_run_guard.py', 'host_first_observed_review_scope.verify_independence', 'verify_prepared_first_observed_population'): (1, 'REGISTERED'),
     ('first_observed_run_guard.py', 'verify_prepared_first_observed_population', 'open'): (1, 'REGISTERED'),
     ('first_observed_run_guard.py', 'verify_prepared_first_observed_population', 'resolve_prepared_first_observed_coordinate'): (1, 'REGISTERED'),

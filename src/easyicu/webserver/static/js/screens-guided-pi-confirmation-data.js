@@ -466,8 +466,23 @@
       return rows.map(row => `<button class="btn sm" type="button" data-gpi-composer-prefill="${esc(row.draft)}" data-gpi-timing-alternative="${esc(row.id)}">${esc(row.label)}</button>`).join('');
     }
 
+    // The study's first-stay setting the reviewed population does not list
+    // (plan_decisions.unlisted_first_stay_setting): named so it is never a
+    // silent restriction, with a request to change it the researcher sends.
+    function firstStaySettingHtml(review) {
+      const scope = review && review.first_stay_setting_unlisted;
+      const copy = {
+        first_icu_stay: [tr('Keep each patient’s first ICU stay only', '仅保留每位患者的首次 ICU 入住'),
+          tr('Keep every ICU stay instead of only each patient’s first ICU stay.', '不只保留每位患者的首次 ICU 入住，改为保留所有 ICU 入住。')],
+        first_icu_stay_per_hospitalization: [tr('Keep the first ICU stay within each hospitalization', '仅保留每次住院的首次 ICU 入住'),
+          tr('Keep every ICU stay instead of only the first ICU stay within each hospitalization.', '不只保留每次住院的首次 ICU 入住，改为保留所有 ICU 入住。')],
+      }[scope];
+      if (!copy) return '';
+      return `<div class="gpi-confirmation-data-status is-compact is-system-default" data-gpi-first-stay-setting="${esc(scope)}"><strong>${esc(copy[0])} · ${esc(tr('Study setting (system default)', '研究设置（系统默认）'))}</strong><small>${esc(tr('The plan’s population conditions do not list this setting, but the data are extracted with it.', '计划的人群条件中没有列出这一项，但数据会按这项设置提取。'))}</small><button class="btn sm" type="button" data-gpi-composer-prefill="${esc(copy[1])}">${esc(tr('Change in the conversation', '在对话中修改'))}</button></div>`;
+    }
+
     return Object.freeze({
-      runnableTimingCard, timingAlternativesHtml,
+      runnableTimingCard, timingAlternativesHtml, firstStaySettingHtml,
       preparedDataStatus, validDeferredInputScope, deferredInputScopeHtml,
       reviewedPopulationSpecHtml, populationPreparationHtml, populationAcceptanceHtml,
       localizedAuthorizationQuestion, localizedDecisionEvidence, survivalLandmarkDecisionCopy,

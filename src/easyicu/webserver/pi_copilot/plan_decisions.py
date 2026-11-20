@@ -973,6 +973,43 @@ def repeated_stays_system_default_route(study: Mapping[str, Any]) -> str | None:
     return "patient_clustered_per_hospitalization" if per_hospitalization else "patient_clustered"
 
 
+_FIRST_STAY_CRITERION_KINDS = frozenset({"first_icu_stay", "first_icu_stay_per_hospitalization"})
+
+
+def unlisted_first_stay_setting(
+    study: Mapping[str, Any], reviewed_population_spec: Any,
+) -> str | None:
+    """The study's first-stay setting when the reviewed population lists none.
+
+    The study's typed cohort setting restricts the population on its own
+    (``first_icu_stay`` per patient, ``first_icu_stay_per_hospitalization``
+    per admission).  When the plan's reviewed population names no first-stay
+    criterion, the card names the setting so the restriction is never silent;
+    ``None`` when the study sets neither or the population already lists it.
+    """
+
+    cohort = study.get("cohort")
+    try:
+        if primary_cohort.first_icu_stay_only(cohort):
+            scope = "first_icu_stay"
+        elif primary_cohort.first_icu_stay_per_hospitalization_only(cohort):
+            scope = "first_icu_stay_per_hospitalization"
+        else:
+            return None
+    except primary_cohort.PrimaryCohortContractError:
+        return None
+    rows = (
+        reviewed_population_spec.get("criteria")
+        if isinstance(reviewed_population_spec, Mapping)
+        else None
+    )
+    for row in rows if isinstance(rows, list) else ():
+        criterion = row.get("criterion") if isinstance(row, Mapping) else None
+        if isinstance(criterion, Mapping) and criterion.get("kind") in _FIRST_STAY_CRITERION_KINDS:
+            return None
+    return scope
+
+
 #: The design the repeated-stay route compiles: every stay, clustered by patient.
 _PATIENT_CLUSTERED_DESIGN = {
     "analysis_unit": "icu_stay",
@@ -2335,4 +2372,5 @@ __all__ = [
     "question_landmark_configuration",
     "record_post_baseline_landmark",
     "repeated_stays_system_default_route",
+    "unlisted_first_stay_setting",
 ]

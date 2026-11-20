@@ -58,6 +58,13 @@ The full list of changes since 0.1.0 is in the v0.1.3 release notes. Recorded he
   failure line. The card says the last preparation did not finish, gives the reason, and
   offers "Prepare data again" (or extraction on a source with no package). A preparation
   that wrote a run keeps that run's own failure message.
+- A first-stay cohort setting is never applied silently (S1639). When the study keeps
+  each patient's first ICU stay (or the first stay within each hospitalization) and the
+  plan's population conditions do not list it, the plan card names it as "Keep each
+  patient's first ICU stay only · Study setting (system default)" with "Change in the
+  conversation". The plan review now reads the same scope: on a metadata-only plan
+  (for example the raw official demo) it no longer asks to retain all ICU stays while
+  the extraction keeps one stay per patient.
 
 ## 0.1.0 — 2026-11-11 — first public pre-release
 

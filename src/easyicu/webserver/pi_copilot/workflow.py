@@ -1825,6 +1825,17 @@ def _enrich_plan_review(
                 }
             }
         )
+    # A first-stay setting the reviewed population does not list is named on
+    # the card, so the study's cohort setting never restricts it silently.
+    summary = snapshot.plan_review_summary
+    first_stay = (
+        plan_decisions.unlisted_first_stay_setting(study, summary.get("reviewed_population_spec"))
+        if isinstance(summary, Mapping) else None
+    )
+    if first_stay:
+        snapshot = snapshot.model_copy(
+            update={"plan_review_summary": {**dict(summary), "first_stay_setting_unlisted": first_stay}}
+        )
     return snapshot
 
 

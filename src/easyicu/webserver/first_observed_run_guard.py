@@ -168,6 +168,13 @@ def host_first_observed_review_scope(*, study_context_id: str):
         if not isinstance(raw_path, str) or not Path(raw_path).is_absolute():
             return False
         cohort_path = Path(raw_path)
+        if (_metadata_only_planning(context)
+                and load_verified_materialized_cohort_authority(cohort_path) is None):
+            # A metadata-only planning cohort has no rows and no materializer
+            # yet, so this verifier has no observation to add.  It must not
+            # stand in for one: the host first-stay coordinate and the plan's
+            # own facts decide (dependence_authority.repeat_units_possible).
+            return None
         restriction, _ = _restriction_from_cohort(run_dir=cohort_path.parent, cohort_path=cohort_path)
         source_run = restriction.get("preparation_run_id") if isinstance(restriction, Mapping) else None
         if restriction is None:
@@ -190,6 +197,13 @@ def host_first_observed_review_scope(*, study_context_id: str):
 
     with host_first_observed_population_scope(verify), host_independent_units_scope(verify_independence):
         yield
+
+
+def _metadata_only_planning(context: Any) -> bool:
+    """Whether the context is a zero-row catalog planned before any extraction."""
+    cohort = getattr(context, "cohort", None)
+    provenance = getattr(cohort, "provenance", None)
+    return isinstance(provenance, Mapping) and provenance.get("evidence_stage") == "metadata_only_planning"
 
 
 def _restriction_from_cohort(*, run_dir: Path, cohort_path: Path) -> tuple[Mapping[str, Any] | None, Any]:
