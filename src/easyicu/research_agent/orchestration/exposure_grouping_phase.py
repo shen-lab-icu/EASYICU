@@ -339,7 +339,7 @@ def run_exposure_grouping_phase(
     )
     blocking = [item for item in compiled.groupings if not item.applied]
     if blocking:
-        raise _stop(blocking)
+        raise _stop(blocking, planner_stated=accepted is None)
     drifted = [
         item
         for item in compiled.applied
@@ -869,8 +869,23 @@ def _record_not_asked(run_dir: Path, reason: str) -> Path:
 def _ask(
     planner: Any, *, context: ResearchContext, sources: Sequence[Any]
 ) -> tuple[ExposureGroupings, dict[str, Any]]:
+    refused: list[str] = []
+
+    def refuse_once(stated: ExposureGroupings) -> None:
+        # One re-ask with the compiler's reason (S1706); a second answer
+        # naming no concept is compiled and stops as a planning error.
+        if refused:
+            return
+        try:
+            _refuse_unknown_concepts(stated, context=context, sources=sources)
+        except ValueError as exc:
+            refused.append(str(exc))
+            raise
+
     try:
-        answer = ask_exposure_groupings(planner, context=context, sources=sources)
+        answer = ask_exposure_groupings(
+            planner, context=context, sources=sources, answer_check=refuse_once
+        )
     except StructuredResponseFailure as exc:
         raise ProgressivePlanCompileError(
             "exposure_grouping_unanswered",
@@ -880,6 +895,36 @@ def _ask(
             cause_code=EXPOSURE_GROUPING_ROLE,
         ) from exc
     return answer.groupings, {"planner": answer.record(), "candidate": None}
+
+
+#: The compile owner's verdict that a grouping names no concept at all: the
+#: name is neither a value of the input nor a concept Data Extraction defines.
+_UNKNOWN_CONCEPT = "exposure_group_concept_unavailable"
+
+
+def _refuse_unknown_concepts(
+    stated: ExposureGroupings, *, context: ResearchContext, sources: Sequence[Any]
+) -> None:
+    """Send back an answer whose grouping names no concept (B24).
+
+    A Planner answer once named its own grouping id ("x1") as the concept,
+    and planning stopped as not applied.  The compile owner's verdict is read
+    here, before the answer is taken, so the Planner is asked again within
+    the same bounded retries.  A concept the input lacks but an extraction
+    defines is an answer: the phase reports the extraction it needs.
+    """
+
+    listed = ", ".join(dict.fromkeys(str(source.concept) for source in sources))
+    for compiled in compile_exposure_groupings(stated, context).groupings:
+        if compiled.reason != _UNKNOWN_CONCEPT:
+            continue
+        raise ValueError(
+            f"grouping {compiled.grouping.id} names the concept "
+            f"{compiled.grouping.concept!r}: {compiled.detail.rstrip(' .')}.  "
+            "concept is the concept id of the measured value the study groups "
+            "by, never the grouping's id"
+            + (f"; the input lists {listed}" if listed else "")
+        )
 
 
 def _drift(
@@ -986,9 +1031,32 @@ def _staged(item: CompiledGrouping) -> dict[str, Any]:
     }
 
 
-def _stop(blocking: Sequence[CompiledGrouping]) -> ProgressivePlanCompileError:
-    """Planning stops: a grouping waits for an extraction, or cannot apply."""
+def _stop(
+    blocking: Sequence[CompiledGrouping], *, planner_stated: bool = False
+) -> ProgressivePlanCompileError:
+    """Planning stops: a grouping waits for an extraction, or cannot apply.
 
+    A grouping the Planner stated with no concept the host knows, after the
+    one re-ask, is the Planner's error, not the study's: it stops as
+    ``exposure_grouping_unanswered``, whose message offers a fresh plan.
+    """
+
+    unknown = [item for item in blocking if item.reason == _UNKNOWN_CONCEPT]
+    if planner_stated and unknown:
+        return ProgressivePlanCompileError(
+            "exposure_grouping_unanswered",
+            "The Planner named no measured value EasyICU knows as the concept of "
+            "the study's exposure grouping, also when asked again with the "
+            "reason: "
+            + "; ".join(
+                f"{item.grouping.id} names {item.grouping.concept!r}"
+                for item in unknown
+            )
+            + ".  This is a planning error, not one in the study's question.",
+            path="exposure_groupings",
+            cause_code=_UNKNOWN_CONCEPT,
+            findings=[item.record() for item in blocking],
+        )
     code = (
         "exposure_group_not_applied"
         if any(item.disposition == "not_applied" for item in blocking)

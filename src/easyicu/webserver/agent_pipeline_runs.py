@@ -970,11 +970,13 @@ _PLANNING_STOP_SENTENCES = {
     "exposure_group_not_applied": (
         "A grouping the study states cannot be formed as stated on this data; "
         "the details name the grouping and why. Planning stopped before the "
-        "plan's outline, and no analysis was run. Change the grouping in the "
-        "question, then generate the plan again."
+        "plan's outline, and no analysis was run. If the details show the "
+        "plan misread the question, generate a fresh plan; if the question "
+        "states a grouping this data cannot hold, change it in the question."
     ),
     "exposure_grouping_unanswered": (
-        "The model did not state the study's exposure grouping in a form "
+        "This is a planning error, not a problem with the question: the "
+        "model did not state the study's exposure grouping in a form "
         "EasyICU can read within the allowed retries, so planning stopped and "
         "no analysis was run. Generate the plan again; if it stops again, "
         "keep the run record for diagnosis."

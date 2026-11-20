@@ -247,13 +247,22 @@ assert.equal(Object.isFrozen(modules.require('preview')), true);
   const groupingStops = {
     exposure_group_requires_extraction: [/Prepare data that include this value/, /请准备包含该数值的数据/],
     exposure_group_not_applied: [/the detail names the grouping and the reason/, /详情里写明了是哪一个分组以及原因/],
-    exposure_grouping_unanswered: [/keep the run record for diagnosis/, /请保留运行记录供排查/],
+    exposure_grouping_unanswered: [/This is a planning error, not a problem with your question/, /这是规划出错，不是您的问题写得有误/],
     exposure_group_variable_unbound: [/This is an EasyICU fault/, /这是 EasyICU 的内部故障/],
     exposure_group_candidate_drift: [/runs only the grouping that was approved/, /EasyICU 只运行已批准的分组/],
     exposure_group_level_empty: [/does not drop or merge a group on its own/, /不会自行删除或合并分组/],
     progressive_family_spec_exposure_group_contrast_unavailable: [/reference or comparison group/, /参照组或对比组不在模板能提供的水平里/],
     progressive_exposure_group_contrast_mismatch: [/conflicting contrasts/, /不一致的比较方向/],
   };
+  // B24 (S1706): a planning error never sends the researcher to change
+  // the question, and both stops name the fresh-plan action.
+  const unanswered = runFailure('research_pipeline_progressive_compile_failed', { code: 'exposure_grouping_unanswered' });
+  assert.doesNotMatch(unanswered, /[Cc]hange/);
+  assert.doesNotMatch(runFailureZh('research_pipeline_progressive_compile_failed', { code: 'exposure_grouping_unanswered' }), /修改/);
+  ['exposure_grouping_unanswered', 'exposure_group_not_applied'].forEach(code => {
+    assert.match(runFailure('research_pipeline_progressive_compile_failed', { code }), /Generate a fresh plan/);
+    assert.match(runFailureZh('research_pipeline_progressive_compile_failed', { code }), /重新生成新计划/);
+  });
   Object.entries(groupingStops).forEach(([code, [en, zh]]) => {
     const text = runFailure('research_pipeline_progressive_compile_failed', { code });
     assert.match(text, en);

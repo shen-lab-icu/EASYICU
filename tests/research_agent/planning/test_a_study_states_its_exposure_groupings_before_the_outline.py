@@ -549,3 +549,84 @@ def test_a_cohort_note_is_not_a_quote_source_for_an_exposure_grouping():
     assert note not in " ".join(texts) and "age range: 18 to *" in texts
     with pytest.raises(ValueError, match="is not written there"):
         parse_exposure_groupings(_answer(_grouping(quote=note, source="study_wording")), study_texts=texts)
+
+
+def test_a_grouping_naming_no_concept_goes_back_with_the_inputs_values(
+    tmp_path: Path,
+) -> None:
+    # B24: a strict-schema answer named its own grouping id as the concept.
+    # The compile owner finds "x1" in no value of the input and in no Data
+    # Extraction definition; the answer goes back with that reason and the
+    # values the input lists, inside the same bounded retries.
+    copy = _run_copy(tmp_path)
+    client = ScriptedMockLLMClient(
+        [_answer(_grouping(concept="x1")), _answer(_grouping())]
+    )
+
+    _phase(copy, client)
+
+    record = json.loads((copy.parent / EXPOSURE_GROUPINGS_FILENAME).read_text())
+    assert [item["concept"] for item in record["planner"]["stated"]["groupings"]] == [
+        "lact"
+    ]
+    assert record["compiled"]["groupings"][0]["disposition"] == "applied"
+    retry = client.calls[1][0][-1].content
+    assert "names the concept 'x1'" in retry
+    assert "never the grouping's id" in retry
+    assert "the input lists age, lact" in retry
+
+
+def test_a_grouping_naming_no_concept_twice_stops_as_a_planning_error(
+    tmp_path: Path,
+) -> None:
+    # One re-ask only (S1706): the second answer is compiled and recorded, and
+    # planning stops as the Planner's error, never as the study's grouping.
+    copy = _run_copy(tmp_path)
+    client = ScriptedMockLLMClient([_answer(_grouping(concept="x1"))] * 2)
+
+    with pytest.raises(ProgressivePlanCompileError) as stopped:
+        _phase(copy, client)
+
+    assert stopped.value.reason_code == "exposure_grouping_unanswered"
+    assert stopped.value.details["cause_code"] == "exposure_group_concept_unavailable"
+    assert "planning error, not one in the study's question" in str(stopped.value)
+    assert len(client.calls) == 2
+    record = json.loads((copy.parent / EXPOSURE_GROUPINGS_FILENAME).read_text())
+    assert record["compiled"]["groupings"][0]["reason"] == (
+        "exposure_group_concept_unavailable"
+    )
+    assert _producer(copy) == "research_agent_run_stage"
+
+
+def test_a_grouping_naming_a_known_concept_is_asked_once(tmp_path: Path) -> None:
+    copy = _run_copy(tmp_path)
+    client = ScriptedMockLLMClient([_answer(_grouping())])
+
+    _phase(copy, client)
+
+    assert len(client.calls) == 1
+    record = json.loads((copy.parent / EXPOSURE_GROUPINGS_FILENAME).read_text())
+    assert record["compiled"]["groupings"][0]["disposition"] == "applied"
+
+
+def test_a_concept_an_extraction_defines_is_an_answer_not_a_retry(
+    tmp_path: Path,
+) -> None:
+    # glu is not in this input, but Data Extraction defines it: the phase
+    # reports the extraction it needs, and the Planner is asked once.
+    copy = _run_copy(tmp_path)
+    client = ScriptedMockLLMClient([_answer(_grouping(concept="glu"))])
+
+    with pytest.raises(ProgressivePlanCompileError) as stopped:
+        _phase(copy, client)
+
+    assert stopped.value.reason_code == "exposure_group_requires_extraction"
+    assert len(client.calls) == 1
+
+
+def test_an_answer_read_without_its_input_is_held_to_the_words_only() -> None:
+    parsed = parse_exposure_groupings(
+        _answer(_grouping(concept="x1")), study_texts=(_QUESTION,)
+    )
+
+    assert [item.concept for item in parsed.groupings] == ["x1"]

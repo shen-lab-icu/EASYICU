@@ -94,6 +94,15 @@ The full list of changes since 0.1.0 is in the v0.1.3 release notes. Recorded he
   chosen connection. Before, the open conversation stayed on the connection it was
   created with, so the next messages went to the model and account you had just left.
   The earlier conversation stays in the project.
+- When the model, asked how the study groups its exposure, names something that is not
+  a measured value (for example the grouping's own id) as the grouping's concept, the
+  plan no longer stops at once telling you to change the grouping in your question
+  (B24). The model is asked once more with the reason and the values the data hold. If
+  it names no known value again, planning stops as a planning error, says it is not a
+  problem with your question, and points to "Generate a fresh plan". A concept the data
+  lack but Data Extraction defines still reports the extraction it needs. The message
+  for a grouping that cannot be formed on the data no longer assumes the question is at
+  fault.
 
 ## 0.1.0 — 2026-11-11 — first public pre-release
 

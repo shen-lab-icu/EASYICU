@@ -263,9 +263,16 @@ def exposure_grouping_structured_output() -> StructuredOutputRequest:
 
 
 def parse_exposure_groupings(
-    raw: str, *, study_texts: Sequence[str]
+    raw: str,
+    *,
+    study_texts: Sequence[str],
+    answer_check: Optional[Callable[[ExposureGroupings], None]] = None,
 ) -> ExposureGroupings:
-    """One answer, read by the spec owner and held to the study's words."""
+    """One answer, read by the spec owner and held to the study's words.
+
+    ``answer_check`` is the caller's own check of a readable answer; a
+    ``ValueError`` it raises sends the answer back with that reason.
+    """
 
     payload = json.loads(str(raw or "").strip())
     if not isinstance(payload, dict):
@@ -287,6 +294,8 @@ def parse_exposure_groupings(
         )
     for item in groupings.groupings:
         grouping_partition(item)
+    if answer_check is not None:
+        answer_check(groupings)
     return groupings
 
 
@@ -316,11 +325,13 @@ def ask_exposure_groupings(
     context: ResearchContext,
     sources: Sequence[GroupingSource],
     progress_callback: Optional[Callable[[Any], None]] = None,
+    answer_check: Optional[Callable[[ExposureGroupings], None]] = None,
 ) -> ExposureGroupingAnswer:
     """Ask the Planner (``llm``) for the study's groupings; none is an answer.
 
-    ``StructuredResponseFailure`` propagates when no answer the owner reads
-    arrives within the retries.
+    ``answer_check`` is the caller's check of each readable answer
+    (:func:`parse_exposure_groupings`).  ``StructuredResponseFailure``
+    propagates when no answer the owner reads arrives within the retries.
     """
 
     schema = (
@@ -339,7 +350,9 @@ def ask_exposure_groupings(
     groupings = call_llm_with_structured_retry(
         llm,
         messages,
-        parser=lambda raw: parse_exposure_groupings(raw, study_texts=study_texts),
+        parser=lambda raw: parse_exposure_groupings(
+            raw, study_texts=study_texts, answer_check=answer_check
+        ),
         role=EXPOSURE_GROUPING_ROLE,
         max_retries=EXPOSURE_GROUPING_MAX_RETRIES,
         max_tokens=EXPOSURE_GROUPING_MAX_OUTPUT_TOKENS,
