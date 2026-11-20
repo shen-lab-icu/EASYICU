@@ -624,6 +624,7 @@ _CLASSIFIED = {
     ('research_run_submission.py', 'submit_research_run', 'describe_source_tables'): (1, 'FOLDER'),
     ('research_run_submission.py', 'submit_research_run', '_with_repeated_stays_default'): (1, 'OWNER'),
     ('research_run_submission.py', 'submit_research_run', 'prepared_export_manifest_path'): (1, 'OWNER'),
+    ('research_run_submission.py', 'execution_input_available', 'prepared_export_manifest_path'): (1, 'OWNER'),
     ('research_run_submission.py', 'submit_research_run', 'validate_research_pipeline_source'): (2, 'REGISTERED'),
     ('research_run_submission.py', 'submit_research_run', 'public_demo_egress_scope'): (1, 'FOLDER'),
     ('research_run_submission.py', 'submit_research_run', 'egress_source_database'): (1, 'FOLDER'),

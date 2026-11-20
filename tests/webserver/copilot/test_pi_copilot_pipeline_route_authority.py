@@ -482,6 +482,30 @@ def test_planner_only_plan_says_whether_its_source_can_be_prepared(monkeypatch, 
     assert snapshot.execution_input_available is available and seen
 
 
+@pytest.mark.parametrize("revision_source, expected", [("run-candidate", True), ("", False)])
+def test_a_preparation_that_ends_asking_for_preparation_read_no_data(monkeypatch, revision_source, expected) -> None:
+    # S1574 invariant: the latest run prepared a candidate (it names its
+    # revision source) yet stops at the upgrade again: it ran on metadata only
+    # and materialized no cohort. The snapshot marks it; it is never success.
+    from easyicu.webserver import research_run_submission
+
+    monkeypatch.setattr(research_run_submission, "execution_input_available", lambda study: True)
+    study = _complete_study()
+    digest = study_context_owner.scientific_configuration_sha256(study)
+    snapshot = build_research_workflow_snapshot(
+        study=study, active_export_present=True, active_job=None,
+        latest_run={"run_type": "full", "run_id": "run-prepared", "engine": "easyicu.research_agent.pipeline",
+                    "gate_status": "blocked", "run_status": "human_review_pending",
+                    "pending_review_reason_codes": ["operator_plan_approval_required"],
+                    "plan_revision_source_run_id": revision_source,
+                    "artifact_names": ["agent_plan.json", "source_run_manifest.json"]},
+        plan_review_authority={"run_id": "run-prepared", "resumable_here": True,
+                               "scientific_configuration_sha256": digest, "budget_mode": "planner_canary"},
+    )
+    assert snapshot.next_action_code == "plan_execution_upgrade_required"
+    assert snapshot.preparation_read_no_data is expected
+
+
 def test_legacy_scientific_review_requests_fresh_plan_without_reextracting() -> None:
     study = _complete_study()
     digest = study_context_owner.scientific_configuration_sha256(study)

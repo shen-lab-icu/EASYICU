@@ -48,6 +48,11 @@ The full list of changes since 0.1.0 is in the v0.1.3 release notes. Recorded he
   now says the study's data must be extracted first and offers to ask for that
   extraction in the conversation; a direct submission of that preparation is refused
   with `research_pipeline_prepare_requires_extracted_package`.
+  A data preparation that ends asking for preparation again (it ran on metadata only and
+  built no cohort) never counts as done: the card states that the last preparation read
+  no data, and offers extraction or, when the source now has a package, preparing again
+  from it. B18 does not come from the B15 candidate change; it is the budget a raw
+  source resolves to.
 
 ## 0.1.0 — 2026-11-11 — first public pre-release
 

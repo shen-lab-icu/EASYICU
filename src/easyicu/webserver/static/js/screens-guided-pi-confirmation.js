@@ -422,7 +422,8 @@
       if (code === 'plan_execution_upgrade_required' && workflow.execution_input_available === false) return {
         code, grants: [], nonApprovable: true, primaryEdit: true, showPlanPreview: true,
         editLabel: tr('Ask to extract this study’s data', '在对话中请求提取本研究数据'),
-        title: tr('Candidate plan ready; this study’s data must be extracted first', '候选研究计划已生成，需先提取本研究数据'),
+        title: workflow.preparation_read_no_data ? tr('The last data preparation read no data; extract this study’s data first', '上次数据准备没有读到数据，需先提取本研究数据')
+          : tr('Candidate plan ready; this study’s data must be extracted first', '候选研究计划已生成，需先提取本研究数据'),
         note: tr(
           'This study’s data source is raw database files with no extracted analysis package, so no data can be prepared from it and the plan would only be made on metadata again. Extract the data for this study’s population in the conversation; the plan is then made again on that package.',
           '本研究的数据源是原始数据库文件，还没有提取好的分析数据包，无法从中准备数据，继续只会再次仅凭元数据规划。请在对话中按本研究人群提取数据；数据包就绪后会据此重新生成计划。',
@@ -431,9 +432,9 @@
         reviewResources: reviewedPlanRunId ? [{ kind: 'research_artifact', run_id: reviewedPlanRunId, artifact: 'agent_plan.json', label: tr('Open the complete plan', '打开完整计划'), media_type: 'application/json' }] : [],
       };
       if (code === 'plan_execution_upgrade_required') {
-        const retryPreparation = workflow.latest_attempt_failure
+        const retryPreparation = Boolean(workflow.preparation_read_no_data) || (workflow.latest_attempt_failure
           && workflow.latest_attempt_failure.candidate_run_id === reviewedPlanRunId
-          && workflow.latest_attempt_failure.checkpoint_resume_available === false;
+          && workflow.latest_attempt_failure.checkpoint_resume_available === false);
         return {
         // One visible confirmation owns the whole bounded upgrade: persist the
         // accepted candidate, prepare its exact data package, and let the
@@ -450,7 +451,10 @@
           'Candidate plan ready; confirm data preparation next',
           '候选研究计划已生成，请确认数据准备',
         ),
-        note: retryPreparation ? tr(
+        note: workflow.preparation_read_no_data ? tr(
+          'The last preparation read no data: it ran on metadata only, so no cohort was built. The study’s source now has an extracted package; prepare the data again from it.',
+          '上次数据准备没有读到数据：它只用了元数据，没有生成队列。本研究的数据源现在已有提取好的数据包，请据此重新准备数据。',
+        ) : retryPreparation ? tr(
           'Plan generation did not finish. Your candidate is saved. Prepare the data again, then review the new plan.',
           '这次计划生成未完成。候选方案已保留，请重新准备数据，再核对新计划。',
         ) : tr(

@@ -265,6 +265,7 @@ _CLASSIFIED = {
     ("research_run_submission.py", "_with_repeated_stays_default", "resolve_study_patient_grouping"): (1, "OWNER"),
     ("research_run_submission.py", "submit_research_run", "describe_source_tables"): (1, "FOLDER"),
     ("research_run_submission.py", "submit_research_run", "prepared_export_manifest_path"): (1, "OWNER"),
+    ("research_run_submission.py", "execution_input_available", "prepared_export_manifest_path"): (1, "OWNER"),
     ("research_run_submission.py", "submit_research_run", "validate_research_pipeline_source"): (2, "REGISTERED"),
     ("run_population_proof.py", "verified_first_stay_applied", "open_export_package"): (1, "REGISTERED"),
     ("sources.py", "_autodiscovered_paths.describe", "describe_source_tables"): (1, "FOLDER"),

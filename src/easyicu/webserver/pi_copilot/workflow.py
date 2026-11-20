@@ -156,6 +156,11 @@ class ResearchWorkflowSnapshot(BaseModel):
     #: source (research_run_submission.execution_input_available); a raw
     #: source must be extracted first (B18).
     execution_input_available: bool = True
+    #: The latest run was itself the data preparation of a candidate, yet it
+    #: ends asking for that preparation again: it ran on metadata only, so no
+    #: cohort was materialized (null cohort/materialization hashes). It is
+    #: never a success, and the card says so instead of returning unchanged.
+    preparation_read_no_data: bool = False
     analysis_validation_retry_available: bool = False
     #: The Writer never reached the model service; the sealed analysis may be
     #: written up again without rerunning it.
@@ -1474,6 +1479,10 @@ def build_research_workflow_snapshot(
         execution_input_available=(
             plan_review_reason_code != "plan_execution_upgrade_required"
             or _execution_input_available(study_row)
+        ),
+        preparation_read_no_data=bool(
+            plan_review_reason_code == "plan_execution_upgrade_required"
+            and str(run_row.get("plan_revision_source_run_id") or "").strip()
         ),
         analysis_validation_retry_available=(analysis_validation_retry_available),
         report_rewrite_available=report_rewrite_available,

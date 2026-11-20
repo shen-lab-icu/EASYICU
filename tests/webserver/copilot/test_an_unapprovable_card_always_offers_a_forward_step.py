@@ -134,6 +134,10 @@ def _render(tmp_path: Path) -> list[dict]:
     # B18: a candidate whose source has no extracted package (raw files).
     cases += [{"code": code, "variant": "source:no_package", "summary": {},
                "workflow": {"execution_input_available": False}} for code in _codes()]
+    # S1574: the latest preparation read no data (metadata only, null hashes).
+    cases += [{"code": code, "variant": f"prepared_nothing:{name}", "summary": {},
+               "workflow": {"preparation_read_no_data": True, "execution_input_available": available}}
+              for code in _codes() for name, available in (("no_package", False), ("package", True))]
     cases_path = tmp_path / "cases.json"
     cases_path.write_text(json.dumps(cases), encoding="utf-8")
     result = run_node(node, _SCRIPT, str(OWNER.resolve()), str(cases_path), check=False, timeout=120)
@@ -243,3 +247,28 @@ def test_a_candidate_whose_source_has_a_package_still_offers_preparation(rendere
     for row in (r for r in rendered if r["code"] == "plan_execution_upgrade_required" and r["variant"] == "empty"):
         assert any("data-gpi-confirm-action" in button and " disabled" not in button for button in row["buttons"])
         assert _EXTRACT[row["language"]] not in row["html"]
+
+
+_FIRST_TIME = {"zh": "候选研究计划已生成，请确认数据准备", "en": "Candidate plan ready; confirm data preparation next"}
+_NO_DATA = {"zh": "上次数据准备没有读到数据", "en": "The last data preparation read no data"}
+
+
+@pytest.mark.parametrize("variant", ["prepared_nothing:no_package", "prepared_nothing:package"])
+def test_a_preparation_that_read_no_data_never_returns_the_same_card(rendered, variant) -> None:
+    # S1574 invariant: a preparation run that ends asking for preparation again
+    # built no cohort. It is not a success, and the card must change: it names
+    # the empty preparation and offers extraction (no package) or preparing
+    # again from the package now present, never the first-time card unchanged.
+    rows = [r for r in rendered if r["code"] == "plan_execution_upgrade_required" and r["variant"] == variant]
+    assert {r["language"] for r in rows} == {"zh", "en"}
+    for row in rows:
+        language = row["language"]
+        assert _FIRST_TIME[language] not in row["html"], language
+        enabled = [button for button in row["buttons"] if " disabled" not in button]
+        assert len(enabled) >= 1, language
+        if variant.endswith("no_package"):
+            assert _NO_DATA[language] in row["html"] and _EXTRACT[language] in row["html"]
+            assert not any("data-gpi-confirm-action" in button for button in enabled)
+        else:
+            assert ("The last preparation read no data" if language == "en" else "上次数据准备没有读到数据") in row["html"]
+            assert any("data-gpi-confirm-action" in button for button in enabled)
