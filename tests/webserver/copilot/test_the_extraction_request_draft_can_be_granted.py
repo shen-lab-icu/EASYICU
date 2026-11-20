@@ -95,3 +95,38 @@ def test_the_drafted_extraction_request_is_grantable_when_sent(
 )
 def test_a_request_that_does_not_confirm_extraction_is_not_granted(text: str) -> None:
     assert "extract" not in infer_explicit_turn_actions(text)
+
+
+@pytest.mark.parametrize(
+    "code",
+    [
+        "plan_execution_upgrade_required",
+        "operator_plan_approval_required",
+        "planner_checkpoint_resume_available",
+        "plan_scientific_changes_required",
+    ],
+)
+@pytest.mark.parametrize("available", [True, False, None])
+def test_the_card_and_the_host_trigger_read_the_same_raw_source_state(
+    code: str, available
+) -> None:
+    # B19 routing: the host starts a raw Demo study's extraction only in the
+    # state where this card drafts the request. One Python predicate owns the
+    # state; the card's condition must give the same verdict on the same input.
+    from types import SimpleNamespace
+
+    from easyicu.webserver.pi_copilot.host_study_extraction import (
+        raw_source_extraction_state,
+    )
+
+    workflow = {"next_action_code": code}
+    if available is not None:
+        workflow["execution_input_available"] = available
+    raw_draft = _draft(_CARDS["raw_source_plan"], "en")
+
+    card_drafts_extraction = _draft(workflow, "en") == raw_draft
+    host_state = raw_source_extraction_state(
+        SimpleNamespace(next_action_code=code, execution_input_available=available)
+    )
+
+    assert card_drafts_extraction is host_state

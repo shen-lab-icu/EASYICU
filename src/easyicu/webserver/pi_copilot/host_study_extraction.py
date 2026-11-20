@@ -27,6 +27,21 @@ _RAW_PLAN_STATE = "plan_execution_upgrade_required"
 _LIVE_JOB_STATUSES = frozenset({"queued", "running"})
 
 
+def raw_source_extraction_state(snapshot: Any) -> bool:
+    """The raw-source plan card's state (B18): this study's extraction is next.
+
+    The same condition makes the card draft the extraction request
+    (``planChangeDraft`` in screens-guided-pi-confirmation.js); a test pins
+    the two to the same verdict.
+    """
+
+    return bool(
+        snapshot is not None
+        and snapshot.next_action_code == _RAW_PLAN_STATE
+        and snapshot.execution_input_available is False
+    )
+
+
 def raw_demo_extraction_due(
     *,
     granted_actions: Iterable[str],
@@ -43,12 +58,7 @@ def raw_demo_extraction_due(
 
     if "extract" not in set(granted_actions) or message_origin != "typed":
         return False
-    snapshot = getattr(workflow, "workflow", None)
-    if snapshot is None:
-        return False
-    if snapshot.next_action_code != _RAW_PLAN_STATE:
-        return False
-    if snapshot.execution_input_available is not False:
+    if not raw_source_extraction_state(getattr(workflow, "workflow", None)):
         return False
     active_job = getattr(workflow, "active_job", None) or {}
     if str(active_job.get("status") or "") in _LIVE_JOB_STATUSES:
@@ -115,5 +125,6 @@ __all__ = [
     "HOST_STUDY_EXTRACTION_INTENT",
     "HOST_STUDY_EXTRACTION_TOOL",
     "raw_demo_extraction_due",
+    "raw_source_extraction_state",
     "submit_host_study_extraction",
 ]
