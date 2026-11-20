@@ -112,6 +112,11 @@ from .turn_authority import (
     infer_idea_mining_followup_intent,
     infer_research_entry_intent,
 )
+from .host_study_extraction import (
+    HOST_STUDY_EXTRACTION_INTENT,
+    raw_demo_extraction_due,
+    submit_host_study_extraction,
+)
 from .tools import extraction_workspace_resource
 from .workspace import ProjectWorkspace
 from .workflow import (
@@ -2729,6 +2734,26 @@ class PiCopilotService(SkillAttachmentService, QuickAnswerService):
                 "The exposure arrangement changed. Review the current candidate.",
                 status_code=409,
             )
+        host_study_extraction = False
+        if (
+            record.agent_mode == "research"
+            and not regenerate_user_entry_id
+            and not message_intent
+            and "extract" in inferred_actions
+        ):
+            # B19: on the raw-source plan card the researcher's own sent turn
+            # asked for this study's extraction; the host starts it before the
+            # model turn instead of leaving the step to the model's tool choice.
+            host_study_extraction = raw_demo_extraction_due(
+                granted_actions=inferred_actions,
+                message_origin=str(message_origin or ""),
+                workflow=build_project_workflow_projection(
+                    study_context_id=record.binding.study_context_id,
+                ),
+                study=self._bound_study_context(record) or {},
+            )
+            if host_study_extraction:
+                message_intent = HOST_STUDY_EXTRACTION_INTENT
         opened_state = self._ensure_open(record)
         if record.agent_mode == "research" and not regenerate_user_entry_id and not message_intent:
             workflow = build_project_workflow_projection(
@@ -2998,6 +3023,12 @@ class PiCopilotService(SkillAttachmentService, QuickAnswerService):
                 require_copilot_data_clearance(active_tool_context)
                 if job.cancel_requested:
                     raise RuntimeError("pi_message_cancelled_before_delivery")
+                if host_study_extraction:
+                    params["host_receipt"] = submit_host_study_extraction(
+                        active_tool_context,
+                        call_id=f"host-study-extraction-{job.id}",
+                        emit=emit,
+                    )
                 state = conversation_gateway.request(
                     method,
                     params,

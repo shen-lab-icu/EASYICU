@@ -156,6 +156,11 @@ class ResearchWorkflowSnapshot(BaseModel):
     #: source (research_run_submission.execution_input_available); a raw
     #: source must be extracted first (B18).
     execution_input_available: bool = True
+    #: The one tool that moves this state forward when the host knows it: a
+    #: verified official Demo raw study on the raw-source plan card extracts
+    #: its own data package next (B19). A hint for the conversation, never a
+    #: grant: the tool still needs the researcher's own extraction turn.
+    next_tool: Optional[Literal["easyicu_start_extraction"]] = None
     #: The latest run was itself the data preparation of a candidate, yet it
     #: ends asking for that preparation again: it ran on metadata only, so no
     #: cohort was materialized (null cohort/materialization hashes). It is
@@ -1455,6 +1460,10 @@ def build_research_workflow_snapshot(
         from .demo_planning_source import resolve_demo_planning_source
 
         planning_source = resolve_demo_planning_source(study_row)
+    execution_input_available = (
+        plan_review_reason_code != "plan_execution_upgrade_required"
+        or _execution_input_available(study_row)
+    )
     return ResearchWorkflowSnapshot(
         current_stage=next_stage.id,
         next_action_code=next_action,
@@ -1480,9 +1489,12 @@ def build_research_workflow_snapshot(
         study_setup_receipt=project_study_setup_receipt(study_row),
         plan_review_summary=plan_review_summary,
         plan_execution_ready=plan_execution_ready,
-        execution_input_available=(
-            plan_review_reason_code != "plan_execution_upgrade_required"
-            or _execution_input_available(study_row)
+        execution_input_available=execution_input_available,
+        next_tool=(
+            "easyicu_start_extraction"
+            if not execution_input_available
+            and extraction_handoff.official_demo_raw_source(study_row)
+            else None
         ),
         preparation_read_no_data=bool(
             plan_review_reason_code == "plan_execution_upgrade_required"

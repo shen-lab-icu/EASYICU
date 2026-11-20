@@ -1375,6 +1375,7 @@
     "src/easyicu/webserver/pi_copilot/extraction_handoff.py",
     "src/easyicu/webserver/pi_copilot/followup_queue.py",
     "src/easyicu/webserver/pi_copilot/gateway.py",
+    "src/easyicu/webserver/pi_copilot/host_study_extraction.py",
     "src/easyicu/webserver/pi_copilot/host_tool_dispatcher.py",
     "src/easyicu/webserver/pi_copilot/idea_exploration.py",
     "src/easyicu/webserver/pi_copilot/install.py",
@@ -1603,7 +1604,7 @@
     "src/easyicu/webserver/zotero_probe.py"
   ],
   "scorer_tree_root": "benchmarks/figure2_canonical9/successor_v4",
-  "scorer_tree_sha256": "6cc335c8c48ac52de99bb3ea2c1e022ffce5c638821356911321680e2520721d",
+  "scorer_tree_sha256": "cc3950af87fbf7974a93e9d48f4a7a06f47d0c96b1ebd9fd0d837f4a2405c4af",
   "suite_projection_sha256": "11c39afac69c9a0b560c6aa92be19f05725f04c66b9d2c499cfdb353c40295ab",
   "suite_ref": "easyicu_evaluation_protocol_suite/v2",
   "tasks": [

@@ -643,6 +643,8 @@ function modelPrompt(message, language, ownerContext = [], turnIntent = "", idea
       : sourcePreparationAlreadyPassed
       ? `\n\n[EASYICU_HOST_TRANSITION_V1]\n${DATA_SOURCE_CONFIRMED_MARKER}\nThe host has confirmed the study's data source outside the model transcript, and the authoritative workflow has already advanced to ${transitionWorkflowCode}. Do not ask the user to choose, confirm, download, inspect, or prepare a data source again. Acknowledge the current plan-stage readiness in at most two short sentences and stop so the host can show the workflow-owned action. Do not ask a setup question, do not start a sequential questionnaire, and do not propose cohort, exposure, outcome, window, module or export values yourself. Do not call a tool during this transition.`
       : `\n\n[EASYICU_HOST_TRANSITION_V1]\n${DATA_SOURCE_CONFIRMED_MARKER}\nThe host has confirmed the study data source. Follow the authoritative workflow receipt, including any blocker. Do not ask the user to choose, confirm, download, inspect, or prepare a data source again. A raw identified database supports metadata-only candidate planning: extraction is not a prerequisite for generating a candidate plan. Acknowledge the saved source briefly and stop for the host-owned next action. Do not invent data-preparation inputs, ask exposure/outcome/goal confirmations, or authorize extraction. The host carries the research question the researcher already wrote in this conversation into the study setup; never ask them to send it again. Only when this conversation contains no research question at all, ask for it once. Do not call a tool during this transition.`)
+    : turnIntent === HOST_STUDY_EXTRACTION_INTENT
+    ? "\n\n[EASYICU_HOST_TRANSITION_V1]\nThe researcher's own message asked for this study's data extraction, and the host already acted on it before this reply: the owner context above is the host's easyicu_start_extraction receipt for this turn. Report that receipt in at most three short sentences. If it was submitted, say that this study's extraction, with its own population conditions, has started, and that the plan card continues once this study's data package is ready. If it was blocked, state the blocker and its next step from the receipt. Call no tool, do not claim the extraction finished, never describe a generic Demo export as this study's data package, do not ask the researcher to confirm extraction again, and do not mention job ids, paths, or internal codes."
     : turnIntent === "idea_discovery_entry"
     ? "\n\n[EASYICU_RESEARCH_ENTRY_V1]\n[EASYICU_ZERO_DIRECTION_ENTRY_V1]\nThe researcher explicitly says they do not yet have a research direction. Do not call any tool, do not invent candidate ideas, and do not start a study-design questionnaire. The host owns the exact localized routing reply for this marker."
     : turnIntent === "idea_mining_entry"
@@ -1242,6 +1244,20 @@ async function preloadOwnerReceipt(sessionId, name, args = {}) {
   }
 }
 
+const HOST_STUDY_EXTRACTION_INTENT = "report_host_study_extraction";
+
+function hostOwnerReceipt(result) {
+  return {
+    tool_name: "easyicu_start_extraction",
+    status: boundedText(result?.status || "blocked", 40),
+    code: boundedText(result?.code || "pi_tool_result", 160),
+    summary: boundedText(result?.summary || result?.code || "", 2000),
+    owner: boundedText(result?.owner || "easyicu.webserver.pi_copilot", 240),
+    details: result?.details && typeof result.details === "object" ? result.details : {},
+    authority: result?.authority && typeof result.authority === "object" ? result.authority : {},
+  };
+}
+
 async function currentTurnOwnerContext(sessionId) {
   const workflow = await preloadOwnerReceipt(sessionId, "easyicu_inspect_workflow");
   const receipts = [workflow];
@@ -1485,12 +1501,20 @@ async function createSession(params) {
 }
 
 async function promptSession(requestId, params) {
-  assertExactKeys(params, new Set(["session_id", "message", "intent", "idea_source", "message_origin", "attached_skill_context", "mentioned_objects", "quick_question"]), "pi_prompt_invalid");
+  assertExactKeys(params, new Set(["session_id", "message", "intent", "idea_source", "message_origin", "attached_skill_context", "mentioned_objects", "host_receipt", "quick_question"]), "pi_prompt_invalid");
   const sessionId = boundedText(params.session_id, 160).trim();
   const message = boundedText(params.message, MAX_TEXT_CHARS).trim();
   const intent = boundedText(params.intent, 80).trim();
-  if (intent && intent !== "confirm_formal_plan_generation" && intent !== "confirm_fresh_plan_generation" && intent !== "request_candidate_plan_revision" && intent !== "confirm_planner_checkpoint_resume" && intent !== "advance_after_data_source_confirmation" && intent !== "idea_discovery_entry" && intent !== "idea_mining_entry" && intent !== "idea_mining_candidate_selection" && intent !== "implement_scientific_question" && intent !== "data_first_entry" && intent !== "clarify_research_entry") {
+  if (intent && intent !== "confirm_formal_plan_generation" && intent !== "confirm_fresh_plan_generation" && intent !== "request_candidate_plan_revision" && intent !== "confirm_planner_checkpoint_resume" && intent !== "advance_after_data_source_confirmation" && intent !== HOST_STUDY_EXTRACTION_INTENT && intent !== "idea_discovery_entry" && intent !== "idea_mining_entry" && intent !== "idea_mining_candidate_selection" && intent !== "implement_scientific_question" && intent !== "data_first_entry" && intent !== "clarify_research_entry") {
     throw Object.assign(new Error("unsupported message intent"), { code: "pi_message_intent_invalid" });
+  }
+  // The host already ran this study's extraction for the researcher's own
+  // sent turn (B19); its owner receipt replaces the preloaded context, since
+  // the submission changed authority and no further tool may run this turn.
+  const hostReceipt = params.host_receipt;
+  const hostReceiptValid = hostReceipt && typeof hostReceipt === "object" && !Array.isArray(hostReceipt);
+  if ((intent === HOST_STUDY_EXTRACTION_INTENT) !== Boolean(hostReceiptValid) || (params.host_receipt !== undefined && !hostReceiptValid)) {
+    throw Object.assign(new Error("a host receipt belongs to the host study extraction"), { code: "pi_prompt_invalid" });
   }
   // The host binds this question to the researcher's own typed message; only
   // the data-source transition may offer it to the quick-answer owner.
@@ -1521,11 +1545,15 @@ async function promptSession(requestId, params) {
       record.session.setActiveToolsByName(["easyicu_request_replan"]);
     } else if (intent === "advance_after_data_source_confirmation") {
       record.session.setActiveToolsByName([]);
+    } else if (intent === HOST_STUDY_EXTRACTION_INTENT) {
+      record.session.setActiveToolsByName([]);
     } else if (intent === "clarify_research_entry" || intent === "idea_discovery_entry") {
       record.session.setActiveToolsByName([]);
     }
     if (quickQuestion) record.session.setActiveToolsByName(["easyicu_quick_answer"]);
-    const ownerContext = await currentTurnOwnerContext(sessionId);
+    const ownerContext = intent === HOST_STUDY_EXTRACTION_INTENT
+      ? [hostOwnerReceipt(hostReceipt)]
+      : await currentTurnOwnerContext(sessionId);
     record.researchContext.beginTurn(ownerContext);
     const prompt = modelPrompt(message, record.language, ownerContext, intent, params.idea_source, params.attached_skill_context, params.mentioned_objects, quickQuestion);
     if (intent === "advance_after_data_source_confirmation") {

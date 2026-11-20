@@ -71,7 +71,10 @@ The full list of changes since 0.1.0 is in the v0.1.3 release notes. Recorded he
   study's extraction uses the Demo's full module scope when the study names no modules;
   preparing the same Demo again is redirected to the study's extraction instead of
   re-registering the generic Demo export; and a generic Demo export is never described
-  as the study's own data package.
+  as the study's own data package. When you send that request on the raw-data plan
+  card, EasyICU starts the study's extraction itself, once, before the assistant
+  replies, and the assistant reports the result. A request that does not confirm the
+  extraction, or one sent in any other state, is left to the assistant as before.
 - Extracting a MIMIC-IV or MIMIC-III study that keeps each patient's first ICU stay no
   longer fails with "criterion 'first_icu_stay' is unavailable" (B20). Extraction now
   selects the first ICU stay within the database's record (icustays ordered by intime

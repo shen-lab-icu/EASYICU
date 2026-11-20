@@ -1104,13 +1104,21 @@ def _inspect_data_package(
     try:
         review = build_registered_data_package_review(study)
     except DataPackageReviewError as exc:
+        details = dict(exc.details or {})
+        if (
+            exc.code == "data_package_source_not_registered"
+            and extraction_handoff.official_demo_raw_source(study)
+        ):
+            # A verified Demo raw study has no package to review yet: its own
+            # extraction makes one (B19). Name that tool, never grant it.
+            details["next_tool"] = "easyicu_start_extraction"
         return _result(
             context,
             status="blocked",
             code=exc.code,
             summary=exc.message,
             owner="easyicu.webserver.data_package_review",
-            details=exc.details,
+            details=details,
         )
     try:
         DataPackageReviewSnapshotStore().persist(review)

@@ -225,3 +225,31 @@ def test_a_generic_demo_export_says_it_is_no_studys_package(
         "not a data package extracted for any study's population" in result["summary"]
     )
     assert raw_demo.preparations == ["demo-source-prepare"]
+
+
+def test_reviewing_the_package_before_it_exists_names_the_extraction_tool(
+    raw_demo, monkeypatch, tmp_path
+) -> None:
+    # B19 (A): the raw Demo study has no registered package to review yet; the
+    # refusal names the tool that makes it, and spends no grant.
+    turn = _turn(raw_demo)
+
+    result = tool_module.execute_tool("easyicu_inspect_data_package", {}, turn)
+
+    assert result["code"] == "data_package_source_not_registered"
+    assert result["details"]["next_tool"] == "easyicu_start_extraction"
+    assert "extract" in turn.grant.available_actions
+
+    copied = Path(tmp_path) / "copied_demo_raw"
+    copied.mkdir()
+    unverified = {
+        **raw_demo.study,
+        "data_source": {**raw_demo.study["data_source"], "path": str(copied)},
+    }
+    monkeypatch.setattr(tool_module, "_bound_context", lambda binding: unverified)
+    monkeypatch.setattr(
+        tool_module, "require_copilot_data_clearance", lambda *args: None
+    )
+    result = tool_module.execute_tool("easyicu_inspect_data_package", {}, turn)
+    assert result["code"] == "data_package_source_not_registered"
+    assert "next_tool" not in result["details"]

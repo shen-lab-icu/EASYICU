@@ -49,6 +49,7 @@ CONTRACTS: dict[str, list[str]] = {
     "guided_pi_deferred_input_scope.test.js": [],
     "guided_pi_deferred_review_handoff.test.js": [],
     "pi_draft_repair.test.js": [],
+    "host_study_extraction_turn.test.js": [],
     "guided_pi_ux_recovery.test.js": [],
     "reply_continuation.test.js": [],
     "workspace_runtime_qa.test.js": [],
