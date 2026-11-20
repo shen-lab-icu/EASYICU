@@ -204,3 +204,39 @@ def test_preparing_the_raw_source_after_the_plan_leaves_the_compiled_lineage(cho
     assert not plan_review_progress.planned_on_compiled_configuration(prepared, after, compiled_source_run_id="")
     assert not plan_review_progress.planned_on_compiled_configuration(
         prepared, planned, compiled_source_run_id="run-compiled")
+
+
+def test_the_launch_materialization_variant_asks_the_export_through_the_launch_study(choice, chosen, monkeypatch):
+    # B14 (UX leg 3 en on f3636d097, 2026-11-20): the candidate run's
+    # foundation profile is built on the launch's materialization study (its
+    # modules and scope source differ from the signed study), so the raw
+    # Demo choice read as stale there and the first-stay authority was asked
+    # of the raw folder: research_pipeline_first_stay_restriction_unverified.
+    from easyicu.research_agent.acquisition import catalog as catalog_owner
+    from easyicu.research_agent.acquisition.catalog import AvailableCatalog, CatalogConcept
+
+    study = _first_stay_reconfirmed(choice, chosen)
+    variant = {**study, "modules": ["demographics", "outcome"], "materialization_scope_source": "neutral_default"}
+    with pytest.raises(ValueError):
+        resolve_choice(variant)
+    asked = []
+
+    def first_stay(*, export_path, database):
+        asked.append(export_path)
+        return object() if export_path == str(choice.paths.export) else None
+
+    monkeypatch.setattr(source_identity_authority, "resolve_study_first_icu_stay", first_stay)
+    monkeypatch.setattr(catalog_owner, "build_available_catalog", lambda _path: AvailableCatalog(
+        source="synthetic-metadata-only", concepts=[
+            CatalogConcept(concept_id=concept, file_name=f"{module}.parquet", typed_metadata=True,
+                           column_role=role)
+            for concept, module, role in (("age", "demographics", "value"), ("death", "outcome", "event_status"))]))
+    profile = launch._data_foundation_profile(
+        export_path=str(choice.paths.raw), study=variant, target="death", require_primary_exposure=False,
+        covariates=("age",), source_study=study)
+    assert asked == [str(choice.paths.export)] and profile["first_icu_stay"] is not None
+    # The variant alone still refuses, and now says why its choice did not hold.
+    with pytest.raises(launch.ResearchPipelineRunError) as raised:
+        launch._first_icu_stay_for_cohort(variant)
+    assert raised.value.details["source_authority_cause"] == "demo_planning_authority_stale"
+    assert asked[-1] == str(choice.paths.raw)

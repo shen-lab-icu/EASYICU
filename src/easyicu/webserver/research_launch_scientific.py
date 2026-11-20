@@ -301,21 +301,49 @@ def _patient_grouping_for_analysis_design(
     return verified_patient_grouping(study)
 
 
+def _source_authority_cause(study: Mapping[str, Any]) -> Dict[str, Any]:
+    """Why a raw Demo study's signed choice did not resolve, for a refusal.
+
+    ``source_authority_export_path`` keeps the bound path when the choice
+    does not resolve; a refusal that follows names that cause instead of
+    hiding it (B14).
+    """
+
+    if not study.get("demo_planning_authority_ref"):
+        return {}
+    from easyicu.research_agent.authority.filesystem import AuthorityFilesystemError
+    from easyicu.webserver.pi_copilot.demo_planning_authority import resolve_choice
+
+    try:
+        resolve_choice(study)
+    except (ValueError, OSError, KeyError, TypeError, dataio.ExportCohortError, AuthorityFilesystemError) as exc:
+        return {"source_authority_cause": _clean_text(str(exc) or type(exc).__name__, 120)}
+    return {}
+
+
 def _first_icu_stay_for_cohort(
     study: Mapping[str, Any],
+    *,
+    authority_study: Optional[Mapping[str, Any]] = None,
 ) -> Optional[FirstIcuStayBinding]:
     """Resolve the verified coordinate a first-stay cohort requires, or refuse.
 
     An ICU-readmission indicator is not this authority: only a coordinate the
     host derived from the bound official stay table says which stay came
     first for each patient.
+
+    ``study`` supplies the cohort. ``authority_study`` is the launch's own
+    study when ``study`` is a variant of it (a materialization study): the
+    source is resolved through the study the raw Demo choice was signed on
+    (B14, UX leg 3 en, 2026-11-20).
     """
 
     if not primary_cohort.first_icu_stay_only(study.get("cohort")):
         return None
-    source = study.get("data_source")
+    owner_study = authority_study or study
+    source = owner_study.get("data_source")
     source = source if isinstance(source, Mapping) else {}
-    export_path = source_authority_export_path(study)
+    export_path = source_authority_export_path(owner_study)
     database = _clean_text(source.get("database"), 80)
     binding: Optional[FirstIcuStayBinding] = None
     reason_code = "first_icu_stay_authority_unavailable"
@@ -346,6 +374,7 @@ def _first_icu_stay_for_cohort(
             "first_stay_restriction_status": "unverified_in_selected_export",
             "first_icu_stay_reason_code": reason_code,
             **cause,
+            **_source_authority_cause(owner_study),
             "icu_readmission_is_first_patient_stay_authority": False,
             "safe_alternatives": [
                 {
@@ -362,27 +391,34 @@ def _first_icu_stay_for_cohort(
     )
 
 
-def _first_icu_stay_per_hospitalization_for_cohort(study: Mapping[str, Any]):
-    """Resolve the distinct hospital-level restriction; never substitute patient-first."""
+def _first_icu_stay_per_hospitalization_for_cohort(
+    study: Mapping[str, Any], *, authority_study: Optional[Mapping[str, Any]] = None,
+):
+    """Resolve the distinct hospital-level restriction; never substitute patient-first.
+
+    ``authority_study`` as in ``_first_icu_stay_for_cohort`` (B14).
+    """
     if not primary_cohort.first_icu_stay_per_hospitalization_only(study.get("cohort")):
         return None
-    source = study.get("data_source")
+    owner_study = authority_study or study
+    source = owner_study.get("data_source")
     source = source if isinstance(source, Mapping) else {}
     try:
         binding = source_identity_authority.resolve_study_first_icu_stay_per_hospitalization(
-            export_path=source_authority_export_path(study),
+            export_path=source_authority_export_path(owner_study),
             database=_clean_text(source.get("database"), 80),
         )
     except source_identity_authority.PatientGroupingAuthorityError as exc:
         raise ResearchPipelineRunError(
             "research_pipeline_hospital_first_stay_restriction_unverified", str(exc),
-            details={"field": "cohort.first_icu_stay_per_hospitalization", "reason_code": exc.code},
+            details={"field": "cohort.first_icu_stay_per_hospitalization", "reason_code": exc.code,
+                     **_source_authority_cause(owner_study)},
         ) from exc
     if binding is None:
         raise ResearchPipelineRunError(
             "research_pipeline_hospital_first_stay_restriction_unverified",
             "The selected source cannot prove the first ICU stay within each hospitalization.",
-            details={"field": "cohort.first_icu_stay_per_hospitalization"},
+            details={"field": "cohort.first_icu_stay_per_hospitalization", **_source_authority_cause(owner_study)},
         )
     return binding
 
@@ -2309,8 +2345,9 @@ def _data_foundation_profile(
         else:
             required_feature_concepts.append(source_concept)
 
-    first_icu_stay = _first_icu_stay_for_cohort(study)
-    hospital_first = _first_icu_stay_per_hospitalization_for_cohort(study)
+    # The cohort is the variant's; the source is the launch study's (B14).
+    first_icu_stay = _first_icu_stay_for_cohort(study, authority_study=source_study)
+    hospital_first = _first_icu_stay_per_hospitalization_for_cohort(study, authority_study=source_study)
     return {
         "allowed_modules": modules,
         "available_concepts": tuple(by_id),

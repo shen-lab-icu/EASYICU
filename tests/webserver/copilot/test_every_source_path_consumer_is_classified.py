@@ -907,3 +907,70 @@ def test_every_pass_row_forwards_into_a_classified_webserver_parameter():
 def test_no_source_path_consumer_reads_the_raw_folder_for_its_registered_export():
     bugs = sorted(key for key, (_count, cls) in _CLASSIFIED.items() if cls == "BUG")
     assert not bugs, f"route these through bound_source_authority_path: {bugs}"
+
+
+# B14 (UX leg 3 en on f3636d097, 2026-11-20; S1545): the owner was called,
+# but with a variant of the launch's study. The launch's materialization
+# study differs from the signed study (modules, scope source), so the raw
+# Demo choice read as stale, the owner silently kept the raw folder, and the
+# first-stay restriction was refused. A study-keyed owner therefore reads the
+# launch's own study: inside a function that is handed ``source_study`` it is
+# passed that, and a known variant is never passed to it.
+STUDY_OWNERS = {
+    # owner: (positional index of the study argument, its keyword names)
+    "source_authority_export_path": (0, {"study"}),
+    "bound_source_authority_path": (1, {"study"}),
+    "_first_icu_stay_for_cohort": (0, {"study", "authority_study"}),
+    "_first_icu_stay_per_hospitalization_for_cohort": (0, {"study", "authority_study"}),
+    "verified_patient_grouping": (0, {"study"}),
+    "resolve_choice": (0, {"study"}),
+    # Wrappers that swallow a refusal would hide a variant silently.
+    "_verified_first_icu_stay_or_none": (0, {"study"}),
+    "execution_patient_grouping": (0, {"study"}),
+}
+STUDY_VARIANTS = frozenset({"materialization_study", "candidate_planning_study", "timed_study", "drafted"})
+
+
+def _owner_study_arguments(call: ast.Call) -> list[ast.AST]:
+    index, names = STUDY_OWNERS[_callee(call)]
+    arguments = [keyword.value for keyword in call.keywords if keyword.arg in names]
+    if len(call.args) > index:
+        arguments.append(call.args[index])
+    return arguments
+
+
+def study_owner_violations(sources: dict[str, str]) -> list[tuple[str, str, str, int]]:
+    violations = []
+    for rel, text in sources.items():
+        for function in ast.walk(ast.parse(text)):
+            if not isinstance(function, (ast.FunctionDef, ast.AsyncFunctionDef)):
+                continue
+            parameters = {arg.arg for arg in (*function.args.args, *function.args.kwonlyargs)}
+            for call in ast.walk(function):
+                if not (isinstance(call, ast.Call) and _callee(call) in STUDY_OWNERS):
+                    continue
+                arguments = _owner_study_arguments(call)
+                names = {node.id for argument in arguments for node in ast.walk(argument) if isinstance(node, ast.Name)}
+                attributes = {node.attr for argument in arguments for node in ast.walk(argument)
+                              if isinstance(node, ast.Attribute)}
+                # The owner is handed the launch's own study (as its study or
+                # its ``authority_study``), and never a known variant.
+                if ("source_study" in parameters and "source_study" not in names) or (
+                        (names | attributes) & STUDY_VARIANTS):
+                    violations.append((rel, function.name, _callee(call), call.lineno))
+    return sorted(set(violations))
+
+
+def test_a_study_keyed_owner_reads_the_launch_study_not_a_variant():
+    assert study_owner_violations(_webserver_sources()) == []
+
+
+def test_the_study_owner_check_finds_b14s_shape():
+    assert study_owner_violations({"synthetic.py": (
+        "def profile(study, source_study=None):\n"
+        "    path = bound_source_authority_path(export_path, source_study or study)\n"
+        "    return _first_icu_stay_for_cohort(study)\n"
+        "def launch(scientific):\n"
+        "    return source_authority_export_path(scientific.materialization_study)\n"
+    )}) == [("synthetic.py", "launch", "source_authority_export_path", 5),
+            ("synthetic.py", "profile", "_first_icu_stay_for_cohort", 3)]
