@@ -1225,16 +1225,26 @@ def _bound_source_column(export_path: Optional[str], *, database: str | None = N
         from easyicu.research_agent.intake.export_package import ExportPackageError
         from easyicu.webserver.dataio import ExportCohortError
         from easyicu.webserver.raw_preparation_dependencies import native_planning_metadata
+        unreadable = False
         try:
             native = native_planning_metadata(export_path=path, database=database)
-        except (ResearchPipelineRunError, ExportCohortError, ExportPackageError, OSError, ValueError, KeyError, TypeError):
-            # A package that cannot be read leaves the name as is (Carbon
-            # b14r1): this is proposal context, and the launch's package
-            # check refuses that package with its typed stop.
-            native = None
+        except ResearchPipelineRunError as exc:
+            # Declared native metadata that drifted (missing, tampered,
+            # inconsistent, another database) fails before any fallback; a
+            # manifest that declares none is not drift (Carbon b14r1 below).
+            if (exc.code == "research_pipeline_planning_native_metadata_invalid"
+                    and not isinstance(exc.__cause__, KeyError)):
+                raise
+            native, unreadable = None, True
+        except (ExportCohortError, ExportPackageError, OSError, ValueError, KeyError, TypeError):
+            native, unreadable = None, True
         if native is not None:
             available = frozenset(item.concept_id for item in native["catalog"].concepts)
-        else:
+        elif not unreadable:
+            # No native package: the existing catalog contract. A package whose
+            # native metadata cannot be read leaves the name as is (Carbon
+            # b14r1) and is never snapshotted: this is proposal context, and the
+            # launch's package check refuses that package with its typed stop.
             try:
                 source = build_available_catalog(path)
             except (FileNotFoundError, OSError, ValueError):

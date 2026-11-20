@@ -67,6 +67,22 @@ def test_declared_native_metadata_drift_fails_before_any_fallback(tmp_path, monk
     assert error.value.code == 'research_pipeline_planning_native_metadata_invalid'
 
 
+def test_a_package_that_declares_no_column_metadata_is_named_as_is_and_never_snapshotted(tmp_path, monkeypatch):
+    # Carbon b14r1 degrade, kept narrow: a manifest with no column metadata is
+    # not drift, so the name is left as is; and a package whose native
+    # metadata cannot be read is never read through the data snapshot.
+    from easyicu.research_agent.acquisition import catalog
+
+    source = typed_export(tmp_path / 'synthetic-export', database='eicu_demo')
+    manifest_path = source / '_manifest.json'
+    manifest = json.loads(manifest_path.read_text())
+    manifest.pop('column_metadata')
+    manifest_path.write_text(json.dumps(manifest))
+    monkeypatch.setattr(catalog, 'build_available_catalog', lambda *_: pytest.fail('must not fall back to data snapshot'))
+    resolver = owner._bound_source_column(str(source), database='eicu_demo')
+    assert resolver('death') == 'death'
+
+
 def test_non_native_column_resolution_preserves_existing_catalog_contract(tmp_path, monkeypatch):
     from types import SimpleNamespace
     from easyicu.research_agent.acquisition import catalog
