@@ -1,5 +1,17 @@
 # Changelog
 
+## 0.1.3 — unreleased (release candidate)
+
+The full list of changes since 0.1.0 is in the v0.1.3 release notes. Recorded here:
+
+- On the official demo's raw data with a first-ICU-stay cohort, the next run after you
+  confirm the demo source again no longer stops at once because "the first-stay
+  restriction cannot be verified" (B14). The run's own working copy of the study now
+  asks the registered official export through the study it was launched from.
+- When a run adds its launch timing and re-signs the confirmed demo choice, the data
+  the run prepares now carries the re-signed choice. Before, it kept the earlier one,
+  so the run's source checks could refuse a valid study.
+
 ## 0.1.0 — 2026-11-11 — first public pre-release
 
 ### Highlights
