@@ -418,11 +418,13 @@
           { kind: 'research_artifact', run_id: reviewedPlanRunId, artifact: 'literature_evidence.json', label: tr('Literature evidence', '文献依据'), media_type: 'application/json' },
         ],
       };
-      // S1574/S1577: this candidate's preparation already ended (no data read, or failed before a run): never the same card again.
-      const endedTurn = (host.session()?.conversation_replay?.turns || []).filter(turn => turn?.kind === 'host_action' && turn.action_code === 'prepare_analysis_data'
-        && String(turn.action_key || '').split(':')[2] === reviewedPlanRunId).at(-1);
-      const endedJob = ['done', 'failed', 'cancelled'].includes(endedTurn?.status) ? archivedJobs.find(job => job?.job_id === endedTurn.child_job_id) || {} : null;
-      const endedReason = endedJob?.status === 'failed' && String(host.runFailureText?.(endedJob.error_code) || '');
+      // S1574/S1577: this candidate's preparation ended before it wrote a run (one that wrote a run is that run's failure): never the same card again.
+      const endedTurn = reviewedPlanRunId && (host.session()?.conversation_replay?.turns || []).filter(turn => turn?.kind === 'host_action'
+        && turn.action_code === 'prepare_analysis_data' && String(turn.action_key || '').split(':')[2] === reviewedPlanRunId).at(-1);
+      const endedRow = endedTurn && archivedJobs.find(job => job?.job_id === endedTurn.child_job_id);
+      const endedJob = ['done', 'failed', 'cancelled', 'interrupted'].includes(endedTurn?.status) && !endedRow?.run_id
+        && workflow.latest_attempt_failure?.candidate_run_id !== reviewedPlanRunId ? endedRow || {} : null;
+      const endedReason = endedJob && endedTurn.status !== 'done' && String(host.runFailureText?.(endedJob.error_code) || '');
       const preparedNothing = Boolean(workflow.preparation_read_no_data || endedJob);
       // B18: a raw source has no package to prepare from; extract it first.
       if (code === 'plan_execution_upgrade_required' && workflow.execution_input_available === false) return {

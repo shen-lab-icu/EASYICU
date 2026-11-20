@@ -108,7 +108,7 @@ for (const language of ['zh', 'en']) {
     const owner = window.EasyICU.guidedPi.require('confirmation').create({
       tr: (en, zh) => language === 'en' ? en : zh || en,
       esc: value => String(value).replaceAll('&', '&amp;').replaceAll('<', '&lt;').replaceAll('>', '&gt;'),
-      iconHtml: () => '', resourceButton: resource => `<a data-resource="${resource.artifact}"></a>`,
+      iconHtml: () => '', resourceButton: resource => `<a data-resource="${resource.artifact}"></a>`, runFailureText: code => code ? `REASON:${code}.` : '',
       sessionIsStale: () => false, busy: () => false,
       session: () => ({ binding: { run_id: 'run_guard_1' }, ...(item.session || {}) }),
       workflow: () => ({ next_action_code: item.code, ...(item.workflow || {}), plan_review_summary: { run_id: 'run_guard_1', ...item.summary } }),
@@ -141,16 +141,28 @@ def _render(tmp_path: Path) -> list[dict]:
     # S1577 (m35): the conversation's preparation of this candidate already
     # ended (here: failed in seconds before writing a run), yet the workflow
     # offers the same step again.
-    for status, candidate in (("failed", "run_guard_1"), ("done", "run_guard_1"), ("running", "run_guard_1"), ("failed", "run_other_1")):
+    # (variant, turn status, turn candidate, job run id, extra workflow, summary)
+    wrote_run = {"latest_attempt_failure": {"run_id": "run_attempt_1", "candidate_run_id": "run_guard_1",
+                                            "reason": "preparation_failed", "checkpoint_resume_available": False}}
+    for label, status, candidate, run_id, extra, summary in (
+        ("failed", "failed", "run_guard_1", None, {}, {}),
+        ("done", "done", "run_guard_1", None, {}, {}),
+        ("interrupted", "interrupted", "run_guard_1", None, {}, {}),
+        ("running", "running", "run_guard_1", None, {}, {}),
+        ("other", "failed", "run_other_1", None, {}, {}),
+        ("wrote_run", "failed", "run_guard_1", "run_attempt_1", wrote_run, {}),
+        ("no_candidate", "failed", "", None, {}, {"run_id": ""}),
+    ):
         session = {"conversation_replay": {"turns": [{
             "kind": "host_action", "action_code": "prepare_analysis_data", "status": status, "child_job_id": "job_guard_1",
             "action_key": f"plan:{'a' * 16}:{candidate}:plan_execution_upgrade_required"}]},
-            "archived_child_jobs": [{"job_id": "job_guard_1", "kind": "agent-run", "run_id": None,
-                                     "status": "running" if status == "running" else status,
-                                     "error_code": "codex_auth_app_server_request_failed" if status == "failed" else None}]}
+            "archived_child_jobs": [{"job_id": "job_guard_1", "kind": "agent-run", "run_id": run_id,
+                                     "status": {"running": "running", "done": "done"}.get(status, "failed"),
+                                     "error_code": None if status in {"running", "done"} else "codex_auth_app_server_request_failed"}]}
         for name, available in (("no_package", False), ("package", True)):
-            cases += [{"code": code, "variant": f"turn:{status}:{candidate}:{name}", "summary": {},
-                       "workflow": {"execution_input_available": available}, "session": session} for code in _codes()]
+            cases += [{"code": code, "variant": f"turn:{label}:{name}", "summary": summary,
+                       "workflow": {"execution_input_available": available, **extra}, "session": session}
+                      for code in _codes()]
     cases_path = tmp_path / "cases.json"
     cases_path.write_text(json.dumps(cases), encoding="utf-8")
     result = run_node(node, _SCRIPT, str(OWNER.resolve()), str(cases_path), check=False, timeout=120)
@@ -288,31 +300,49 @@ def test_a_preparation_that_read_no_data_never_returns_the_same_card(rendered, v
 
 
 _ENDED = {"zh": "上次数据准备未完成", "en": "The last data preparation did not finish"}
+_RAW_FIRST = {"zh": "候选研究计划已生成，需先提取本研究数据", "en": "Candidate plan ready; this study’s data must be extracted first"}
+_PLAN_UNFINISHED = {"zh": "这次计划生成未完成", "en": "Plan generation did not finish"}
+_REASON = "REASON:codex_auth_app_server_request_failed."
 
 
-@pytest.mark.parametrize("status", ["failed", "done"])
-def test_a_preparation_that_ended_without_a_run_never_returns_the_same_card(rendered, status) -> None:
+def _rows(rendered, variant):
+    rows = [r for r in rendered if r["code"] == "plan_execution_upgrade_required" and r["variant"] == variant]
+    assert {r["language"] for r in rows} == {"zh", "en"}, variant
+    return rows
+
+
+@pytest.mark.parametrize("label", ["failed", "done", "interrupted"])
+def test_a_preparation_that_ended_without_a_run_never_returns_the_same_card(rendered, label) -> None:
     # S1577: m35 failed in two seconds (a transient model-service sign-in error)
     # before writing a run, and the card came back unchanged with no failure
-    # line. Any ended preparation of the shown candidate changes the card.
+    # line. Any ended, runless preparation of the shown candidate changes it.
     for name in ("no_package", "package"):
-        rows = [r for r in rendered if r["code"] == "plan_execution_upgrade_required"
-                and r["variant"] == f"turn:{status}:run_guard_1:{name}"]
-        assert {r["language"] for r in rows} == {"zh", "en"}
-        for row in rows:
-            language = row["language"]
-            assert _FIRST_TIME[language] not in row["html"], (name, language)
+        for row in _rows(rendered, f"turn:{label}:{name}"):
+            language, html = row["language"], row["html"]
+            assert _FIRST_TIME[language] not in html and _RAW_FIRST[language] not in html, (name, language)
+            # The job's failure is named; a preparation that finished has none.
+            assert (_REASON in html) is (label != "done" and name == "package"), (label, name, language)
             enabled = [button for button in row["buttons"] if " disabled" not in button]
             if name == "package":
-                assert _ENDED[language] in row["html"]
+                assert _ENDED[language] in html and _PREPARED[language][2] in html
                 assert sum("data-gpi-confirm-action" in button for button in enabled) == 1
-                assert _PREPARED[language][2] in row["html"]  # "prepare data again"
             else:
-                assert _NO_DATA[language] in row["html"] and _EXTRACT[language] in row["html"]
+                assert _NO_DATA[language] in html and _EXTRACT[language] in html
                 assert len(enabled) == 1 and "data-gpi-confirm-edit" in enabled[0]
 
 
-@pytest.mark.parametrize("variant", ["turn:running:run_guard_1:package", "turn:failed:run_other_1:package"])
-def test_a_running_or_other_candidates_preparation_leaves_the_card(rendered, variant) -> None:
-    for row in (r for r in rendered if r["code"] == "plan_execution_upgrade_required" and r["variant"] == variant):
-        assert _FIRST_TIME[row["language"]] in row["html"] and _ENDED[row["language"]] not in row["html"]
+@pytest.mark.parametrize("label", ["running", "other", "no_candidate"])
+def test_a_running_unrelated_or_unnamed_preparation_leaves_the_card(rendered, label) -> None:
+    for name, first in (("package", _FIRST_TIME), ("no_package", _RAW_FIRST)):
+        for row in _rows(rendered, f"turn:{label}:{name}"):
+            if label == "no_candidate" and name == "package":
+                continue  # no candidate run: the card has nothing to name
+            assert first[row["language"]] in row["html"], (label, name)
+            assert _ENDED[row["language"]] not in row["html"] and _NO_DATA[row["language"]] not in row["html"]
+
+
+def test_a_preparation_that_wrote_a_run_keeps_that_runs_failure(rendered) -> None:
+    # A preparation that wrote a run and then failed planning is reported by
+    # that run's attempt ("plan generation did not finish"), not as runless.
+    for row in _rows(rendered, "turn:wrote_run:package"):
+        assert _PLAN_UNFINISHED[row["language"]] in row["html"] and _ENDED[row["language"]] not in row["html"]
