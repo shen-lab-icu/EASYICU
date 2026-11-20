@@ -1565,6 +1565,7 @@ def run_family_spec_attempt(
             not isinstance(exc, ProgressivePlanCompileError)
             or exc.reason_code in {
                 "progressive_population_quote_not_verbatim",
+                "progressive_population_first_stay_scope_conflict",
                 "progressive_capability_gap_claim_unverified",
                 "progressive_capability_gap_confirmation_required",
                 "progressive_question_requirement_repair_regression",

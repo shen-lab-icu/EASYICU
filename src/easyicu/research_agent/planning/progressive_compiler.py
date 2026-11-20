@@ -113,9 +113,11 @@ from .population_review import (
     adult_population_accounted_for,
     explicit_adult_population,
 )
+from .population_provenance import typed_first_stay_scope
 from .population_spec import (
     PopulationSpec,
     PopulationSpecRefused,
+    quote_written_in,
     read_stated_population_spec,
     unquoted_criteria,
 )
@@ -646,6 +648,12 @@ def _population_quote_source_excerpt(quote: str, study_texts: Sequence[str]) -> 
     return f"{marker} {source[start:start + width]} {marker}"
 
 
+_FIRST_STAY_KINDS = {
+    "first_icu_stay": "each patient's first ICU stay",
+    "first_icu_stay_per_hospitalization": "the first ICU stay within each hospitalization",
+}
+
+
 def _stated_population_spec(
     cohort_intent: ProgressiveCohortIntent,
     *,
@@ -697,6 +705,27 @@ def _stated_population_spec(
             + _population_quote_source_excerpt(criterion.quote, source_texts),
             path=f"cohort.population_spec.criteria[{index}].quote",
         )
+    # A first-stay rule of the other scope than the study's typed setting
+    # cannot be prepared or applied. Unless the question states it, the quote
+    # is cohort wording (which may be a note), so the Planner repairs it.
+    scope = typed_first_stay_scope(getattr(context.user_preferences, "data_constraints", None))
+    for index, criterion in enumerate(spec.criteria):
+        if (
+            scope is not None
+            and criterion.kind in _FIRST_STAY_KINDS
+            and criterion.kind != scope
+            and not quote_written_in(criterion.quote, "question", question_texts)
+        ):
+            raise _fail(
+                "progressive_population_first_stay_scope_conflict",
+                f"criterion {criterion.id} is typed {criterion.kind}, but the study's "
+                f"population setting keeps {_FIRST_STAY_KINDS[scope]} and the research "
+                "question does not state this rule. Wording that does not itself say "
+                "which ICU stays to keep states no criterion: omit it. If the study's "
+                f"words do state a first-stay rule, type it {scope}, the scope the "
+                "study keeps.",
+                path=f"cohort.population_spec.criteria[{index}].kind",
+            )
     return spec
 
 

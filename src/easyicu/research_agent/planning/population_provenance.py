@@ -66,6 +66,29 @@ def typed_study_criterion_setting(
     return None
 
 
+def _typed_flag(value: Any) -> bool:
+    if isinstance(value, bool):
+        return value
+    return str(value or "").strip().casefold() in {"1", "true", "yes", "on"}
+
+
+def typed_first_stay_scope(data_constraints: str | None) -> str | None:
+    """The first-stay criterion kind the study's typed population setting keeps.
+
+    ``first_icu_stay`` for each patient's first ICU stay
+    (``cohort.exclude_readmissions``), ``first_icu_stay_per_hospitalization``
+    for the first ICU stay within each hospitalization; ``None`` when the study
+    types neither, or both (a conflicting pair its own owner refuses).
+    """
+
+    cohort = _study_cohort(data_constraints)
+    patient = _typed_flag(cohort.get("exclude_readmissions"))
+    hospitalization = _typed_flag(cohort.get("first_icu_stay_per_hospitalization"))
+    if patient == hospitalization:
+        return None
+    return "first_icu_stay" if patient else "first_icu_stay_per_hospitalization"
+
+
 def bind_population_provenance(
     criterion: PopulationCriterion, *, question: str,
     data_constraints: str | None,

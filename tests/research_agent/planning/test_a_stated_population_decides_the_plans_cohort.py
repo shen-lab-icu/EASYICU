@@ -523,6 +523,64 @@ def test_a_quote_from_the_outline_or_a_preset_is_not_held_to_the_study(source) -
     _foundation(_cohort(spec), _context(question="Is X associated with Y?"))
 
 
+_NOTE = "first-stay handling remains for the formal plan"
+
+
+def _with_study_cohort(context: ResearchContext, **cohort: Any) -> ResearchContext:
+    constraints = json.loads(context.user_preferences.data_constraints or "{}")
+    constraints["cohort"] = {"review": f"Include adult ICU patients; {_NOTE}.", **cohort}
+    return context.model_copy(
+        update={"user_preferences": UserPreferences(data_constraints=json.dumps(constraints))}
+    )
+
+
+@pytest.mark.parametrize(
+    "setting, kind",
+    [
+        ({"exclude_readmissions": True}, "first_icu_stay_per_hospitalization"),
+        ({"first_icu_stay_per_hospitalization": True}, "first_icu_stay"),
+    ],
+    ids=["patient-scope-study", "hospitalization-scope-study"],
+)
+def test_a_first_stay_rule_of_the_other_scope_from_cohort_wording_goes_back_to_the_planner(
+    setting, kind,
+) -> None:
+    context = _with_study_cohort(_context(question="Is X associated with Y?"), **setting)
+    spec = _spec({"quote": _NOTE, "kind": kind}, source="study_wording")
+
+    with pytest.raises(ProgressivePlanCompileError) as refused:
+        _foundation(_cohort(spec), context)
+
+    assert refused.value.reason_code == "progressive_population_first_stay_scope_conflict"
+    assert refused.value.path == "cohort.population_spec.criteria[0].kind"
+    assert "omit it" in str(refused.value)
+
+
+@pytest.mark.parametrize(
+    "setting, kind",
+    [
+        ({"exclude_readmissions": True}, "first_icu_stay"),
+        ({"first_icu_stay_per_hospitalization": True}, "first_icu_stay_per_hospitalization"),
+        ({}, "first_icu_stay_per_hospitalization"),
+        ({"exclude_readmissions": False}, "first_icu_stay"),
+    ],
+    ids=["same-patient-scope", "same-hospitalization-scope", "no-typed-scope", "all-stays-typed"],
+)
+def test_a_first_stay_rule_the_study_setting_does_not_contradict_is_kept(setting, kind) -> None:
+    context = _with_study_cohort(_context(question="Is X associated with Y?"), **setting)
+
+    _foundation(_cohort(_spec({"quote": _NOTE, "kind": kind}, source="study_wording")), context)
+
+
+def test_a_first_stay_rule_the_question_states_is_not_sent_back() -> None:
+    # The researcher's own words decide; the plan's review states the conflict.
+    question = "Among the first ICU stay per hospitalization, is X associated with Y?"
+    context = _with_study_cohort(_context(question=question), exclude_readmissions=True)
+    spec = _spec({"quote": "first ICU stay per hospitalization", "kind": "first_icu_stay_per_hospitalization"})
+
+    _foundation(_cohort(spec), context)
+
+
 def test_with_a_spec_the_planners_predicates_are_not_its_population() -> None:
     # A stated criterion that no predicate applies fails without a spec...
     criteria = [{"criterion": "adults only", "concept_ids": ["age"]}]

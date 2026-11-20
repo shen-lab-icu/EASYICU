@@ -126,6 +126,27 @@ def test_patient_first_and_hospital_first_mismatch_is_explained_without_approval
     assert "核实患者入住顺序" in card["html"]
 
 
+@pytest.mark.parametrize("language, words", [
+    ("zh", ("与研究已设定的首次 ICU 入住范围", "提出修改")),
+    ("en", ("Conflicts with the study’s first ICU stay setting", "Request changes")),
+])
+def test_a_first_stay_scope_conflict_names_itself_and_the_way_forward(language, words):
+    # Not the generic "needs extraction" copy: nothing can be extracted for it.
+    preparation = {
+        "available": False, "status": "blocked",
+        "criteria": [{"quote": "first-stay handling remains for the formal plan",
+                      "proposed_by_system": False, "disposition": "requires_extraction",
+                      "reason": "population_preparation_first_stay_scope_conflict"}],
+    }
+    card = _card(REQUIRES_EXTRACTION, preparation=preparation, language=language)
+    assert card["execute"] is False
+    assert card["edit"] is True
+    for word in words:
+        assert word in card["html"]
+    assert "需按这些设置提取" not in card["html"]
+    assert "Needs extraction with these settings" not in card["html"]
+
+
 def test_missing_cohort_decisions_are_visible_and_cannot_be_approved():
     card = _card("population_criterion_decision_unconfirmed")
     assert card["execute"] is False

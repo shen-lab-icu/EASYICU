@@ -24,6 +24,15 @@ The full list of changes since 0.1.0 is in the v0.1.3 release notes. Recorded he
   deliverable ("references"). A run writes it when the plan's confirmed deliverables
   include references, for example when the question asks for a bibliography. Otherwise
   the LaTeX manuscript keeps an inline bibliography and no separate `.bib` is written.
+  This came in with 8165c4913 ("Honor reviewed article deliverables and explain tier
+  omissions"); a `.bib` by default when the manuscript has citations is planned for
+  0.1.4.
+- A plan no longer stops with no way forward when a study's cohort note (for example
+  "first-stay handling remains for the formal plan") was read as a first-stay rule of
+  the other scope than the study's setting (B17). Unless the question states that
+  rule, the plan goes back to the Planner, which omits the note or restates the study's
+  own scope. When the question does state a conflicting first-stay rule, the plan card
+  now says so and points to "Request changes".
 
 ## 0.1.0 — 2026-11-11 — first public pre-release
 

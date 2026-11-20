@@ -180,6 +180,7 @@
       if (!preparation) return '';
       const reasons = {
         population_preparation_all_stays_conflict: tr('Conflicts with your choice to retain all stays.', '与已选择的保留全部入住冲突。'),
+        population_preparation_first_stay_scope_conflict: tr('Conflicts with the study’s first ICU stay setting (each patient’s first stay or the first stay per hospitalization). Request changes to keep one scope.', '与研究已设定的首次 ICU 入住范围（每位患者首次或每次住院首次）冲突。请通过“提出修改”只保留一种范围。'),
         population_preparation_patient_hospitalization_scope_mismatch: tr('The question asks for each patient’s first ICU stay; the first ICU stay per hospitalization is different. Revise the plan and verify patient ordering before preparation.', '原问题要求每位患者首次 ICU 入住；每次住院首次 ICU 不是同一人群。请先修订计划并核实患者入住顺序。'),
         population_preparation_eicu_demo_first_observed_unavailable: tr('The requested eICU Demo subset needs a verified complete-source selection and exclusion record; this preparation is not available yet.', '所需的 eICU Demo 子人群需要完整来源核验与排除记录；该数据准备方式尚不可用。'),
         population_preparation_bound_unrepresentable: tr('Extraction cannot preserve these exact bounds.', '提取无法保留这组精确界限。'),

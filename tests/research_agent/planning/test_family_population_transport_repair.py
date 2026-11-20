@@ -156,3 +156,26 @@ def test_a_complete_typed_population_retries_its_quote_without_losing_the_host_b
     assert "cohort.population_spec.criteria[0].quote" in feedback
     assert any(p.concept_id == "age" and p.value == 18 for p in result.output.cohort.inclusion)
     assert list(result.output.cohort.unapplied_population_criteria) == ["first ICU within each hospitalization"]
+
+
+def test_a_cohort_note_typed_as_the_other_first_stay_scope_is_repaired_in_one_retry():
+    # A study keeping each patient's first ICU stay, with a cohort note that
+    # states no rule: a per-hospitalization criterion quoting the note goes
+    # back to the Planner instead of reaching an unapprovable plan.
+    note = "first-stay handling remains for the formal plan"
+    ctx = context().model_copy(update={"research_question": "Describe group mortality in adults age 18 or older."})
+    constraints = json.loads(ctx.user_preferences.data_constraints)
+    constraints["cohort"] = {"age_min": 18, "exclude_readmissions": True,
+                             "review": f"Include adult ICU patients; {note}."}
+    ctx.user_preferences.data_constraints = json.dumps(constraints)
+    request = _request(ctx)
+    bad = payload(request)
+    bad["population"]["population_spec"]["criteria"][1].update(source="study_wording", quote=note)
+    good = deepcopy(bad)
+    good["population"]["population_spec"]["criteria"].pop(1)
+    llm, result = _run(ctx, [json.dumps(bad), json.dumps(good)])
+    assert len(llm.calls) == 2
+    feedback = llm.calls[1][0][-1].content
+    assert "progressive_population_first_stay_scope_conflict" in feedback
+    assert "cohort.population_spec.criteria[1].kind" in feedback
+    assert note not in list(result.output.cohort.unapplied_population_criteria)
