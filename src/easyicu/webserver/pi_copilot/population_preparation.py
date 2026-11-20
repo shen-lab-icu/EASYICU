@@ -15,6 +15,11 @@ from typing import Any, Mapping, Sequence
 
 from easyicu.research_agent.canonical_json import canonical_sha256
 from easyicu.research_agent.contracts.frozen_payload import thaw_payload
+from easyicu.research_agent.planning.population_provenance import (
+    HOSPITAL_SCOPE,
+    PATIENT_SCOPE,
+    names_scope,
+)
 from easyicu.research_agent.planning.population_review import sealed_population
 from easyicu.research_agent.planning.population_spec import (
     AgeYears,
@@ -30,25 +35,9 @@ from easyicu.webserver import primary_cohort, study_contexts
 STOP = "population_inclusion_requires_extraction"
 
 
-_HOSPITAL_SCOPE = (
-    r"每(?:一)?(?:次|个)?(?:住院|入院|住院期间)",
-    r"(?:每|各)(?:次|个)?(?:医院)?住院",
-    r"\b(?:per|each|every|within each|within every)\s+"
-    r"(?:hospitali[sz]ation|hospital(?:\s+admission|\s+stay))s?\b",
-)
-_PATIENT_SCOPE = (
-    r"每(?:一)?(?:位|名|个)?(?:患者|病人)",
-    r"(?:患者|病人)(?:各自|分别|每人)",
-    r"每人",
-    r"\b(?:each|every)\s+patient(?:'s)?\b",
-    r"\bper\s+patient\b",
-    r"\bpatients?'\s+first\b",
-)
-
-
-def _names_scope(text: str, patterns: Sequence[str]) -> bool:
-    folded = unicodedata.normalize("NFKC", str(text or "")).casefold()
-    return any(re.search(pattern, folded) for pattern in patterns)
+_HOSPITAL_SCOPE = HOSPITAL_SCOPE
+_PATIENT_SCOPE = PATIENT_SCOPE
+_names_scope = names_scope
 
 
 def _patient_first_wording_conflicts_with_hospitalization(quote: str) -> bool:

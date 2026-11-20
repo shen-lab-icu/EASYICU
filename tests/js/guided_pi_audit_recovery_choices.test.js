@@ -165,7 +165,9 @@ for (const lang of ['zh', 'en']) {
       '重复生成计划不能补足数据或独立证据')));
     assert.ok(html.includes('data-file="scientific_plan_review.json" data-run="candidate-a"'));
     assert.equal(html.includes('data-gpi-confirm-action'), false);
-    assert.equal(html.includes('data-gpi-confirm-edit'), false);
+    // S1572: the conversation is the one way forward; it starts no revision.
+    assert.equal((html.match(/data-gpi-confirm-edit/g) || []).length, 1);
+    assert.ok(html.includes(tr('Request changes (back to the conversation)', '提出修改（回到对话）')));
   });
 }
 

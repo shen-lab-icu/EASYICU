@@ -9,9 +9,11 @@ from __future__ import annotations
 
 import json
 import math
+import re
+import unicodedata
 from dataclasses import dataclass
 from types import MappingProxyType
-from typing import Any, Mapping
+from typing import Any, Mapping, Sequence
 
 from .population_spec import PopulationCriterion, quote_written_in
 
@@ -64,6 +66,43 @@ def typed_study_criterion_setting(
         ):
             return {"cohort.min_icu_los_hours": cohort["min_icu_los_hours"]}
     return None
+
+
+#: Wording that names the hospitalization as the first-stay scope.
+HOSPITAL_SCOPE = (
+    r"每(?:一)?(?:次|个)?(?:住院|入院|住院期间)",
+    r"(?:每|各)(?:次|个)?(?:医院)?住院",
+    r"\b(?:per|each|every|within each|within every)\s+"
+    r"(?:hospitali[sz]ation|hospital(?:\s+admission|\s+stay))s?\b",
+)
+#: Wording that names the patient as the first-stay scope.
+PATIENT_SCOPE = (
+    r"每(?:一)?(?:位|名|个)?(?:患者|病人)",
+    r"(?:患者|病人)(?:各自|分别|每人)",
+    r"每人",
+    r"\b(?:each|every)\s+patient(?:'s)?\b",
+    r"\bper\s+patient\b",
+    r"\bpatients?'\s+first\b",
+)
+
+
+def names_scope(text: str, patterns: Sequence[str]) -> bool:
+    folded = unicodedata.normalize("NFKC", str(text or "")).casefold()
+    return any(re.search(pattern, folded) for pattern in patterns)
+
+
+def names_first_stay_scope(quote: str, kind: str) -> bool:
+    """Whether ``quote`` itself names the scope of first-stay ``kind``.
+
+    "first ICU stay" names neither; "each patient's first ICU stay" names the
+    patient and "first ICU stay per hospitalization" the hospitalization.
+    """
+
+    if kind == "first_icu_stay_per_hospitalization":
+        return names_scope(quote, HOSPITAL_SCOPE)
+    if kind == "first_icu_stay":
+        return names_scope(quote, PATIENT_SCOPE) and not names_scope(quote, HOSPITAL_SCOPE)
+    return False
 
 
 def _typed_flag(value: Any) -> bool:

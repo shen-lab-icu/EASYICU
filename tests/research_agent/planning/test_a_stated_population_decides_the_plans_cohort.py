@@ -572,13 +572,38 @@ def test_a_first_stay_rule_the_study_setting_does_not_contradict_is_kept(setting
     _foundation(_cohort(_spec({"quote": _NOTE, "kind": kind}, source="study_wording")), context)
 
 
-def test_a_first_stay_rule_the_question_states_is_not_sent_back() -> None:
-    # The researcher's own words decide; the plan's review states the conflict.
-    question = "Among the first ICU stay per hospitalization, is X associated with Y?"
-    context = _with_study_cohort(_context(question=question), exclude_readmissions=True)
-    spec = _spec({"quote": "first ICU stay per hospitalization", "kind": "first_icu_stay_per_hospitalization"})
+@pytest.mark.parametrize("where", ["question", "review", "inclusion"])
+def test_words_naming_the_other_scope_are_a_real_conflict_the_review_states(where) -> None:
+    # Carbon b25 #1: explicit words are never retyped to the study's scope.
+    # They compile, the extraction remedy refuses them, and the card says so.
+    words = "first ICU stay per hospitalization"
+    question = f"Among the {words}, is X associated with Y?" if where == "question" else "Is X associated with Y?"
+    context = _context(question=question, wording=[words] if where == "inclusion" else ())
+    context = _with_study_cohort(context, exclude_readmissions=True)
+    if where == "review":
+        constraints = json.loads(context.user_preferences.data_constraints)
+        constraints["cohort"]["review"] = f"Adults; {words}."
+        context = context.model_copy(update={"user_preferences": UserPreferences(data_constraints=json.dumps(constraints))})
+    spec = _spec({"quote": words, "kind": "first_icu_stay_per_hospitalization"},
+                 source="question" if where == "question" else "study_wording")
 
     _foundation(_cohort(spec), context)
+    compiled = compile_population(PopulationSpec.model_validate(spec), context).criteria[0]
+    assert compiled.disposition == "requires_extraction"
+
+
+def test_an_unqualified_first_stay_in_the_question_typed_the_other_scope_goes_back() -> None:
+    # Carbon b25 #2: "first ICU stay" names no scope; the Planner's typing
+    # against the study's setting is repaired even though the question holds it.
+    question = "Among adults during their first ICU stay, is X associated with Y?"
+    context = _with_study_cohort(_context(question=question), exclude_readmissions=True)
+    spec = _spec({"quote": "first ICU stay", "kind": "first_icu_stay_per_hospitalization"})
+
+    with pytest.raises(ProgressivePlanCompileError) as refused:
+        _foundation(_cohort(spec), context)
+
+    assert refused.value.reason_code == "progressive_population_first_stay_scope_conflict"
+    assert "type them first_icu_stay" in str(refused.value)
 
 
 def test_with_a_spec_the_planners_predicates_are_not_its_population() -> None:

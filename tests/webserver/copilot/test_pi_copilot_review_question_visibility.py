@@ -101,7 +101,10 @@ def test_a_method_choice_never_becomes_a_question(code):
     ))
 
     assert "data-gpi-plan-decision-option" not in html
-    assert "data-gpi-confirm-edit" not in html
+    # S1572: no question is asked; the card's one way forward is the conversation.
+    assert "回答这个问题" not in html and "Answer this question" not in html
+    assert html.count("data-gpi-confirm-edit") == 1
+    assert "提出修改（回到对话）" in html or "Request changes (back to the conversation)" in html
     assert SYSTEM_REVIEW_SUMMARY in html
 
 

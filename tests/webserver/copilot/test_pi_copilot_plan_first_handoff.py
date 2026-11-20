@@ -320,7 +320,9 @@ def test_repeated_stay_runtime_gap_stays_blocked_without_a_method_question(
     assert "请选择重复 ICU 入住的研究目标" not in rendered
     assert 'data-gpi-plan-decision-option=' not in rendered
     assert 'data-gpi-confirm-action' not in rendered
-    assert 'data-gpi-confirm-edit' not in rendered
+    # S1572: no method question and no revision; only the conversation return.
+    assert rendered.count('data-gpi-confirm-edit') == 1
+    assert '提出修改（回到对话）' in rendered
     assert 'class="gpi-plan-conversation"' in rendered
     assert '<details class="gpi-plan-conversation-summary" open>' in rendered
 

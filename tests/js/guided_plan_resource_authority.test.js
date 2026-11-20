@@ -128,7 +128,10 @@ test('a blocked revision explains the next step without promising an automatic r
     const before = JSON.stringify(workflow);
     const html = owner.workflowConfirmationHtml();
     assert.equal(owner.workflowConfirmation().nonApprovable, true);
-    assert.doesNotMatch(html, /data-gpi-confirm-action|data-gpi-confirm-edit/);
+    // S1572: no revision is offered; the only control returns to the conversation.
+    assert.doesNotMatch(html, /data-gpi-confirm-action/);
+    assert.equal((html.match(/data-gpi-confirm-edit/g) || []).length, 1);
+    assert.match(html, language === 'en' ? /Request changes \(back to the conversation\)/ : /提出修改（回到对话）/);
     assert.doesNotMatch(html, /will revise the candidate plan|将在分析前修订候选计划/);
     assert.doesNotMatch(html, /use the action below to recover|请使用下方操作恢复/);
     assert.match(html, language === 'en'

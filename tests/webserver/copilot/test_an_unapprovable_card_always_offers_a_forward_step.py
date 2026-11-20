@@ -118,7 +118,7 @@ for (const language of ['zh', 'en']) {
     catch (error) { out.push({ ...item, language, error: String(error && error.stack || error) }); continue; }
     const buttons = [...html.matchAll(/<button[^>]*>/g)].map(match => match[0]);
     out.push({ code: item.code, variant: item.variant, language,
-      nonApprovable: Boolean(confirmation && confirmation.nonApprovable), buttons });
+      nonApprovable: Boolean(confirmation && confirmation.nonApprovable), buttons, html });
   }
 }
 process.stdout.write(JSON.stringify(out));
@@ -147,16 +147,6 @@ def test_the_guard_reads_the_population_stops_and_the_owners_codes() -> None:
 #: A progress state, not a decision: the host is already starting a decision
 #: the researcher took, and the card follows it.
 TRANSIENT = frozenset({"starting"})
-#: Dead states the guard found on 2026-11-20, reported to the supervisor
-#: (S1571) for a ruling; the strict xfail below flips when they are fixed.
-#: - plan_scientific_changes_required: a review holding a blocker no plan can
-#:   close (automatic_revision_blockers) and no question, or neither repairs
-#:   nor questions, renders no control.
-#: - agent_plan_revision_nonconvergent: when its one retry is not offered
-#:   (questions, blockers or no repairs), it renders no control.
-PENDING_RULING = frozenset({"plan_scientific_changes_required", "agent_plan_revision_nonconvergent"})
-
-
 def _dead(rows) -> dict[str, set[str]]:
     dead: dict[str, set[str]] = {}
     for row in rows:
@@ -177,24 +167,45 @@ def rendered(tmp_path_factory) -> list[dict]:
 
 
 def test_every_unapprovable_card_offers_an_enabled_forward_step(rendered) -> None:
-    dead = {code: states for code, states in _dead(rendered).items()
-            if code not in TRANSIENT | PENDING_RULING}
+    dead = {code: states for code, states in _dead(rendered).items() if code not in TRANSIENT}
     assert not dead, f"unapprovable cards without an enabled forward step: {dead}"
 
 
-@pytest.mark.xfail(strict=True, reason="S1571: dead review states reported for a ruling")
-def test_the_review_stops_pending_a_ruling_offer_a_forward_step(rendered) -> None:
-    dead = {code: states for code, states in _dead(rendered).items() if code in PENDING_RULING}
-    assert not dead, f"review stops without an enabled forward step: {dead}"
+_RETURN = {"zh": "提出修改（回到对话）", "en": "Request changes (back to the conversation)"}
+_WHY = {
+    "plan_scientific_changes_required": {"zh": "无法通过自动修订计划解决", "en": "No automatic plan revision can resolve"},
+    "agent_plan_revision_nonconvergent": {"zh": "自动修订已停止，这里无法再次发起", "en": "Automatic revision has stopped and cannot run again"},
+}
 
 
-def test_a_resolved_review_stop_still_offers_its_step(rendered) -> None:
-    # The pending stops are dead only in the states named above.
-    live = {(row["code"], row["variant"]) for row in rendered if row["language"] == "zh"
-            and any(attribute in button and " disabled" not in button
-                    for button in row["buttons"] for attribute in FORWARD)}
-    assert ("agent_plan_revision_nonconvergent", "review:repairs") in live
-    assert ("plan_scientific_changes_required", "review:questions") in live
+@pytest.mark.parametrize("code, variant", [
+    ("plan_scientific_changes_required", "review:blockers"),
+    ("plan_scientific_changes_required", "review:repairs+blockers"),
+    ("plan_scientific_changes_required", "review:nothing"),
+    ("agent_plan_revision_nonconvergent", "review:blockers"),
+    ("agent_plan_revision_nonconvergent", "review:questions"),
+    ("agent_plan_revision_nonconvergent", "review:nothing"),
+])
+def test_a_review_no_revision_can_close_returns_to_the_conversation(rendered, code, variant) -> None:
+    # S1572: these states had no control. They now say why in one sentence and
+    # offer only the conversation, never a revision that would fail silently.
+    for row in (r for r in rendered if r["code"] == code and r["variant"] == variant):
+        language = row["language"]
+        enabled = [button for button in row["buttons"] if " disabled" not in button]
+        assert len(enabled) == 1 and "data-gpi-confirm-edit" in enabled[0], (language, enabled)
+        assert not any("data-gpi-confirm-action" in button for button in enabled)
+        assert _RETURN[language] in row["html"] and _WHY[code][language] in row["html"]
+
+
+def test_states_that_offer_their_own_step_keep_it(rendered) -> None:
+    rows = {(r["code"], r["variant"]): r for r in rendered if r["language"] == "zh"}
+    retry = rows[("agent_plan_revision_nonconvergent", "review:repairs")]
+    assert any("data-gpi-confirm-action" in b and " disabled" not in b for b in retry["buttons"])
+    assert _RETURN["zh"] not in retry["html"]
+    revise = rows[("plan_scientific_changes_required", "review:repairs")]
+    assert not revise["nonApprovable"] and _RETURN["zh"] not in revise["html"]
+    question = rows[("plan_scientific_changes_required", "review:questions")]
+    assert "回答这个问题" in question["html"] and _RETURN["zh"] not in question["html"]
 
 
 def test_a_card_whose_only_control_is_disabled_is_caught() -> None:

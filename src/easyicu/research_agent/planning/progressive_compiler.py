@@ -113,11 +113,10 @@ from .population_review import (
     adult_population_accounted_for,
     explicit_adult_population,
 )
-from .population_provenance import typed_first_stay_scope
+from .population_provenance import names_first_stay_scope, typed_first_stay_scope
 from .population_spec import (
     PopulationSpec,
     PopulationSpecRefused,
-    quote_written_in,
     read_stated_population_spec,
     unquoted_criteria,
 )
@@ -705,25 +704,27 @@ def _stated_population_spec(
             + _population_quote_source_excerpt(criterion.quote, source_texts),
             path=f"cohort.population_spec.criteria[{index}].quote",
         )
-    # A first-stay rule of the other scope than the study's typed setting
-    # cannot be prepared or applied. Unless the question states it, the quote
-    # is cohort wording (which may be a note), so the Planner repairs it.
+    # A first-stay criterion typed with the other scope than the study's
+    # setting, from words that do not themselves name that scope (a note, or
+    # an unqualified "first ICU stay"), is the Planner's typing: it repairs it.
+    # Words that name the other scope state a real conflict; they compile and
+    # the plan's review states it (wherever the words are written).
     scope = typed_first_stay_scope(getattr(context.user_preferences, "data_constraints", None))
     for index, criterion in enumerate(spec.criteria):
         if (
             scope is not None
             and criterion.kind in _FIRST_STAY_KINDS
             and criterion.kind != scope
-            and not quote_written_in(criterion.quote, "question", question_texts)
+            and not names_first_stay_scope(criterion.quote, criterion.kind)
         ):
             raise _fail(
                 "progressive_population_first_stay_scope_conflict",
-                f"criterion {criterion.id} is typed {criterion.kind}, but the study's "
-                f"population setting keeps {_FIRST_STAY_KINDS[scope]} and the research "
-                "question does not state this rule. Wording that does not itself say "
-                "which ICU stays to keep states no criterion: omit it. If the study's "
-                f"words do state a first-stay rule, type it {scope}, the scope the "
-                "study keeps.",
+                f"criterion {criterion.id} is typed {criterion.kind}, but its words "
+                f"{criterion.quote!r} do not name {_FIRST_STAY_KINDS[criterion.kind]}, "
+                f"and the study's population setting keeps {_FIRST_STAY_KINDS[scope]}. "
+                "Wording that does not say which ICU stays to keep states no "
+                "criterion: omit it. Words that state a first-stay rule without "
+                f"naming its scope follow the study's setting: type them {scope}.",
                 path=f"cohort.population_spec.criteria[{index}].kind",
             )
     return spec

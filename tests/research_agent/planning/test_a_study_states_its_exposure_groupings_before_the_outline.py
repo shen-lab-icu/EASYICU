@@ -529,3 +529,23 @@ def test_a_host_planning_no_groupings_keeps_archived_config_digests(
     assert "enable_exposure_grouping" not in off.canonical_payload()
     assert on.canonical_payload()["enable_exposure_grouping"] is True
     assert on.canonical_digest() != off.canonical_digest()
+
+
+def test_a_cohort_note_is_not_a_quote_source_for_an_exposure_grouping():
+    # S1572: free text in cohort.review can be the assistant's own note. The
+    # grouping gate quotes only the question and the host's typed criteria.
+    from easyicu.research_agent.agents.exposure_grouping_planner import study_wording_texts
+    from easyicu.research_agent.schema import CohortDescriptor, ResearchContext, UserPreferences
+
+    note = "lactate groups remain for the formal plan"
+    context = ResearchContext(
+        research_question="Is first-day lactate associated with death?",
+        cohort=CohortDescriptor(cohort_name="synthetic", database="miiv", n_stays=0,
+                                inclusion_criteria=["age range: 18 to *"]),
+        variables=[],
+        user_preferences=UserPreferences(data_constraints=json.dumps({"cohort": {"review": note}})),
+    )
+    texts = study_wording_texts(context)
+    assert note not in " ".join(texts) and "age range: 18 to *" in texts
+    with pytest.raises(ValueError, match="is not written there"):
+        parse_exposure_groupings(_answer(_grouping(quote=note, source="study_wording")), study_texts=texts)

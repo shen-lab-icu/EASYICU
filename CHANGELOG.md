@@ -29,14 +29,19 @@ The full list of changes since 0.1.0 is in the v0.1.3 release notes. Recorded he
   0.1.4.
 - A plan no longer stops with no way forward when a study's cohort note (for example
   "first-stay handling remains for the formal plan") was read as a first-stay rule of
-  the other scope than the study's setting (B17). Unless the question states that
-  rule, the plan goes back to the Planner, which omits the note or restates the study's
-  own scope. When the question does state a conflicting first-stay rule, the plan card
-  now says so and points to "Request changes".
+  the other scope than the study's setting (B17). When the words do not themselves name
+  that scope (a note, or a plain "first ICU stay"), the plan goes back to the Planner,
+  which omits the note or follows the study's own scope. Words that do name the other
+  scope ("first ICU stay per hospitalization") are never retyped: the plan card states
+  the conflict and points to "Request changes".
 - A population condition counts as stated by the study only when its words are in the
   research question. Wording found only in the study's cohort notes (which can hold
   the assistant's own remarks) is shown as a system proposal, never as the study's
   own words.
+- A plan review card that no automatic revision can resolve (review findings only an
+  owner can close, or an automatic revision that has stopped) no longer shows no
+  buttons at all. It says why in one sentence and offers "Request changes (back to
+  the conversation)".
 
 ## 0.1.0 — 2026-11-11 — first public pre-release
 
