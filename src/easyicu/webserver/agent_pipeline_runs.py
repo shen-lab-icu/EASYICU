@@ -7847,8 +7847,10 @@ def make_research_pipeline_run_runner(
             # design's variance does not; planning and execution share its owner.
             planning_grouping_status = None
             if metadata_only_planning and execution_resume_inputs is None:
+                # The launch study, captured at launch: an in-flight run never
+                # rereads the stored study for its identity (Carbon b15r2).
                 patient_grouping, planning_grouping_status = run_patient_grouping.planning_patient_grouping(
-                    candidate_planning_study, bound=patient_grouping,
+                    study, bound=patient_grouping,
                     first_icu_stay_restricted=_verified_first_icu_stay_or_none(study) is not None,
                 )
             if execution_resume_inputs is not None:

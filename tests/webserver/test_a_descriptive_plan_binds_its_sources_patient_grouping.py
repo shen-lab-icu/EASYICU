@@ -271,7 +271,7 @@ def test_the_planning_launch_reads_the_binding_owner():
              and ast.unparse(node.func) == "run_patient_grouping.planning_patient_grouping"]
     assert len(calls) == 1
     call = calls[0]
-    assert ast.unparse(call.args[0]) == "candidate_planning_study"
+    assert ast.unparse(call.args[0]) == "study"  # the captured launch study (Carbon b15r2)
     assert {kw.arg: ast.unparse(kw.value) for kw in call.keywords} == {
         "bound": "patient_grouping",
         "first_icu_stay_restricted": "_verified_first_icu_stay_or_none(study) is not None",

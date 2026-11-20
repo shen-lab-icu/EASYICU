@@ -235,8 +235,8 @@ def test_the_launch_materialization_variant_asks_the_export_through_the_launch_s
         export_path=str(choice.paths.raw), study=variant, target="death", require_primary_exposure=False,
         covariates=("age",), source_study=study)
     assert asked == [str(choice.paths.export)] and profile["first_icu_stay"] is not None
-    # The owner answers any variant through the stored study's choice: the
-    # variant alone, the runner's planning grouping and a merged proposal.
+    # The owner answers a launch-derived copy through the stored study's
+    # choice: the variant alone and a planning grouping on it.
     launch._first_icu_stay_for_cohort(variant)
     assert asked[-1] == str(choice.paths.export)
     from easyicu.webserver import run_patient_grouping
@@ -251,9 +251,20 @@ def test_the_launch_materialization_variant_asks_the_export_through_the_launch_s
     read = []
     monkeypatch.setattr(catalog_owner, "build_available_catalog", lambda path: read.append(str(path)) or AvailableCatalog(
         source="synthetic-metadata-only", concepts=[]))
+    # A researcher's pending change is never forgiven (Carbon b15r2): a
+    # changed scientific field reads as stale and the raw folder stays,
+    # while a change outside the signed configuration still reads the export.
     study_context_update._execution_catalog(study, {"primary_exposure": "lactate", "covariates": ["age"]},
                                             study["data_source"])
-    assert read == [str(choice.paths.export)]
+    study_context_update._execution_catalog(study, {"title": "Renamed"}, study["data_source"])
+    assert read == [str(choice.paths.raw), str(choice.paths.export)]
+    # A launch copy that also carries a researcher's change is not forgiven:
+    # only the launch-derived fields are restored before the signature check.
+    mixed = {**variant, "outcome": "hospital_mortality"}
+    with pytest.raises(launch.ResearchPipelineRunError) as raised:
+        launch._first_icu_stay_for_cohort(mixed)
+    assert raised.value.details["source_authority_cause"] == "demo_planning_authority_stale"
+    assert asked[-1] == str(choice.paths.raw)
     # A variant on another source, or a stored choice that no longer holds,
     # refuses as before and names the cause as a category only.
     moved = {**variant, "data_source": {**variant["data_source"], "label": "another"}}

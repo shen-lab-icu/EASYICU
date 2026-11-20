@@ -199,17 +199,24 @@ def _choice_cause(exc: BaseException) -> str:
     return text if _CHOICE_CAUSE.fullmatch(text) else type(exc).__name__
 
 
+# Fields a launch derives on its own copy of the study (the materialization
+# scope; a discuss-only SIC gap). A researcher never sets them through a
+# choice, so they are the only differences a signed choice forgives.
+_LAUNCH_DERIVED_FIELDS = ("modules", "materialization_scope_source", "metadata_only_unresolved_capability_gap")
+
+
 def _signed_choice_resolution(study: Mapping[str, Any]) -> tuple[Any, str]:
     """The raw Demo choice's source identity for ``study``, or ``None`` and why.
 
-    The choice is signed on the study as stored. A launch or proposal works
-    on variants of it (the materialization study, a candidate planning
-    study, a merged update proposal) whose other fields differ, so the
-    signature reads as stale on them. The choice answers a question about
-    the source only, so a variant that keeps the stored study's id, choice
-    and data source is answered by the stored study's choice (B14, UX leg 3
-    en, 2026-11-20). When the stored study's own choice does not resolve,
-    nothing resolves and the authorities refuse as before.
+    The choice is signed on the study as stored. A launch works on copies of
+    it (the materialization study, the runner's candidate planning study)
+    whose launch-derived fields differ, so the signature reads as stale on
+    them (B14, UX leg 3 en, 2026-11-20). Such a copy is verified again with
+    only those fields restored from the stored study; every other field,
+    the id, the choice and the data source must be the copy's own and still
+    match the signature. A researcher's change (an update proposal, a saved
+    edit) is never forgiven: it reads as stale and the authorities refuse as
+    before (Carbon b15r2).
     """
 
     from easyicu.research_agent.authority.filesystem import AuthorityFilesystemError
@@ -229,8 +236,16 @@ def _signed_choice_resolution(study: Mapping[str, Any]) -> tuple[Any, str]:
     if (stored is None or stored.get("demo_planning_authority_ref") != study.get("demo_planning_authority_ref")
             or stored.get("data_source") != study.get("data_source")):
         return None, cause
+    restored = dict(study)
+    for field in _LAUNCH_DERIVED_FIELDS:
+        if field in stored:
+            restored[field] = stored[field]
+        else:
+            restored.pop(field, None)
+    if restored == dict(study):
+        return None, cause
     try:
-        return resolve_choice(stored), ""
+        return resolve_choice(restored), ""
     except errors as exc:
         return None, _choice_cause(exc)
 
