@@ -4534,12 +4534,18 @@ def _request_replan(
             context.user_message,
             registered_sources=sources.load_registry().get("sources") or [],
         )
+        decision = getattr(context, "expected_exposure_decision", None)
         plan_change_request = PlanChangeRequest(
             source_run_id=str(latest["run_id"]),
             source_scientific_configuration_sha256=planned_digest or None,
             target_scientific_configuration_sha256=current_digest if planned_digest else None,
             user_message=prepared_message.provider_message,
             reference_plans=_plan_change_references(context, latest),
+            exposure_decision=(
+                decision
+                if decision and decision.get("source_run_id") == str(latest["run_id"])
+                else None
+            ),
         )
     fresh_run_required = bool(
         same_study_plan

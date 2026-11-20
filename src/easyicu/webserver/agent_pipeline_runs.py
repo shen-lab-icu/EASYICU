@@ -76,11 +76,14 @@ from easyicu.research_agent.planning.cohort_contract import (
     coerce_cohort_definition,
 )
 from easyicu.research_agent.canonical_json import canonical_sha256
+from easyicu.research_agent.contracts.frozen_payload import thaw_payload
 from easyicu.research_agent.planning.question_requirements import (
+    EXPOSURE_DECISIONS_KEY,
     QUESTION_REQUIREMENTS_FILENAME,
     QUESTION_REQUIREMENTS_REVIEW_FILENAME,
     QUESTION_REQUIREMENTS_REVIEW_SCHEMA_VERSION,
     QUESTION_REQUIREMENTS_SCHEMA_VERSION,
+    recorded_exposure_decisions,
 )
 from easyicu.research_agent.planning.scientific_review import (
     CURRENT_SCIENTIFIC_REVIEW_SCHEMA_VERSION,
@@ -3063,6 +3066,7 @@ def _research_user_preferences(
     host_applied_verified: bool = False,
     question_named_concepts: Sequence[Mapping[str, Any]] = (),
     question_substance_forms: Sequence[Mapping[str, Any]] = (),
+    exposure_decisions: Sequence[Mapping[str, Any]] = (),
 ) -> Dict[str, Any]:
     """Compile StudyContext into the existing strict preference contract.
 
@@ -3285,6 +3289,10 @@ def _research_user_preferences(
             {"concepts": list(item["concepts"]), "evidence": str(item["evidence"])}
             for item in question_named_concepts
         ]
+    if exposure_decisions:
+        # The researcher's answers to an exposure-arrangement choice (B29):
+        # the plan is judged on them instead of asking again.
+        constraints[EXPOSURE_DECISIONS_KEY] = [dict(item) for item in exposure_decisions]
     if question_substance_forms:
         # A substance the question names as given or as measured: a plan that
         # reads it in the other form stops (planning.question_interpretation).
@@ -3617,6 +3625,7 @@ def research_context_declarations(
     scientific: PreparedScientificLaunch, *, export_path: str,
     source_identity: Optional[Mapping[str, str]] = None,
     acquisition: Any = None,
+    exposure_decisions: Sequence[Mapping[str, Any]] = (),
 ) -> Dict[str, Any]:
     """What a run declares on its research context besides its rows and coordinates.
 
@@ -3687,6 +3696,7 @@ def research_context_declarations(
                 scientific.metadata_planning_coordinates.get("question_substance_forms")
                 or ()
             ),
+            exposure_decisions=exposure_decisions,
         ),
         "notes": _clean_text(study.get("analysis_goal"), 1_200) or None,
     }
@@ -5983,6 +5993,52 @@ def _load_plan_revision_source_review(
             "before requesting another plan from the unchanged study.",
         )
     return parsed_review
+
+
+def _carried_exposure_decisions(
+    *,
+    study: Mapping[str, Any],
+    project_root: Optional[str],
+    change_request: Optional[PlanChangeRequest],
+    source_run_id: str,
+) -> list[dict[str, Any]]:
+    """The researcher's exposure-arrangement answers a revised plan is judged on (B29).
+
+    The answer this request carries, and those the source plan's own planning
+    record carried, so a later revision of the same study does not ask again.
+    A source record that cannot be read carries none: the choice is then
+    offered again, never assumed.
+    """
+
+    decisions: list[dict[str, Any]] = []
+    if change_request is not None and change_request.exposure_decision is not None:
+        decisions.append(change_request.exposure_decision.model_dump(mode="json"))
+    run_ids = dict.fromkeys(
+        value for value in (
+            change_request.source_run_id if change_request is not None else "", source_run_id,
+        ) if value
+    )
+    if run_ids:
+        rows = agent_runs.list_run_history(
+            study_id=_clean_text(study.get("id"), 160), project_root=project_root, limit=100,
+        ).get("runs", [])
+        for run_id in run_ids:
+            row = next((item for item in rows if _clean_text(item.get("run_id"), 160) == run_id), None)
+            record = agent_runs.read_run_record(str(row.get("project_dir") or "")) if isinstance(row, Mapping) else None
+            payload = (
+                None if record is None or isinstance(record, RunRecordReadError)
+                else record.artifact_payloads.get(QUESTION_REQUIREMENTS_FILENAME)
+            )
+            try:
+                carried = recorded_exposure_decisions(thaw_payload(payload)) if isinstance(payload, Mapping) else ()
+            except ValueError:
+                carried = ()
+            decisions.extend(item.model_dump(mode="json") for item in carried)
+    unique: dict[tuple[str, tuple[str, ...]], dict[str, Any]] = {}
+    for item in decisions:
+        # One answer per exposure set: the newest (this request's) wins.
+        unique.setdefault((item["primary"], tuple(sorted(item["additional"]))), item)
+    return list(unique.values())
 
 
 def _agent_plan_revision_codes(
@@ -8469,6 +8525,10 @@ def make_research_pipeline_run_runner(
             declarations = research_context_declarations(
                 replace(scientific, patient_grouping=patient_grouping), export_path=export_path, acquisition=acquisition,
                 source_identity=prepared.source_identity.to_dict() if prepared.source_identity is not None else None,
+                exposure_decisions=_carried_exposure_decisions(
+                    study=study, project_root=project_root, change_request=bound_change_request,
+                    source_run_id=source_run_id,
+                ),
             )
             from .research_launch_population import resolved_launch_population_mode
 

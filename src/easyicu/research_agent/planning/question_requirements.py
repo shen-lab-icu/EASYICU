@@ -558,6 +558,84 @@ class NamedQuestionConcept(BaseModel):
         return cleaned
 
 
+EXPOSURE_DECISIONS_KEY = "exposure_arrangement_decisions"
+EXPOSURE_DECISION_REASON = "question_exposure_arrangement_decided"
+_COLUMN = r"^[A-Za-z][A-Za-z0-9_]{0,127}$"
+
+
+class ExposureArrangementDecision(BaseModel):
+    """The researcher's answer to one exposure-arrangement choice (B29).
+
+    Recorded by the host from the option the researcher sent on the plan card;
+    never a plan approval.  It answers the choice only for the same exposures
+    (:meth:`answers`), so a plan that names other exposures is asked again.
+    """
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    schema_version: Literal["easyicu.exposure-arrangement-decision/1"] = (
+        "easyicu.exposure-arrangement-decision/1"
+    )
+    source: Literal["researcher_choice"] = "researcher_choice"
+    option: Literal["analyse_both", "primary_and_secondary", "only_primary"]
+    primary: str = Field(pattern=_COLUMN)
+    additional: tuple[str, ...] = Field(min_length=1, max_length=MAX_REQUIREMENT_CONCEPTS)
+    source_run_id: str = Field(min_length=1, max_length=160)
+
+    @field_validator("additional")
+    @classmethod
+    def _distinct_additional(cls, values: tuple[str, ...]) -> tuple[str, ...]:
+        if len(set(values)) != len(values) or not all(re.fullmatch(_COLUMN, value) for value in values):
+            raise ValueError("additional exposures are distinct column names")
+        return values
+
+    @model_validator(mode="after")
+    def _primary_apart(self) -> "ExposureArrangementDecision":
+        if self.primary in self.additional:
+            raise ValueError("the primary exposure is not also an additional one")
+        return self
+
+    def answers(self, exposures: Sequence[str]) -> bool:
+        return len(exposures) == len(self.additional) + 1 and set(exposures) == {
+            self.primary, *self.additional
+        }
+
+
+def exposure_arrangement_decisions(
+    context: ResearchContext,
+) -> tuple[ExposureArrangementDecision, ...]:
+    """The researcher's recorded exposure-arrangement answers, from the run's data constraints.
+
+    A malformed record is the host's defect and is refused with
+    :data:`MALFORMED_REASON`, never read as "nothing decided".
+    """
+
+    raw = (
+        getattr(context.user_preferences, "data_constraints", None)
+        if context.user_preferences
+        else None
+    )
+    if not raw:
+        return ()
+    try:
+        constraints = json.loads(raw) if isinstance(raw, str) else raw
+    except ValueError as exc:
+        raise QuestionRequirementsError(
+            MALFORMED_REASON, "the run's data constraints are not JSON"
+        ) from exc
+    entries = constraints.get(EXPOSURE_DECISIONS_KEY) if isinstance(constraints, Mapping) else None
+    if entries is None:
+        return ()
+    try:
+        if not isinstance(entries, list):
+            raise ValueError(f"{EXPOSURE_DECISIONS_KEY} is not a list")
+        return tuple(ExposureArrangementDecision.model_validate(entry) for entry in entries)
+    except (ValueError, ValidationError) as exc:
+        raise QuestionRequirementsError(
+            MALFORMED_REASON, "an exposure arrangement decision is not a researcher decision"
+        ) from exc
+
+
 @dataclass(frozen=True)
 class RequirementProblem:
     """Why a stated requirement list is refused, with the field it is about."""
@@ -1065,7 +1143,52 @@ def question_analysis_exposures(
 def _judge_exposures(
     item: QuestionRequirement, exposures: Sequence[str], *, plan: AnalysisPlan,
     sealed: Sequence[str], relatives: Callable[[str], frozenset[str]],
+    decision: ExposureArrangementDecision | None = None,
 ) -> JudgedRequirement:
+    if decision is not None:
+        # The researcher answered this choice (B29): only the chosen exposures
+        # need an owner, and a model's renewed "needs_choice" claim does not
+        # reopen it.  The choice is never offered again for these exposures.
+        chosen = (decision.primary,) if decision.option == "only_primary" else tuple(exposures)
+        owners = _exposure_owners(chosen, plan=plan, sealed=sealed, relatives=relatives)
+        missing = [exposure for exposure, steps in owners.items() if not steps]
+        answer = (
+            f"The researcher chose {decision.option} for {decision.primary} "
+            f"and {', '.join(decision.additional)}"
+        )
+        if not missing:
+            return JudgedRequirement(
+                item, "covered", EXPOSURE_DECISION_REASON,
+                tuple(dict.fromkeys(owner for group in owners.values() for owner in group)),
+                host_judged=True, fact=f"{answer}; the plan analyses the chosen exposures.",
+            )
+        return JudgedRequirement(
+            item, "not_covered", QUESTION_REQUIREMENT_APPROVAL_STOPS["not_covered"], host_judged=True,
+            fact=f"{answer}; the plan has no analysis owner for {', '.join(missing)}.",
+        )
+    owners = _exposure_owners(exposures, plan=plan, sealed=sealed, relatives=relatives)
+    if item.coverage != "needs_choice" and all(owners.values()):
+        return JudgedRequirement(item, "covered", "typed_plan_owner_present",
+                                 tuple(dict.fromkeys(owner for group in owners.values() for owner in group)),
+                                 host_judged=True)
+    primary = sealed[0] if sealed and sealed[0] in exposures else exposures[0]
+    return JudgedRequirement(
+        item, "not_covered", "question_named_exposure_choice_required", host_judged=True,
+        exposure_choice={
+            "primary_exposure": primary,
+            "additional_exposures": [name for name in exposures if name != primary],
+            "options": ["analyse_both", "primary_and_secondary", "only_primary"],
+            "question": "Analyse both, keep the current primary and the other secondary, or analyse only the current primary?",
+        },
+    )
+
+
+def _exposure_owners(
+    exposures: Sequence[str], *, plan: AnalysisPlan,
+    sealed: Sequence[str], relatives: Callable[[str], frozenset[str]],
+) -> dict[str, tuple[str, ...]]:
+    """The analysis steps that own each exposure's analysis of the sealed outcome."""
+
     outcome = sealed[1] if len(sealed) == 2 else (plan.endpoint.name if plan.endpoint else "")
     owners: dict[str, tuple[str, ...]] = {}
     for exposure in exposures:
@@ -1085,20 +1208,7 @@ def _judge_exposures(
             and str(step.method or "").startswith("signed_")
             and exposure in step.inputs
         ))
-    if item.coverage != "needs_choice" and all(owners.values()):
-        return JudgedRequirement(item, "covered", "typed_plan_owner_present",
-                                 tuple(dict.fromkeys(owner for group in owners.values() for owner in group)),
-                                 host_judged=True)
-    primary = sealed[0] if sealed and sealed[0] in exposures else exposures[0]
-    return JudgedRequirement(
-        item, "not_covered", "question_named_exposure_choice_required", host_judged=True,
-        exposure_choice={
-            "primary_exposure": primary,
-            "additional_exposures": [name for name in exposures if name != primary],
-            "options": ["analyse_both", "primary_and_secondary", "only_primary"],
-            "question": "Analyse both, keep the current primary and the other secondary, or analyse only the current primary?",
-        },
-    )
+    return owners
 
 
 def judge_question_requirements(
@@ -1112,6 +1222,7 @@ def judge_question_requirements(
     host_facts: Sequence[Mapping[str, Any]] = (),
     sealed: Sequence[str] = (),
     question: str | None = None,
+    decisions: Sequence[ExposureArrangementDecision] = (),
 ) -> tuple[JudgedRequirement, ...]:
     """Decide how the compiled plan answers each stated requirement.
 
@@ -1131,6 +1242,7 @@ def judge_question_requirements(
             check_gap=check_gap,
             sealed_owner_concepts=sealed_owner_concepts or {},
             requirements=requirements, host_facts=host_facts, sealed=sealed,
+            decisions=decisions,
         )
         for item in requirements
     )
@@ -1153,6 +1265,7 @@ def _judge(
     requirements: Sequence[QuestionRequirement],
     host_facts: Sequence[Mapping[str, Any]],
     sealed: Sequence[str],
+    decisions: Sequence[ExposureArrangementDecision] = (),
 ) -> JudgedRequirement:
     planned = (
         requested_plan_deliverables(item.quote)
@@ -1202,7 +1315,10 @@ def _judge(
         )
     exposures = question_analysis_exposures(item, requirements, sealed=sealed)
     if exposures:
-        return _judge_exposures(item, exposures, plan=plan, sealed=sealed, relatives=relatives)
+        decision = next((row for row in decisions if row.answers(exposures)), None)
+        return _judge_exposures(
+            item, exposures, plan=plan, sealed=sealed, relatives=relatives, decision=decision,
+        )
     clauses = _judge_clauses(item, requirements=requirements, plan=plan, host_facts=host_facts)
     if clauses:
         complete = all(row["disposition"] == "covered" for row in clauses)
@@ -1949,6 +2065,7 @@ def question_requirements_record(
     sealed_owner_concepts: Mapping[str, Collection[str]] | None = None,
     host_facts: Sequence[Mapping[str, Any]] = (),
     question: str | None = None,
+    decisions: Sequence[ExposureArrangementDecision] = (),
 ) -> dict[str, Any]:
     """The run's record of what the question asked and how the compiled plan answers it.
 
@@ -1978,6 +2095,11 @@ def question_requirements_record(
         # keeps its bytes; a record without it credits no sealed owner.
         **({"sealed_owner_concepts": owner_concepts} if owner_concepts else {}),
         **({"host_facts": [dict(fact) for fact in host_facts]} if host_facts else {}),
+        # Only a run whose researcher answered an exposure choice carries it (B29).
+        **(
+            {"exposure_decisions": [row.model_dump(mode="json") for row in decisions]}
+            if decisions else {}
+        ),
         # Always present on a record this owner writes, so a plan under review
         # is judged on it; a record written before it was read lacks it.
         "question_effect_measures": [item.row() for item in stated_measures],
@@ -2007,6 +2129,20 @@ class RecordedJudgment:
 
 def _gap_key(gap: ProgressiveCapabilityGap) -> str:
     return json.dumps(gap.model_dump(mode="json"), sort_keys=True)
+
+
+def recorded_exposure_decisions(
+    record: Mapping[str, Any],
+) -> tuple[ExposureArrangementDecision, ...]:
+    """The exposure-arrangement answers a planning record carries; raises ValueError if malformed."""
+
+    entries = record.get("exposure_decisions", [])
+    if not isinstance(entries, list):
+        raise ValueError("its exposure decisions are not a list")
+    try:
+        return tuple(ExposureArrangementDecision.model_validate(entry) for entry in entries)
+    except ValidationError as exc:
+        raise ValueError("an exposure decision is not a researcher decision") from exc
 
 
 def judge_recorded_requirements(
@@ -2055,6 +2191,7 @@ def judge_recorded_requirements(
             str(method): frozenset(str(concept) for concept in concepts)
             for method, concepts in owner_concepts.items()
         }
+        decisions = recorded_exposure_decisions(record)
         verdicts = {
             str(row["id"]): (row["gap_verification"], row["gap_fact"])
             for row in record["judged"]
@@ -2110,6 +2247,7 @@ def judge_recorded_requirements(
         sealed_owner_concepts=sealed_owner_concepts,
         host_facts=host_facts, sealed=sealed,
         question=recorded_question or question or plan.research_question,
+        decisions=decisions,
     )
     judged = tuple(
         replace(entry, quote_span=quote_spans.get(entry.requirement.id)) for entry in judged
@@ -2374,6 +2512,9 @@ __all__ = [
     "QUESTION_REQUIREMENT_APPROVAL_STOPS",
     "QUESTION_REQUIREMENT_STOP_CODES",
     "EFFECT_MEASURE_NOT_REPORTED_REASON",
+    "EXPOSURE_DECISIONS_KEY",
+    "EXPOSURE_DECISION_REASON",
+    "ExposureArrangementDecision",
     "EFFECT_MEASURE_UNREQUESTED_REASON",
     "SUBGROUP_ACTIONS",
     "UNACCOUNTED_REASON",
@@ -2393,6 +2534,7 @@ __all__ = [
     "analysis_plan_sha256",
     "bind_named_question_concepts",
     "concept_relatives",
+    "exposure_arrangement_decisions",
     "judge_question_requirements",
     "judge_recorded_requirements",
     "judge_stated_effect_measures",
@@ -2409,6 +2551,7 @@ __all__ = [
     "question_requirements_record",
     "question_requirements_schema",
     "question_requirements_shape",
+    "recorded_exposure_decisions",
     "requirement_delivery_kinds",
     "unaccounted_named_concepts",
     "write_question_requirements",

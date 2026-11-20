@@ -129,6 +129,33 @@ The full list of changes since 0.1.0 is in the v0.1.3 release notes. Recorded he
   "Extend to a full article" appears on the card when the study's design supports it, and
   that landmark and other current-case designs cannot yet be extended to an article in the
   desktop app (planned for 0.1.4).
+- A question that restricts its patients to a condition EasyICU records (for example
+  「在脓毒症 ICU 患者中…」, "among patients with sepsis", "septic patients", AKI or
+  mechanical ventilation) now names that population to the plan. The plan's requirement
+  list must account for it, and a plan that neither reads nor selects on it goes back to
+  the model to state the population as a condition. Before, the condition was not read
+  as something the plan must answer, so the plan could study every input row without
+  saying so.
+- When the plan review asks which of the question's exposures to analyse and you choose
+  one arrangement (for example "Analyse only the primary exposure"), the revised plan no
+  longer comes back with the same question (B29). EasyICU records your choice for those
+  exposures, carries it into the revised plan and its later revisions, and judges the plan
+  on it: it is covered once the plan analyses the exposures you chose. A plan that names
+  other exposures is asked again.
+- "Generate candidate plan" on a landmark association study whose exposure the researcher
+  verified in the conversation no longer starts nothing with
+  "study_concept_selection_authority_server_owned" (B30). The launch staged the host's
+  24-hour landmark together with the researcher's verified exposure receipt it had just
+  read, and then refused that unchanged receipt. An unchanged receipt is now accepted
+  on that path as it is everywhere else; a receipt a client creates or changes is still
+  refused.
+- When the question states how its exposure is summarized (for example 「暴露只取入科时的首次
+  乳酸，不使用 24 小时峰值」 or "the first lactate at ICU admission"), the study can no
+  longer store a different summary such as the 24-hour maximum (B31). Such a write is
+  refused with both readings, so the assistant must correct it instead of only saying it
+  did; a summary that a new question supersedes is dropped, and the question's own words
+  decide. A population condition (「Sepsis-3 脓毒症成人 ICU 患者中」) is no longer read as the
+  study's exposure.
 
 ## 0.1.0 — 2026-11-11 — first public pre-release
 

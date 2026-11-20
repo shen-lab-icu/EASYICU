@@ -1795,6 +1795,7 @@ def _metadata_only_planning_coordinates(
         explicit_exposure_aggregation,
         named_study_concepts,
         stated_comparison_groupings,
+        stated_population_conditions,
         stated_treatment_uses,
         substance_forms,
     )
@@ -1918,7 +1919,13 @@ def _metadata_only_planning_coordinates(
         else checked_grouping or stated_grouping or _study_exposure_reading(
             named_concept("exposure"),
             field_concept,
-            excluded={*declared_covariates, *required_subgroup_concepts, target_outcome, configured_outcome},
+            # A condition the population is restricted to is whom the study
+            # includes, not what it compares (B31: 「Sepsis-3 脓毒症成人 ICU 患者中，
+            # …首次乳酸…」 read sepsis as the exposure).
+            excluded={
+                *declared_covariates, *required_subgroup_concepts, target_outcome, configured_outcome,
+                *(concept for concepts, _words in stated_population_conditions(question) for concept in concepts),
+            },
             named=question_concepts,
             stated_names=field_names,
             demographic=frozenset(
@@ -2051,6 +2058,17 @@ def _metadata_only_planning_coordinates(
         and _clean_text(phrase, 120)
         and named_exposure not in concepts
     ]
+    # A population the question restricts to a recorded condition is named
+    # too (S1733): the plan must select on it, or show it as not applied,
+    # instead of silently studying every input row.
+    named_columns = {frozenset(item["concepts"]) for item in named_concepts}
+    for concepts, phrase in stated_population_conditions(question):
+        columns = list(dict.fromkeys(
+            source_column(concept) for concept in concepts if concept in catalog_by_id
+        ))
+        if columns and _clean_text(phrase, 120) and frozenset(columns) not in named_columns:
+            named_columns.add(frozenset(columns))
+            named_concepts.append({"concepts": columns, "evidence": _clean_text(phrase, 120)})
     coordinate_readings = []
     for role, concept, column, basis, slot_name in (
         ("outcome", target_outcome, endpoint.name if endpoint is not None else source_column(target_outcome),

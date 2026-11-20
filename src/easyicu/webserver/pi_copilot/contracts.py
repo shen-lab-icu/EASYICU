@@ -509,9 +509,15 @@ class ToolExecutionContext:
         quick_answer_submit: Callable[..., dict | QuickProposal | None] | None = None,
         propose_multi_database: Optional[Callable[[MultiDatabaseRequest], Dict[str, Any]]] = None,
         expected_replan_source_run_id: str = "",
+        expected_exposure_decision: Optional[Mapping[str, Any]] = None,
     ) -> None:
         self.session = session
         self.expected_replan_source_run_id = str(expected_replan_source_run_id or "")
+        # The researcher's exposure-arrangement choice the host matched on
+        # this turn's card text (B29); the model cannot supply it.
+        self.expected_exposure_decision = (
+            dict(expected_exposure_decision) if expected_exposure_decision else None
+        )
         self.quick_answer_submit = quick_answer_submit
         from easyicu.research_agent.providers.client_trust import DataHandling
 

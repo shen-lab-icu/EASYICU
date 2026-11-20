@@ -1343,8 +1343,18 @@ def validate_context_update(
     preview applies the same normalizers and cross-field scientific contracts
     as :func:`upsert_context`; the subsequent write still performs revision
     checking and validates again under the store lock.
+
+    A host-written concept-selection receipt echoed unchanged is accepted here
+    as it is by :func:`upsert_context` (B30: a launch-staged landmark patch
+    carried the receipt it merged from the stored confirmations, and the
+    host refused its own echo); a created, flipped or dropped one fails closed.
     """
 
+    client_concept_selection_authority: Dict[str, Any] = {}
+    if not _server_concept_selection_authority_write and isinstance(raw_context, dict):
+        raw_context, client_concept_selection_authority = (
+            _split_client_concept_selection_authority(raw_context)
+        )
     patch = _sanitize_patch(
         raw_context,
         allow_skill_attachments=_server_skill_attachments_write,
@@ -1373,10 +1383,16 @@ def validate_context_update(
             }
         )
 
+    if not _server_concept_selection_authority_write:
+        _carry_forward_concept_selection_authority(
+            patch, current, client_concept_selection_authority
+        )
     candidate = dict(current)
     candidate.update(patch)
     _apply_attached_setup(patch, candidate, current)
     candidate.update(patch)
+    if "question" in patch or "execution_concepts" in patch:
+        _exposure_aggregation_contract(candidate, patch)
     _validate_covariate_decision_contract(candidate)
     _validate_analysis_dependence_contract(candidate)
     if "time_window" in patch:
@@ -2025,6 +2041,47 @@ def _contexts_from_raw(raw: Dict[str, Any]) -> List[Dict[str, Any]]:
     return contexts
 
 
+def _exposure_aggregation_contract(context: Dict[str, Any], patch: Dict[str, Any]) -> None:
+    """The stored exposure operation never contradicts the one the question states (B31).
+
+    「暴露只取入科时的首次乳酸，不使用 24 小时峰值」 was answered "switching to the
+    first value" while the conversation wrote ``max``.  A write that sets an
+    operation the question's own words contradict is refused with both
+    readings; one the question has just superseded is dropped, so the
+    question's words decide at launch.  A question that states no operation
+    for the concept leaves the stored one alone.
+    """
+
+    execution = context.get("execution_concepts")
+    if not isinstance(execution, dict):
+        return
+    concept = str(execution.get("primary_exposure") or "")
+    written = str(execution.get("primary_exposure_aggregation") or "")
+    question = str(context.get("question") or "")
+    if not (concept and written and question.strip()):
+        return
+    from easyicu.webserver.study_intent import explicit_exposure_aggregation
+
+    stated = explicit_exposure_aggregation(question, concept_id=concept)
+    if stated is None or stated.aggregation == written:
+        return
+    patched = patch.get("execution_concepts")
+    if isinstance(patched, dict) and patched.get("primary_exposure_aggregation"):
+        raise StudyContextError(
+            {
+                "error": "study_exposure_aggregation_conflicts_question",
+                "field": "execution_concepts.primary_exposure_aggregation",
+                "concept": concept,
+                "written": written,
+                "stated": stated.aggregation,
+                "stated_words": stated.evidence,
+            }
+        )
+    kept = {key: value for key, value in execution.items() if key != "primary_exposure_aggregation"}
+    context["execution_concepts"] = kept
+    patch["execution_concepts"] = dict(kept)
+
+
 def _validate_covariate_decision_contract(context: Dict[str, Any]) -> None:
     roster = set(context.get("covariates") or [])
     rationale_keys = set((context.get("covariate_rationales") or {}).keys())
@@ -2560,6 +2617,8 @@ def upsert_context(
                 context["stated_variables_unread"] = pending_unread(context)
             if design_variance_basis_is_stale(context):
                 context["design_variance_basis"] = None
+            if "question" in patch or "execution_concepts" in patch:
+                _exposure_aggregation_contract(context, patch)
             _validate_covariate_decision_contract(context)
             _validate_analysis_dependence_contract(context)
             if "time_window" in patch:

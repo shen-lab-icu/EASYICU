@@ -65,3 +65,39 @@ def requested_candidate_run(
     if "agent_plan.json" not in (row.get("artifact_names") or []):
         return ""
     return run_id
+
+
+def exposure_arrangement_decision(
+    message: str, *, projection: Any, source_run_id: str
+) -> dict[str, Any] | None:
+    """The researcher's choice on the plan card's exposure arrangement, as a typed decision (B29).
+
+    Only the host-drafted text of an offered option counts, matched exactly as
+    :func:`requested_candidate_run` matched it, for the plan that offered it.
+    The decision lets the revised plan be judged on that choice instead of
+    asking it again; it is not plan approval.
+    """
+
+    if not source_run_id:
+        return None
+    review = projection.workflow.plan_review_summary or {}
+    if str(review.get("run_id") or "") != source_run_id:
+        return None
+    arrangement = review.get("exposure_arrangement") or {}
+    options = arrangement.get("options") or {}
+    chosen = [key for key, labels in options.items() if isinstance(labels, dict) and message in labels.values()]
+    if len(chosen) != 1:
+        return None
+    from easyicu.research_agent.planning.question_requirements import ExposureArrangementDecision
+
+    try:
+        decision = ExposureArrangementDecision(
+            option=chosen[0],
+            primary=str(arrangement.get("primary") or ""),
+            additional=tuple(str(value) for value in arrangement.get("additional") or ()),
+            source_run_id=source_run_id,
+        )
+    except ValueError:
+        return None
+    return decision.model_dump(mode="json")
+

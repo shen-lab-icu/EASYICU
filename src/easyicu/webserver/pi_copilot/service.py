@@ -2708,6 +2708,7 @@ class PiCopilotService(SkillAttachmentService, QuickAnswerService):
             exclude_session_id=record.session_id,
         )
         revision_run_id = ""
+        exposure_decision = None
         exposure_confirmation = message_intent == "confirm_exposure_arrangement"
         if (
             record.agent_mode == "research"
@@ -2718,7 +2719,7 @@ class PiCopilotService(SkillAttachmentService, QuickAnswerService):
             )
             and "provider_run" in inferred_actions
         ):
-            from .plan_revision_intent import requested_candidate_run
+            from .plan_revision_intent import exposure_arrangement_decision, requested_candidate_run
 
             candidate_workflow = build_project_workflow_projection(
                 study_context_id=record.binding.study_context_id,
@@ -2728,6 +2729,12 @@ class PiCopilotService(SkillAttachmentService, QuickAnswerService):
             )
             if revision_run_id:
                 message_intent = "request_candidate_plan_revision"
+                if exposure_confirmation:
+                    # B29: the researcher's card choice is recorded once, as a
+                    # typed decision the revised plan is judged on.
+                    exposure_decision = exposure_arrangement_decision(
+                        provider_text, projection=candidate_workflow, source_run_id=revision_run_id,
+                    )
         if exposure_confirmation and not revision_run_id:
             raise PiCopilotError(
                 "plan_revision_source_changed",
@@ -3182,6 +3189,7 @@ class PiCopilotService(SkillAttachmentService, QuickAnswerService):
                 note_credentialed_history=lambda: self._note_credentialed_history(record.session_id),
                 propose_multi_database=lambda request: propose_multi_database(self, request, _message_job_id=job.id),
                 expected_replan_source_run_id=revision_run_id,
+                expected_exposure_decision=exposure_decision,
                 user_message=text,
                 idea_source=idea_source,
                 allowed_actions=requested_actions,

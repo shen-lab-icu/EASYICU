@@ -46,6 +46,7 @@ from ..planning.question_requirements import (
     QuestionRequirementsError,
     bind_named_question_concepts,
     concept_relatives,
+    exposure_arrangement_decisions,
     judge_question_requirements,
     judge_stated_effect_measures,
     named_question_concepts,
@@ -557,6 +558,7 @@ def question_requirement_outcome(
     relatives = concept_relatives(context)
     try:
         stated = named_question_concepts(context)
+        decisions = exposure_arrangement_decisions(context)
     except QuestionRequirementsError as exc:
         raise ProgressivePlanCompileError(
             f"progressive_{exc.reason_code}", str(exc), path="question_named_concepts"
@@ -600,6 +602,7 @@ def question_requirement_outcome(
         sealed_owner_concepts=sealed_owner_concepts,
         host_facts=host_facts, sealed=sealed,
         question=context.research_question,
+        decisions=decisions,
     )
     unstated = (
         ()
@@ -629,6 +632,7 @@ def question_requirement_outcome(
             sealed_owner_concepts=sealed_owner_concepts,
             host_facts=host_facts,
             question=context.research_question,
+            decisions=decisions,
         ),
     )
     findings = question_requirement_findings(judged, unstated=unstated, measures=measures)

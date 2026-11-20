@@ -66,6 +66,7 @@ __all__ = [
     "stated_treatment_uses",
     "StatedTreatmentUse",
     "named_study_concepts",
+    "stated_population_conditions",
     "substance_forms",
     "substance_reading",
     "SLOTS",
@@ -1925,6 +1926,59 @@ def named_study_concepts(question: str) -> Tuple[Tuple[Tuple[str, ...], str], ..
         )
         for concept, phrase in named
     )
+
+
+# A condition a population is restricted to, and the concepts that record it.
+# Only conditions the dictionary records are listed: a population restricted to
+# one of these must be selected on it, or shown as not applied (leg 3, S1733:
+# 「在脓毒症 ICU 患者中…」 planned every input row and said nothing).
+_POPULATION_CONDITIONS: Tuple[Tuple[str, Tuple[str, ...]], ...] = (
+    (r"sepsis(?:-?3)?|脓毒症|septic", ("sep3", "sep3_sofa1", "sep3_sofa2")),
+    (r"\baki\b|acute kidney injury|急性肾损伤", ("aki", "aki_stage")),
+    (r"mechanically ventilated|mechanical ventilation|机械通气", ("vent_ind",)),
+)
+# 「脓毒症成人 ICU 患者」, "septic adult ICU patients": setting and age words, in any
+# order and spacing, between the condition and the patient noun.
+_CONDITION_QUALIFIES_PATIENTS = re.compile(
+    r"(?:\s|的|成人|成年|重症|监护室|入科时|入院时"
+    r"|(?:adult|pediatric|paediatric|icu|hospital|critically\s+ill)(?![a-z0-9_]))*"
+    r"(?:patients?\b|cohort\b|患者|人群|病人)",
+    re.IGNORECASE,
+)
+# "patients with sepsis", "adults who had AKI", "patients on mechanical ventilation".
+_POPULATION_WITH_CONDITION = re.compile(
+    r"(?:patients?|adults?|stays|cohort|subjects?)\s+"
+    r"(?:who\s+(?:have|had|developed)\s+|with\s+|on\s+|receiving\s+)(?:[a-z0-9-]+\s+){0,2}$",
+    re.IGNORECASE,
+)
+
+
+def stated_population_conditions(question: str) -> Tuple[Tuple[Tuple[str, ...], str], ...]:
+    """Each recorded condition the sentence restricts its population to, with its words.
+
+    A condition counts when it qualifies the patients the study includes
+    (「脓毒症 ICU 患者中」, "septic patients", "among patients with sepsis"),
+    is not negated, and is not the study's outcome.  Each comes with the
+    concepts that record it, for the plan to select on.
+    """
+
+    text = _clean_question(question)
+    lowered = text.lower()
+    outcome, _phrase, _named = _study_concept_readings(text, lowered)
+    outcome_family = _family_of(outcome) or frozenset({outcome} if outcome else ())
+    found: List[Tuple[Tuple[str, ...], str]] = []
+    for pattern, concepts in _POPULATION_CONDITIONS:
+        if outcome_family & set(concepts):
+            continue
+        for match in re.finditer(pattern, lowered):
+            if _negated(lowered, match.start()):
+                continue
+            if _CONDITION_QUALIFIES_PATIENTS.match(lowered, match.end()) or (
+                _POPULATION_WITH_CONDITION.search(lowered[: match.start()])
+            ):
+                found.append((concepts, text[match.start() : match.end()]))
+                break
+    return tuple(found)
 
 
 def _study_concept_readings(

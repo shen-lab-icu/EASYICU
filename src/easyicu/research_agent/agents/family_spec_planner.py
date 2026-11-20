@@ -86,6 +86,8 @@ from ..planning.capability_gap import (
 from ..planning.family_spec.landmark_categorical_template import reconcile_population_grouping
 from ..planning.question_requirements import (
     QUESTION_REQUIREMENTS_GUIDE,
+    QuestionRequirementsError,
+    exposure_arrangement_decisions,
     question_effect_measures,
     question_requirements_schema,
     question_requirements_shape,
@@ -1587,6 +1589,12 @@ def run_family_spec_attempt(
     protected_requirements: set[tuple[str, str]] = set()
     protected_plan_claims: set[tuple[str, str]] = set()
 
+    try:
+        decided_exposures = exposure_arrangement_decisions(context)
+    except QuestionRequirementsError:
+        # The requirement outcome owner refuses a malformed record itself.
+        decided_exposures = ()
+
     def parse_spec(raw: str) -> tuple[FamilyPlanSpec, FamilySkeletonDraft, object]:
         nonlocal parse_attempts
         parse_attempts += 1
@@ -1608,6 +1616,12 @@ def run_family_spec_attempt(
                     item, spec.question_requirements,
                     sealed=(request.primary_exposure, request.outcome),
                 ))
+                # The researcher already chose to analyse only the primary
+                # exposure (B29): the other mention stays a definition.
+                and not any(
+                    row.option == "only_primary" and row.answers(exposures)
+                    for row in decided_exposures
+                )
             }
             if choices:
                 if parse_attempts <= parse_limit:

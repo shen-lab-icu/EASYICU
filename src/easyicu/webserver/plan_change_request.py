@@ -9,6 +9,7 @@ from pydantic import BaseModel, ConfigDict, Field, model_serializer, model_valid
 
 from easyicu.research_agent.planning.baseline_requirements import AcceptedBaselineRequirements
 from easyicu.research_agent.planning.population_requirements import PlanPopulationRequirements
+from easyicu.research_agent.planning.question_requirements import ExposureArrangementDecision
 
 
 class PlanChangeRequirements(BaseModel):
@@ -87,6 +88,9 @@ class PlanChangeRequest(BaseModel):
     source_scientific_configuration_sha256: str | None = Field(default=None, pattern=r"^[0-9a-f]{64}$")
     target_scientific_configuration_sha256: str | None = Field(default=None, pattern=r"^[0-9a-f]{64}$")
     source_requirements: PlanChangeRequirements | None = None
+    # The option the researcher sent on the source plan's exposure-arrangement
+    # card, recorded by the host that matched it (B29); never an approval.
+    exposure_decision: ExposureArrangementDecision | None = None
 
     @model_validator(mode="after")
     def _bounded_references(self) -> "PlanChangeRequest":
@@ -99,6 +103,8 @@ class PlanChangeRequest(BaseModel):
             raise ValueError("revision source and target configurations must be paired")
         if self.source_requirements is not None and self.source_scientific_configuration_sha256 is None:
             raise ValueError("verified requirements need exact source and target configurations")
+        if self.exposure_decision is not None and self.exposure_decision.source_run_id != self.source_run_id:
+            raise ValueError("an exposure decision answers the plan this request revises")
         return self
 
     @model_serializer(mode="wrap")
@@ -106,7 +112,8 @@ class PlanChangeRequest(BaseModel):
         payload = handler(self)
         if not self.reference_plans:
             payload.pop("reference_plans", None)
-        for key in ("source_scientific_configuration_sha256", "target_scientific_configuration_sha256", "source_requirements"):
+        for key in ("source_scientific_configuration_sha256", "target_scientific_configuration_sha256", "source_requirements",
+                    "exposure_decision"):
             if payload.get(key) is None:
                 payload.pop(key, None)
         return payload
