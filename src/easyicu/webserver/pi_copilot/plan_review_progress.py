@@ -275,22 +275,23 @@ def has_pending_choices(
 
 def _compiles_after(
     before: Mapping[str, Any],
+    after: Mapping[str, Any],
     run: Mapping[str, Any],
     choice: tuple[str, str],
-    previous: ReviewChoiceProgress | None,
 ) -> int:
     """How many host compiles of ``run`` this write makes, consecutively.
 
     A compile of the run the last compile receipt names adds one; a compile
     of another run (a planning run came in between) starts at one. Any other
-    choice keeps the count it continues.
+    choice keeps the count while the compiled configuration holds; a choice
+    that changes it is new researcher input and restarts the count (S1542,
+    Carbon b14r3), so editing a plan step by step never reaches the stop.
     """
 
     prior = _compile_receipt(before)
     if choice != AGENT_PLAN_CONFIGURATION_CHOICE:
-        if previous is not None:
-            return previous.compiles
-        return prior.compiles if prior is not None and prior.run_id == run.get("run_id") else 0
+        same_run = prior is not None and prior.run_id == run.get("run_id")
+        return prior.compiles if same_run and compiled_digest_holds(after, prior) else 0
     if prior is not None and prior.run_id == run.get("run_id"):
         return max(prior.compiles, 1) + 1
     return 1
@@ -350,22 +351,25 @@ def record_choice(
     validate_choice_source(before, run)
     previous = matching_progress(before, run)
     compiled = _compile_receipt(before)
-    if (previous is None and compiled is not None and compiled.run_id == run.get("run_id")
-            and compiled_digest_holds(before, compiled) and compiled_digest_holds(after, compiled)):
+    holds_after = (compiled is not None and compiled.run_id == run.get("run_id")
+                   and compiled_digest_holds(after, compiled))
+    if previous is None and holds_after and compiled_digest_holds(before, compiled):
         # Carbon b14r1: another choice on the compiled plan keeps its compile
         # receipt and count, else B13's hold and the S1542 count were erased.
-        # Only while the choice leaves the compiled configuration as it was
-        # (Carbon b14r2): a choice that changes it is offered its compile
-        # again, and ``_compiles_after`` still keeps the count.
         previous = compiled
+    carried = dict(previous.choices) if previous else {}
+    if (decision_code, option_id) != AGENT_PLAN_CONFIGURATION_CHOICE and not holds_after:
+        # Carbon b14r2/b14r3: a choice that changes the compiled configuration
+        # is offered its compile again, whichever record it continues.
+        carried.pop(AGENT_PLAN_CONFIGURATION_CHOICE[0], None)
     progress = ReviewChoiceProgress(
         study_id=str(after["id"]),
         run_id=str(run["run_id"]),
         source_digest=str(run["scientific_configuration_sha256"]),
         current_digest=study_contexts.scientific_configuration_sha256(after),
         revision=int(after["revision"]),
-        choices={**(previous.choices if previous else {}), decision_code: option_id},
-        compiles=_compiles_after(before, run, (decision_code, option_id), previous),
+        choices={**carried, decision_code: option_id},
+        compiles=_compiles_after(before, after, run, (decision_code, option_id)),
     )
     path = _path(progress.study_id)
     path.parent.mkdir(mode=0o700, parents=True, exist_ok=True)

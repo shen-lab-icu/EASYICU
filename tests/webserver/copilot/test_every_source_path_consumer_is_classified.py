@@ -112,6 +112,10 @@ def _path_value(node: ast.AST, tainted: set[str], maps: frozenset[str] | set[str
     if isinstance(node, ast.Dict):
         # ``reader(**{"export_path": folder})`` or a kwargs local (Carbon b14r2).
         return any(value is not None and _path_value(value, tainted, maps) for value in node.values)
+    if isinstance(node, ast.Call) and isinstance(node.func, ast.Name) and node.func.id == "dict":
+        # ``dict(export_path=folder)`` (Carbon b14r3).
+        return any(_path_value(value, tainted, maps)
+                   for value in (*node.args, *(keyword.value for keyword in node.keywords)))
     if isinstance(node, (ast.Tuple, ast.List)):
         return any(_path_value(element, tainted, maps) for element in node.elts)
     if isinstance(node, ast.Call):
@@ -126,6 +130,32 @@ def _path_value(node: ast.AST, tainted: set[str], maps: frozenset[str] | set[str
     return False
 
 
+def _path_keys(node: ast.AST, tainted: set[str], maps, known: dict[str, set]) -> set | None:
+    """The keys of a dict value that carry a path (``None`` for an unknown key).
+
+    ``None`` as a result means the value is not a dict this sweep can read.
+    """
+
+    if isinstance(node, ast.Name) and node.id in known:
+        return set(known[node.id])
+    if isinstance(node, ast.Dict):
+        keys: set = set()
+        for key, value in zip(node.keys, node.values):
+            if key is None:
+                inner = _path_keys(value, tainted, maps, known)
+                keys |= inner if inner is not None else ({None} if _path_value(value, tainted, maps) else set())
+            elif _path_value(value, tainted, maps):
+                keys.add(key.value if isinstance(key, ast.Constant) else None)
+        return keys
+    if isinstance(node, ast.Call) and isinstance(node.func, ast.Name) and node.func.id == "dict":
+        keys = {keyword.arg for keyword in node.keywords if _path_value(keyword.value, tainted, maps)}
+        for arg in node.args:
+            inner = _path_keys(arg, tainted, maps, known)
+            keys |= inner if inner is not None else ({None} if _path_value(arg, tainted, maps) else set())
+        return keys
+    return None
+
+
 def _callee(node: ast.Call) -> str:
     func = node.func
     return func.id if isinstance(func, ast.Name) else func.attr if isinstance(func, ast.Attribute) else "?"
@@ -136,6 +166,7 @@ class _Sites(ast.NodeVisitor):
         self.rel, self.sites, self.scope, self.tainted, self.maps = rel, sites, [], [set()], [set()]
         self.kinds: list[str] = []
         self.bindings = bindings if bindings is not None else {}
+        self.keys: list[dict[str, set]] = [{}]
 
     def _enter(self, name: str, kind: str) -> None:
         # A nested function sees its enclosing function's locals (Carbon
@@ -145,12 +176,14 @@ class _Sites(ast.NodeVisitor):
         self.kinds.append(kind)
         self.tainted.append(set(self.tainted[-1]) if inherit else set())
         self.maps.append(set(self.maps[-1]) if inherit else set())
+        self.keys.append(dict(self.keys[-1]) if inherit else {})
 
     def _leave(self) -> None:
         self.scope.pop()
         self.kinds.pop()
         self.tainted.pop()
         self.maps.pop()
+        self.keys.pop()
 
     def _function(self, node) -> None:
         self._enter(node.name, "function")
@@ -165,6 +198,10 @@ class _Sites(ast.NodeVisitor):
         self._leave()
 
     def _bind(self, name: str, value: ast.AST) -> None:
+        keys = _path_keys(value, self.tainted[-1], self.maps[-1], self.keys[-1])
+        if keys:
+            # ``runner_kwargs = {"export_path": path, ...}`` (Carbon b14r3).
+            self.keys[-1][name] = keys
         if _path_value(value, self.tainted[-1], self.maps[-1]):
             self.tainted[-1].add(name)
         if _source_map(value, self.maps[-1]):
@@ -199,11 +236,12 @@ class _Sites(ast.NodeVisitor):
         for keyword in node.keywords:
             if keyword.arg is not None and _path_value(keyword.value, tainted, maps):
                 slots.add(("kw", keyword.arg))
-            elif keyword.arg is None and _path_value(keyword.value, tainted, maps):
-                if isinstance(keyword.value, ast.Dict):
-                    slots.update(("kw", key.value) for key, value in zip(keyword.value.keys, keyword.value.values)
-                                 if isinstance(key, ast.Constant) and _path_value(value, tainted, maps))
-                else:
+            elif keyword.arg is None:
+                keys = _path_keys(keyword.value, tainted, maps, self.keys[-1])
+                if keys:
+                    # An unknown key reads as ``**`` and no PASS row accepts it.
+                    slots.update(("kw", "**" if key is None else key) for key in keys)
+                elif keys is None and _path_value(keyword.value, tainted, maps):
                     slots.add(("kw", "**"))
         if callee not in PURE and slots:
             key = (self.rel, ".".join(self.scope) or "<module>", callee)
@@ -711,15 +749,29 @@ def test_the_sweep_follows_text_paths_payloads_and_binds():
         "    reader_g(folder)\n"
         "    if (member := Path(export_path)):\n"
         "        reader_h(member)\n"
+        "    kwargs = {'export_path': export_path, 'label': 'x'}\n"
+        "    reader_i(**kwargs)\n"
+        "    reader_j(**{**kwargs, 'label': 'y'})\n"
+        "    reader_k(**dict(source_path=export_path))\n"
+        "    reader_l(**{name: export_path})\n"
     )})
-    assert sites == Counter({("synthetic.py", "outer", f"reader_{letter}"): 1 for letter in "abcdefgh"})
+    assert sites == Counter({("synthetic.py", "outer", f"reader_{letter}"): 1 for letter in "abcdefghijkl"})
+    bindings: dict = {}
+    path_consumer_sites({"synthetic.py": (
+        "def outer(export_path, name):\n"
+        "    kwargs = {'export_path': export_path, 'label': 'x'}\n"
+        "    reader_i(**kwargs)\n"
+        "    reader_l(**{name: export_path})\n"
+    )}, bindings)
+    assert bindings[("synthetic.py", "outer", "reader_i")] == {("kw", "export_path")}
+    assert bindings[("synthetic.py", "outer", "reader_l")] == {("kw", "**")}
 
 
 def test_a_pass_row_must_reach_a_path_parameter_by_its_slot():
     forms = [(["study", "export_path"], {"study", "export_path", "label"})]
     assert _slot_reaches_a_path_parameter(("pos", 1), forms)
     assert _slot_reaches_a_path_parameter(("kw", "export_path"), forms)
-    assert _slot_reaches_a_path_parameter(("kw", "**"), forms)
+    assert not _slot_reaches_a_path_parameter(("kw", "**"), forms)
     assert not _slot_reaches_a_path_parameter(("pos", 0), forms)
     assert not _slot_reaches_a_path_parameter(("kw", "label"), forms)
     assert not _slot_reaches_a_path_parameter(("kw", "export_path"), [])
@@ -760,9 +812,6 @@ def webserver_signatures(sources: dict[str, str]) -> dict[str, list[tuple[list[s
 def _slot_reaches_a_path_parameter(slot: tuple[str, object], forms: list[tuple[list[str], set[str]]]) -> bool:
     kind, value = slot
     for positional, keywords in forms:
-        if kind == "kw" and value == "**" and keywords & PATH_NAMES:
-            # ``**runner_kwargs`` carrying ``export_path`` into a factory.
-            return True
         if kind == "kw" and value in keywords and value in PATH_NAMES:
             return True
         if kind == "pos" and isinstance(value, int) and value < len(positional) and positional[value] in PATH_NAMES:
