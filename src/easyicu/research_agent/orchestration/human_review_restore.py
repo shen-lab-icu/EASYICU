@@ -623,6 +623,16 @@ def restore_durable_human_review_pause(
         cohort_concept_ids=cohort_concept_ids,
     )
 
+    if not rejection_only:
+        # B27: a restarted host rebuilds the pipeline from its launch
+        # configuration, whose runtime contract may defer its adjustment roster
+        # to the reviewed plan.  The pausing process sealed it in memory only,
+        # so seal it again from the restored plan, as every planning path does
+        # (deterministic and idempotent), before validation and execution.
+        pipeline._scientific_runtime_authorities = (
+            pipeline._scientific_runtime_authorities.seal_for_plan(plan)
+        )
+
     trajectory_binding = None
     trajectory_payload = execution.get("trajectory_binding")
     if not rejection_only and isinstance(trajectory_payload, Mapping):

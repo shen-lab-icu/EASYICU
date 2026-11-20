@@ -119,6 +119,11 @@ The full list of changes since 0.1.0 is in the v0.1.3 release notes. Recorded he
   only drafted a request into the conversation that started nothing, and the reply said
   no article run had begun. The button appears only when the study's result can take an
   article extension.
+- When EasyICU was restarted between preparing a study's data and approving its plan,
+  the approved analysis no longer stops at its first modelled step because "the
+  landmark spline authority has not sealed its Planner-selected adjustment roster"
+  (B27). The restored review now seals the plan's adjustment variables again before the
+  analysis runs, as an uninterrupted run does.
 
 ## 0.1.0 — 2026-11-11 — first public pre-release
 
