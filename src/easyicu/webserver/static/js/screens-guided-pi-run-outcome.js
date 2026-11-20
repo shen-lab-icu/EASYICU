@@ -46,8 +46,8 @@
         excluded_by_user: ['Excluded at your request.', '按你的选择省略。'],
         delivery_choice_unanswered: ['No choice was recorded, so this item was not produced.', '未收到选择，本次未生成。'],
         first_result_delivery_requires_article: [
-          'This run produces first results only. This item requires a separate article run.',
-          '本次仅生成首轮分析结果。此交付物需要另行启动论文任务。',
+          'This run produces first results only. When this study\'s design supports it, “Extend to a full article” appears on this card; landmark and other current-case designs cannot yet be extended to an article in the desktop app (planned for 0.1.4).',
+          '本次仅生成首轮分析结果。研究设计支持时，本卡片上会出现“扩展成完整论文”；landmark 等设计暂不能在桌面版扩展成论文（计划在 0.1.4 支持）。',
         ],
         no_citable_references: ['This run has no citable references.', '本次没有可引用的参考文献。'],
       };

@@ -84,3 +84,16 @@ def test_the_card_has_no_drafted_article_request() -> None:
     assert "data-gpi-article-run" not in outcome + events
     assert "articleRunPrompt" not in outcome + events
     assert "APPEND?.offers?.(run, 'article')" in outcome
+
+
+def test_a_deferred_deliverable_names_the_designs_that_cannot_extend() -> None:
+    # S1731: the row no longer sends the researcher to "a separate article run"
+    # that no control starts; it names when the button appears and which
+    # designs cannot take it yet.
+    outcome = (STATIC / "js" / "screens-guided-pi-run-outcome.js").read_text(encoding="utf-8")
+
+    assert "separate article run" not in outcome
+    assert "另行启动论文任务" not in outcome
+    assert "landmark and other current-case designs cannot yet be extended" in outcome
+    assert "landmark 等设计暂不能在桌面版扩展成论文" in outcome
+    assert "“Extend to a full article” appears on this card" in outcome

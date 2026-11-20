@@ -124,6 +124,11 @@ The full list of changes since 0.1.0 is in the v0.1.3 release notes. Recorded he
   landmark spline authority has not sealed its Planner-selected adjustment roster"
   (B27). The restored review now seals the plan's adjustment variables again before the
   analysis runs, as an uninterrupted run does.
+- On a first-result card, a deliverable held back for an article no longer says it
+  "requires a separate article run", which nothing on the card could start. It says that
+  "Extend to a full article" appears on the card when the study's design supports it, and
+  that landmark and other current-case designs cannot yet be extended to an article in the
+  desktop app (planned for 0.1.4).
 
 ## 0.1.0 — 2026-11-11 — first public pre-release
 
