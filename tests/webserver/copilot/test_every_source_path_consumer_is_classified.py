@@ -950,14 +950,20 @@ def _owner_study_arguments(call: ast.Call) -> list[ast.AST]:
     return arguments
 
 
+def _owner_check_of(node: ast.AST, parameter: str) -> bool:
+    """``source_authority_owner_study(study, <parameter>, ...)``: its authority slot is the bare parameter."""
+
+    if not (isinstance(node, ast.Call) and _callee(node) == "source_authority_owner_study"):
+        return False
+    authority = [*node.args[1:2], *(kw.value for kw in node.keywords if kw.arg == "authority_study")]
+    return len(authority) == 1 and isinstance(authority[0], ast.Name) and authority[0].id == parameter
+
+
 def _checked_owner_locals(function: ast.AST, parameter: str) -> set[str]:
-    """Locals assigned ``source_authority_owner_study(..., <parameter>, ...)``: the checked launch study."""
+    """Locals assigned ``source_authority_owner_study(study, <parameter>, ...)``: the checked launch study."""
 
     return {target.id for node in ast.walk(function) if isinstance(node, ast.Assign)
-            and isinstance(node.value, ast.Call) and _callee(node.value) == "source_authority_owner_study"
-            and any(isinstance(name, ast.Name) and name.id == parameter
-                    for argument in (*node.value.args, *(kw.value for kw in node.value.keywords))
-                    for name in ast.walk(argument))
+            and _owner_check_of(node.value, parameter)
             for target in node.targets if isinstance(target, ast.Name)}
 
 
@@ -1208,9 +1214,7 @@ def _carries_launch_study(node: ast.AST, function: ast.AST, parameter: str) -> b
 
     if isinstance(node, ast.Name):
         return node.id == parameter or node.id in _checked_owner_locals(function, parameter)
-    return (isinstance(node, ast.Call) and _callee(node) == "source_authority_owner_study"
-            and any(isinstance(argument, ast.Name) and argument.id == parameter
-                    for argument in (*node.args, *(keyword.value for keyword in node.keywords))))
+    return _owner_check_of(node, parameter)
 
 
 def authority_forwarding_violations(sources: dict[str, str]) -> list[tuple[str, str, str, int]]:
@@ -1226,8 +1230,11 @@ def authority_forwarding_violations(sources: dict[str, str]) -> list[tuple[str, 
     """
 
     keyed = study_keyed_functions(sources)
+    functions = list(_functions(sources))
+    signatures = {function.name: (positional, parameters) for _rel, function, positional, parameters, _v in functions}
+    signatures.setdefault("source_authority_owner_study", (["study", "authority_study"], {"study", "authority_study"}))
     violations = []
-    for rel, function, _positional, parameters, _variants in _functions(sources):
+    for rel, function, _positional, parameters, _variants in functions:
         held = [name for name in ("source_study", "authority_study") if name in parameters]
         if not held:
             continue
@@ -1235,12 +1242,20 @@ def authority_forwarding_violations(sources: dict[str, str]) -> list[tuple[str, 
             callee = _callee(call) if isinstance(call, ast.Call) else None
             if callee not in keyed or (function.name in STUDY_OWNERS and callee in STUDY_OWNERS):
                 continue
-            authorities = [keyword.value for keyword in call.keywords if keyword.arg in AUTHORITY_KEYWORDS]
-            studies = _keyed_arguments(call, keyed[callee] - {("kw", name) for name in AUTHORITY_KEYWORDS})
+            # The callee's own authority slots: a keyword it accepts (an extra
+            # keyword swallowed by ``**kwargs`` is not one) or its position.
+            callee_positional, callee_parameters = signatures.get(
+                callee, ([], {name for kind, name in keyed[callee] if kind == "kw"}))
+            authority_slots = ({("kw", name) for name in AUTHORITY_KEYWORDS & callee_parameters}
+                               | {("pos", index) for index, name in enumerate(callee_positional)
+                                  if name in AUTHORITY_KEYWORDS})
+            authorities = _keyed_arguments(call, authority_slots)
+            studies = _keyed_arguments(call, keyed[callee] - authority_slots)
             for parameter in held:
                 carried = (all(_carries_launch_study(value, function, parameter) for value in authorities)
                            if authorities else
-                           any(_carries_launch_study(value, function, parameter) for value in studies))
+                           bool(studies) and all(_carries_launch_study(value, function, parameter)
+                                                 for value in studies))
                 if not carried:
                     violations.append((rel, function.name, callee, call.lineno))
     return sorted(set(violations))
@@ -1265,8 +1280,23 @@ def test_a_function_handed_the_launch_study_forwards_it():
         "    reads_kw(study=study, source_study={**source_study, 'data_source': 'other'})\n"
         "    source_authority_export_path(source_authority_owner_study(study, source_study, code='x'))\n"
         "    source_authority_export_path(study)\n"
-    )}) == [("synthetic.py", "checked", "reads_kw", 12), ("synthetic.py", "checked", "reads_kw", 13),
-            ("synthetic.py", "checked", "reads_kw", 14), ("synthetic.py", "checked", "source_authority_export_path", 16),
+        "    helper(owner_study, None)\n"
+        "    helper(owner_study, study)\n"
+        "    helper(study, source_study)\n"
+        "    source_authority_export_path(source_authority_owner_study(source_study, study, code='x'))\n"
+        "    reads_kw(study=study, authority_study=source_study)\n"
+        "    compare(owner_study, study)\n"
+        "def helper(study, source_study=None):\n"
+        "    return _first_icu_stay_for_cohort(study, authority_study=source_study)\n"
+        "def compare(study, other):\n"
+        "    source_authority_export_path(study)\n"
+        "    source_authority_export_path(other)\n"
+    )}) == [("synthetic.py", "checked", "compare", 22),
+            ("synthetic.py", "checked", "helper", 17), ("synthetic.py", "checked", "helper", 18),
+            ("synthetic.py", "checked", "reads_kw", 12), ("synthetic.py", "checked", "reads_kw", 13),
+            ("synthetic.py", "checked", "reads_kw", 14), ("synthetic.py", "checked", "reads_kw", 21),
+            ("synthetic.py", "checked", "source_authority_export_path", 16),
+            ("synthetic.py", "checked", "source_authority_export_path", 20),
             ("synthetic.py", "router", "_first_icu_stay_for_cohort", 7), ("synthetic.py", "router", "reads_kw", 5),
             ("synthetic.py", "router", "reads_kw", 6)]
 
