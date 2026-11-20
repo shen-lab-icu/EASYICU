@@ -302,6 +302,7 @@ def native_planning_metadata(*, export_path: Path, database: str | None = None):
         ) from exc
     if not os.path.lexists(root / "_manifest.json"):
         return None
+    declared_metadata: bool | None = None
     try:
         with AnchoredDirectory.open(root) as directory:
             raw = directory.read_bytes("_manifest.json", max_bytes=16 * 1024 * 1024)
@@ -318,6 +319,10 @@ def native_planning_metadata(*, export_path: Path, database: str | None = None):
             raise ExportCohortError(
                 "research_pipeline_manifest_invalid", _research_pipeline_intake_diagnostic(intake_error)
             ) from exc
+        # Whether the package declares typed column metadata at all: one that
+        # declares none is not drift (callers may leave names as is), while a
+        # declared sidecar that cannot be verified always is.
+        declared_metadata = isinstance(manifest, dict) and "column_metadata" in manifest
         name = manifest.get("database") if isinstance(manifest, dict) else None
         if (not isinstance(name, str) or not name
                 or (database and normalize_database_name(name) != normalize_database_name(database))):
@@ -384,7 +389,8 @@ def native_planning_metadata(*, export_path: Path, database: str | None = None):
         raise
     except (AuthorityFilesystemError, OSError, ValueError, TypeError, KeyError) as exc:
         raise ResearchPipelineRunError("research_pipeline_planning_native_metadata_invalid",
-            "The native export column metadata cannot be verified without reading patient rows.") from exc
+            "The native export column metadata cannot be verified without reading patient rows.",
+            details={} if declared_metadata is None else {"column_metadata_declared": declared_metadata}) from exc
 
 
 def _candidate_plan_input_dependencies(*, plan, context, population_spec, structural_columns=()) -> dict:

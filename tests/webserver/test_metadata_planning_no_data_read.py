@@ -42,7 +42,7 @@ def test_native_planning_coordinates_resolve_sidecar_without_opening_data(tmp_pa
     assert coordinates['target_outcome'] == 'death'
 
 
-@pytest.mark.parametrize('defect', ['missing', 'tampered', 'identity', 'wrong_database'])
+@pytest.mark.parametrize('defect', ['missing', 'tampered', 'identity', 'wrong_database', 'declared_key_missing'])
 def test_declared_native_metadata_drift_fails_before_any_fallback(tmp_path, monkeypatch, defect):
     from easyicu.research_agent.acquisition import catalog
     from easyicu.webserver import raw_preparation_dependencies
@@ -61,6 +61,15 @@ def test_declared_native_metadata_drift_fails_before_any_fallback(tmp_path, monk
             result['files'][0]['identity_column'] = 'patientunitstayid'
             return result
         monkeypatch.setattr(raw_preparation_dependencies, '_declared_typed_export_columns', inconsistent)
+    elif defect == 'declared_key_missing':
+        # Carbon b28: declared metadata whose file entry lacks a key fails
+        # with a KeyError underneath; that is drift, never "declares none".
+        real = raw_preparation_dependencies._declared_typed_export_columns
+        def keyless(**kwargs):
+            result = real(**kwargs)
+            result['files'][0].pop('file')
+            return result
+        monkeypatch.setattr(raw_preparation_dependencies, '_declared_typed_export_columns', keyless)
     monkeypatch.setattr(catalog, 'build_available_catalog', lambda *_: pytest.fail('must not fall back to data snapshot'))
     with pytest.raises(ResearchPipelineRunError) as error:
         owner._bound_source_column(str(source), database='miiv' if defect == 'wrong_database' else 'eicu_demo')
@@ -81,6 +90,18 @@ def test_a_package_that_declares_no_column_metadata_is_named_as_is_and_never_sna
     monkeypatch.setattr(catalog, 'build_available_catalog', lambda *_: pytest.fail('must not fall back to data snapshot'))
     resolver = owner._bound_source_column(str(source), database='eicu_demo')
     assert resolver('death') == 'death'
+
+
+def test_an_unreadable_package_is_named_as_is_and_never_snapshotted(tmp_path, monkeypatch):
+    # Carbon b28: a package whose manifest cannot be read (not drift of
+    # declared metadata) leaves names as is and never reaches the snapshot.
+    from easyicu.research_agent.acquisition import catalog
+
+    source = typed_export(tmp_path / 'synthetic-export', database='eicu_demo')
+    (source / '_manifest.json').write_text('{not json')
+    monkeypatch.setattr(catalog, 'build_available_catalog', lambda *_: pytest.fail('must not fall back to data snapshot'))
+    resolver = owner._bound_source_column(str(source), database='eicu_demo')
+    assert resolver('an_unbound_name') == 'an_unbound_name'
 
 
 def test_non_native_column_resolution_preserves_existing_catalog_contract(tmp_path, monkeypatch):

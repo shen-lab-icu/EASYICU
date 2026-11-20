@@ -1229,11 +1229,11 @@ def _bound_source_column(export_path: Optional[str], *, database: str | None = N
         try:
             native = native_planning_metadata(export_path=path, database=database)
         except ResearchPipelineRunError as exc:
-            # Declared native metadata that drifted (missing, tampered,
-            # inconsistent, another database) fails before any fallback; a
-            # manifest that declares none is not drift (Carbon b14r1 below).
+            # Native metadata that cannot be verified fails before any
+            # fallback, unless the owner states the manifest declares none,
+            # which is not drift (Carbon b14r1 below; Carbon b28).
             if (exc.code == "research_pipeline_planning_native_metadata_invalid"
-                    and not isinstance(exc.__cause__, KeyError)):
+                    and exc.details.get("column_metadata_declared") is not False):
                 raise
             native, unreadable = None, True
         except (ExportCohortError, ExportPackageError, OSError, ValueError, KeyError, TypeError):
