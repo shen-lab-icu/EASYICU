@@ -11,6 +11,15 @@ The full list of changes since 0.1.0 is in the v0.1.3 release notes. Recorded he
 - When a run adds its launch timing and re-signs the confirmed demo choice, the data
   the run prepares now carries the re-signed choice. Before, it kept the earlier one,
   so the run's source checks could refuse a valid study.
+- When a study planned from the database dictionary uses a reviewed candidate whose
+  exposure is summarized per stay (for example its maximum), preparing the data no
+  longer stops because that summarized exposure "is not in the catalog" (B15). The
+  summarized column is a coordinate the study carries; its base concept is still
+  checked against the catalog.
+- On the official demo's raw data, starting a run no longer undoes a demo choice you
+  just confirmed (B16). The default for repeated ICU stays is no longer written into a
+  study whose signed choice it would void, so the run does not ask you to confirm the
+  demo source again.
 
 ## 0.1.0 — 2026-11-11 — first public pre-release
 
