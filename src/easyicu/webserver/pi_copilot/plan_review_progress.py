@@ -353,9 +353,12 @@ def record_choice(
     compiled = _compile_receipt(before)
     holds_after = (compiled is not None and compiled.run_id == run.get("run_id")
                    and compiled_digest_holds(after, compiled))
-    if previous is None and holds_after and compiled_digest_holds(before, compiled):
-        # Carbon b14r1: another choice on the compiled plan keeps its compile
-        # receipt and count, else B13's hold and the S1542 count were erased.
+    if (previous is None and compiled is not None and compiled.run_id == run.get("run_id")
+            and compiled_digest_holds(before, compiled)):
+        # Carbon b14r1: another choice on the compiled plan continues its
+        # compile receipt, else B13's hold, the S1542 count and the earlier
+        # answers were erased (Carbon b14r4: also when this choice changes
+        # the configuration; the compile choice alone is dropped below).
         previous = compiled
     carried = dict(previous.choices) if previous else {}
     if (decision_code, option_id) != AGENT_PLAN_CONFIGURATION_CHOICE and not holds_after:

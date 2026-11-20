@@ -296,6 +296,31 @@ def test_a_choice_that_changes_the_compiled_configuration_drops_its_compile_and_
     assert not plan_review_progress.compile_loop_stopped(after, retry)
 
 
+def test_a_change_right_after_reconfirmation_keeps_the_earlier_answers(choice, runs):
+    # Carbon b14r4: a configuration-changing choice straight after the
+    # signed reconfirmation (no record matches the new revision) kept only
+    # itself, so the answers given before the compile turned pending again.
+    first = runs.launch(study_contexts.get_context(choice.study["id"]), "run-a")
+    _compile(choice, first)
+    reconfirmed = _reconfirm(choice)
+    after_failure = _job_writes(reconfirmed["id"], "job-failed")
+    retry = runs.launch(after_failure, "run-b")
+    _job_writes(after_failure["id"], "job-b")
+    timed = study_contexts.upsert_context({"id": after_failure["id"], "title": "Timed"})
+    plan_review_progress.record_choice(before=after_failure, after=timed, run=retry,
+                                       decision_code="plan_timing", option_id="landmark_24h")
+    _compile(choice, retry)
+    reconfirmed = _reconfirm(choice)
+    assert plan_review_progress.matching_progress(reconfirmed, retry) is None
+    after = study_contexts.upsert_context({"id": reconfirmed["id"], "question": "A changed question?"})
+    plan_review_progress.record_choice(before=reconfirmed, after=after, run=retry,
+                                       decision_code="plan_followup", option_id="hospital")
+    receipt = plan_review_progress._receipt(after)
+    assert receipt.choices["plan_timing"] == "landmark_24h" and receipt.choices["plan_followup"] == "hospital"
+    assert plan_review_progress.AGENT_PLAN_CONFIGURATION_CHOICE[0] not in receipt.choices
+    assert receipt.compiles == 0
+
+
 def test_a_third_compile_of_one_plan_stops_the_loop(choice, runs, monkeypatch, caplog):
     # S1542 backstop: whatever lets a plan be offered its compile again (B13
     # was the second retry-path loop), two compiles of one plan with no

@@ -148,8 +148,9 @@ def _path_keys(node: ast.AST, tainted: set[str], maps, known: dict[str, set]) ->
                 keys.add(key.value if isinstance(key, ast.Constant) else None)
         return keys
     if isinstance(node, ast.Call) and isinstance(node.func, ast.Name) and node.func.id == "dict":
-        keys = {keyword.arg for keyword in node.keywords if _path_value(keyword.value, tainted, maps)}
-        for arg in node.args:
+        keys = {keyword.arg for keyword in node.keywords
+                if keyword.arg is not None and _path_value(keyword.value, tainted, maps)}
+        for arg in (*node.args, *(keyword.value for keyword in node.keywords if keyword.arg is None)):
             inner = _path_keys(arg, tainted, maps, known)
             keys |= inner if inner is not None else ({None} if _path_value(arg, tainted, maps) else set())
         return keys
@@ -199,19 +200,45 @@ class _Sites(ast.NodeVisitor):
 
     def _bind(self, name: str, value: ast.AST) -> None:
         keys = _path_keys(value, self.tainted[-1], self.maps[-1], self.keys[-1])
+        carries = _path_value(value, self.tainted[-1], self.maps[-1])
         if keys:
             # ``runner_kwargs = {"export_path": path, ...}`` (Carbon b14r3).
-            self.keys[-1][name] = keys
-        if _path_value(value, self.tainted[-1], self.maps[-1]):
+            # Every assignment adds to what the name may carry, so a branch
+            # cannot narrow it (Carbon b14r4).
+            self.keys[-1][name] = self.keys[-1].get(name, set()) | keys
+        elif keys is None and name in self.keys[-1]:
+            # An opaque rebind of a kwargs dict carries unknown keys.
+            self.keys[-1][name] = self.keys[-1][name] | {None}
+        if carries:
             self.tainted[-1].add(name)
         if _source_map(value, self.maps[-1]):
             # ``source = study.get("data_source") or {}`` (Carbon b14r1).
             self.maps[-1].add(name)
 
+    def _store_key(self, target: ast.AST, value: ast.AST) -> None:
+        # ``kwargs["label"] = export_path`` / ``kwargs |= {...}`` (Carbon b14r4).
+        # A nested mapping (``patch["data_source"] = {"path": ...}``) is not a
+        # path argument; it is read through ``["data_source"]`` instead.
+        nested = isinstance(value, ast.Dict) or (
+            isinstance(value, ast.Call) and isinstance(value.func, ast.Name) and value.func.id == "dict")
+        if isinstance(target, ast.Subscript) and isinstance(target.value, ast.Name) and not nested:
+            if _path_value(value, self.tainted[-1], self.maps[-1]):
+                name = target.value.id
+                key = target.slice.value if isinstance(target.slice, ast.Constant) else None
+                self.keys[-1][name] = self.keys[-1].get(name, set()) | {key}
+                self.tainted[-1].add(name)
+
+    def visit_AugAssign(self, node) -> None:
+        if isinstance(node.target, ast.Name) and isinstance(node.op, ast.BitOr):
+            self._bind(node.target.id, node.value)
+        self.generic_visit(node)
+
     def visit_Assign(self, node) -> None:
         for target in node.targets:
             if isinstance(target, ast.Name):
                 self._bind(target.id, node.value)
+            elif isinstance(target, ast.Subscript):
+                self._store_key(target, node.value)
             elif isinstance(target, (ast.Tuple, ast.List)) and isinstance(node.value, (ast.Tuple, ast.List)):
                 # ``folder, database = export_path, name`` (Carbon b14r2).
                 for element, value in zip(target.elts, node.value.elts):
@@ -765,6 +792,32 @@ def test_the_sweep_follows_text_paths_payloads_and_binds():
     )}, bindings)
     assert bindings[("synthetic.py", "outer", "reader_i")] == {("kw", "export_path")}
     assert bindings[("synthetic.py", "outer", "reader_l")] == {("kw", "**")}
+    # Carbon b14r4: branches, opaque rebinds and key stores only widen a
+    # kwargs dict; ``dict(**kwargs)`` keeps its known keys.
+    bindings = {}
+    path_consumer_sites({"synthetic.py": (
+        "def outer(export_path, cond):\n"
+        "    if cond:\n"
+        "        branch = {'label': export_path}\n"
+        "    else:\n"
+        "        branch = {'export_path': export_path}\n"
+        "    reader_m(**branch)\n"
+        "    opaque = {'export_path': export_path}\n"
+        "    opaque = build(export_path)\n"
+        "    reader_n(**opaque)\n"
+        "    stored = {'export_path': export_path}\n"
+        "    stored['label'] = export_path\n"
+        "    reader_o(**stored)\n"
+        "    merged = {'export_path': export_path}\n"
+        "    merged |= {'label': export_path}\n"
+        "    reader_p(**merged)\n"
+        "    reader_q(**dict(**stored))\n"
+    )}, bindings)
+    assert bindings[("synthetic.py", "outer", "reader_m")] == {("kw", "label"), ("kw", "export_path")}
+    assert bindings[("synthetic.py", "outer", "reader_n")] == {("kw", "export_path"), ("kw", "**")}
+    assert bindings[("synthetic.py", "outer", "reader_o")] == {("kw", "export_path"), ("kw", "label")}
+    assert bindings[("synthetic.py", "outer", "reader_p")] == {("kw", "export_path"), ("kw", "label")}
+    assert bindings[("synthetic.py", "outer", "reader_q")] == {("kw", "export_path"), ("kw", "label")}
 
 
 def test_a_pass_row_must_reach_a_path_parameter_by_its_slot():
