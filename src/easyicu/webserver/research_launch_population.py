@@ -154,8 +154,11 @@ def prepared_candidate_selection_mode(
             window = predicate.time_window
             if (predicate.concept_id != "age" or predicate.aggregation != "first"
                     or predicate.op not in {">=", "<="}
+                    # Age is a static concept: the materializer reads one value
+                    # per stay and never summarizes it over a window, so any
+                    # window that opens at admission names the same value (B22).
                     or window.anchor != "icu_admission" or window.start_offset_hours != 0
-                    or window.end_offset_hours != math.inf
+                    or not window.end_offset_hours > 0
                     or isinstance(predicate.value, bool)
                     or not isinstance(predicate.value, (int, float))
                     or not math.isfinite(predicate.value)):

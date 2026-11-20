@@ -56,8 +56,8 @@ def test_the_export_must_prove_the_exact_requested_range(change):
     assert mode(source=source) == "predicate_filtered"
 
 
-@pytest.mark.parametrize("change", ["extra_predicate", "exclusion", "different_window", "mean",
-                                    "strict_bound", "upper_bound", "unapplied"])
+@pytest.mark.parametrize("change", ["extra_predicate", "exclusion", "later_window", "empty_window",
+                                    "other_anchor", "mean", "strict_bound", "upper_bound", "unapplied"])
 def test_other_scientific_predicates_and_windows_keep_the_existing_guard(change):
     candidate = definition()
     predicate = candidate["inclusion"][0]
@@ -65,8 +65,12 @@ def test_other_scientific_predicates_and_windows_keep_the_existing_guard(change)
         candidate["inclusion"].append({**deepcopy(predicate), "concept_id": "death", "value": 0})
     elif change == "exclusion":
         candidate["exclusion"] = [deepcopy(predicate)]
-    elif change == "different_window":
-        predicate["time_window"]["end_offset_hours"] = 24
+    elif change == "later_window":
+        predicate["time_window"]["start_offset_hours"] = 6
+    elif change == "empty_window":
+        predicate["time_window"]["end_offset_hours"] = 0
+    elif change == "other_anchor":
+        predicate["time_window"]["anchor"] = "hospital_admission"
     elif change == "mean":
         predicate["aggregation"] = "mean"
     elif change == "strict_bound":
@@ -201,3 +205,14 @@ def test_launch_mode_uses_the_groupings_declared_by_its_acquired_catalog(tmp_pat
         declarations={"cohort_name": "synthetic", "user_preferences": context.user_preferences},
     )
     assert mode == ("all_input_rows" if share else "predicate_filtered")
+
+
+@pytest.mark.parametrize("end", [24, 72, "inf"])
+def test_an_age_window_opening_at_admission_names_the_same_static_age(end):
+    # B22: the reviewed candidate read first age within 0-24 h of ICU
+    # admission; the study's own extraction had applied age >= 18. Age is a
+    # static concept (one value per stay, no window), so the export's proof
+    # applies and the prepared plan keeps every input row.
+    candidate, source = definition(), report()
+    candidate["inclusion"][0]["time_window"]["end_offset_hours"] = end
+    assert mode(candidate, source) == "all_input_rows"

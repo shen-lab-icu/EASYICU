@@ -84,6 +84,11 @@ The full list of changes since 0.1.0 is in the v0.1.3 release notes. Recorded he
   stops the extraction with a typed reason. On MIMIC the plan card's first-stay row
   names the same scope.
 
+- Preparing the data of a reviewed plan no longer fails with
+  "caller_bound_population_mode_conflict" when the study's own extraction already kept
+  only adults and the plan read age within the first hours of the ICU stay (B22). Age is
+  one value per stay, so the extraction's age step proves the criterion and the prepared
+  plan keeps every input row.
 - Switching the model connection in setup (for example from a saved API connection to
   the ChatGPT account) while a conversation is open now starts a conversation on the
   chosen connection. Before, the open conversation stayed on the connection it was
