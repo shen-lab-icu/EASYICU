@@ -162,6 +162,13 @@ The full list of changes since 0.1.0 is in the v0.1.3 release notes. Recorded he
   says 「问题限定了人群“心衰”，方案未包含对应的人群条件，请确认」 and offers to add it in the
   conversation. Sepsis, AKI and mechanical ventilation are the conditions EasyICU selects
   on itself.
+- A study bound directly to the official demo's raw folder (for example through 「从它的原数据
+  重定义新队列 → 继续使用已转换数据」) no longer reaches a card whose only action cannot
+  start (B32). With no earlier choice for that study, the card now offers the first data
+  source choice from the current verified export of that same official folder, with the
+  same checks as before; nothing is signed until you click 确认数据源并继续. A folder
+  whose export or raw receipts do not verify, or a folder that is not the official one,
+  is still refused with no offer.
 
 ## 0.1.0 — 2026-11-11 — first public pre-release
 

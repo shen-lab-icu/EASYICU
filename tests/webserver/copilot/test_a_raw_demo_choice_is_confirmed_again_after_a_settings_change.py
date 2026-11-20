@@ -171,22 +171,6 @@ def test_a_displayed_offer_is_used_once_and_only_for_its_revision(choice, chosen
         choice.service.authorize_data_source(choice.record.session_id, **body)
 
 
-def test_a_raw_folder_never_chosen_for_this_study_is_refused_without_an_offer(choice, chosen):
-    """No earlier receipt for this study: refuse, and offer nothing to sign."""
-    other = study_contexts.upsert_context({
-        "question": chosen["question"], "data_source": chosen["data_source"], "cohort": chosen["cohort"],
-        "modules": ["demographics"],
-    })
-    assert demo_planning_source.raw_choice_needs_reconfirmation(other)
-    assert demo_planning_source.resolve_demo_planning_reconfirmation(other) is None
-    workflow = _workflow(other)
-    assert workflow.next_action_code == CODE
-    assert "planning_source" not in workflow.bound_export_cohort_refusal
-    with pytest.raises(research_run_submission.ResearchRunSubmissionError) as refused:
-        _launch(other)
-    assert refused.value.detail["error"] == CODE
-
-
 def test_an_unreadable_receipt_is_skipped_not_trusted(choice, chosen, monkeypatch):
     changed = _changed(choice, chosen, "outcome")
 
@@ -195,6 +179,8 @@ def test_an_unreadable_receipt_is_skipped_not_trusted(choice, chosen, monkeypatc
 
     monkeypatch.setattr(demo_planning_authority, "_signed_body", unreadable)
     assert demo_planning_authority.prior_choice_export(changed) is None
+    # Only the verified current export's first choice (B32) may remain.
+    monkeypatch.setattr(demo_planning_source, "_current_official_export", lambda _source: None)
     assert "planning_source" not in _workflow(changed).bound_export_cohort_refusal
 
 

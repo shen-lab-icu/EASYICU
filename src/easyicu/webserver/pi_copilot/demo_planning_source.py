@@ -122,8 +122,35 @@ def raw_choice_needs_reconfirmation(study: Mapping[str, Any]) -> bool:
         return True
 
 
+def _current_official_export(source: Mapping[str, Any]) -> str | None:
+    """The current, ready official export of exactly this official raw folder.
+
+    Only the allowlisted release whose cache coordinate is this raw folder and
+    whose database matches, and only when the running producer's export of it
+    is ready. Any other folder has none.
+    """
+    raw = Path(str(source.get("path") or "")).expanduser().absolute()
+    database = str(source.get("database") or "")
+    for spec in SOURCES:
+        try:
+            paths = demo_source_storage.source_paths(spec)
+            if raw == paths.raw and spec.database == database and demo_source_storage.export_ready(paths, spec):
+                return str(paths.export)
+        except (OSError, ValueError):
+            return None
+    return None
+
+
 def _reconfirmation_study(study: Mapping[str, Any]) -> Mapping[str, Any] | None:
-    """The study as its earlier choice was offered: bound to the receipt's export."""
+    """The study as its choice is offered: bound to the export the choice is made from.
+
+    That is the export the study's earlier receipt named. A study bound to an
+    official raw folder without any receipt (B32: bound through "redefine a
+    new cohort from its raw data", 2026-11-20) is offered the first choice from
+    the current verified export of that same folder; the full
+    ``resolve_demo_planning_source`` checks still run, and nothing is signed
+    until the researcher confirms.
+    """
     source = study.get("data_source")
     if not isinstance(source, Mapping) or study.get("active_job_id"):
         return None
@@ -131,7 +158,7 @@ def _reconfirmation_study(study: Mapping[str, Any]) -> Mapping[str, Any] | None:
         return None
     from .demo_planning_authority import prior_choice_export
 
-    export = prior_choice_export(study)
+    export = prior_choice_export(study) or _current_official_export(source)
     if export is None:
         return None
     return {**dict(study), "data_source": {**dict(source), "path": export}}
