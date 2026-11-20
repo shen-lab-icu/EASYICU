@@ -932,6 +932,14 @@ STUDY_VARIANTS = frozenset({"materialization_study", "candidate_planning_study",
 
 
 def _owner_study_arguments(call: ast.Call) -> list[ast.AST]:
+    """The expression that supplies the owner's source (Carbon b15).
+
+    With ``authority_study`` passed, that alone; otherwise the study itself.
+    """
+
+    authority = [keyword.value for keyword in call.keywords if keyword.arg == "authority_study"]
+    if authority:
+        return authority
     index, names = STUDY_OWNERS[_callee(call)]
     arguments = [keyword.value for keyword in call.keywords if keyword.arg in names]
     if len(call.args) > index:
@@ -954,8 +962,11 @@ def study_owner_violations(sources: dict[str, str]) -> list[tuple[str, str, str,
                 attributes = {node.attr for argument in arguments for node in ast.walk(argument)
                               if isinstance(node, ast.Attribute)}
                 # The owner is handed the launch's own study (as its study or
-                # its ``authority_study``), and never a known variant.
+                # its ``authority_study``), and never a known variant. A
+                # function handed ``authority_study`` forwards it (through its
+                # checked ``owner_study``).
                 if ("source_study" in parameters and "source_study" not in names) or (
+                        "authority_study" in parameters and not names & {"authority_study", "owner_study"}) or (
                         (names | attributes) & STUDY_VARIANTS):
                     violations.append((rel, function.name, _callee(call), call.lineno))
     return sorted(set(violations))
@@ -972,5 +983,130 @@ def test_the_study_owner_check_finds_b14s_shape():
         "    return _first_icu_stay_for_cohort(study)\n"
         "def launch(scientific):\n"
         "    return source_authority_export_path(scientific.materialization_study)\n"
+        "def swapped(study, source_study=None):\n"
+        "    return _first_icu_stay_for_cohort(source_study, authority_study=study)\n"
+        "def direct(study, candidate_planning_study):\n"
+        "    return _first_icu_stay_for_cohort(candidate_planning_study, authority_study=study)\n"
+        "def resolver(study, *, authority_study=None):\n"
+        "    return source_authority_export_path(study)\n"
     )}) == [("synthetic.py", "launch", "source_authority_export_path", 5),
-            ("synthetic.py", "profile", "_first_icu_stay_for_cohort", 3)]
+            ("synthetic.py", "profile", "_first_icu_stay_for_cohort", 3),
+            ("synthetic.py", "resolver", "source_authority_export_path", 11),
+            ("synthetic.py", "swapped", "_first_icu_stay_for_cohort", 7)]
+
+
+# S1546: other variant sources. A study-keyed function is an owner above, or
+# any webserver function that forwards one of its parameters into one (to a
+# fixed point). A *variant* is a known variant name or attribute, a dict
+# built with ``**`` from another mapping, ``dict(mapping)``, or a variant
+# builder's result. Every call that hands a variant to a study-keyed slot is
+# classified:
+# - OWNER: the owner answers it through the stored study's choice
+#   (``_signed_choice_resolution``: same id, same choice, same data source);
+# - AUTHORITY: the call also passes the launch study (``source_study`` /
+#   ``authority_study``).
+VARIANT_BUILDERS = frozenset({"_neutral_materialization_scope", "_planning_study"})
+AUTHORITY_KEYWORDS = frozenset({"source_study", "authority_study"})
+
+
+def _is_variant(node: ast.AST) -> bool:
+    for item in ast.walk(node):
+        if isinstance(item, ast.Name) and item.id in STUDY_VARIANTS:
+            return True
+        if isinstance(item, ast.Attribute) and item.attr in STUDY_VARIANTS:
+            return True
+        if isinstance(item, ast.Dict) and any(key is None for key in item.keys):
+            return True
+        if isinstance(item, ast.Call) and _callee(item) in VARIANT_BUILDERS:
+            return True
+        if isinstance(item, ast.Call) and isinstance(item.func, ast.Name) and item.func.id == "dict" and item.args:
+            return True
+    return False
+
+
+def _functions(sources: dict[str, str]):
+    for rel, text in sources.items():
+        for function in ast.walk(ast.parse(text)):
+            if isinstance(function, (ast.FunctionDef, ast.AsyncFunctionDef)):
+                positional = [arg.arg for arg in (*function.args.posonlyargs, *function.args.args)]
+                if positional and positional[0] in {"self", "cls"}:
+                    positional = positional[1:]
+                yield rel, function, positional, {*positional, *(arg.arg for arg in function.args.kwonlyargs)}
+
+
+def _keyed_arguments(call: ast.Call, slots: set) -> list[ast.AST]:
+    return ([value for index, value in enumerate(call.args) if ("pos", index) in slots]
+            + [keyword.value for keyword in call.keywords if ("kw", keyword.arg) in slots])
+
+
+def study_keyed_functions(sources: dict[str, str]) -> dict[str, set]:
+    keyed = {name: {("pos", index), *(("kw", keyword) for keyword in names)}
+             for name, (index, names) in STUDY_OWNERS.items()}
+    functions = list(_functions(sources))
+    changed = True
+    while changed:
+        changed = False
+        for _rel, function, positional, parameters in functions:
+            for call in ast.walk(function):
+                if not isinstance(call, ast.Call) or _callee(call) not in keyed:
+                    continue
+                for argument in _keyed_arguments(call, keyed[_callee(call)]):
+                    for name in (node.id for node in ast.walk(argument) if isinstance(node, ast.Name)):
+                        if name in parameters:
+                            slots = {("kw", name)} | ({("pos", positional.index(name))} if name in positional else set())
+                            if not slots <= keyed.setdefault(function.name, set()):
+                                keyed[function.name] |= slots
+                                changed = True
+    return keyed
+
+
+def variant_flows(sources: dict[str, str]) -> Counter:
+    keyed = study_keyed_functions(sources)
+    flows: Counter = Counter()
+    for rel, function, _positional, _parameters in _functions(sources):
+        for call in ast.walk(function):
+            if isinstance(call, ast.Call) and _callee(call) in keyed and any(
+                    _is_variant(argument) for argument in _keyed_arguments(call, keyed[_callee(call)])
+                    if argument not in [keyword.value for keyword in call.keywords if keyword.arg in AUTHORITY_KEYWORDS]):
+                authority = any(keyword.arg in AUTHORITY_KEYWORDS for keyword in call.keywords)
+                flows[(rel, function.name, _callee(call), "AUTHORITY" if authority else "OWNER")] += 1
+    return flows
+
+
+_VARIANT_FLOWS = {
+    # The runner's candidate planning study (the launch's materialization study).
+    ("agent_pipeline_runs.py", "make_research_pipeline_run_runner", "_data_foundation_profile", "AUTHORITY"): 2,
+    ("agent_pipeline_runs.py", "runner", "_data_foundation_profile", "AUTHORITY"): 2,
+    ("agent_pipeline_runs.py", "make_research_pipeline_run_runner", "planning_patient_grouping", "OWNER"): 1,
+    ("agent_pipeline_runs.py", "runner", "planning_patient_grouping", "OWNER"): 1,
+    # The launch preparation's materialization study.
+    ("research_pipeline_run_preparation.py", "_prepare_scientific_launch", "_data_foundation_profile", "OWNER"): 1,
+    ("research_pipeline_run_preparation.py", "_prepare_scientific_launch", "target_trial_launch_inputs", "OWNER"): 1,
+    ("research_launch_scientific.py", "target_trial_launch_inputs", "_data_foundation_profile", "OWNER"): 1,
+    # A merged update proposal (current study + patch).
+    ("pi_copilot/study_context_update.py", "_execution_catalog", "bound_source_authority_path", "OWNER"): 1,
+    ("pi_copilot/study_context_update.py", "_question_design_variance", "descriptive_variance", "OWNER"): 1,
+}
+
+
+def test_every_study_variant_reaching_an_owner_is_classified():
+    flows = variant_flows(_webserver_sources())
+    assert dict(flows) == _VARIANT_FLOWS, (
+        "classify each new variant flow: does the owner answer it through the stored study's choice "
+        "(same id, choice and data source), or does the call pass the launch study?")
+
+
+def test_the_variant_sweep_follows_a_variant_through_a_forwarding_function():
+    flows = variant_flows({"synthetic.py": (
+        "def reads(study):\n"
+        "    return source_authority_export_path(study)\n"
+        "def forwards(study, label):\n"
+        "    return reads(study)\n"
+        "def launch(study, patch):\n"
+        "    forwards({**study, **patch}, 'x')\n"
+        "    forwards(study, 'x')\n"
+        "    reads(materialization_study)\n"
+        "    _data_foundation_profile(study=materialization_study, source_study=study)\n"
+    )})
+    assert flows == Counter({("synthetic.py", "launch", "forwards", "OWNER"): 1,
+                             ("synthetic.py", "launch", "reads", "OWNER"): 1})

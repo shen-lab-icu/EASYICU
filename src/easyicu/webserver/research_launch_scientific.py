@@ -189,6 +189,52 @@ def _runtime_projection_sensitivity_specs(
     return (*sensitivity_specs, automatic)
 
 
+_CHOICE_CAUSE = re.compile(r"[a-z][a-z0-9_]{2,79}")
+
+
+def _choice_cause(exc: BaseException) -> str:
+    """A category code for a choice that did not resolve; never a path or a value."""
+
+    text = str(exc)
+    return text if _CHOICE_CAUSE.fullmatch(text) else type(exc).__name__
+
+
+def _signed_choice_resolution(study: Mapping[str, Any]) -> tuple[Any, str]:
+    """The raw Demo choice's source identity for ``study``, or ``None`` and why.
+
+    The choice is signed on the study as stored. A launch or proposal works
+    on variants of it (the materialization study, a candidate planning
+    study, a merged update proposal) whose other fields differ, so the
+    signature reads as stale on them. The choice answers a question about
+    the source only, so a variant that keeps the stored study's id, choice
+    and data source is answered by the stored study's choice (B14, UX leg 3
+    en, 2026-11-20). When the stored study's own choice does not resolve,
+    nothing resolves and the authorities refuse as before.
+    """
+
+    from easyicu.research_agent.authority.filesystem import AuthorityFilesystemError
+    from easyicu.webserver.pi_copilot.demo_planning_authority import resolve_choice
+
+    errors = (ValueError, OSError, KeyError, TypeError, AttributeError, dataio.ExportCohortError,
+              AuthorityFilesystemError)
+    try:
+        return resolve_choice(study), ""
+    except errors as exc:
+        cause = _choice_cause(exc)
+    study_id = _clean_text(study.get("id"), 200)
+    try:
+        stored = study_context_owner.get_context(study_id) if study_id else None
+    except study_context_owner.StudyContextError:
+        stored = None
+    if (stored is None or stored.get("demo_planning_authority_ref") != study.get("demo_planning_authority_ref")
+            or stored.get("data_source") != study.get("data_source")):
+        return None, cause
+    try:
+        return resolve_choice(stored), ""
+    except errors as exc:
+        return None, _choice_cause(exc)
+
+
 def source_authority_export_path(study: Mapping[str, Any]) -> str:
     """The export whose raw source answers a study's identity questions.
 
@@ -196,7 +242,9 @@ def source_authority_export_path(study: Mapping[str, Any]) -> str:
     export package. Its signed choice binds that folder to the registered
     official export of the same raw source (B9, 2026-11-19: a first-stay
     raw Demo study could neither compile nor launch). Without a choice that
-    resolves, the bound path stays, so the authorities refuse as before.
+    resolves, the bound path stays, so the authorities refuse as before. A
+    variant of the stored study is answered by the stored study's choice
+    (``_signed_choice_resolution``, B14).
     """
 
     source = study.get("data_source")
@@ -204,14 +252,9 @@ def source_authority_export_path(study: Mapping[str, Any]) -> str:
     path = _clean_text(source.get("path"), 2_000)
     if not path or not study.get("demo_planning_authority_ref"):
         return path
-    from easyicu.research_agent.authority.filesystem import AuthorityFilesystemError
-    from easyicu.webserver import dataio, sources
-    from easyicu.webserver.pi_copilot.demo_planning_authority import resolve_choice
+    from easyicu.webserver import sources
 
-    try:
-        identity = resolve_choice(study)
-    except (ValueError, OSError, KeyError, TypeError, dataio.ExportCohortError, AuthorityFilesystemError):
-        return path
+    identity, _cause = _signed_choice_resolution(study)
     registered = sources.stored_source_path_for_identity(identity) if identity is not None else None
     return _clean_text(registered, 2_000) if registered else path
 
@@ -311,14 +354,31 @@ def _source_authority_cause(study: Mapping[str, Any]) -> Dict[str, Any]:
 
     if not study.get("demo_planning_authority_ref"):
         return {}
-    from easyicu.research_agent.authority.filesystem import AuthorityFilesystemError
-    from easyicu.webserver.pi_copilot.demo_planning_authority import resolve_choice
+    identity, cause = _signed_choice_resolution(study)
+    # A category code only (S1546): never a path, a count or a row.
+    return {"source_authority_cause": cause} if identity is None and cause else {}
 
-    try:
-        resolve_choice(study)
-    except (ValueError, OSError, KeyError, TypeError, dataio.ExportCohortError, AuthorityFilesystemError) as exc:
-        return {"source_authority_cause": _clean_text(str(exc) or type(exc).__name__, 120)}
-    return {}
+
+def _authority_owner_study(
+    study: Mapping[str, Any], authority_study: Optional[Mapping[str, Any]], *, code: str,
+) -> Mapping[str, Any]:
+    """The study whose source answers ``study``'s identity question.
+
+    ``authority_study`` is the launch's own study when ``study`` is a variant
+    of it; it must bind the same source and the same raw Demo choice, so it
+    can never lend its source to another study's cohort (Carbon b15).
+    """
+
+    if authority_study is None:
+        return study
+    if (not isinstance(authority_study, Mapping)
+            or authority_study.get("data_source") != study.get("data_source")
+            or authority_study.get("demo_planning_authority_ref") != study.get("demo_planning_authority_ref")):
+        raise ResearchPipelineRunError(
+            code, "The launch study and its variant do not bind the same source.",
+            details={"first_icu_stay_reason_code": "authority_study_source_mismatch"},
+        )
+    return authority_study
 
 
 def _first_icu_stay_for_cohort(
@@ -340,7 +400,8 @@ def _first_icu_stay_for_cohort(
 
     if not primary_cohort.first_icu_stay_only(study.get("cohort")):
         return None
-    owner_study = authority_study or study
+    owner_study = _authority_owner_study(
+        study, authority_study, code="research_pipeline_first_stay_restriction_unverified")
     source = owner_study.get("data_source")
     source = source if isinstance(source, Mapping) else {}
     export_path = source_authority_export_path(owner_study)
@@ -400,7 +461,8 @@ def _first_icu_stay_per_hospitalization_for_cohort(
     """
     if not primary_cohort.first_icu_stay_per_hospitalization_only(study.get("cohort")):
         return None
-    owner_study = authority_study or study
+    owner_study = _authority_owner_study(
+        study, authority_study, code="research_pipeline_hospital_first_stay_restriction_unverified")
     source = owner_study.get("data_source")
     source = source if isinstance(source, Mapping) else {}
     try:

@@ -235,8 +235,65 @@ def test_the_launch_materialization_variant_asks_the_export_through_the_launch_s
         export_path=str(choice.paths.raw), study=variant, target="death", require_primary_exposure=False,
         covariates=("age",), source_study=study)
     assert asked == [str(choice.paths.export)] and profile["first_icu_stay"] is not None
-    # The variant alone still refuses, and now says why its choice did not hold.
+    # The owner answers any variant through the stored study's choice: the
+    # variant alone, the runner's planning grouping and a merged proposal.
+    launch._first_icu_stay_for_cohort(variant)
+    assert asked[-1] == str(choice.paths.export)
+    from easyicu.webserver import run_patient_grouping
+
+    grouped = []
+    monkeypatch.setattr(source_identity_authority, "resolve_study_patient_grouping",
+                        lambda *, export_path, database: grouped.append(export_path))
+    run_patient_grouping.planning_patient_grouping(variant, bound=None, first_icu_stay_restricted=True)
+    assert grouped and set(grouped) == {str(choice.paths.export)}
+    from easyicu.webserver.pi_copilot import study_context_update
+
+    read = []
+    monkeypatch.setattr(catalog_owner, "build_available_catalog", lambda path: read.append(str(path)) or AvailableCatalog(
+        source="synthetic-metadata-only", concepts=[]))
+    study_context_update._execution_catalog(study, {"primary_exposure": "lactate", "covariates": ["age"]},
+                                            study["data_source"])
+    assert read == [str(choice.paths.export)]
+    # A variant on another source, or a stored choice that no longer holds,
+    # refuses as before and names the cause as a category only.
+    moved = {**variant, "data_source": {**variant["data_source"], "label": "another"}}
+    with pytest.raises(launch.ResearchPipelineRunError) as raised:
+        launch._first_icu_stay_for_cohort(moved)
+    assert raised.value.details["source_authority_cause"] == "demo_planning_authority_stale"
+    assert asked[-1] == str(choice.paths.raw)
+    study_contexts.upsert_context({"id": study["id"], "outcome": "hospital_mortality"})
     with pytest.raises(launch.ResearchPipelineRunError) as raised:
         launch._first_icu_stay_for_cohort(variant)
     assert raised.value.details["source_authority_cause"] == "demo_planning_authority_stale"
-    assert asked[-1] == str(choice.paths.raw)
+    assert "/" not in raised.value.details["source_authority_cause"]
+
+
+def test_the_hospital_first_variant_asks_the_export_and_a_foreign_authority_is_refused(choice, chosen, monkeypatch):
+    # Carbon b15: the per-hospitalization resolver reads the launch study's
+    # source too; an authority study on another source cannot lend it.
+    asked = []
+
+    def resolve(*, export_path, database):
+        asked.append(export_path)
+        return object()
+
+    monkeypatch.setattr(source_identity_authority, "resolve_study_first_icu_stay_per_hospitalization", resolve)
+    assert chosen["cohort"]["first_icu_stay_per_hospitalization"] is True
+    variant = {**chosen, "modules": ["demographics"], "materialization_scope_source": "neutral_default"}
+    assert launch._first_icu_stay_per_hospitalization_for_cohort(variant, authority_study=chosen) is not None
+    assert asked == [str(choice.paths.export)]
+    foreign = {**chosen, "data_source": {**chosen["data_source"], "path": "/another/source"}}
+    for authority in (foreign, {}):
+        with pytest.raises(launch.ResearchPipelineRunError) as raised:
+            launch._first_icu_stay_per_hospitalization_for_cohort(variant, authority_study=authority)
+        assert raised.value.details["first_icu_stay_reason_code"] == "authority_study_source_mismatch"
+    assert asked == [str(choice.paths.export)]
+
+
+def test_a_choice_cause_is_a_category_never_a_path():
+    assert launch._choice_cause(ValueError("demo_planning_source_changed")) == "demo_planning_source_changed"
+    assert launch._choice_cause(OSError("/Volumes/data/raw/icustays.csv.gz: missing")) == "OSError"
+    assert launch._choice_cause(KeyError("stay 1234")) == "KeyError"
+    # A malformed study refuses with a category instead of crashing.
+    identity, cause = launch._signed_choice_resolution({"id": "x", "demo_planning_authority_ref": "r", "data_source": "raw"})
+    assert identity is None and cause
