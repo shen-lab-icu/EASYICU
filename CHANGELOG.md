@@ -156,6 +156,12 @@ The full list of changes since 0.1.0 is in the v0.1.3 release notes. Recorded he
   did; a summary that a new question supersedes is dropped, and the question's own words
   decide. A population condition (「Sepsis-3 脓毒症成人 ICU 患者中」) is no longer read as the
   study's exposure.
+- A question that restricts its patients to a population EasyICU has no condition for
+  (for example 「在心衰患者中」, "among patients with heart failure", 「ARDS 患者的」,
+  "trauma patients") is no longer silent when the plan does not list it: the plan card
+  says 「问题限定了人群“心衰”，方案未包含对应的人群条件，请确认」 and offers to add it in the
+  conversation. Sepsis, AKI and mechanical ventilation are the conditions EasyICU selects
+  on itself.
 
 ## 0.1.0 — 2026-11-11 — first public pre-release
 

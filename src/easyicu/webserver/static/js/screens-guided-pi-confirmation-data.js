@@ -484,8 +484,23 @@
       return `<div class="gpi-confirmation-data-status is-compact is-system-default" data-gpi-first-stay-setting="${esc(scope)}"><strong>${esc(copy[0])} · ${esc(tr('Study setting (system default)', '研究设置（系统默认）'))}</strong><small>${esc(tr('The plan’s population conditions do not list this setting, but the data are extracted with it.', '计划的人群条件中没有列出这一项，但数据会按这项设置提取。'))}</small><button class="btn sm" type="button" data-gpi-composer-prefill="${esc(copy[1])}">${esc(tr('Change in the conversation', '在对话中修改'))}</button></div>`;
     }
 
+    // A population the question restricts to that the plan's population does
+    // not list (plan_decisions.unlisted_question_population, S1737): named,
+    // with a request to add it the researcher reviews and sends.
+    function unlistedPopulationHtml(review) {
+      const rows = Array.isArray(review?.question_population_unlisted)
+        ? review.question_population_unlisted.filter(row => typeof row === 'string' && row.trim()).slice(0, 4) : [];
+      return rows.map(words => `<div class="gpi-confirmation-data-status is-compact is-system-default" data-gpi-population-unlisted="${esc(words)}"><strong>${esc(tr(
+        `The question restricts the population to “${words}”, but the plan lists no matching population condition. Please confirm.`,
+        `问题限定了人群“${words}”，方案未包含对应的人群条件，请确认。`,
+      ))}</strong><button class="btn sm" type="button" data-gpi-composer-prefill="${esc(tr(
+        `Add the population restriction “${words}” from my question as a population condition of the plan.`,
+        `请把问题中的人群限定“${words}”作为方案的人群条件加入。`,
+      ))}">${esc(tr('Change in the conversation', '在对话中修改'))}</button></div>`).join('');
+    }
+
     return Object.freeze({
-      runnableTimingCard, timingAlternativesHtml, firstStaySettingHtml,
+      runnableTimingCard, timingAlternativesHtml, firstStaySettingHtml, unlistedPopulationHtml,
       preparedDataStatus, validDeferredInputScope, deferredInputScopeHtml,
       reviewedPopulationSpecHtml, populationPreparationHtml, populationAcceptanceHtml,
       localizedAuthorizationQuestion, localizedDecisionEvidence, survivalLandmarkDecisionCopy,

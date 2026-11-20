@@ -42,7 +42,7 @@
       reviewedPopulationSpecHtml, populationPreparationHtml, populationAcceptanceHtml,
       localizedAuthorizationQuestion, localizedDecisionEvidence, survivalLandmarkDecisionCopy,
       staleConfirmationHtml, latestAttemptFailureHtml, planConversationHtml,
-      runnableTimingCard, timingAlternativesHtml, firstStaySettingHtml,
+      runnableTimingCard, timingAlternativesHtml, firstStaySettingHtml, unlistedPopulationHtml,
     } = window.EasyICU.guidedPi.require('confirmationData').create(host);
     const cohortEligibilityDecisionHtml = typeof host.cohortEligibilityDecisionHtml === 'function'
       ? host.cohortEligibilityDecisionHtml : () => '';
@@ -1059,9 +1059,9 @@
           ),
         }[review.repeated_stays_system_default]
         : '';
-      const repeatedStaysDefault = repeatedStaysRoute
+      const repeatedStaysDefault = (repeatedStaysRoute
         ? `<div class="gpi-confirmation-data-status is-compact is-system-default"><strong>${esc(tr('Repeat ICU stays · system default', '重复 ICU 入住 · 系统默认'))}</strong><small>${esc(repeatedStaysRoute)}</small></div>`
-        : SYSTEM_DEFAULT_CARDS.has(confirmation.code) ? firstStaySettingHtml(review) : '';
+        : SYSTEM_DEFAULT_CARDS.has(confirmation.code) ? firstStaySettingHtml(review) : '') + (SYSTEM_DEFAULT_CARDS.has(confirmation.code) ? unlistedPopulationHtml(review) : '');
       const flowSteps = Array.isArray(confirmation.flowSteps) && confirmation.flowSteps.length
         ? `<div class="gpi-confirmation-flow-overview">
             <div class="gpi-confirmation-flow-heading"><strong>${esc(confirmation.flowTitle || tr('What happens next', '接下来会发生什么'))}</strong><span>${esc(confirmation.flowHint || tr('Process preview · no action needed yet', '流程预览 · 现在无需操作'))}</span></div>

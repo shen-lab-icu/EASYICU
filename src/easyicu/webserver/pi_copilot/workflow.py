@@ -1841,6 +1841,17 @@ def _enrich_plan_review(
                 }
             }
         )
+    # A population the question restricts to, with no condition EasyICU
+    # records, is named on the card when the reviewed population lists none.
+    summary = snapshot.plan_review_summary
+    unlisted = (
+        plan_decisions.unlisted_question_population(study, summary.get("reviewed_population_spec"))
+        if isinstance(summary, Mapping) else []
+    )
+    if unlisted:
+        snapshot = snapshot.model_copy(
+            update={"plan_review_summary": {**dict(summary), "question_population_unlisted": unlisted}}
+        )
     # A first-stay setting the reviewed population does not list is named on
     # the card, so the study's cohort setting never restricts it silently.
     summary = snapshot.plan_review_summary

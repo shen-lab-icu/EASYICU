@@ -67,6 +67,7 @@ __all__ = [
     "StatedTreatmentUse",
     "named_study_concepts",
     "stated_population_conditions",
+    "stated_population_restrictions",
     "substance_forms",
     "substance_reading",
     "SLOTS",
@@ -1979,6 +1980,53 @@ def stated_population_conditions(question: str) -> Tuple[Tuple[Tuple[str, ...], 
                 found.append((concepts, text[match.start() : match.end()]))
                 break
     return tuple(found)
+
+
+# Constructions that restrict whom a study includes (S1737): 「在…患者中」,
+# 「…患者的」, "among/in patients with …", "among/in X patients".
+_RESTRICTION_CONSTRUCTIONS = (
+    re.compile(r"在\s*([^，,。；;？?、]{1,30}?)\s*(?:患者|病人|人群)\s*中"),
+    re.compile(r"(?:^|[，,。；;：:\s])([^，,。；;？?、在\s][^，,。；;？?、在]{0,20}?)\s*(?:患者|病人)\s*的"),
+    re.compile(
+        r"\b(?:among|in)\s+(?:adult\s+|icu\s+|critically\s+ill\s+)*(?:patients|adults)\s+"
+        r"(?:with|who\s+(?:have|had))\s+([a-z0-9][a-z0-9 \-]{1,40}?)"
+        r"(?=\s*[,.;?]|\s+(?:how|is|are|was|were|what|does|do|did|and|in|during|after)\b|$)",
+        re.IGNORECASE,
+    ),
+    re.compile(r"\b(?:among|in)\s+([a-z0-9\-]+(?:\s+[a-z0-9\-]+){0,2}?)\s+patients\b", re.IGNORECASE),
+)
+# Setting, age and stay words a restriction may carry; none of them is a
+# condition (ages and first stays are typed population criteria of their own).
+_RESTRICTION_SETTING_WORDS = re.compile(
+    r"(?:\d+(?:\.\d+)?\s*(?:岁|years?(?:\s+old)?|y)|(?:≥|>=|>|大于|以上|及以上|或以上|以上的|older|or\s+older|and\s+older|aged)"
+    r"|成人|成年|重症|危重|监护室|icu|adult|adults|critically\s+ill|hospitali[sz]ed|入住|入科时|入院时|首次|first|stay|stays"
+    r"|所有|全部|的|入|住院|ICU|[（）()\s\-、,，])",
+    re.IGNORECASE,
+)
+
+
+def stated_population_restrictions(question: str) -> Tuple[Tuple[str, bool], ...]:
+    """Each population restriction the sentence states, and whether EasyICU reads its condition.
+
+    The words are the restriction's head (「心衰」 in 「在心衰患者中」), without
+    setting, age or stay words; a restriction that is only those words (「在
+    成人 ICU 患者中」) is not listed.  ``True`` marks a head that
+    :func:`stated_population_conditions` reads as a recorded condition.
+    """
+
+    text = _clean_question(question)
+    found: Dict[str, bool] = {}
+    for pattern in _RESTRICTION_CONSTRUCTIONS:
+        for match in pattern.finditer(text):
+            words = match.group(1).strip()
+            if not _RESTRICTION_SETTING_WORDS.sub("", words).strip() or _negated(text.lower(), match.start(1)):
+                continue
+            head = words.strip(" 的")
+            supported = any(
+                re.search(condition, head.lower()) for condition, _concepts in _POPULATION_CONDITIONS
+            )
+            found.setdefault(head, supported)
+    return tuple(found.items())
 
 
 def _study_concept_readings(

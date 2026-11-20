@@ -976,6 +976,45 @@ def repeated_stays_system_default_route(study: Mapping[str, Any]) -> str | None:
 _FIRST_STAY_CRITERION_KINDS = frozenset({"first_icu_stay", "first_icu_stay_per_hospitalization"})
 
 
+def unlisted_question_population(
+    study: Mapping[str, Any], reviewed_population_spec: Any,
+) -> list[str]:
+    """The question's population restrictions the reviewed population does not list (S1737).
+
+    A condition EasyICU records (sepsis, AKI, mechanical ventilation) is a
+    named concept the plan must answer for; any other restriction the
+    question states (「在心衰患者中」, "among patients with heart failure")
+    has no concept to select on, so the card names it when no population
+    criterion quotes it.  Never a silent restriction, never an approval stop.
+    """
+
+    from easyicu.webserver.study_intent import stated_population_restrictions
+
+    question = str(study.get("question") or "")
+    if not question.strip():
+        return []
+    rows = (
+        reviewed_population_spec.get("criteria")
+        if isinstance(reviewed_population_spec, Mapping)
+        else None
+    )
+    quotes = [
+        str(quote).lower()
+        for row in (rows if isinstance(rows, list) else ())
+        if isinstance(row, Mapping)
+        for quote in (
+            row.get("quote"),
+            (row.get("criterion") or {}).get("quote") if isinstance(row.get("criterion"), Mapping) else None,
+        )
+        if quote
+    ]
+    return [
+        head
+        for head, supported in stated_population_restrictions(question)
+        if not supported and not any(head.lower() in quote for quote in quotes)
+    ][:4]
+
+
 def unlisted_first_stay_setting(
     study: Mapping[str, Any], reviewed_population_spec: Any,
 ) -> str | None:
@@ -2373,4 +2412,5 @@ __all__ = [
     "record_post_baseline_landmark",
     "repeated_stays_system_default_route",
     "unlisted_first_stay_setting",
+    "unlisted_question_population",
 ]
