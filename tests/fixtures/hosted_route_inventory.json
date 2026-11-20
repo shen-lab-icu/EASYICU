@@ -1225,6 +1225,17 @@
   },
   {
     "method": "POST",
+    "route": "/api/copilot/pi/sessions/{session_id}/target-trial-proposal",
+    "fields": ["path:session_id", "body:project_id", "body:study_context_id", "body:expected_revision", "body:proposal_sha256"],
+    "reaches": "PiCopilotService.compile_target_trial_proposal -> _scoped_record + host_action_session (session/project/study binding) + data-source confirmation and Copilot data clearance -> target_trial_card.compile_target_trial_proposal (study revision CAS; only the host's own proposal whose request sha256 matches) -> submit_target_trial_compile job",
+    "protection": "hosted.guard_request + owner check: _scoped_record and host_action_session verify the session, project and StudyContext registry binding; no path inputs; the client names no statement, only the sha256 of the proposal the host derived from the stored study",
+    "guarded_fields": [],
+    "guarded_errors": {},
+    "writes": "instance home",
+    "write_owner": "The target trial compile job writes its compile receipt through the study's server-owned state_paths roots; request identifiers never select a destination. Approval stays a separate click (target-trial-approval)."
+  },
+  {
+    "method": "POST",
     "route": "/api/copilot/pi/sessions/{session_id}/thinking-level",
     "fields": [
       "query/body:project_id",
