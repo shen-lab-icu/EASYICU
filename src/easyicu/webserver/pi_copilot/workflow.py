@@ -1837,8 +1837,21 @@ def _enrich_plan_review(
         if isinstance(summary, Mapping) else None
     )
     if first_stay:
+        from easyicu.webserver.raw_source_authority import extraction_applies_first_stay_recipe
+
+        source = study.get("data_source")
+        database = str(source.get("database") or "") if isinstance(source, Mapping) else ""
         snapshot = snapshot.model_copy(
-            update={"plan_review_summary": {**dict(summary), "first_stay_setting_unlisted": first_stay}}
+            update={"plan_review_summary": {
+                **dict(summary),
+                "first_stay_setting_unlisted": first_stay,
+                # MIMIC: the first ICU stay within this database's record (B20),
+                # the host recipe extraction and the run both apply.
+                "first_stay_within_database_record": bool(
+                    first_stay == "first_icu_stay"
+                    and extraction_applies_first_stay_recipe(database)
+                ),
+            }}
         )
     return snapshot
 

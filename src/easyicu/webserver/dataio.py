@@ -2086,6 +2086,66 @@ def _sample_export_cohort_ids(
     }
 
 
+#: How a receipt names a first-stay selection by the host recipe (S1663).
+FIRST_STAY_WITHIN_DATABASE_RECORD_LABEL = {
+    "en": "First ICU stay within this database's record (MIMIC has no outside or earlier stay history)",
+    "zh": "数据库记录中的首次 ICU 入住（MIMIC 无院外/更早入住史）",
+}
+
+
+def _apply_first_stay_recipe(
+    selected: Set[Any], *, data_path: str, database: str
+) -> Tuple[Set[Any], Dict[str, Any]]:
+    """Keep each patient's first ICU stay by the host's declared recipe.
+
+    ``raw_source_authority`` owns the recipe and its proof over the source's
+    whole official stay table; this only intersects the stays it flags with
+    the demographic selection and records an aggregate receipt.
+    """
+
+    from easyicu.research_agent.acquisition.first_icu_stay import (
+        COORDINATE_FLAG_COLUMN,
+        COORDINATE_STAY_COLUMN,
+        ORDER_RULE,
+    )
+    from easyicu.webserver import raw_source_authority
+
+    try:
+        derived, receipt = raw_source_authority.derive_raw_source_first_icu_stay(
+            data_path=data_path, database=database
+        )
+    except raw_source_authority.RawSourceAuthorityError as exc:
+        raise ExportCohortError(
+            "export_first_icu_stay_unavailable",
+            {"criterion": "first_icu_stay", "cause_code": str(exc.code)[:120]},
+        ) from exc
+    frame = derived.frame
+    flagged = frame.loc[frame[COORDINATE_FLAG_COLUMN].eq(True), COORDINATE_STAY_COLUMN]
+    first_stays = {int(value) for value in flagged.tolist()}
+    before = len(selected)
+    kept = {value for value in selected if _stay_key(value) in first_stays}
+    return kept, {
+        "rule": ORDER_RULE,
+        "label": dict(FIRST_STAY_WITHIN_DATABASE_RECORD_LABEL),
+        "scope": receipt.get("scope"),
+        "identity_table": receipt.get("identity_table"),
+        "identity_table_sha256": receipt.get("identity_table_sha256"),
+        "order_column": receipt.get("order_column"),
+        "selected_before": before,
+        "selected": len(kept),
+        "excluded": before - len(kept),
+        "identifier_values_returned": False,
+    }
+
+
+def _stay_key(value: Any) -> Optional[int]:
+    try:
+        number = float(value)
+    except (TypeError, ValueError):
+        return None
+    return int(number) if number.is_integer() else None
+
+
 def _resolve_export_cohort(
     data_path: str,
     database: str,
@@ -2197,15 +2257,23 @@ def _resolve_export_cohort(
         min_icu_los_hours=normalized["min_icu_los_hours"],
         exclude_readmissions=normalized["exclude_readmissions"],
     )
+    from easyicu.webserver import raw_source_authority
+
+    first_stay_requested = bool(
+        normalized["exclude_readmissions"] or normalized["preset"] == "adult_first"
+    )
+    # MIMIC exposes no absolute patient ICU ordinal to PatientFilter; the host's
+    # declared recipe (the same one planning and the run apply) selects each
+    # patient's first ICU stay within this database's record instead.
+    first_stay_by_recipe = first_stay_requested and (
+        raw_source_authority.extraction_applies_first_stay_recipe(database)
+    )
     pf = PatientFilter(database=patient_filter_db, data_path=data_path, verbose=False)
     filtered = pf.filter(
         age_min=normalized["age_min"] if normalized["age_min"] > 0 else None,
         age_max=normalized["age_max"] if normalized["age_max"] < 100 else None,
         first_icu_stay=(
-            True
-            if normalized["exclude_readmissions"]
-            or normalized["preset"] == "adult_first"
-            else None
+            True if first_stay_requested and not first_stay_by_recipe else None
         ),
         los_min=(
             normalized["min_icu_los_hours"]
@@ -2229,10 +2297,16 @@ def _resolve_export_cohort(
             "cohort_filter_missing_patient_id", {"database": database}
         )
     selected: Set[Any] = set(filtered["patient_id"].dropna().tolist())
+    applied = ["demographics"]
+    first_stay_report: Optional[Dict[str, Any]] = None
+    if first_stay_by_recipe:
+        selected, first_stay_report = _apply_first_stay_recipe(
+            selected, data_path=data_path, database=database
+        )
+        applied.append("first_icu_stay")
     before_concept = len(selected)
     concept_matches: Optional[int] = None
     before_icd = len(selected)
-    applied = ["demographics"]
     emit("demographics_selected", selected=before_concept)
 
     if normalized["preset"] in _CONCEPT_DERIVED_COHORTS:
@@ -2337,6 +2411,7 @@ def _resolve_export_cohort(
                 else {}
             ),
             "applied_filters": applied,
+            **({"first_icu_stay": first_stay_report} if first_stay_report else {}),
             "icd": {
                 "enabled": normalized["icd_enabled"],
                 "include_tokens": normalized["icd_include"],

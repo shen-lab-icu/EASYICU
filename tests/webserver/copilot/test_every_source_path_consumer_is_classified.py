@@ -562,6 +562,9 @@ _CLASSIFIED = {
     ('raw_preparation_dependencies.py', 'candidate_from_scientific_review', 'compile_producer_dependencies'): (1, 'REGISTERED'),
     ('raw_preparation_projection.py', '_candidate_projection', 'declared_native_export_inventory'): (1, 'REGISTERED'),
     ('raw_preparation_projection.py', '_candidate_projection', '_declared_typed_export_columns'): (1, 'REGISTERED'),
+    # B20: locates the official stay table in the extraction's raw root, as the
+    # manifest binding does; the recipe's result only selects first stays.
+    ('raw_source_authority.py', 'derive_raw_source_first_icu_stay', '_regular_descendant'): (1, 'FOLDER'),
     ('raw_source_authority.py', 'resolve_manifest_raw_source_binding', '_read_export_manifest'): (2, 'REGISTERED'),
     ('raw_source_authority.py', 'resolve_manifest_raw_source_binding', '_regular_descendant'): (1, 'FOLDER'),
     ('raw_source_authority.py', 'resolve_manifest_raw_source_binding', 'RawHospitalSourceBinding'): (1, 'PASS'),

@@ -206,6 +206,21 @@ def test_a_capped_export_persists_the_shared_sample_and_aggregate_provenance(
     )
 
 
+def _mimic_stay_table(root: Path) -> None:
+    """A MIMIC icustays table where stays 1 and 2 are first stays, 3 a readmission.
+
+    A MIMIC first-stay cohort is selected by the host recipe over this table
+    (B20), not by a PatientFilter column MIMIC never publishes.
+    """
+    pd.DataFrame(
+        {
+            "stay_id": [1, 2, 3],
+            "subject_id": [10, 20, 20],
+            "intime": pd.to_datetime(["2150-01-01", "2150-02-01", "2150-06-01"]),
+        }
+    ).to_parquet(root / "icustays.parquet", index=False)
+
+
 def test_export_runner_applies_native_cohort_contract_to_patient_ids(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
@@ -223,14 +238,16 @@ def test_export_runner_applies_native_cohort_contract_to_patient_ids(
         def filter(self, **kwargs):
             assert kwargs["age_min"] == 40
             assert kwargs["age_max"] == 80
-            assert kwargs["first_icu_stay"] is True
+            # MIMIC: the host recipe, not PatientFilter, selects first stays.
+            assert kwargs["first_icu_stay"] is None
             assert kwargs["los_min"] == 24
             assert kwargs["return_dataframe"] is True
-            return pd.DataFrame({"patient_id": [2]})
+            return pd.DataFrame({"patient_id": [2, 3]})
 
     loaded: list[dict[str, object]] = []
     _patch_export_api(monkeypatch, loaded)
     monkeypatch.setattr(patient_filter_module, "PatientFilter", FakePatientFilter)
+    _mimic_stay_table(tmp_path)
 
     runner = dataio.make_export_runner(
         data_path=str(tmp_path),
@@ -857,6 +874,7 @@ def test_export_runner_ignores_stale_icd_tokens_when_preset_is_not_icd(
     loaded: list[dict[str, object]] = []
     _patch_export_api(monkeypatch, loaded)
     monkeypatch.setattr(patient_filter_module, "PatientFilter", FakePatientFilter)
+    _mimic_stay_table(tmp_path)
 
     runner = dataio.make_export_runner(
         data_path=str(tmp_path),
@@ -881,7 +899,7 @@ def test_export_runner_ignores_stale_icd_tokens_when_preset_is_not_icd(
     assert "win_length" not in loaded[0]["kwargs"]
     assert manifest["cohort_contract"]["icd_include"] == []
     assert manifest["cohort_contract"]["observation_window_hours"] == 720
-    assert manifest["cohort_report"]["applied_filters"] == ["demographics"]
+    assert manifest["cohort_report"]["applied_filters"] == ["demographics", "first_icu_stay"]
 
 
 @pytest.mark.parametrize(

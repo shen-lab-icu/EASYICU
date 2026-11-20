@@ -24,6 +24,12 @@ from easyicu.patient_filter import PatientFilter
 from easyicu.webserver import dataio
 
 
+# A database whose PatientFilter publishes its own absolute first-stay ordinal
+# (AUMC: admissioncount == 1), so its first-stay step is a demographic step.
+# MIMIC selects first stays by the host recipe instead
+# (test_a_mimic_export_keeps_the_first_stay_in_its_record.py).
+_DATABASE = "aumc"
+
 _ADULT_FIRST = {
     "preset": "adult_first",
     "age_min": 18,
@@ -67,7 +73,7 @@ def demographics(monkeypatch: pytest.MonkeyPatch) -> pd.DataFrame:
 
 def _report(cohort, *, max_patients=None, ids=(), order="source_file_order"):
     return dataio._resolve_export_cohort(
-        "/unused", "miiv", cohort, max_patients, _api(list(ids), order)
+        "/unused", _DATABASE, cohort, max_patients, _api(list(ids), order)
     )["cohort_report"]
 
 
@@ -95,7 +101,7 @@ def test_a_binding_cap_records_its_sample_and_a_nonbinding_cap_is_unchanged(
     demographics,
 ) -> None:
     resolved = dataio._resolve_export_cohort(
-        "/unused", "miiv", _ADULT_FIRST, 3, _api([])
+        "/unused", _DATABASE, _ADULT_FIRST, 3, _api([])
     )
     report = resolved["cohort_report"]
 
@@ -303,7 +309,7 @@ def test_a_cap_samples_only_the_stays_left_after_every_eligibility_filter(
     )
 
     resolved = dataio._resolve_export_cohort(
-        "/unused", "miiv", {
+        "/unused", _DATABASE, {
             "preset": "sepsis3", "icd_enabled": True,
             "icd_include": ["A123"], "icd_exclude": ["B456"],
         }, 5, _api([]),
@@ -337,7 +343,7 @@ def test_an_export_not_reduced_by_its_cap_keeps_its_serialized_report(
     monkeypatch.setattr(patient_filter_module, "PatientFilter", FakeFilter)
     events = []
     resolved = dataio._resolve_export_cohort(
-        "/unused", "miiv", {"age_min": 18} if filtered else None,
+        "/unused", _DATABASE, {"age_min": 18} if filtered else None,
         max_patients, _api(ids),
         progress=lambda stage, extra: events.append((stage, extra)),
     )

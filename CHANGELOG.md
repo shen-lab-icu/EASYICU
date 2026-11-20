@@ -72,6 +72,14 @@ The full list of changes since 0.1.0 is in the v0.1.3 release notes. Recorded he
   preparing the same Demo again is redirected to the study's extraction instead of
   re-registering the generic Demo export; and a generic Demo export is never described
   as the study's own data package.
+- Extracting a MIMIC-IV or MIMIC-III study that keeps each patient's first ICU stay no
+  longer fails with "criterion 'first_icu_stay' is unavailable" (B20). Extraction now
+  selects the first ICU stay within the database's record (icustays ordered by intime
+  within each patient, MIMIC has no outside or earlier stay history), the same host rule
+  planning and the run apply, and the export's cohort report names that rule with
+  aggregate counts. A tied or missing admission time, or a missing stay table, still
+  stops the extraction with a typed reason. On MIMIC the plan card's first-stay row
+  names the same scope.
 
 ## 0.1.0 — 2026-11-11 — first public pre-release
 

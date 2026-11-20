@@ -716,6 +716,55 @@ def _derive_first_icu_stay(
         ) from exc
 
 
+#: Families whose PatientFilter publishes no first-ICU-stay column (MIMIC has
+#: no absolute patient ICU ordinal) while this module declares a recipe: Data
+#: Extraction applies the recipe instead, so planning, extraction and the run
+#: read one first-stay authority. AUMC and SICdb publish an absolute ordinal of
+#: their own (admissioncount == 1, the AUMC recipe's rule; SICdb's offset from
+#: the first admission) and keep it.
+EXTRACTION_FIRST_STAY_RECIPE_FAMILIES = frozenset({"mimic_iv", "mimic_iii"})
+
+
+def extraction_applies_first_stay_recipe(database: str) -> bool:
+    """Whether Data Extraction selects first ICU stays by this module's recipe."""
+
+    family = _database(database)
+    return family in EXTRACTION_FIRST_STAY_RECIPE_FAMILIES and family in _FIRST_ICU_STAY_PROFILES
+
+
+def derive_raw_source_first_icu_stay(
+    *, data_path: str | Path, database: str
+) -> tuple["DerivedFirstIcuStay", dict[str, Any]]:
+    """The declared first-stay recipe applied to one raw source folder.
+
+    "First ICU stay within this database's record": the earliest stay of each
+    patient in the source's own official stay table (for MIMIC, icustays by
+    intime within subject_id). The whole table is read, so a later stay is
+    never promoted because an extract left out an earlier one; a missing or
+    tied time fails closed (``derive_first_icu_stay``). Returns the private
+    coordinate (stay identifiers and a flag, no patient key) and an
+    aggregate, path-free receipt.
+    """
+
+    family = _database(database)
+    profile = _FIRST_ICU_STAY_PROFILES.get(family)
+    if profile is None:
+        raise _first_icu_stay_unavailable(family or str(database or ""))
+    source_root = _regular_directory(Path(data_path), label="raw source root")
+    table = profile["table"]
+    path = _regular_descendant(source_root, f"{table}.parquet", label=f"{table} table")
+    available, digest = _table_schema_and_digest(path, table=table, database=family)
+    bound = _bound_profile(profile, available)
+    if not {bound["stay_column"], bound["patient_column"], bound["order_column"]} <= set(available):
+        raise _first_icu_stay_unavailable(family)
+    derived = _derive_first_icu_stay(
+        _read_verified_table(path, digest, table=table, columns=_first_icu_stay_columns(bound)),
+        bound,
+        database=family,
+    )
+    return derived, _first_icu_stay_receipt(bound, table_sha256=digest)
+
+
 def _read_verified_table(
     path: Path,
     expected_sha256: str,
@@ -1274,9 +1323,12 @@ def resolve_raw_mimic_iv_source_binding(
 
 
 __all__ = [
+    "EXTRACTION_FIRST_STAY_RECIPE_FAMILIES",
     "RawHospitalSourceBinding",
     "RawMimicIVSourceBinding",
     "RawSourceAuthorityError",
+    "derive_raw_source_first_icu_stay",
+    "extraction_applies_first_stay_recipe",
     "resolve_manifest_raw_source_binding",
     "resolve_raw_hospital_source_binding",
     "resolve_raw_mimic_iv_source_binding",

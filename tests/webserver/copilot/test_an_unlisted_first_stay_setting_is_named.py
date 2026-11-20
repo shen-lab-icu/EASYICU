@@ -67,8 +67,9 @@ def test_a_study_that_keeps_every_stay_names_nothing(cohort: Any) -> None:
 # --- the workflow states it for the plan under review --------------------------------------
 
 
-def _summary(cohort: dict[str, Any]) -> dict[str, Any]:
+def _summary(cohort: dict[str, Any], database: str | None = None) -> dict[str, Any]:
     study = {
+        **({"data_source": {"database": database, "path": "/unused"}} if database else {}),
         "id": "study-unlisted-first-stay",
         "revision": 2,
         "question": "Is the first-day maximum creatinine associated with hospital death?",
@@ -109,6 +110,17 @@ def test_the_plan_under_review_names_the_unlisted_setting() -> None:
 
     every_stay = _summary({"preset": "all_icu", "exclude_readmissions": False})
     assert "first_stay_setting_unlisted" not in every_stay
+
+
+@pytest.mark.parametrize(
+    ("database", "record_scope"),
+    [("miiv", True), ("mimic_demo", True), ("aumc", False), (None, False)],
+)
+def test_a_mimic_first_stay_is_named_within_the_databases_record(database, record_scope) -> None:
+    # B20: MIMIC selects the first stay within its own record (host recipe).
+    named = _summary({"preset": "all_icu", "exclude_readmissions": True}, database)
+
+    assert named["first_stay_within_database_record"] is record_scope
 
 
 # --- the cards ------------------------------------------------------------------------
@@ -186,3 +198,14 @@ def test_a_card_that_does_not_move_the_plan_names_no_setting() -> None:
     html = _card("failed_pipeline_requires_fresh_plan", {"first_stay_setting_unlisted": "first_icu_stay"})
 
     assert LINE not in html
+
+
+def test_a_mimic_card_names_the_first_stay_within_the_databases_record() -> None:
+    summary = {"first_stay_setting_unlisted": "first_icu_stay", "first_stay_within_database_record": True}
+
+    zh = _card("plan_execution_upgrade_required", summary)
+    en = _card("plan_execution_upgrade_required", summary, lang="en")
+
+    assert "仅保留每位患者在数据库记录中的首次 ICU 入住（MIMIC 无院外/更早入住史） · 研究设置（系统默认）" in zh
+    assert LINE not in zh
+    assert "first ICU stay within this database’s record (MIMIC has no outside or earlier stay history)" in en

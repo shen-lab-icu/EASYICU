@@ -471,8 +471,11 @@
     // silent restriction, with a request to change it the researcher sends.
     function firstStaySettingHtml(review) {
       const scope = review && review.first_stay_setting_unlisted;
+      const recordScope = Boolean(review && review.first_stay_within_database_record);
       const copy = {
-        first_icu_stay: [tr('Keep each patient’s first ICU stay only', '仅保留每位患者的首次 ICU 入住'),
+        first_icu_stay: [recordScope
+          ? tr('Keep each patient’s first ICU stay within this database’s record (MIMIC has no outside or earlier stay history)', '仅保留每位患者在数据库记录中的首次 ICU 入住（MIMIC 无院外/更早入住史）')
+          : tr('Keep each patient’s first ICU stay only', '仅保留每位患者的首次 ICU 入住'),
           tr('Keep every ICU stay instead of only each patient’s first ICU stay.', '不只保留每位患者的首次 ICU 入住，改为保留所有 ICU 入住。')],
         first_icu_stay_per_hospitalization: [tr('Keep the first ICU stay within each hospitalization', '仅保留每次住院的首次 ICU 入住'),
           tr('Keep every ICU stay instead of only the first ICU stay within each hospitalization.', '不只保留每次住院的首次 ICU 入住，改为保留所有 ICU 入住。')],
