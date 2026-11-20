@@ -1199,6 +1199,9 @@ _VARIANT_FLOWS = Counter({
     ("pi_copilot/study_context_update.py", "_question_family_design", "question_family_design", "NO_AUTHORITY"): 1,
     ("pi_copilot/study_context_update.py", "update_study_context", "validate_analysis_design_for_execution", "NO_AUTHORITY"): 1,
     ("study_contexts.py", "upsert_context", "_apply_attached_setup", "NO_AUTHORITY"): 1,
+    # A host planning default's proposal, checked on purpose: a default that
+    # would void the signed Demo choice is not written (B16).
+    ("research_run_submission.py", "_breaks_signed_demo_choice", "resolve_choice", "NO_AUTHORITY"): 1,
 })
 
 

@@ -321,3 +321,37 @@ def test_every_package_or_identity_reader_is_classified():
     )
     assert not sorted(expected.keys() - sites.keys()), "a classified reader is gone; drop its row"
     assert {cls for _count, cls in _CLASSIFIED.values()} <= {"OWNER", "REGISTERED", "REFUSES", "FOLDER"}
+
+
+def test_a_planning_default_never_voids_the_signed_demo_choice(choice, chosen):
+    # B16 (UX leg 3 zh, 2026-11-20): since S1506 the repeated-stay default reads
+    # the registered export's grouping, so it applied to a raw Demo study; in a
+    # staged launch its write left the study's signed choice stale and the
+    # first plan was refused (research_pipeline_demo_planning_authority_stale).
+    # A host default never voids the researcher's source confirmation: it is
+    # left to the plan card's review-then-compile path, as a refused write is.
+    from types import SimpleNamespace
+
+    from easyicu.webserver import launch_study_updates, research_run_submission
+    from easyicu.webserver.pi_copilot import plan_decisions
+
+    design = chosen.get("analysis_design") if isinstance(chosen.get("analysis_design"), dict) else {}
+    patch = {"analysis_design": {**design, **plan_decisions._PATIENT_CLUSTERED_DESIGN}}
+    unsigned_id = study_contexts.upsert_context({
+        "question": chosen["question"], "data_source": {"path": "/synthetic/export", "database": "miiv"},
+    })["id"]
+    seen = {}
+
+    @launch_study_updates.stage_launch_updates
+    def launch_with_default(request, study):
+        seen[request.study_context_id] = research_run_submission._with_planning_default(
+            study, patch, label="synthetic")
+
+    launch_with_default(SimpleNamespace(study_context_id=chosen["id"]), chosen)
+    assert seen[chosen["id"]] == chosen and resolve_choice(seen[chosen["id"]]) is not None
+    # Without a signed choice the default is applied as before.
+    unsigned = study_contexts.get_context(unsigned_id)
+    launch_with_default(SimpleNamespace(study_context_id=unsigned_id), unsigned)
+    assert seen[unsigned_id]["analysis_design"] == patch["analysis_design"]
+    # The guard reads the patch itself: this design change would void the choice.
+    assert research_run_submission._breaks_signed_demo_choice(chosen, patch) is True

@@ -338,12 +338,47 @@ def _with_stated_first_stay(study: Dict[str, Any]) -> Dict[str, Any]:
     return _with_planning_default(study, patch, label="stated first-stay")
 
 
+def _breaks_signed_demo_choice(study: Mapping[str, Any], patch: Mapping[str, Any]) -> bool:
+    """Whether ``patch`` would make a raw Demo study's resolving signed choice stale.
+
+    The choice signs the study's scientific configuration; a planning default
+    is a host proposal, not the researcher's change, so it never voids the
+    researcher's confirmation of the source (B16, UX leg 3 zh 2026-11-20: the
+    repeated-stay default, read from the registered export since S1506, left
+    the staged launch study's choice stale and the first plan was refused).
+    """
+
+    if not study.get("demo_planning_authority_ref"):
+        return False
+    from easyicu.research_agent.authority.filesystem import AuthorityFilesystemError
+    from easyicu.webserver.pi_copilot.demo_planning_authority import resolve_choice
+
+    errors = (ValueError, OSError, dataio.ExportCohortError, AuthorityFilesystemError)
+    try:
+        resolve_choice(study)
+    except errors:
+        return False  # already stale: not this default's doing; its own owner answers
+    normalized = context_store.validate_context_update(
+        {"id": study["id"], **patch}, current_context=study, lifecycle_write=False,
+    )
+    try:
+        resolve_choice({**study, **{key: value for key, value in normalized.items() if key != "id"}})
+    except errors:
+        return True
+    return False
+
+
 def _with_planning_default(
     study: Dict[str, Any], patch: Optional[Mapping[str, Any]], *, label: str
 ) -> Dict[str, Any]:
     if patch is None:
         return study
     try:
+        if _breaks_signed_demo_choice(study, patch):
+            # The documented fallback: the default stays the plan card's, and
+            # the review-then-compile path proposes it (B16).
+            _LOG.info("%s planning default not applied: it would void the signed Demo choice", label)
+            return study
         return upsert_launch_context(study,
             {"id": study["id"], **patch},
             expected_revision=int(study.get("revision") or 0),
