@@ -367,3 +367,17 @@ def test_the_kdigo_remedy_asks_the_export_through_the_launch_study(choice, chose
     assert remedy(source_study={**study, "id": "study_another"}) is None
     study_contexts.upsert_context({"id": study["id"], "outcome": "hospital_mortality"})
     assert remedy(source_study=study) == str(choice.paths.export)
+
+
+def test_no_choice_reads_alike_whether_absent_none_or_empty(chosen):
+    # Carbon b17: a study without a raw Demo choice (the key absent, None or
+    # empty, e.g. after the launch timing cleared it) and its copy bind the
+    # same source; a real choice on only one side does not.
+    unsigned = {key: value for key, value in chosen.items() if key != "demo_planning_authority_ref"}
+    for copy_ref in (None, ""):
+        copy = {**unsigned, "demo_planning_authority_ref": copy_ref}
+        assert launch.source_authority_owner_study(copy, unsigned, code="synthetic") is unsigned
+        assert launch.source_authority_owner_study(unsigned, copy, code="synthetic") is copy
+    with pytest.raises(launch.ResearchPipelineRunError) as raised:
+        launch.source_authority_owner_study(unsigned, chosen, code="synthetic")
+    assert raised.value.details["first_icu_stay_reason_code"] == "authority_study_source_mismatch"

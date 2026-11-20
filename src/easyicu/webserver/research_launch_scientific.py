@@ -358,7 +358,9 @@ def source_authority_owner_study(
         return study
     if (not isinstance(authority_study, Mapping)
             or authority_study.get("data_source") != study.get("data_source")
-            or authority_study.get("demo_planning_authority_ref") != study.get("demo_planning_authority_ref")
+            # No choice reads alike whether the key is absent, None or empty (Carbon b17).
+            or (authority_study.get("demo_planning_authority_ref") or "")
+            != (study.get("demo_planning_authority_ref") or "")
             or authority_study.get("id") != study.get("id")):
         raise ResearchPipelineRunError(
             code, "The launch study and its variant do not bind the same source.",

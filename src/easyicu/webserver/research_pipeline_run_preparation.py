@@ -394,9 +394,10 @@ def _prepare_scientific_launch(
             # The copy follows the timing and the raw Demo choice it re-signed
             # (or cleared): the launch study answers for it (B14, Carbon b16).
             materialization_study = {
-                **materialization_study,
-                **{key: study[key] for key in ("sensitivity_specs", "confirmations", "revision") if key in study},
-                "demo_planning_authority_ref": study.get("demo_planning_authority_ref") or "",
+                **{key: value for key, value in materialization_study.items()
+                   if key != "demo_planning_authority_ref"},
+                **{key: study[key] for key in ("sensitivity_specs", "confirmations", "revision",
+                                                "demo_planning_authority_ref") if key in study},
             }
     covariate_selection = _configured_covariate_selection(study)
     sensitivity_specs = _configured_sensitivity_specs(study)
