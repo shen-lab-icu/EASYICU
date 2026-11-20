@@ -147,6 +147,21 @@ def test_a_first_stay_scope_conflict_names_itself_and_the_way_forward(language, 
     assert "Needs extraction with these settings" not in card["html"]
 
 
+def test_a_criterion_not_stated_in_the_question_reads_as_a_system_proposal():
+    # The owners derive proposed_by_system from the compiler's stated_by_study
+    # (test_population_preparation.py); the card reads it.
+    preparation = {
+        "available": False, "status": "blocked",
+        "criteria": [{"quote": "first-stay handling remains for the formal plan",
+                      "proposed_by_system": True, "quote_found_in_question": False,
+                      "stated_by_study": False, "disposition": "requires_extraction",
+                      "reason": "population_preparation_first_stay_scope_conflict"}],
+    }
+    card = _card(REQUIRES_EXTRACTION, preparation=preparation)
+    assert "系统建议" in card["html"]
+    assert "研究原文" not in card["html"]
+
+
 def test_missing_cohort_decisions_are_visible_and_cannot_be_approved():
     card = _card("population_criterion_decision_unconfirmed")
     assert card["execute"] is False

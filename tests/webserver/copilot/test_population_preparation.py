@@ -175,6 +175,33 @@ def test_preparation_and_system_proposals_keep_the_compilers_attribution(
         assert row[field] == proposed[field]
 
 
+def test_cohort_wording_the_question_does_not_write_is_a_system_proposal_on_both_cards(study):
+    # S1570: a study_wording quote absent from the question (an assistant's
+    # cohort note) is never presented as the study's own words.
+    from easyicu.webserver.pi_copilot.population_acceptance import population_acceptance_proposal
+
+    note = "first-stay handling remains for the formal plan"
+    for criterion, card in (
+        ({"kind": "age_years", "min_years": 18.5}, "preparation"),
+        ({"kind": "not_typed", "why": "No supported restriction kind"}, "acceptance"),
+    ):
+        population, requests = reviewed_population(
+            {**criterion, "source": "study_wording", "quote": note},
+            question="Describe outcomes.", settings={"review": f"Adults; {note}"},
+        )
+        result = (
+            proposal(study, requests) if card == "preparation"
+            else population_acceptance_proposal(
+                study=study, pending=SimpleNamespace(requests=requests, run_id="run_population"),
+            )
+        )
+        row = result["criteria"][0]
+        assert row["source"] == "study_wording", card
+        assert row["stated_by_study"] is False, card
+        assert row["proposed_by_system"] is True, card
+        assert row["attribution"] == "system_interpretation", card
+
+
 def test_omission_card_keeps_system_interpretation_separate_from_the_question(study):
     from easyicu.webserver.pi_copilot.population_acceptance import population_acceptance_proposal
 

@@ -33,6 +33,10 @@ The full list of changes since 0.1.0 is in the v0.1.3 release notes. Recorded he
   rule, the plan goes back to the Planner, which omits the note or restates the study's
   own scope. When the question does state a conflicting first-stay rule, the plan card
   now says so and points to "Request changes".
+- A population condition counts as stated by the study only when its words are in the
+  research question. Wording found only in the study's cohort notes (which can hold
+  the assistant's own remarks) is shown as a system proposal, never as the study's
+  own words.
 
 ## 0.1.0 — 2026-11-11 — first public pre-release
 

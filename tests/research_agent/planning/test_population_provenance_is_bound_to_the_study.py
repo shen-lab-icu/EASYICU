@@ -210,3 +210,32 @@ def test_question_attribution_cannot_borrow_explicit_study_review_words(field):
 def test_explicit_study_wording_keeps_its_own_source(field):
     criterion = _read(source="study_wording", quote="Adult patients", settings={field: "Adult patients"}).criteria[0]
     assert criterion.source == "study_wording" and criterion.quote == "Adult patients"
+
+
+@pytest.mark.parametrize("field", ["review", "exclusion_statement"])
+def test_cohort_wording_absent_from_the_question_is_never_stated_by_the_study(field):
+    # S1570: cohort wording can hold the assistant's own notes. A quote it
+    # holds but the question does not is the plan's interpretation, recorded
+    # as such, whatever source the Planner cites.
+    question = "Describe outcomes."
+    settings = {field: "Adult patients; first-stay handling remains for the formal plan"}
+    spec = _read(source="study_wording", quote="Adult patients", question=question, settings=settings)
+    population = _compiled(spec, question=question, settings=settings)
+    row = population.record()["criteria"][0]
+    assert row["criterion"]["source"] == "study_wording"  # the Planner's claim is kept, not rewritten
+    assert population.criteria[0].stated_by_study is False
+    assert row["provenance"]["stated_by_study"] is False
+    assert row["provenance"]["attribution"] == "system_interpretation"
+    assert row["provenance"]["quote_found_in_question"] is False
+    finding = population_proposals_finding(population)
+    assert finding is not None and finding.detail["criteria"][0]["stated_by_study"] is False
+
+
+def test_study_wording_the_question_also_writes_stays_stated():
+    question = "Describe outcomes in adult patients."
+    settings = {"review": "Adult patients"}
+    spec = _read(source="study_wording", quote="Adult patients", question=question, settings=settings)
+    population = _compiled(spec, question=question, settings=settings)
+    row = population.record()["criteria"][0]
+    assert population.criteria[0].stated_by_study is True
+    assert row["provenance"]["attribution"] == "study_wording"

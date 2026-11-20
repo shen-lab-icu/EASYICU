@@ -340,12 +340,24 @@ class CompiledCriterion:
 
     @property
     def stated_by_study(self) -> bool:
-        return self.criterion.source in STUDY_WORDING_SOURCES
+        # Only the researcher's question states the study. Cohort wording can
+        # hold the assistant's own notes, so a quote found nowhere in the
+        # question is the plan's interpretation, whatever source it cites.
+        return (
+            self.criterion.source in STUDY_WORDING_SOURCES
+            and self.provenance.quote_found_in_question
+        )
 
     def provenance_record(self) -> dict[str, Any]:
         setting = self.provenance.typed_study_setting
+        attribution = (
+            "typed_study_setting" if setting is not None
+            else self.criterion.source if self.stated_by_study
+            or self.criterion.source not in STUDY_WORDING_SOURCES
+            else "system_interpretation"
+        )
         return {
-            "attribution": "typed_study_setting" if setting is not None else self.criterion.source,
+            "attribution": attribution,
             "stated_by_study": self.stated_by_study,
             "quote_found_in_question": self.provenance.quote_found_in_question,
             "typed_study_setting": dict(setting) if setting is not None else None,

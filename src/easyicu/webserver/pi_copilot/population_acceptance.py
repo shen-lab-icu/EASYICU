@@ -127,8 +127,9 @@ def population_acceptance_proposal(
                 "id": row["criterion"]["id"],
                 "quote": row["criterion"]["quote"],
                 "source": row["criterion"]["source"],
-                "proposed_by_system": row["criterion"]["source"]
-                not in STUDY_WORDING_SOURCES,
+                "proposed_by_system": not row.get("provenance", {}).get(
+                    "stated_by_study", row["criterion"]["source"] in STUDY_WORDING_SOURCES
+                ),
                 **row.get("provenance", {}),
                 "disposition": row["disposition"],
                 "reason": row["reason"],
