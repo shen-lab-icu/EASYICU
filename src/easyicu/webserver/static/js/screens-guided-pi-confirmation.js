@@ -1460,8 +1460,8 @@
       }
       if (['bound_export_cohort_mismatch', 'demo_planning_source_reconfirm_required'].includes(workflow.next_action_code)
         || (workflow.next_action_code === 'plan_execution_upgrade_required' && workflow.execution_input_available === false)) return tr(
-        'I want to prepare data for this study’s current cohort. Please show the extraction requirements.',
-        '我想按本研究现有的人群条件准备数据，请列出提取要求。',
+        'I confirm data extraction for this study’s current cohort to build this study’s data package.',
+        '我确认：按本研究现有的人群条件进行数据提取，生成本研究的数据包。',
       );
       const trial = window.EasyICU.guidedPi.optional('targetTrial');
       const trialDraft = trial ? trial.changeDraft(workflow, tr) : '';
