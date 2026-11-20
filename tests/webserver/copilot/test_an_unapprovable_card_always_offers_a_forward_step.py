@@ -141,24 +141,43 @@ def _render(tmp_path: Path) -> list[dict]:
     # S1577 (m35): the conversation's preparation of this candidate already
     # ended (here: failed in seconds before writing a run), yet the workflow
     # offers the same step again.
-    # (variant, turn status, turn candidate, job run id, extra workflow, summary)
-    wrote_run = {"latest_attempt_failure": {"run_id": "run_attempt_1", "candidate_run_id": "run_guard_1",
-                                            "reason": "preparation_failed", "checkpoint_resume_available": False}}
-    for label, status, candidate, run_id, extra, summary in (
-        ("failed", "failed", "run_guard_1", None, {}, {}),
-        ("done", "done", "run_guard_1", None, {}, {}),
-        ("interrupted", "interrupted", "run_guard_1", None, {}, {}),
-        ("running", "running", "run_guard_1", None, {}, {}),
-        ("other", "failed", "run_other_1", None, {}, {}),
-        ("wrote_run", "failed", "run_guard_1", "run_attempt_1", wrote_run, {}),
-        ("no_candidate", "failed", "", None, {}, {"run_id": ""}),
-    ):
-        session = {"conversation_replay": {"turns": [{
-            "kind": "host_action", "action_code": "prepare_analysis_data", "status": status, "child_job_id": "job_guard_1",
-            "action_key": f"plan:{'a' * 16}:{candidate}:plan_execution_upgrade_required"}]},
-            "archived_child_jobs": [{"job_id": "job_guard_1", "kind": "agent-run", "run_id": run_id,
-                                     "status": {"running": "running", "done": "done"}.get(status, "failed"),
-                                     "error_code": None if status in {"running", "done"} else "codex_auth_app_server_request_failed"}]}
+    # S1577 (m35) and Carbon b27/b27r: the conversation's latest preparation
+    # of the shown candidate has ended; a run it wrote is reported by that run.
+    auth = "codex_auth_app_server_request_failed"
+
+    def turn(job_id, status, candidate="run_guard_1"):
+        return {"kind": "host_action", "action_code": "prepare_analysis_data", "status": status, "child_job_id": job_id,
+                "action_key": f"plan:{'a' * 16}:{candidate}:plan_execution_upgrade_required"}
+
+    def job(job_id, status, run_id=None, error=None):
+        return {"job_id": job_id, "kind": "agent-run", "run_id": run_id, "status": status, "error_code": error}
+
+    attempt = {"latest_attempt_failure": {"run_id": "run_attempt_1", "candidate_run_id": "run_guard_1",
+                                          "reason": "preparation_failed", "checkpoint_resume_available": False}}
+    scenarios = {
+        # label: (turns, archived jobs, extra workflow, summary)
+        "failed": ([turn("j1", "failed")], [job("j1", "failed", error=auth)], {}, {}),
+        "done": ([turn("j1", "done")], [job("j1", "done")], {}, {}),
+        "cancelled": ([turn("j1", "cancelled")], [job("j1", "cancelled", error="job_cancelled")], {}, {}),
+        "interrupted": ([turn("j1", "interrupted")], [job("j1", "interrupted", error="job_interrupted_by_server_restart")], {}, {}),
+        "row_missing": ([turn("j1", "failed")], [], {}, {}),
+        "running": ([turn("j1", "running")], [job("j1", "running")], {}, {}),
+        "other": ([turn("j1", "failed", "run_other_1")], [job("j1", "failed", error=auth)], {}, {}),
+        "no_candidate": ([turn("j1", "failed", "")], [job("j1", "failed", error=auth)], {}, {"run_id": ""}),
+        # A preparation that wrote a run whose failure the workflow reports.
+        "wrote_run": ([turn("j1", "failed")], [job("j1", "failed", run_id="run_attempt_1")], attempt, {}),
+        # A runless retry after it: the retry's own failure is the news.
+        "retry_after_run": ([turn("j1", "failed"), turn("j2", "failed")],
+                            [job("j1", "failed", run_id="run_attempt_1"), job("j2", "failed", error=auth)], attempt, {}),
+        # A run nothing reports (no attempt names it) is still not the first-time card.
+        "unreported_run": ([turn("j1", "cancelled")], [job("j1", "cancelled", run_id="run_attempt_1", error="job_cancelled")], {}, {}),
+        # The row was evicted and the workflow reports the empty preparation.
+        "row_missing_read_no_data": ([turn("j1", "done")], [], {"preparation_read_no_data": True}, {}),
+        # The row was evicted and a preserved attempt reports the candidate's run.
+        "row_missing_with_attempt": ([turn("j1", "failed")], [], attempt, {}),
+    }
+    for label, (turns, archived, extra, summary) in scenarios.items():
+        session = {"conversation_replay": {"turns": turns}, "archived_child_jobs": archived}
         for name, available in (("no_package", False), ("package", True)):
             cases += [{"code": code, "variant": f"turn:{label}:{name}", "summary": summary,
                        "workflow": {"execution_input_available": available, **extra}, "session": session}
@@ -311,24 +330,29 @@ def _rows(rendered, variant):
     return rows
 
 
-@pytest.mark.parametrize("label", ["failed", "done", "interrupted"])
-def test_a_preparation_that_ended_without_a_run_never_returns_the_same_card(rendered, label) -> None:
+_ERRORS = {"failed": "codex_auth_app_server_request_failed", "cancelled": "job_cancelled",
+           "interrupted": "job_interrupted_by_server_restart", "retry_after_run": "codex_auth_app_server_request_failed",
+           "unreported_run": "job_cancelled"}
+
+
+@pytest.mark.parametrize("label", ["failed", "done", "cancelled", "interrupted", "row_missing", "retry_after_run", "unreported_run"])
+def test_an_ended_preparation_no_run_reports_never_returns_the_same_card(rendered, label) -> None:
     # S1577: m35 failed in two seconds (a transient model-service sign-in error)
     # before writing a run, and the card came back unchanged with no failure
-    # line. Any ended, runless preparation of the shown candidate changes it.
+    # line. The latest ended preparation of the shown candidate that no run
+    # reports changes the card and names its own failure.
     for name in ("no_package", "package"):
         for row in _rows(rendered, f"turn:{label}:{name}"):
             language, html = row["language"], row["html"]
             assert _FIRST_TIME[language] not in html and _RAW_FIRST[language] not in html, (name, language)
-            # The job's failure is named; a preparation that finished has none.
-            assert (_REASON in html) is (label != "done" and name == "package"), (label, name, language)
-            enabled = [button for button in row["buttons"] if " disabled" not in button]
+            error = _ERRORS.get(label)
             if name == "package":
                 assert _ENDED[language] in html and _PREPARED[language][2] in html
+                assert (f"REASON:{error}." in html) if error else ("REASON:" not in html), (label, language)
+                enabled = [button for button in row["buttons"] if " disabled" not in button]
                 assert sum("data-gpi-confirm-action" in button for button in enabled) == 1
             else:
                 assert _NO_DATA[language] in html and _EXTRACT[language] in html
-                assert len(enabled) == 1 and "data-gpi-confirm-edit" in enabled[0]
 
 
 @pytest.mark.parametrize("label", ["running", "other", "no_candidate"])
@@ -341,8 +365,15 @@ def test_a_running_unrelated_or_unnamed_preparation_leaves_the_card(rendered, la
             assert _ENDED[row["language"]] not in row["html"] and _NO_DATA[row["language"]] not in row["html"]
 
 
-def test_a_preparation_that_wrote_a_run_keeps_that_runs_failure(rendered) -> None:
-    # A preparation that wrote a run and then failed planning is reported by
+def test_a_preparation_whose_run_is_reported_keeps_that_runs_message(rendered) -> None:
+    # A preparation that wrote a run whose planning then failed is reported by
     # that run's attempt ("plan generation did not finish"), not as runless.
-    for row in _rows(rendered, "turn:wrote_run:package"):
+    for row in _rows(rendered, "turn:wrote_run:package") + _rows(rendered, "turn:row_missing_with_attempt:package"):
         assert _PLAN_UNFINISHED[row["language"]] in row["html"] and _ENDED[row["language"]] not in row["html"]
+    for row in _rows(rendered, "turn:wrote_run:no_package"):
+        assert _EXTRACT[row["language"]] in row["html"] and _ENDED[row["language"]] not in row["html"]
+    # An evicted row when the workflow already reports the empty preparation.
+    for row in _rows(rendered, "turn:row_missing_read_no_data:package"):
+        language = row["language"]
+        assert ("The last preparation read no data" if language == "en" else "上次数据准备没有读到数据") in row["html"]
+        assert _ENDED[language] not in row["html"]

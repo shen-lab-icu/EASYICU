@@ -131,6 +131,22 @@
     return job;
   }
 
+  // S1574/S1577: the latest preparation of this candidate has ended. A run it
+  // wrote is reported by that run (latest_attempt_failure, or
+  // preparation_read_no_data); one that ended before writing a run (m35), or a
+  // run no attempt reports, is reported here so the same card never returns.
+  function endedPreparation(session, workflow, candidateRunId) {
+    if (!candidateRunId) return null;
+    const turn = (session?.conversation_replay?.turns || []).filter(row => row?.kind === 'host_action'
+      && row.action_code === 'prepare_analysis_data' && String(row.action_key || '').split(':')[2] === candidateRunId).at(-1);
+    if (!['done', 'failed', 'cancelled', 'interrupted'].includes(turn?.status)) return null;
+    const job = (session?.archived_child_jobs || []).find(row => row?.job_id === turn.child_job_id);
+    const attempt = workflow?.latest_attempt_failure?.candidate_run_id === candidateRunId ? workflow.latest_attempt_failure.run_id : '';
+    const reportedByRun = job ? Boolean(job.run_id && (job.run_id === attempt || workflow?.preparation_read_no_data))
+      : Boolean(attempt || workflow?.preparation_read_no_data);
+    return reportedByRun ? null : { status: turn.status, errorCode: turn.status === 'done' ? '' : String(job?.error_code || '') };
+  }
+
   function actionLabel(action, route, workflow, tr) {
     if (route === 'codex-login') return tr('Re-login to Codex', '重新登录 Codex');
     if (route === 'draft' || route === 'new-project') return window.EasyICU.guidedPi.optional('confirmation')?.stopActionCopy(action, tr)?.label;
@@ -263,5 +279,5 @@
     return Object.freeze({ render, renderJob, stopped });
   }
 
-  window.EasyICU.guidedPi.declare('runStop', { create, stopped, actionRoute, currentRun, offeredActions, jobActions, latestJobStop, repairStopText });
+  window.EasyICU.guidedPi.declare('runStop', { create, stopped, actionRoute, currentRun, offeredActions, jobActions, latestJobStop, repairStopText, endedPreparation });
 })();
