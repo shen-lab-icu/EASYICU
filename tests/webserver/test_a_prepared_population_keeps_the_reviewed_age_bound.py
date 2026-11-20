@@ -216,3 +216,40 @@ def test_an_age_window_opening_at_admission_names_the_same_static_age(end):
     candidate, source = definition(), report()
     candidate["inclusion"][0]["time_window"]["end_offset_hours"] = end
     assert mode(candidate, source) == "all_input_rows"
+
+
+def test_the_concept_registry_declares_which_concepts_have_one_value_per_stay():
+    from easyicu.webserver.research_launch_population import concept_has_one_value_per_stay
+
+    assert [c for c in ("age", "sex", "lact", "hr", "map") if concept_has_one_value_per_stay(c)] == [
+        "age", "sex",
+    ]
+
+
+@pytest.mark.parametrize("concept", ["lact", "hr"])
+def test_a_time_varying_concept_read_in_the_first_day_keeps_the_guard(concept):
+    candidate = definition()
+    predicate = candidate["inclusion"][0]
+    predicate.update({"concept_id": concept, "value": 2})
+    predicate["time_window"]["end_offset_hours"] = 24
+    assert mode(candidate) == "predicate_filtered"
+
+
+@pytest.mark.parametrize(("declared", "end", "expected"), [
+    ("id_tbl", 24, "all_input_rows"),
+    ("ts_tbl", 24, "predicate_filtered"),
+    ("ts_tbl", "inf", "all_input_rows"),
+])
+def test_a_shorter_age_window_is_proven_only_while_the_registry_declares_one_value_per_stay(
+    monkeypatch, declared, end, expected
+):
+    # The window rule follows the registry, not the predicate's shape or name:
+    # declared time-varying, a first-day age read would differ from the export's.
+    from types import SimpleNamespace
+
+    from easyicu.concept import loader
+
+    monkeypatch.setattr(loader, "load_dictionary", lambda *a, **k: {"age": SimpleNamespace(target=declared)})
+    candidate = definition()
+    candidate["inclusion"][0]["time_window"]["end_offset_hours"] = end
+    assert mode(candidate) == expected

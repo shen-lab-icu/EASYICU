@@ -119,6 +119,22 @@ def prepare_source_population(study: Mapping[str, Any]) -> dict[str, Any]:
     return result
 
 
+def concept_has_one_value_per_stay(concept_id: str) -> bool:
+    """Whether the concept registry declares one value per stay (an ID table).
+
+    Such a concept has no time column, so the cohort materializer reads its one
+    value per stay and never summarizes it over a predicate's window
+    (``_predicate_column``). An unreadable registry declares nothing.
+    """
+    try:
+        from easyicu.concept.loader import load_dictionary
+
+        definition = load_dictionary().get(str(concept_id))
+    except Exception:  # noqa: BLE001 - an unreadable registry declares nothing
+        return False
+    return getattr(definition, "target", None) == "id_tbl"
+
+
 def prepared_candidate_selection_mode(
     *, candidate_definition: Mapping[str, Any] | None, required_mode: str,
     source_basis: str | None, source_report: Mapping[str, Any] | None, database: str,
@@ -154,11 +170,13 @@ def prepared_candidate_selection_mode(
             window = predicate.time_window
             if (predicate.concept_id != "age" or predicate.aggregation != "first"
                     or predicate.op not in {">=", "<="}
-                    # Age is a static concept: the materializer reads one value
-                    # per stay and never summarizes it over a window, so any
-                    # window that opens at admission names the same value (B22).
                     or window.anchor != "icu_admission" or window.start_offset_hours != 0
-                    or not window.end_offset_hours > 0
+                    # A window that does not run to the end of the stay names
+                    # the same value only for a concept the registry declares
+                    # one value per stay (B22).
+                    or (window.end_offset_hours != math.inf
+                        and not (window.end_offset_hours > 0
+                                 and concept_has_one_value_per_stay(predicate.concept_id)))
                     or isinstance(predicate.value, bool)
                     or not isinstance(predicate.value, (int, float))
                     or not math.isfinite(predicate.value)):
