@@ -350,9 +350,13 @@ def record_choice(
     validate_choice_source(before, run)
     previous = matching_progress(before, run)
     compiled = _compile_receipt(before)
-    if previous is None and compiled is not None and compiled.run_id == run.get("run_id") and compiled_digest_holds(before, compiled):
+    if (previous is None and compiled is not None and compiled.run_id == run.get("run_id")
+            and compiled_digest_holds(before, compiled) and compiled_digest_holds(after, compiled)):
         # Carbon b14r1: another choice on the compiled plan keeps its compile
         # receipt and count, else B13's hold and the S1542 count were erased.
+        # Only while the choice leaves the compiled configuration as it was
+        # (Carbon b14r2): a choice that changes it is offered its compile
+        # again, and ``_compiles_after`` still keeps the count.
         previous = compiled
     progress = ReviewChoiceProgress(
         study_id=str(after["id"]),

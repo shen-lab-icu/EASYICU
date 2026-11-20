@@ -9086,10 +9086,14 @@ def resume_research_pipeline(
             )
 
             # A raw official-Demo study's receipts live in its registered
-            # export, not the raw folder (S1540 sweep, Carbon b14r1).
-            derivable = export_kdigo_strict_derivation_available(
-                source_authority_export_path(entry.study) or None
-            )
+            # export, not the raw folder (S1540 sweep, Carbon b14r1). This
+            # only words the remedy: an export that cannot be resolved reads
+            # as not derivable and the typed stop stands (Carbon b14r2).
+            try:
+                remedy_export = source_authority_export_path(entry.study) or None
+            except (ResearchPipelineRunError, dataio.ExportCohortError, OSError, ValueError, KeyError, TypeError):
+                remedy_export = None
+            derivable = export_kdigo_strict_derivation_available(remedy_export)
             raise ResearchPipelineRunError(
                 "research_pipeline_kdigo_observability_authority_missing",
                 "This KDIGO plan uses an exposure that can collapse incomplete observation evidence into stage 0. "

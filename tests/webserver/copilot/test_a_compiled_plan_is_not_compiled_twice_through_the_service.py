@@ -268,6 +268,26 @@ def test_another_choice_on_the_compiled_plan_keeps_its_compile(choice, runs):
     assert not _offers_compile(study_contexts.get_context(after["id"]), runs, retry)
 
 
+def test_a_choice_that_changes_the_compiled_configuration_drops_its_compile_but_keeps_the_count(choice, runs):
+    # Carbon b14r2: the receipt carries the compile only while the choice
+    # leaves the compiled configuration as it was; the loop count survives.
+    first = runs.launch(study_contexts.get_context(choice.study["id"]), "run-a")
+    _compile(choice, first)
+    reconfirmed = _reconfirm(choice)
+    after_failure = _job_writes(reconfirmed["id"], "job-failed")
+    retry = runs.launch(after_failure, "run-b")
+    _job_writes(after_failure["id"], "job-b")
+    _compile(choice, retry)
+    reconfirmed = _reconfirm(choice)
+    after = study_contexts.upsert_context({"id": reconfirmed["id"], "question": "A changed question?"})
+    assert study_contexts.scientific_configuration_sha256(after) != study_contexts.scientific_configuration_sha256(reconfirmed)
+    plan_review_progress.record_choice(before=reconfirmed, after=after, run=retry,
+                                       decision_code="plan_timing", option_id="landmark_24h")
+    receipt = plan_review_progress._receipt(after)
+    assert receipt.run_id == "run-b" and receipt.compiles == 1
+    assert plan_review_progress.AGENT_PLAN_CONFIGURATION_CHOICE[0] not in receipt.choices
+
+
 def test_a_third_compile_of_one_plan_stops_the_loop(choice, runs, monkeypatch, caplog):
     # S1542 backstop: whatever lets a plan be offered its compile again (B13
     # was the second retry-path loop), two compiles of one plan with no

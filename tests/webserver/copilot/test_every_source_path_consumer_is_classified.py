@@ -33,6 +33,12 @@ Classes:
   ``PATH_NAMES``, so its body's sites are classified here too.
 - BUG: the raw folder is read where its registered export answers. Kept red
   until fixed.
+
+Known limits (static, deliberately bounded): a path stored on an attribute
+(``self.folder = export_path``), a closure variable assigned after its inner
+function, a record field outside ``PATH_NAMES``, and a container other than
+a literal dict, tuple or list are not followed. A new reader behind one of
+these shapes is caught by the behaviour tests of its owner, not here.
 """
 
 from __future__ import annotations
@@ -49,8 +55,9 @@ PATH_NAMES = frozenset({
 SOURCE_MAPS = frozenset({"source", "data_source", "bound_source", "effective_source"})
 WRAPS = frozenset({
     "str", "Path", "fspath", "_clean_text", "expanduser", "resolve", "strip", "normpath", "abspath", "realpath",
-    # A member path built from the source path (Carbon b14r1).
-    "join", "joinpath",
+    # A member path built from the source path (Carbon b14r1), or the path
+    # re-spelled as text (Carbon b14r2).
+    "join", "joinpath", "rstrip", "lstrip", "replace", "format", "with_name", "with_suffix",
 })
 PURE = WRAPS | frozenset({
     "len", "bool", "isinstance", "int", "dict", "list", "set", "tuple", "frozenset", "sorted", "append", "extend", "update",
@@ -64,6 +71,11 @@ PURE = WRAPS | frozenset({
 def _source_map(node: ast.AST, maps: frozenset[str] | set[str] = frozenset()) -> bool:
     if isinstance(node, ast.Name):
         return node.id in SOURCE_MAPS or node.id in maps
+    if isinstance(node, ast.Call) and node.args and isinstance(node.func, ast.Name) and node.func.id in {"dict", "MappingProxyType"}:
+        # ``dict(study.get("data_source") or {})`` (Carbon b14r2).
+        return _source_map(node.args[0], maps)
+    if isinstance(node, ast.Call) and isinstance(node.func, ast.Attribute) and node.func.attr in {"copy", "deepcopy"}:
+        return _source_map(node.func.value, maps) or any(_source_map(arg, maps) for arg in node.args)
     if isinstance(node, ast.BoolOp):
         return any(_source_map(value, maps) for value in node.values)
     if isinstance(node, ast.IfExp):
@@ -90,6 +102,18 @@ def _path_value(node: ast.AST, tainted: set[str], maps: frozenset[str] | set[str
     if isinstance(node, ast.BinOp) and isinstance(node.op, ast.Div):
         # ``Path(export_path) / "member.parquet"`` (Carbon b14r1).
         return _path_value(node.left, tainted, maps)
+    if isinstance(node, ast.BinOp) and isinstance(node.op, (ast.Add, ast.Mod)):
+        # ``export_path + "/x"``, ``"%s/x" % export_path`` (Carbon b14r2).
+        return _path_value(node.left, tainted, maps) or _path_value(node.right, tainted, maps)
+    if isinstance(node, ast.JoinedStr):
+        return any(isinstance(part, ast.FormattedValue) and _path_value(part.value, tainted, maps) for part in node.values)
+    if isinstance(node, ast.NamedExpr):
+        return _path_value(node.value, tainted, maps)
+    if isinstance(node, ast.Dict):
+        # ``reader(**{"export_path": folder})`` or a kwargs local (Carbon b14r2).
+        return any(value is not None and _path_value(value, tainted, maps) for value in node.values)
+    if isinstance(node, (ast.Tuple, ast.List)):
+        return any(_path_value(element, tainted, maps) for element in node.elts)
     if isinstance(node, ast.Call):
         func = node.func
         if (isinstance(func, ast.Attribute) and func.attr == "get" and node.args
@@ -108,25 +132,37 @@ def _callee(node: ast.Call) -> str:
 
 
 class _Sites(ast.NodeVisitor):
-    def __init__(self, rel: str, sites: Counter) -> None:
+    def __init__(self, rel: str, sites: Counter, bindings: dict | None = None) -> None:
         self.rel, self.sites, self.scope, self.tainted, self.maps = rel, sites, [], [set()], [set()]
+        self.kinds: list[str] = []
+        self.bindings = bindings if bindings is not None else {}
 
-    def _function(self, node) -> None:
-        self.scope.append(node.name)
-        # A nested function sees its enclosing function's locals (Carbon b14r1).
-        self.tainted.append(set(self.tainted[-1]) if len(self.scope) > 1 else set())
-        self.maps.append(set(self.maps[-1]) if len(self.scope) > 1 else set())
-        self.generic_visit(node)
+    def _enter(self, name: str, kind: str) -> None:
+        # A nested function sees its enclosing function's locals (Carbon
+        # b14r1); a class body or a method starts clean (Carbon b14r2).
+        inherit = kind == "function" and bool(self.kinds) and self.kinds[-1] == "function"
+        self.scope.append(name)
+        self.kinds.append(kind)
+        self.tainted.append(set(self.tainted[-1]) if inherit else set())
+        self.maps.append(set(self.maps[-1]) if inherit else set())
+
+    def _leave(self) -> None:
         self.scope.pop()
+        self.kinds.pop()
         self.tainted.pop()
         self.maps.pop()
+
+    def _function(self, node) -> None:
+        self._enter(node.name, "function")
+        self.generic_visit(node)
+        self._leave()
 
     visit_FunctionDef = visit_AsyncFunctionDef = _function
 
     def visit_ClassDef(self, node) -> None:
-        self.scope.append(node.name)
+        self._enter(node.name, "class")
         self.generic_visit(node)
-        self.scope.pop()
+        self._leave()
 
     def _bind(self, name: str, value: ast.AST) -> None:
         if _path_value(value, self.tainted[-1], self.maps[-1]):
@@ -139,6 +175,16 @@ class _Sites(ast.NodeVisitor):
         for target in node.targets:
             if isinstance(target, ast.Name):
                 self._bind(target.id, node.value)
+            elif isinstance(target, (ast.Tuple, ast.List)) and isinstance(node.value, (ast.Tuple, ast.List)):
+                # ``folder, database = export_path, name`` (Carbon b14r2).
+                for element, value in zip(target.elts, node.value.elts):
+                    if isinstance(element, ast.Name):
+                        self._bind(element.id, value)
+        self.generic_visit(node)
+
+    def visit_NamedExpr(self, node) -> None:
+        if isinstance(node.target, ast.Name):
+            self._bind(node.target.id, node.value)
         self.generic_visit(node)
 
     def visit_AnnAssign(self, node) -> None:
@@ -148,16 +194,28 @@ class _Sites(ast.NodeVisitor):
 
     def visit_Call(self, node) -> None:
         callee = _callee(node)
-        values = [*node.args, *(keyword.value for keyword in node.keywords)]
-        if callee not in PURE and any(_path_value(value, self.tainted[-1], self.maps[-1]) for value in values):
-            self.sites[(self.rel, ".".join(self.scope) or "<module>", callee)] += 1
+        tainted, maps = self.tainted[-1], self.maps[-1]
+        slots = {("pos", index) for index, value in enumerate(node.args) if _path_value(value, tainted, maps)}
+        for keyword in node.keywords:
+            if keyword.arg is not None and _path_value(keyword.value, tainted, maps):
+                slots.add(("kw", keyword.arg))
+            elif keyword.arg is None and _path_value(keyword.value, tainted, maps):
+                if isinstance(keyword.value, ast.Dict):
+                    slots.update(("kw", key.value) for key, value in zip(keyword.value.keys, keyword.value.values)
+                                 if isinstance(key, ast.Constant) and _path_value(value, tainted, maps))
+                else:
+                    slots.add(("kw", "**"))
+        if callee not in PURE and slots:
+            key = (self.rel, ".".join(self.scope) or "<module>", callee)
+            self.sites[key] += 1
+            self.bindings.setdefault(key, set()).update(slots)
         self.generic_visit(node)
 
 
-def path_consumer_sites(sources: dict[str, str]) -> Counter:
+def path_consumer_sites(sources: dict[str, str], bindings: dict | None = None) -> Counter:
     sites: Counter = Counter()
     for rel, text in sources.items():
-        _Sites(rel, sites).visit(ast.parse(text, filename=rel))
+        _Sites(rel, sites, bindings).visit(ast.parse(text, filename=rel))
     return sites
 
 
@@ -557,6 +615,36 @@ _CLASSIFIED = {
     ('source_partition_candidates.py', 'discover_source_partition_candidates', 'listdir'): (1, 'REGISTERED'),
     ('source_partition_candidates.py', 'discover_source_partition_candidates', 'open'): (2, 'REGISTERED'),
     ('time_origin_source_authority.py', 'prepare_case_duration_metadata_plan', 'read_schema'): (1, 'REGISTERED'),
+    # Carbon b14r2 collector (dict payloads, `+`/f-string/format paths, tuple
+    # and walrus binds, class scopes). cohort_review_summary and the patient
+    # drilldown resolve a registered source; the checked_* readings go through
+    # bound_source_planning_concepts, the raw-Demo capability menu owner (S1506).
+    ('agent_runs.py', 'make_agent_run_runner.runner', '_evaluate_gate_with_ledger'): (1, 'FOLDER'),
+    ('agent_runs.py', 'make_agent_run_runner.runner', 'safe_artifacts_after_privacy_scan'): (2, 'FOLDER'),
+    ('crossdb_review.py', '_crossdb_review_summary_for_sources', 'cohort_review_summary'): (1, 'REGISTERED'),
+    ('data_package_review.py', 'build_registered_data_package_review', 'cohort_review_summary'): (1, 'REGISTERED'),
+    ('dataio.py', 'make_convert_runner.runner', 'emit'): (1, 'FOLDER'),
+    ('hosted_warmup.py', 'warm', 'cohort_review_summary'): (1, 'REGISTERED'),
+    ('ideas/mining.py', 'scan_literature_folder', 'IdeaMiningWebError'): (2, 'FOLDER'),
+    ('ideas/mining.py', 'scan_literature_folder', '_assert_no_row_payload'): (1, 'FOLDER'),
+    ('pi_copilot/demo_planning_source.py', 'bind_demo_planning_source', '_planning_study'): (1, 'OWNER'),
+    ('pi_copilot/demo_planning_source.py', 'bind_demo_planning_source', 'publish_choice'): (1, 'OWNER'),
+    ('pi_copilot/demo_planning_source.py', 'bind_demo_planning_source', 'upsert_context'): (1, 'OWNER'),
+    ('pi_copilot/extraction_handoff.py', 'submit_study_extraction', 'submit'): (1, 'FOLDER'),
+    ('pi_copilot/service.py', 'PiCopilotService._bind_registered_source_from_message', 'upsert_context'): (1, 'REGISTERED'),
+    ('pi_copilot/service.py', 'PiCopilotService.prepare_data_workbench_snapshot', 'cohort_review_summary'): (1, 'REGISTERED'),
+    ('pi_copilot/tools.py', '_review_cohort', 'cohort_review_summary'): (2, 'REGISTERED'),
+    ('pi_copilot/tools.py', '_review_patient_timeline', 'patient_review_drilldown'): (1, 'REGISTERED'),
+    ('pi_copilot/tools.py', '_review_patient_timeline', 'patient_review_entity_page'): (1, 'REGISTERED'),
+    ('pi_copilot/tools.py', '_review_patient_timeline', 'patient_review_feature'): (1, 'REGISTERED'),
+    ('pi_copilot/tools.py', '_run', 'submit_agent_run'): (1, 'FOLDER'),
+    ('research_launch_scientific.py', '_metadata_only_planning_coordinates', 'checked_exposure_concept'): (1, 'OWNER'),
+    ('research_launch_scientific.py', '_metadata_only_planning_coordinates', 'checked_stated_adjustments'): (1, 'OWNER'),
+    ('research_launch_scientific.py', '_metadata_only_planning_coordinates', 'checked_stated_subgroups'): (1, 'OWNER'),
+    ('research_run_submission.py', 'submit_research_run', 'make_report_only_run_runner'): (1, 'PASS'),
+    ('research_run_submission.py', 'submit_research_run', 'make_research_pipeline_run_runner'): (1, 'PASS'),
+    ('research_run_submission.py', 'submit_research_run', 'prepare_descriptor'): (1, 'FOLDER'),
+    ('sources.py', 'register_source', 'save_registry'): (1, 'REGISTERED'),
 }
 
 
@@ -602,6 +690,41 @@ def test_the_sweep_follows_wrapped_maps_member_paths_and_closures():
     })
 
 
+def test_the_sweep_follows_text_paths_payloads_and_binds():
+    # Carbon b14r2: a path re-spelled as text, a copied source map, a
+    # payload dict or ``**`` forward, tuple and walrus binds; a class body's
+    # names do not leak into its methods.
+    sites = path_consumer_sites({"synthetic.py": (
+        "class Owner:\n"
+        "    folder = export_path\n"
+        "    def method(self):\n"
+        "        return reader_x(folder)\n"
+        "def outer(study, export_path):\n"
+        "    reader_a(f'{export_path}/cohort.parquet')\n"
+        "    reader_b(export_path + '/cohort.parquet')\n"
+        "    reader_c(export_path.rstrip('/'))\n"
+        "    copied = dict(study.get('data_source') or {})\n"
+        "    reader_d(copied['path'])\n"
+        "    reader_e({'source_path': export_path})\n"
+        "    reader_f(**{'export_path': export_path})\n"
+        "    folder, name = export_path, 'x'\n"
+        "    reader_g(folder)\n"
+        "    if (member := Path(export_path)):\n"
+        "        reader_h(member)\n"
+    )})
+    assert sites == Counter({("synthetic.py", "outer", f"reader_{letter}"): 1 for letter in "abcdefgh"})
+
+
+def test_a_pass_row_must_reach_a_path_parameter_by_its_slot():
+    forms = [(["study", "export_path"], {"study", "export_path", "label"})]
+    assert _slot_reaches_a_path_parameter(("pos", 1), forms)
+    assert _slot_reaches_a_path_parameter(("kw", "export_path"), forms)
+    assert _slot_reaches_a_path_parameter(("kw", "**"), forms)
+    assert not _slot_reaches_a_path_parameter(("pos", 0), forms)
+    assert not _slot_reaches_a_path_parameter(("kw", "label"), forms)
+    assert not _slot_reaches_a_path_parameter(("kw", "export_path"), [])
+
+
 def test_every_source_path_consumer_is_classified():
     sites = path_consumer_sites(_webserver_sources())
     expected = {key: count for key, (count, _cls) in _CLASSIFIED.items()}
@@ -614,30 +737,52 @@ def test_every_source_path_consumer_is_classified():
     assert {cls for _count, cls in _CLASSIFIED.values()} <= _CLASSES
 
 
-def path_parameter_owners(sources: dict[str, str]) -> set[str]:
-    """Webserver functions (or record classes) with a parameter in ``PATH_NAMES``."""
+def webserver_signatures(sources: dict[str, str]) -> dict[str, list[tuple[list[str], set[str]]]]:
+    """Each webserver function or record class: its positional and keyword slots."""
 
-    owners: set[str] = set()
+    signatures: dict[str, list[tuple[list[str], set[str]]]] = {}
     for text in sources.values():
         for node in ast.walk(ast.parse(text)):
             if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
                 arguments = node.args
-                names = [arg.arg for arg in (*arguments.posonlyargs, *arguments.args, *arguments.kwonlyargs)]
-                if any(name in PATH_NAMES for name in names):
-                    owners.add(node.name)
-            elif isinstance(node, ast.ClassDef) and any(
-                    isinstance(item, ast.AnnAssign) and isinstance(item.target, ast.Name)
-                    and item.target.id in PATH_NAMES for item in node.body):
-                owners.add(node.name)
-    return owners
+                positional = [arg.arg for arg in (*arguments.posonlyargs, *arguments.args)]
+                if positional and positional[0] in {"self", "cls"}:
+                    positional = positional[1:]
+                keywords = {*positional, *(arg.arg for arg in arguments.kwonlyargs)}
+                signatures.setdefault(node.name, []).append((positional, keywords))
+            elif isinstance(node, ast.ClassDef):
+                fields = [item.target.id for item in node.body
+                          if isinstance(item, ast.AnnAssign) and isinstance(item.target, ast.Name)]
+                signatures.setdefault(node.name, []).append((fields, set(fields)))
+    return signatures
+
+
+def _slot_reaches_a_path_parameter(slot: tuple[str, object], forms: list[tuple[list[str], set[str]]]) -> bool:
+    kind, value = slot
+    for positional, keywords in forms:
+        if kind == "kw" and value == "**" and keywords & PATH_NAMES:
+            # ``**runner_kwargs`` carrying ``export_path`` into a factory.
+            return True
+        if kind == "kw" and value in keywords and value in PATH_NAMES:
+            return True
+        if kind == "pos" and isinstance(value, int) and value < len(positional) and positional[value] in PATH_NAMES:
+            return True
+    return False
 
 
 def test_every_pass_row_forwards_into_a_classified_webserver_parameter():
-    # A PASS row is only sound when its callee's own body is swept here
-    # (Carbon b14r1): the callee is a webserver function whose path
-    # parameter is in PATH_NAMES, so its sites carry their own rows.
-    owners = path_parameter_owners(_webserver_sources())
-    unresolved = sorted(key for key, (_count, cls) in _CLASSIFIED.items() if cls == "PASS" and key[2] not in owners)
+    # A PASS row is only sound when its callee's own body is swept here: the
+    # callee is a webserver function or record whose parameter receiving the
+    # path, by position or keyword, is in PATH_NAMES (Carbon b14r1, b14r2).
+    sources = _webserver_sources()
+    bindings: dict = {}
+    path_consumer_sites(sources, bindings)
+    signatures = webserver_signatures(sources)
+    unresolved = sorted(
+        (key, sorted(bindings.get(key, ()), key=str)) for key, (_count, cls) in _CLASSIFIED.items()
+        if cls == "PASS" and not all(_slot_reaches_a_path_parameter(slot, signatures.get(key[2], []))
+                                     for slot in bindings.get(key, {("kw", "?")}))
+    )
     assert not unresolved, f"classify these by what the callee does with the path: {unresolved}"
 
 

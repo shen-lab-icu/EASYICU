@@ -924,15 +924,23 @@ def compile_landmark_categorical_runtime_projection(
     if kdigo_observability_authority_missing(
         primary_exposure_source, primary_exposure
     ):
+        from easyicu.webserver.dataio import ExportCohortError
         from easyicu.webserver.research_launch_scientific import (
             source_authority_export_path,
         )
+        from easyicu.webserver.research_pipeline_run_errors import (
+            ResearchPipelineRunError,
+        )
 
         # A raw official-Demo study's receipts live in its registered export,
-        # not the raw folder (S1540 sweep, Carbon b14r1).
-        derivable = export_kdigo_strict_derivation_available(
-            source_authority_export_path(study) or None if isinstance(study, Mapping) else None
-        )
+        # not the raw folder (S1540 sweep, Carbon b14r1). This only words the
+        # remedy: an export that cannot be resolved reads as not derivable and
+        # the typed stop below stands (Carbon b14r2).
+        try:
+            remedy_export = source_authority_export_path(study) or None if isinstance(study, Mapping) else None
+        except (ResearchPipelineRunError, ExportCohortError, OSError, ValueError, KeyError, TypeError):
+            remedy_export = None
+        derivable = export_kdigo_strict_derivation_available(remedy_export)
         raise WebScientificRuntimeProjectionError(
             "web_kdigo_observability_authority_missing",
             "KDIGO execution requires an exposure that keeps incomplete observation evidence unknown.",
