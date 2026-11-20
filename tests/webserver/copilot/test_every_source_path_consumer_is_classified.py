@@ -512,6 +512,9 @@ _CLASSIFIED = {
     ('pi_copilot/demo_planning_source.py', 'resolve_demo_planning_source', 'verified_public_demo_raw'): (1, 'OWNER'),
     ('pi_copilot/demo_planning_source.py', 'resolve_demo_planning_source', 'DemoPlanningSource'): (1, 'OWNER'),
     ('pi_copilot/extraction_handoff.py', '_verify_study_source', 'resolve_registered_export_binding'): (1, 'REGISTERED'),
+    # B19: identifies the study's folder as a verified official Demo raw cache;
+    # its result only decides the extraction's module scope (the Demo's full scope).
+    ('pi_copilot/extraction_handoff.py', 'official_demo_raw_source', 'verified_public_demo_raw'): (1, 'FOLDER'),
     ('pi_copilot/install.py', 'install_runtime', 'runtime_manifest'): (1, 'FOLDER'),
     ('pi_copilot/install.py', 'install_runtime', 'runtime_is_installed'): (1, 'FOLDER'),
     ('pi_copilot/install.py', 'install_runtime', '_packaged_source_file'): (3, 'FOLDER'),

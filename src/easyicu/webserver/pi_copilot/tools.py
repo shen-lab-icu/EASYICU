@@ -1859,6 +1859,30 @@ def _prepare_demo_source(
             owner="easyicu.webserver.demo_sources",
             details={"allowed_source_ids": list(demo_sources.allowed_source_ids())},
         )
+    study = _bound_context(context.session.binding)
+    bound_source = study.get("data_source") if study else None
+    if (
+        isinstance(bound_source, Mapping)
+        and str(bound_source.get("database") or "").strip() == source.database
+        and extraction_handoff.official_demo_raw_source(study)
+    ):
+        # This study already reads this Demo's own raw data. Preparing the Demo
+        # again only re-registers its generic all-module export and extracts
+        # nothing for this study, so the turn's Extraction grant is left for
+        # the study's own extraction.
+        return _result(
+            context,
+            status="blocked",
+            code="pi_demo_source_raw_bound_extract_study",
+            summary=(
+                "This study already uses this official Demo's raw data. Preparing the "
+                "Demo again would only re-register the generic all-module Demo export; "
+                "it would not extract this study's population. To extract this study's "
+                "data, call easyicu_start_extraction without arguments."
+            ),
+            owner="easyicu.webserver.pi_copilot.extraction_handoff",
+            details={"source_id": source.id, "next_tool": "easyicu_start_extraction"},
+        )
     grant_block = _consume_action(context, "extract")
     if grant_block is not None:
         return grant_block
@@ -1881,7 +1905,9 @@ def _prepare_demo_source(
         code="easyicu_demo_source_preparation_submitted",
         summary=(
             "Submitted the existing official demo-source pipeline: download, validate, "
-            "convert, all-module export, and registration will run locally."
+            "convert, all-module export, and registration will run locally. The result "
+            "is the generic all-module Demo export, not a data package extracted for "
+            "any study's population."
         ),
         owner="easyicu.webserver.demo_sources",
         details={
@@ -1889,6 +1915,8 @@ def _prepare_demo_source(
             "kind": job.kind,
             "status": job.status,
             "source_id": source.id,
+            "export_scope": "all_modules",
+            "study_scoped": False,
         },
     )
 
@@ -3787,8 +3815,14 @@ def _start_extraction(
     database = str(source.get("database") or "").strip()
     modules = [str(item) for item in (study.get("modules") or []) if str(item).strip()]
     # A study bound to a registered export without stated modules is extracted
-    # with that export's modules; extraction_handoff resolves them.
-    modules_known = bool(modules) or registered_source is not None
+    # with that export's modules, and one bound to a verified official Demo's
+    # raw folder with that Demo's full module scope; extraction_handoff
+    # resolves both.
+    modules_known = (
+        bool(modules)
+        or registered_source is not None
+        or extraction_handoff.official_demo_raw_source(study)
+    )
     if not source_path or not database or not modules_known:
         missing = [
             name

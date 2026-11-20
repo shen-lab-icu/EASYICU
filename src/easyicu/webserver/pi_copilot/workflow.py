@@ -55,7 +55,7 @@ from easyicu.webserver.stop_next_actions import (
     stop_reason_codes,
 )
 
-from . import cohort_eligibility, plan_decisions, plan_review_progress
+from . import cohort_eligibility, extraction_handoff, plan_decisions, plan_review_progress
 from .contracts import (
     EXECUTION_RETRY_REPLAYABLE_GATE_REASONS,
     PLAN_RESUME_OFFER_GATE_REASONS,
@@ -501,6 +501,10 @@ def build_research_workflow_snapshot(
             ),
             window_finding=study_context_owner.materialization_window_finding(
                 dict(study_row)
+            ),
+            source_modules_resolved=bool(
+                not study_row.get("modules")
+                and extraction_handoff.official_demo_raw_source(study_row)
             ),
         )
     )

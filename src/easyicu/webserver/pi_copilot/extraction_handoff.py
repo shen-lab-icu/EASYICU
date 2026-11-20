@@ -331,6 +331,31 @@ def study_binding_for_export(
     return {"path": path, "database": handoff.database, "label": label[:160]}
 
 
+def official_demo_raw_source(study: Mapping[str, Any]) -> bool:
+    """Whether ``study`` is bound to a verified official Demo's own raw folder.
+
+    A study that planned from an official Demo's raw data (the raw-source
+    choice) may state no modules. Its extraction then uses that Demo's full
+    module scope, the scope of the official all-module export: the counterpart
+    of a registered export whose modules a study without stated modules takes.
+    Only the Demo cache owner's receipt-bound verification qualifies; any other
+    raw folder still needs its modules stated.
+    """
+    from easyicu.webserver import demo_source_storage
+
+    source = study.get("data_source")
+    source = source if isinstance(source, Mapping) else {}
+    path = str(source.get("path") or "").strip()
+    database = str(source.get("database") or "").strip()
+    if not path or not database:
+        return False
+    try:
+        demo = demo_source_storage.verified_public_demo_raw(path)
+    except (OSError, ValueError):
+        return False
+    return demo is not None and demo.database == database
+
+
 def submit_study_extraction(
     *,
     study: Mapping[str, Any],
@@ -403,13 +428,20 @@ def submit_study_extraction(
                 hours = window.get("hours")
             if hours is not None:
                 cohort["observation_window_hours"] = hours
+    # A verified official Demo raw folder with no stated modules is extracted
+    # with the Demo's full module scope (None: every module), as its official
+    # all-module export was. Any other raw folder keeps the stated modules.
+    submitted_modules: Optional[list[str]] = (
+        None if not modules and registered_source is None and official_demo_raw_source(study)
+        else modules
+    )
 
     submitted = submit(
         {
             "path": source_path,
             "registered_export_path": registered_export_path,
             "database": database,
-            "modules": modules,
+            "modules": submitted_modules,
             "format": export_format,
             "merge": True,
             "cohort": cohort,
@@ -434,6 +466,7 @@ __all__ = [
     "bound_export_mismatches",
     "compile_registered_export_handoff",
     "compile_study_cohort",
+    "official_demo_raw_source",
     "study_binding_for_export",
     "submit_study_extraction",
 ]

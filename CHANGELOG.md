@@ -65,6 +65,13 @@ The full list of changes since 0.1.0 is in the v0.1.3 release notes. Recorded he
   conversation". The plan review now reads the same scope: on a metadata-only plan
   (for example the raw official demo) it no longer asks to retain all ICU stays while
   the extraction keeps one stay per patient.
+- On a study planned from the official Demo's raw data, asking in the conversation for
+  this study's extraction now starts it (B19). The card's drafted request confirms the
+  extraction for the study's current cohort, so sending it grants the extraction; the
+  study's extraction uses the Demo's full module scope when the study names no modules;
+  preparing the same Demo again is redirected to the study's extraction instead of
+  re-registering the generic Demo export; and a generic Demo export is never described
+  as the study's own data package.
 
 ## 0.1.0 — 2026-11-11 — first public pre-release
 

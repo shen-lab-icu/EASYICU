@@ -31,6 +31,9 @@ class SetupFacts:
     eligibility_stated: bool
     dependence_finding: Optional[Mapping[str, Any]] = None
     window_finding: Optional[Mapping[str, Any]] = None
+    #: The bound source itself fixes the extraction's modules when the study
+    #: states none (a verified official Demo raw folder: its full module scope).
+    source_modules_resolved: bool = False
 
 
 @dataclass(frozen=True)
@@ -405,7 +408,7 @@ class ScientificConfiguration:
                 bool(_clean(self.study.get("export_format"), 80))
                 and confirmations.get("export_format") is True,
             ),
-            ("modules", bool(self.study.get("modules"))),
+            ("modules", bool(self.study.get("modules")) or facts.source_modules_resolved),
             *(
                 (("execution_concepts.outcome", executable_outcome),)
                 if human_outcome
