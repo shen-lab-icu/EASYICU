@@ -129,6 +129,17 @@
       </div>`;
     }
 
+    // Conditions the system stated from the question after the planner left
+    // them out (S1757); 修改人群 on this card changes them.
+    function hostStatedPopulationHtml(items) {
+      if (!Array.isArray(items) || !items.length) return '';
+      const rows = items.filter(item => item && item.quote && item.concept).map(item => {
+        const hours = `${tr('ICU admission', '入科')} ${item.start_hours}–${item.end_hours} h`;
+        return `<li>${esc(tr('Population condition added by the system from the question', '人群条件由系统按题面补入'))}${esc(tr(': ', '：'))}${esc(item.quote)}${esc(tr(` (${item.concept}, ${hours})`, `（${item.concept}，${hours}）`))}</li>`;
+      }).join('');
+      return rows ? `<ul class="gpi-host-stated-population" data-host-stated-population>${rows}</ul>` : '';
+    }
+
     function reviewedPopulationSpecHtml(projection) {
       if (!projection || projection.schema_version !== 'easyicu.reviewed_population_spec_projection/1' || !Array.isArray(projection.criteria)) return '';
       const missingLabels = {
@@ -502,7 +513,7 @@
     return Object.freeze({
       runnableTimingCard, timingAlternativesHtml, firstStaySettingHtml, unlistedPopulationHtml,
       preparedDataStatus, validDeferredInputScope, deferredInputScopeHtml,
-      reviewedPopulationSpecHtml, populationPreparationHtml, populationAcceptanceHtml,
+      reviewedPopulationSpecHtml, hostStatedPopulationHtml, populationPreparationHtml, populationAcceptanceHtml,
       localizedAuthorizationQuestion, localizedDecisionEvidence, survivalLandmarkDecisionCopy,
       staleConfirmationHtml, latestAttemptFailureHtml, planConversationHtml,
     });

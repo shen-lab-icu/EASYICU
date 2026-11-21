@@ -857,6 +857,10 @@
     ],
     [
       "easyicu.research_agent.agents.family_spec_planner",
+      "easyicu.research_agent.planning.population_spec"
+    ],
+    [
+      "easyicu.research_agent.agents.family_spec_planner",
       "easyicu.research_agent.planning.primary_result_contract"
     ],
     [
@@ -894,6 +898,10 @@
     [
       "easyicu.research_agent.agents.family_spec_planner",
       "easyicu.research_agent.planning.requirement_typing.shadow"
+    ],
+    [
+      "easyicu.research_agent.agents.family_spec_planner",
+      "easyicu.research_agent.planning.stated_population"
     ],
     [
       "easyicu.research_agent.agents.family_spec_planner",
@@ -12525,6 +12533,10 @@
     ],
     [
       "easyicu.research_agent.planning.family_spec.baseline_association_template",
+      "easyicu.research_agent.research_context.typed"
+    ],
+    [
+      "easyicu.research_agent.planning.family_spec.baseline_association_template",
       "easyicu.research_agent.schema"
     ],
     [
@@ -13877,6 +13889,10 @@
     ],
     [
       "easyicu.research_agent.planning.progressive_compiler",
+      "easyicu.research_agent.planning.stated_population"
+    ],
+    [
+      "easyicu.research_agent.planning.progressive_compiler",
       "easyicu.research_agent.research_context.concept_population"
     ],
     [
@@ -14828,6 +14844,18 @@
       "easyicu.research_agent.schema"
     ],
     [
+      "easyicu.research_agent.planning.stated_population",
+      "easyicu.research_agent.planning.cohort_eligibility"
+    ],
+    [
+      "easyicu.research_agent.planning.stated_population",
+      "easyicu.research_agent.research_context.concept_population"
+    ],
+    [
+      "easyicu.research_agent.planning.stated_population",
+      "easyicu.research_agent.research_context.materialization_window"
+    ],
+    [
       "easyicu.research_agent.planning.step_phase",
       "easyicu.research_agent.planning.study_design"
     ],
@@ -15674,6 +15702,10 @@
     [
       "easyicu.research_agent.replication.metrics",
       "easyicu.research_agent.orchestration.human_review_checkpoint"
+    ],
+    [
+      "easyicu.research_agent.replication.metrics",
+      "easyicu.research_agent.research_context.typed"
     ],
     [
       "easyicu.research_agent.replication.metrics",
@@ -18548,9 +18580,9 @@
   "metrics": {
     "cyclic_module_count": 0,
     "cyclic_scc_count": 0,
-    "edge_count": 4629,
+    "edge_count": 4637,
     "largest_scc_size": 0,
-    "module_count": 924,
+    "module_count": 925,
     "package_count": 43,
     "top_level_module_count": 39
   },
@@ -19228,6 +19260,7 @@
     "easyicu.research_agent.planning.scientific_review": "planning/scientific_review.py",
     "easyicu.research_agent.planning.sensitivity_authority": "planning/sensitivity_authority.py",
     "easyicu.research_agent.planning.sensitivity_plan_shaping": "planning/sensitivity_plan_shaping.py",
+    "easyicu.research_agent.planning.stated_population": "planning/stated_population.py",
     "easyicu.research_agent.planning.step_phase": "planning/step_phase.py",
     "easyicu.research_agent.planning.study_design": "planning/study_design.py",
     "easyicu.research_agent.planning.study_design_playbook": "planning/study_design_playbook.py",

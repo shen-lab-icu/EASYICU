@@ -849,6 +849,9 @@ def build_research_workflow_snapshot(
                if isinstance(review_authority.get("deferred_input_scope"), Mapping) else {}),
             **({"reviewed_population_spec": review_authority["reviewed_population_spec"]}
                if isinstance(review_authority.get("reviewed_population_spec"), Mapping) else {}),
+            **({"host_stated_population": review_authority["host_stated_population"]}
+               if isinstance(review_authority.get("host_stated_population"), list)
+               and review_authority["host_stated_population"] else {}),
             # How the selected database changes the study (db capability review).
             **({"source_adjustments": source_adjustments} if source_adjustments is not None else {}),
         }

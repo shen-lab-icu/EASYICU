@@ -38,6 +38,40 @@ def question_population_mode(required_mode: str | None, *, study: Mapping[str, A
     return None if stated_population_conditions(question) else required_mode
 
 
+def stated_population_constraints(study: Mapping[str, Any]) -> list[dict[str, Any]]:
+    """The recorded conditions the question restricts its patients to, for planning.
+
+    Each is the question's own words and the concepts that record the
+    condition (``study_intent.stated_population_conditions``).  Planning holds
+    the plan to them: its cohort applies one of the concepts or lists the
+    words as not applied, else the Planner is asked again and, when its
+    attempts are spent, the host states the condition itself (S1757).  A
+    researcher's recorded eligibility decision stands, as in
+    ``question_population_mode``.  This selects no row and approves nothing.
+    """
+    authority = study.get("cohort_eligibility_authority")
+    if isinstance(authority, Mapping) and authority.get("selection_state") in {"confirmed", "declined"}:
+        return []
+    question = str(study.get("question") or "")
+    if not question.strip():
+        return []
+    from .study_intent import stated_population_conditions
+
+    return [
+        {"quote": str(words), "concepts": sorted(
+            (str(concept) for concept in concepts), key=lambda concept: concept not in _HOST_STATED_FIRST,
+        )}
+        for concepts, words in stated_population_conditions(question)
+        if str(words).strip() and concepts
+    ]
+
+
+# The concept the host states a condition on when the input holds several that
+# record it: Sepsis-3 by its SOFA-1 definition, the reviewed reading (S1757).
+# Any other order is the study-intent table's.
+_HOST_STATED_FIRST = frozenset({"sep3_sofa1"})
+
+
 def carried_population_mode(required_mode: str | None, *, candidate_definition: Mapping[str, Any] | None) -> str | None:
     """Leave the population open when the candidate carries a criterion it could not apply.
 

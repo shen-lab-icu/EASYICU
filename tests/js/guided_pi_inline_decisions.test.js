@@ -176,7 +176,7 @@ function m3Workflow(shape) {
 }
 
 for (const [shape, recording] of [['A', 's15'], ['B', 's15b'], ['C', 's15c']]) {
-  test(`Dev9 M3 shape ${shape} (${recording}) offers one inline revision action after confirmation`, () => {
+  test(`Dev9 M3 shape ${shape} (${recording}) offers one primary forward action and the inline revision`, () => {
     const workflow = m3Workflow(shape);
     const researchProvider = { provider: 'synthetic', model: 'scripted', credential_source: 'pi_verified' };
     const readiness = modules.require('runReadiness').create({
@@ -207,9 +207,17 @@ for (const [shape, recording] of [['A', 's15'], ['B', 's15b'], ['C', 's15c']]) {
     assert.doesNotMatch(log, /data-gpi-aside-pending|data-gpi-cohort-option|data-gpi-exposure-arrangement/);
     const primary = primaryButtons(log);
     assert.equal(primary.length, 1, 'the conversation must contain exactly one primary forward action');
-    assert.match(primary[0], /data-gpi-confirm-edit>/, 'the primary action must open the existing edit path');
+    if (shape === 'C') {
+      assert.match(primary[0], /data-gpi-confirm-edit>/, 'the primary action must open the existing edit path');
+      assert.doesNotMatch(log, /data-gpi-confirm-action/);
+    } else {
+      // S1757: an unanswered question requirement keeps a fresh plan as the
+      // forward action; the edit path stays beside it, never alone.
+      assert.match(primary[0], /data-gpi-confirm-action>$/);
+      assert.match(log, /<button class="btn primary sm" type="button" data-gpi-confirm-action>重新生成计划<\/button>/);
+    }
     assert.match(log, /data-gpi-confirm-edit>提出修改<\/button>/);
-    assert.doesNotMatch(log, /data-gpi-confirm-action/);
+    const edit = log.match(/<button\b[^>]*data-gpi-confirm-edit[^>]*>/)[0];
 
     const handlers = {};
     state.host = { addEventListener: (name, handler) => { handlers[name] = handler; } };
@@ -232,7 +240,7 @@ for (const [shape, recording] of [['A', 's15'], ['B', 's15b'], ['C', 's15c']]) {
       });
     };
     assert.equal(state.draft, '');
-    click(primary[0]);
+    click(edit);
     assert.match(state.draft, /请根据以下审阅意见修订整份研究计划/);
     assert.match(state.draft, /不要开始分析/);
     assert.deepEqual(state.workflowReceipts, []);
@@ -253,6 +261,28 @@ for (const [shape, recording] of [['A', 's15'], ['B', 's15b'], ['C', 's15c']]) {
     assert.equal(state.workflowReceipts[0].text, '已收到示例修订意见。');
   });
 }
+
+test('S1758: an unanswered population condition is named on the card that offers a fresh plan', () => {
+  const workflow = m3Workflow('A');
+  workflow.plan_review_summary.question_population_unlisted = ['示例条件'];
+  const researchProvider = { provider: 'synthetic', model: 'scripted', credential_source: 'pi_verified' };
+  const readiness = modules.require('runReadiness').create({
+    tr: (en, zh) => zh,
+    state: { workflow, session: { research_provider: researchProvider },
+      runtime: { status: 'ready', api_transport: 'openai-completions' } },
+  });
+  const { html } = render('zh', workflow, {
+    research_provider: researchProvider, cohort_eligibility_selection: cohortSelection,
+  }, false, { runReadiness: readiness.forAction }, {
+    messages: [{ role: 'user', text: '确认结局' }, { role: 'assistant', complete: true, text: '候选计划已保存。' }],
+  });
+  const log = conversationLog(html);
+  assert.match(log, /问题限定了人群“示例条件”，方案未包含对应的人群条件，请确认。/);
+  const primary = primaryButtons(log);
+  assert.equal(primary.length, 1);
+  assert.match(log, /<button class="btn primary sm" type="button" data-gpi-confirm-action>重新生成计划<\/button>/);
+  assert.match(log, /data-gpi-confirm-edit>提出修改<\/button>/);
+});
 
 for (const shape of ['A', 'C']) {
   test(`Dev9 M3 shape ${shape} keeps Check connection primary when disconnected`, () => {

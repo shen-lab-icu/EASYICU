@@ -103,11 +103,13 @@ from ..planning.primary_result_contract import family_result_stop_reason, missin
 from ..planning.progressive_artifacts import ProgressivePlannerCheckpointEmitter
 from ..planning.progressive_compiler import (
     progressive_cohort_concept_ids,
+    stated_population_unaccounted,
     required_binary_display_label_scopes,
     required_reader_display_label_keys,
     validate_progressive_foundation,
 )
 from ..planning.progressive_contract import (
+    HostStatedCondition,
     ProgressiveFoundationMaterialization,
     ProgressiveCohortPredicate,
     ProgressivePlanCompileError,
@@ -1302,6 +1304,59 @@ def _source_absolute_risk_scope(context: ResearchContext) -> str | None:
     )
 
 
+def _with_host_stated_population(
+    spec: FamilyPlanSpec, missing: Sequence[Any], *, context: ResearchContext,
+) -> tuple[FamilyPlanSpec, tuple[Any, ...]]:
+    """``spec`` with the host's statement of each unaccounted condition, and those statements.
+
+    A typed population gains a ``condition_present`` criterion per condition.
+    A legacy population, or none, gains the condition as a stated criterion and
+    the predicate applying it, so the template keeps its own typed bounds.
+    A population that has no room left is returned unchanged.
+    """
+
+    from ..planning.family_spec.contract import SpecPopulation
+    from ..planning.population_spec import PopulationSpec
+    from ..planning.stated_population import host_statements, next_criterion_ids
+
+    statements = host_statements(context, missing)
+    population = spec.population
+    if not statements:
+        return spec, ()
+    if population is not None and population.population_spec is not None:
+        existing = list(population.population_spec.criteria)
+        ids = next_criterion_ids((item.id for item in existing), len(statements))
+        if len(ids) < len(statements):
+            return spec, ()
+        updated = SpecPopulation(population_spec=PopulationSpec.model_validate({"criteria": [
+            *(item.model_dump(mode="json") for item in existing),
+            *(item.typed_criterion(ident) for item, ident in zip(statements, ids)),
+        ]}))
+    else:
+        current = population.model_dump(mode="json") if population is not None else {}
+        criteria = [*current.get("criteria", ()), *(item.legacy_criterion() for item in statements)]
+        inclusion = [*current.get("inclusion", ()), *(item.legacy_predicate() for item in statements)]
+        if len(criteria) > 6 or len(inclusion) > 8:
+            return spec, ()
+        updated = SpecPopulation.model_validate({
+            "criteria": criteria, "inclusion": inclusion, "exclusion": current.get("exclusion", []),
+        })
+    return spec.model_copy(update={"population": updated}), statements
+
+
+def _mark_host_stated(draft: Any, statements: Sequence[Any]) -> Any:
+    """Record the host-stated conditions on the draft's cohort, for the plan card."""
+
+    materialization = draft.foundation
+    foundation = materialization.foundation
+    cohort = foundation.cohort.model_copy(update={"host_stated_population": [
+        HostStatedCondition.model_validate(item.provenance()) for item in statements
+    ]})
+    return replace(draft, foundation=materialization.model_copy(update={
+        "foundation": foundation.model_copy(update={"cohort": cohort}),
+    }))
+
+
 def run_family_spec_attempt(
     *,
     llm: Any,
@@ -1574,6 +1629,7 @@ def run_family_spec_attempt(
                 "progressive_distribution_spec_invalid",
                 "progressive_distribution_missingness_authority_invalid",
                 "progressive_question_named_exposure_demoted",
+                "progressive_stated_population_condition_missing",
                 "declared_exposure_level_empty",
             }
         )
@@ -1639,7 +1695,51 @@ def run_family_spec_attempt(
                 # Keep the original claim; the coverage owner records the
                 # explicit choice and blocks approval until the user resolves it.
                 attempt.prompt_metrics["question_exposure_choice_fallback"] = choices
+            host_stated: tuple[Any, ...] = ()
+            missing = (
+                stated_population_unaccounted(
+                    spec.population, context=context,
+                    spec=spec.population.population_spec if spec.population is not None else None,
+                )
+                if required_primary_cohort_selection_mode != "all_input_rows" else ()
+            )
+            if missing:
+                from ..planning.stated_population import missing_condition_instruction
+
+                if parse_attempts <= parse_limit:
+                    raise ProgressivePlanCompileError(
+                        "progressive_stated_population_condition_missing",
+                        missing_condition_instruction(missing), path="population.population_spec",
+                    )
+                # The attempts are spent: the host states the question's condition
+                # itself, recorded on the cohort for the plan card (S1757).  A
+                # statement the family cannot hold leaves the Planner's spec as it
+                # is, recorded, like the exposure-choice fallback: the review
+                # then names the condition the plan selects on nowhere (S1743)
+                # on a card that offers a fresh plan (S1758).
+                stated_spec, host_stated = _with_host_stated_population(spec, missing, context=context)
+                try:
+                    if not host_stated:
+                        raise FamilySpecError(
+                            "family_spec_population_full",
+                            "the population has no room for the condition", path="population",
+                        )
+                    validate_family_plan_spec(stated_spec, request)
+                except FamilySpecError as exc:
+                    host_stated = ()
+                    attempt.prompt_metrics["host_stated_population_unplaced"] = [
+                        {"quote": item.quote, "concepts": list(item.concepts),
+                         "reason": getattr(exc, "reason_code", "family_spec_error")}
+                        for item in missing
+                    ]
+                else:
+                    spec = stated_spec
+                    attempt.prompt_metrics["host_stated_population_conditions"] = [
+                        item.provenance() for item in host_stated
+                    ]
             draft = project_spec(spec)
+            if host_stated:
+                draft = _mark_host_stated(draft, host_stated)
             validate_outline(draft.outline, question_anchors)
             try:
                 compile_draft_prefixes(draft)

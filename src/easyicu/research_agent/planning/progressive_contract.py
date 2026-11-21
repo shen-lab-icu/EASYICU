@@ -16,6 +16,7 @@ import json
 import re
 from typing import Annotated, Any, ClassVar, Literal, Mapping, Optional, Sequence
 
+from pydantic.json_schema import SkipJsonSchema
 from pydantic import (
     BaseModel,
     ConfigDict,
@@ -250,6 +251,17 @@ class ProgressivePopulationCriterion(BaseModel):
         return cleaned
 
 
+class HostStatedCondition(BaseModel):
+    """One population condition the host stated from the question (S1757)."""
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    quote: str = Field(min_length=1, max_length=400)
+    concept: str = Field(min_length=1, max_length=128)
+    start_hours: float
+    end_hours: float
+
+
 class ProgressiveCohortIntent(BaseModel):
     model_config = ConfigDict(extra="forbid", frozen=True)
 
@@ -278,6 +290,14 @@ class ProgressiveCohortIntent(BaseModel):
     #: (``agents.population_spec_transport``).
     population_spec: Annotated[Optional[Any], WithJsonSchema({"type": "null"})] = Field(
         default=None, exclude_if=lambda value: value is None
+    )
+    #: The recorded conditions the host stated from the question's own words
+    #: after the Planner's attempts left them unaccounted for
+    #: (``planning.stated_population``, S1757), so the plan card says who
+    #: stated them.  Host-written only: absent from the model's schema, refused
+    #: from a Planner, and omitted from the digest when empty.
+    host_stated_population: SkipJsonSchema[list[HostStatedCondition]] = Field(
+        default_factory=list, max_length=20, exclude_if=lambda value: not value
     )
 
     @field_validator("population_spec")
@@ -1706,6 +1726,7 @@ def validate_primary_population_owner(
 
 __all__ = [
     "ProgressiveCompiledStepReceipt",
+    "HostStatedCondition",
     "ProgressiveCohortIntent",
     "ProgressiveDisplayLabel",
     "ProgressiveFoundationMaterialization",

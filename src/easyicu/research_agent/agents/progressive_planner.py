@@ -59,6 +59,7 @@ from ..planning.progressive_compiler import (
     compile_progressive_plan,
     progressive_cohort_concept_ids,
     progressive_population_concept_ids,
+    require_stated_population_conditions,
     progressive_output_roles_for_module,
     progressive_module_selection_contract,
     required_binary_display_label_scopes,
@@ -4750,6 +4751,17 @@ class ProgressivePlannerAgent:
                         "outline digest",
                         path="outline_sha256",
                     )
+                if parsed.foundation.cohort.host_stated_population:
+                    raise ProgressivePlanCompileError(
+                        "progressive_host_stated_population_from_planner",
+                        "host_stated_population is written by the host only; state the "
+                        "population in cohort.population_spec instead.",
+                        path="foundation.cohort.host_stated_population",
+                    )
+                if host_cohort is None and required_primary_cohort_selection_mode != "all_input_rows":
+                    # The question restricts its patients to a recorded condition
+                    # (S1757): the cohort applies or lists it, else it goes back.
+                    require_stated_population_conditions(parsed.foundation.cohort, context=context)
                 defer_foundation_label_repair(
                     lambda: validate_projected_foundation(
                         parsed.foundation, context=context, outline=outline,

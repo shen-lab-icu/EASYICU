@@ -933,6 +933,7 @@
     "src/easyicu/research_agent/planning/scientific_review.py",
     "src/easyicu/research_agent/planning/sensitivity_authority.py",
     "src/easyicu/research_agent/planning/sensitivity_plan_shaping.py",
+    "src/easyicu/research_agent/planning/stated_population.py",
     "src/easyicu/research_agent/planning/step_phase.py",
     "src/easyicu/research_agent/planning/study_design.py",
     "src/easyicu/research_agent/planning/study_design_playbook.py",
@@ -1605,7 +1606,7 @@
     "src/easyicu/webserver/zotero_probe.py"
   ],
   "scorer_tree_root": "benchmarks/figure2_canonical9/successor_v4",
-  "scorer_tree_sha256": "67b3a7ae73f9341d5b538ee2ad34627c2ece51a4907e26324a151a1f9efbca09",
+  "scorer_tree_sha256": "9e021cc2c984fe07aab180710b4d69d4d6a8276e128a9a07283eb92c7521589e",
   "suite_projection_sha256": "11c39afac69c9a0b560c6aa92be19f05725f04c66b9d2c499cfdb353c40295ab",
   "suite_ref": "easyicu_evaluation_protocol_suite/v2",
   "tasks": [

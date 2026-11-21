@@ -887,6 +887,37 @@ def _plan_applying_population_spec(
         return AnalysisPlan.model_validate(payload)
 
 
+def stated_population_unaccounted(cohort: Any, *, context: ResearchContext, spec: Any = None) -> tuple[Any, ...]:
+    """The question's recorded conditions this cohort neither applies nor lists (S1757)."""
+
+    from .stated_population import cohort_reads, stated_conditions, unaccounted_conditions
+
+    conditions = stated_conditions(context, allowed=_context_cohort_concept_ids(context))
+    if not conditions:
+        return ()
+    if spec is None:
+        try:
+            spec = read_stated_population_spec(getattr(cohort, "population_spec", None))
+        except PopulationSpecRefused:
+            spec = None
+    named, texts = cohort_reads(cohort, spec)
+    return unaccounted_conditions(context, conditions, named=named, texts=texts)
+
+
+def require_stated_population_conditions(cohort: Any, *, context: ResearchContext, spec: Any = None) -> None:
+    """Send a cohort that leaves a question-named recorded condition unaccounted for back."""
+
+    from .stated_population import missing_condition_instruction
+
+    missing = stated_population_unaccounted(cohort, context=context, spec=spec)
+    if missing:
+        raise _fail(
+            "progressive_stated_population_condition_missing",
+            missing_condition_instruction(missing),
+            path="cohort.population_spec",
+        )
+
+
 def validate_progressive_foundation(
     foundation: ProgressivePlanFoundation,
     *,

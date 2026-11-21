@@ -201,6 +201,17 @@ The full list of changes since 0.1.0 is in the v0.1.3 release notes. Recorded he
   (maximum, count, measured flag, first time): each now reads as the condition itself.
   If the executed plan's population still differs from the approved plan, the stop says
   so in one line and offers 修改人群.
+- A question that restricts its patients to sepsis, AKI or mechanical ventilation no
+  longer yields a plan that studies every patient when the model leaves the condition
+  out (about one plan in five). The plan goes back to the model with the reason; if it
+  still leaves the condition out, the system states it from the question: the recorded
+  condition present in ICU hours 0–24 (Sepsis-3 by its SOFA-1 definition when recorded),
+  unknown values excluded. The plan card says 「人群条件由系统按题面补入」 with the
+  condition and window, and 修改人群 changes it; approving the plan is the consent.
+- When a plan does not answer something the question asks, the plan card offers
+  "Generate fresh plan" beside "Request changes" again. Before, when an edit was offered,
+  the only enabled action was "Request changes", which could save the population as a
+  label only.
 
 ## 0.1.0 — 2026-11-11 — first public pre-release
 

@@ -39,7 +39,7 @@
     const sessionIsStale = host.sessionIsStale;
     const {
       preparedDataStatus, validDeferredInputScope, deferredInputScopeHtml,
-      reviewedPopulationSpecHtml, populationPreparationHtml, populationAcceptanceHtml,
+      reviewedPopulationSpecHtml, hostStatedPopulationHtml, populationPreparationHtml, populationAcceptanceHtml,
       localizedAuthorizationQuestion, localizedDecisionEvidence, survivalLandmarkDecisionCopy,
       staleConfirmationHtml, latestAttemptFailureHtml, planConversationHtml,
       runnableTimingCard, timingAlternativesHtml, firstStaySettingHtml, unlistedPopulationHtml,
@@ -643,13 +643,7 @@
         approve: tr('Continue', '继续'),
         reviewResources: questionStopResources,
       };
-      if (code === 'question_requirement_not_covered' && editPlanOffered && !exposureClarification) return {
-        code, grants: [], nonApprovable: true, primaryEdit: true,
-        title: tr('This plan does not answer an analysis the question asks for', '题面要求的一项分析，这份计划没有回答'),
-        note: reviewedRepairStop,
-        reviewMaterialsTitle: tr('View the plan and review evidence', '查看计划与审阅依据'),
-        reviewResources: questionStopResources,
-      };
+      // A fresh plan stays the forward action beside 提出修改 (S1757).
       if (code === 'question_requirement_not_covered') return {
         code, grants: exposureClarification ? [] : ['provider_run', 'literature'],
         nonApprovable: exposureClarification,
@@ -1061,7 +1055,7 @@
         : '';
       const repeatedStaysDefault = (repeatedStaysRoute
         ? `<div class="gpi-confirmation-data-status is-compact is-system-default"><strong>${esc(tr('Repeat ICU stays · system default', '重复 ICU 入住 · 系统默认'))}</strong><small>${esc(repeatedStaysRoute)}</small></div>`
-        : SYSTEM_DEFAULT_CARDS.has(confirmation.code) ? firstStaySettingHtml(review) : '') + (SYSTEM_DEFAULT_CARDS.has(confirmation.code) ? unlistedPopulationHtml(review) : '');
+        : SYSTEM_DEFAULT_CARDS.has(confirmation.code) ? firstStaySettingHtml(review) : '') + (SYSTEM_DEFAULT_CARDS.has(confirmation.code) || confirmation.code === 'question_requirement_not_covered' ? unlistedPopulationHtml(review) : '');
       const flowSteps = Array.isArray(confirmation.flowSteps) && confirmation.flowSteps.length
         ? `<div class="gpi-confirmation-flow-overview">
             <div class="gpi-confirmation-flow-heading"><strong>${esc(confirmation.flowTitle || tr('What happens next', '接下来会发生什么'))}</strong><span>${esc(confirmation.flowHint || tr('Process preview · no action needed yet', '流程预览 · 现在无需操作'))}</span></div>
@@ -1101,7 +1095,7 @@
         : '';
       const populationPreparation = populationPreparationHtml(confirmation.populationPreparation);
       const populationAcceptance = populationAcceptanceHtml(((host.workflow() || {}).plan_review_summary || {}).population_acceptance);
-      const reviewedPopulation = reviewedPopulationSpecHtml(review && review.reviewed_population_spec);
+      const reviewedPopulation = hostStatedPopulationHtml(review && review.host_stated_population) + reviewedPopulationSpecHtml(review && review.reviewed_population_spec);
       const deferredInputScope = deferredInputScopeHtml(review && review.deferred_input_scope);
       // index.html always loads this owner (static contract); harnesses that
       // load the confirmation alone simply show no database card.

@@ -3281,6 +3281,12 @@ def _research_user_preferences(
             "role": "outer_observation_window",
             **dict(time_window),
         }
+    from .research_launch_population import stated_population_constraints
+
+    if stated_conditions := stated_population_constraints(study):
+        # The recorded conditions the question restricts its patients to: the
+        # plan applies or lists each, else the host states it (S1757).
+        constraints["stated_population_conditions"] = stated_conditions
     if question_named_concepts:
         # The concepts the question names (the planning coordinates' reading):
         # the plan states what the question asks of each, or the review says
@@ -5828,7 +5834,7 @@ def pending_review(run_id: Any) -> Optional[Dict[str, Any]]:
     run_dir = Path(pending.run_dir)
     scientific_plan_review = _load_pending_scientific_review(run_dir, pending)
     from easyicu.webserver.pi_copilot.population_acceptance import current_review_study, population_acceptance_proposal
-    from easyicu.webserver.pi_copilot.population_spec_review import reviewed_population_spec
+    from easyicu.webserver.pi_copilot.population_spec_review import host_stated_population, reviewed_population_spec
 
     proposal_study = current_review_study(study) if pending is not None else None
     population_acceptance = population_acceptance_proposal(study=proposal_study, pending=pending) if proposal_study is not None else None
@@ -5918,6 +5924,7 @@ def pending_review(run_id: Any) -> Optional[Dict[str, Any]]:
         "reviewed_population_spec": reviewed_population_spec(
             run_dir=run_dir, pending=pending, study_context_id=_clean_text(study.get("id"), 160)
         ),
+        "host_stated_population": host_stated_population(run_dir=run_dir, pending=pending),
         "planning_coordinate_readings": planning_coordinate_readings.load_planning_coordinate_readings(
             wrapper_dir,
             context_columns=planning_coordinate_readings.planned_context_columns(run_dir),

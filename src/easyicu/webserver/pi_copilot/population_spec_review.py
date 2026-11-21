@@ -46,39 +46,63 @@ def _bytes(path: Path, digest: str) -> bytes:
     return data
 
 
+def _bound_skeleton(run_dir: Path, pending: Any) -> tuple[Any, Any, Any, dict[str, bytes]] | None:
+    """The skeleton of the exact plan offered for review, with its authorities, or ``None``."""
+    authorities = []
+    for request in pending.requests:
+        payload = request.payload if isinstance(request.payload, Mapping) else {}
+        raw = payload.get("plan_review_authority")
+        if raw is None:
+            continue
+        if not isinstance(raw, Mapping):
+            return None
+        authorities.append(PlanReviewAuthority.model_validate(raw))
+    if not authorities or any(a != authorities[0] for a in authorities[1:]):
+        return None
+    review = authorities[0]
+    content = {
+        key: _bytes(Path(run_dir) / filename, review.evidence_sha256[key])
+        for key, filename in _FILES.items()
+    }
+    authority = ProgressivePlanningAuthority.model_validate_json(content["progressive_planning_authority"])
+    skeleton_json = json.loads(content["progressive_plan_skeleton"])
+    skeleton = ProgressivePlanSkeleton.model_validate(skeleton_json)
+    receipt = ProgressivePlanCompileReceipt.model_validate_json(content["progressive_plan_compile_receipt"])
+    if (
+        authority.normalized_plan_sha256 != review.plan_sha256
+        or authority.skeleton_artifact_sha256 != review.evidence_sha256["progressive_plan_skeleton"]
+        or authority.compile_receipt_artifact_sha256 != review.evidence_sha256["progressive_plan_compile_receipt"]
+        or canonical_sha256(skeleton_json) != authority.compiled_skeleton_sha256
+        or receipt.skeleton_sha256 != authority.compiled_skeleton_sha256
+        or receipt.analysis_plan_sha256 != authority.compiled_analysis_plan_sha256
+    ):
+        return None
+    return review, authority, skeleton, content
+
+
+def host_stated_population(*, run_dir: Path, pending: Any) -> list[dict[str, Any]]:
+    """The population conditions the host stated from the question for this exact plan (S1757).
+
+    Display only: the plan card says the system added them from the question,
+    with 修改人群 as the way to change them.  Unbound evidence shows nothing.
+    """
+    try:
+        bound = _bound_skeleton(run_dir, pending)
+        if bound is None:
+            return []
+        return [item.model_dump(mode="json") for item in bound[2].cohort.host_stated_population]
+    except (AttributeError, KeyError, TypeError, ValueError, OSError):
+        return []
+
+
 def reviewed_population_spec(*, run_dir: Path, pending: Any,
                              study_context_id: str | None = None) -> dict[str, Any] | None:
     """Return only source criteria bound to this pending review's exact plan."""
     try:
-        authorities = []
-        for request in pending.requests:
-            payload = request.payload if isinstance(request.payload, Mapping) else {}
-            raw = payload.get("plan_review_authority")
-            if raw is None:
-                continue
-            if not isinstance(raw, Mapping):
-                return None
-            authorities.append(PlanReviewAuthority.model_validate(raw))
-        if not authorities or any(a != authorities[0] for a in authorities[1:]):
+        bound = _bound_skeleton(run_dir, pending)
+        if bound is None:
             return None
-        review = authorities[0]
-        content = {
-            key: _bytes(Path(run_dir) / filename, review.evidence_sha256[key])
-            for key, filename in _FILES.items()
-        }
-        authority = ProgressivePlanningAuthority.model_validate_json(content["progressive_planning_authority"])
-        skeleton_json = json.loads(content["progressive_plan_skeleton"])
-        skeleton = ProgressivePlanSkeleton.model_validate(skeleton_json)
-        receipt = ProgressivePlanCompileReceipt.model_validate_json(content["progressive_plan_compile_receipt"])
-        if (
-            authority.normalized_plan_sha256 != review.plan_sha256
-            or authority.skeleton_artifact_sha256 != review.evidence_sha256["progressive_plan_skeleton"]
-            or authority.compile_receipt_artifact_sha256 != review.evidence_sha256["progressive_plan_compile_receipt"]
-            or canonical_sha256(skeleton_json) != authority.compiled_skeleton_sha256
-            or receipt.skeleton_sha256 != authority.compiled_skeleton_sha256
-            or receipt.analysis_plan_sha256 != authority.compiled_analysis_plan_sha256
-        ):
-            return None
+        review, authority, skeleton, content = bound
         raw_spec = skeleton.cohort.population_spec
         if raw_spec is None:
             return None
