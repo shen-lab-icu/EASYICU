@@ -9,9 +9,9 @@
 [![Version](https://img.shields.io/badge/version-0.1.4-green.svg)](https://github.com/shen-lab-icu/easyicu)
 [![Clinical mappings](https://img.shields.io/badge/clinical%20mappings-mapping--only-yellow.svg)](src/easyicu/data/clinical-contracts.json)
 
-[![Watch the 3-minute overview](docs/images/video_overview_thumbnail.jpg)](https://github.com/shen-lab-icu/easyicu/releases/download/v0.1.3/easyicu-0.1.3-overview-en.mp4)
+[![Watch the 3-minute overview](docs/images/video_overview_thumbnail.jpg)](https://github.com/shen-lab-icu/easyicu/releases/download/v0.1.4/easyicu-0.1.4-overview-en.mp4)
 
-▶ [Watch the overview (English, 3:20)](https://github.com/shen-lab-icu/easyicu/releases/download/v0.1.3/easyicu-0.1.3-overview-en.mp4) · [中文版](https://github.com/shen-lab-icu/easyicu/releases/download/v0.1.3/easyicu-0.1.3-overview-zh.mp4). The values on screen in the video are schematic.
+▶ [Watch the overview (English, 3:20)](https://github.com/shen-lab-icu/easyicu/releases/download/v0.1.4/easyicu-0.1.4-overview-en.mp4) · [中文版](https://github.com/shen-lab-icu/easyicu/releases/download/v0.1.4/easyicu-0.1.4-overview-zh.mp4). The values on screen in the video are schematic.
 
 ## What EasyICU does
 
@@ -36,9 +36,16 @@ to a registered result, and anything it cannot verify is held back.
 (.bib), say so in your question, for example "…, write it up as a paper with
 PDF and references". A paper needs the container runtime: Docker with the
 EasyICU runner image, as in the web app from source or on a server. Without
-Docker, 0.1.3 gives first-round tables and figures only, and the run says so.
-In 0.1.3, "Extend to a full article" on a finished first result adds
+Docker, 0.1.4 gives first-round tables and figures only, and the run says so.
+In 0.1.4, "Extend to a full article" on a finished first result adds
 paper-level analyses only; it does not write a manuscript.
+
+**FAQ: why did my study stop at analysis results, with no paper PDF?** Association
+studies (an exposure against an outcome, adjusted for covariates) may stop at analysis
+results, without a paper PDF and .bib, when the planned sensitivity analysis is not
+complete enough for the paper. EasyICU does not relax its paper-level checks to
+produce a PDF anyway; the run card says which check stopped it, and its retry button
+will not change the outcome. Ask for the analysis results only, or rephrase the question.
 
 The official public demo databases (MIMIC-IV, MIMIC-III and eICU demos from
 PhysioNet) can be downloaded inside the app, so you can try every step before

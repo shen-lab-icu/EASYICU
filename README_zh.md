@@ -9,9 +9,9 @@
 [![Version](https://img.shields.io/badge/version-0.1.4-green.svg)](https://github.com/shen-lab-icu/easyicu)
 [![临床映射状态](https://img.shields.io/badge/clinical%20mappings-mapping--only-yellow.svg)](src/easyicu/data/clinical-contracts.json)
 
-[![观看 3 分钟介绍视频](docs/images/video_overview_thumbnail.jpg)](https://github.com/shen-lab-icu/easyicu/releases/download/v0.1.3/easyicu-0.1.3-overview-zh.mp4)
+[![观看 3 分钟介绍视频](docs/images/video_overview_thumbnail.jpg)](https://github.com/shen-lab-icu/easyicu/releases/download/v0.1.4/easyicu-0.1.4-overview-zh.mp4)
 
-▶ [观看介绍视频（中文，3:21）](https://github.com/shen-lab-icu/easyicu/releases/download/v0.1.3/easyicu-0.1.3-overview-zh.mp4) · [English](https://github.com/shen-lab-icu/easyicu/releases/download/v0.1.3/easyicu-0.1.3-overview-en.mp4)。视频画面中的数值仅为示意。
+▶ [观看介绍视频（中文，3:21）](https://github.com/shen-lab-icu/easyicu/releases/download/v0.1.4/easyicu-0.1.4-overview-zh.mp4) · [English](https://github.com/shen-lab-icu/easyicu/releases/download/v0.1.4/easyicu-0.1.4-overview-en.mp4)。视频画面中的数值仅为示意。
 
 ## EasyICU 能做什么
 
@@ -32,9 +32,14 @@ ICU 数据上构建研究人群，先给出完整的分析计划供你审阅，�
 
 **如何得到论文。** 如果需要论文稿及其 PDF 和参考文献（.bib），请在提问时就写明，
 例如「……，写成论文，并给出 PDF 和参考文献」。论文需要容器运行时：Docker 加 EasyICU
-运行镜像，即源码运行的 Web 应用或服务器。没有 Docker 时，0.1.3 只给出表格和图形的首轮
-结果，运行中会说明这一点。在 0.1.3 中，对已完成的首轮结果点击「扩展成完整论文」只补充
+运行镜像，即源码运行的 Web 应用或服务器。没有 Docker 时，0.1.4 只给出表格和图形的首轮
+结果，运行中会说明这一点。在 0.1.4 中，对已完成的首轮结果点击「扩展成完整论文」只补充
 论文级分析，不生成稿件。
+
+**常见问题：为什么我的研究只有分析结果、没有论文 PDF？** 关联类研究（暴露与结局的关联，并调整协变量）
+可能因计划中的敏感性分析不足以支撑论文而止于分析结果，不生成论文 PDF 和 .bib。EasyICU 不会为了产出
+PDF 而放宽论文级检查；运行卡片会说明是哪一项检查拦下的，点「重试」不会改变结果。请改为只要求分析结果，
+或调整问题的表述。
 
 PhysioNet 官方公开的演示数据库（MIMIC-IV、MIMIC-III、eICU demo）可以在应用内下载，
 接入自己的数据前就能完整试用每一步。
