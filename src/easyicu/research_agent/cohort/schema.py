@@ -1686,7 +1686,10 @@ def load_materialized_analysis_cohort_result(
         cohort_path.is_file() and flow_path.is_file() and provenance_path.is_file()
     ):
         return None
-    with cohort_concept_id_scope(cohort_concept_ids):
+    # The plan may filter on a column the run materialized; like the lock, it
+    # validates with the run's registered roster whoever asks.
+    scope = (*cohort_concept_ids, *registered_run_cohort_concept_ids(run_dir))
+    with cohort_concept_id_scope(scope):
         definition = coerce_cohort_definition(getattr(plan, "cohort", None))
         if definition is None:
             return None

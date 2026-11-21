@@ -86,8 +86,8 @@ def unaccounted_conditions(
     ``named`` are the concepts or columns the cohort's predicates and stated
     criteria read; a column derived from a condition's concept (``x_max``, or
     any column whose source is the concept) reads it.  ``texts`` are the
-    stated criteria's words: a criterion that quotes the condition lists it,
-    applied or not.
+    words of stated criteria that type a restriction: one that quotes the
+    condition accounts for it (``cohort_reads`` leaves out words-only items).
     """
 
     variables = {str(v.name): v for v in getattr(context, "variables", ()) or ()}
@@ -115,13 +115,38 @@ def cohort_reads(cohort: Any, spec: Any) -> tuple[list[str], list[str]]:
     texts: list[str] = []
     for predicate in (*(getattr(cohort, "inclusion", None) or ()), *(getattr(cohort, "exclusion", None) or ())):
         named.append(str(predicate.concept_id))
+    # Only a criterion that types its restriction accounts for the words it
+    # quotes: a words-only item (no concept, or ``not_typed``) leaves an offered
+    # condition unapplied, so the planner is asked again and the host states it.
     for item in getattr(cohort, "population_criteria", None) or getattr(cohort, "criteria", None) or ():
-        named.extend(str(c) for c in getattr(item, "concept_ids", ()) or ())
-        texts.append(str(getattr(item, "criterion", "") or ""))
+        concepts = [str(c) for c in getattr(item, "concept_ids", ()) or ()]
+        named.extend(concepts)
+        if concepts:
+            texts.append(str(getattr(item, "criterion", "") or ""))
     for criterion in getattr(spec, "criteria", None) or ():
         named.extend(_criterion_concepts(criterion))
-        texts.append(str(getattr(criterion, "quote", "") or ""))
+        if not words_only(criterion):
+            texts.append(str(getattr(criterion, "quote", "") or ""))
     return named, texts
+
+
+def words_only(criterion: Any) -> bool:
+    """A stated criterion that names a restriction without typing it."""
+
+    if getattr(criterion, "kind", None) is not None:
+        return criterion.kind == "not_typed"
+    return not (getattr(criterion, "concept_ids", None) or ())
+
+
+def quotes(criterion: Any, quote: str) -> bool:
+    """An included words-only criterion whose words carry ``quote``."""
+
+    words = str(getattr(criterion, "quote", None) or getattr(criterion, "criterion", "") or "")
+    return (
+        getattr(criterion, "role", "include") == "include"
+        and words_only(criterion)
+        and quote.casefold() in words.casefold()
+    )
 
 
 DEFAULT_ANCHOR = "icu_admission"

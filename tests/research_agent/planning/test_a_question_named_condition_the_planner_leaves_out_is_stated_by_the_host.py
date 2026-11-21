@@ -91,6 +91,12 @@ _TYPED_ADULT = {"criteria": [], "inclusion": [], "exclusion": [], "population_sp
     {"id": "c1", "quote": "adult", "source": "question", "role": "include",
      "kind": "age_years", "min_years": 18, "max_years": None},
 ]}}
+_AKI_WORDS_ONLY = {"criteria": [], "inclusion": [], "exclusion": [], "population_spec": {"criteria": [
+    {"id": "c1", "quote": "adult", "source": "question", "role": "include",
+     "kind": "age_years", "min_years": 18, "max_years": None},
+    {"id": "c2", "quote": "AKI", "source": "question", "role": "include",
+     "kind": "not_typed", "why": "no recorded variable named in the request"},
+]}}
 _WITH_AKI = {"criteria": [{"criterion": "with AKI", "concept_ids": ["aki"]}],
              "inclusion": [_predicate("aki", "==", 1, aggregation="max")], "exclusion": []}
 
@@ -149,17 +155,21 @@ def test_without_a_stated_condition_nothing_is_asked_or_added(context) -> None:
     assert not result.facts.skeleton.cohort.host_stated_population
 
 
-def test_the_progressive_foundation_guard_reads_predicates_columns_and_listed_words() -> None:
+def test_the_progressive_foundation_guard_reads_predicates_columns_and_typed_words() -> None:
     context = _aki_context()
     base = {"name": "stays", "selection_mode": "predicate_filtered",
             "inclusion": [_predicate("age", ">=", 18)], "exclusion": []}
-    with pytest.raises(ProgressivePlanCompileError) as refused:
-        require_stated_population_conditions(ProgressiveCohortIntent.model_validate(base), context=context)
-    assert refused.value.reason_code == _CODE
+    words_only = {**base, "population_criteria": [{"criterion": "stays with AKI", "concept_ids": []}]}
+    for unaccounted in (base, words_only):
+        with pytest.raises(ProgressivePlanCompileError) as refused:
+            require_stated_population_conditions(
+                ProgressiveCohortIntent.model_validate(unaccounted), context=context
+            )
+        assert refused.value.reason_code == _CODE
 
     for accounted in (
         {**base, "inclusion": [*base["inclusion"], _predicate("aki_max", "==", 1, aggregation="max")]},
-        {**base, "population_criteria": [{"criterion": "stays with AKI", "concept_ids": []}]},
+        {**base, "population_criteria": [{"criterion": "stays with AKI", "concept_ids": ["age"]}]},
     ):
         require_stated_population_conditions(ProgressiveCohortIntent.model_validate(accounted), context=context)
 
@@ -259,3 +269,21 @@ def test_a_statement_the_family_cannot_hold_leaves_the_plan_to_review(monkeypatc
     study = {"question": context.research_question}
     plan = result.output.model_dump(mode="json")
     assert unselected_question_conditions(study, plan) == ["AKI"]
+
+
+def test_a_condition_the_planner_only_quotes_is_stated_by_the_host_in_its_place() -> None:
+    """Quoting an offered condition as not_typed does not apply it (UX rc_150 sepsis)."""
+
+    context = _aki_context()
+    payload = json.dumps(_spec_payload(_request(context), population=_AKI_WORDS_ONLY))
+
+    llm, result = _run(context, [payload] * 4)
+
+    assert len(llm.calls) == 3 and _feedback(llm) == [True, True]
+    assert ("aki", "==", 1.0, "max") in _inclusion(result)
+    cohort = result.facts.skeleton.cohort
+    assert [item.concept for item in cohort.host_stated_population] == ["aki"]
+    criteria = cohort.population_spec["criteria"]
+    assert [(item["id"], item["kind"]) for item in criteria] == [
+        ("c1", "age_years"), ("c2", "condition_present"),
+    ], "the host's statement takes the quoted criterion's place"

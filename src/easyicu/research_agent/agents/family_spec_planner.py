@@ -18,6 +18,7 @@ from __future__ import annotations
 
 import json
 from dataclasses import replace
+from types import SimpleNamespace
 from typing import Any, Callable, Mapping, Optional, Sequence, get_args
 
 from pydantic import ValidationError
@@ -1312,29 +1313,48 @@ def _with_host_stated_population(
     A typed population gains a ``condition_present`` criterion per condition.
     A legacy population, or none, gains the condition as a stated criterion and
     the predicate applying it, so the template keeps its own typed bounds.
+    A words-only criterion quoting the condition is replaced by the host's
+    statement under its own id, so the plan does not also list it as unapplied.
     A population that has no room left is returned unchanged.
     """
 
     from ..planning.family_spec.contract import SpecPopulation
     from ..planning.population_spec import PopulationSpec
-    from ..planning.stated_population import host_statements, next_criterion_ids
+    from ..planning.stated_population import host_statements, next_criterion_ids, quotes
 
     statements = host_statements(context, missing)
     population = spec.population
     if not statements:
         return spec, ()
+
+    def restate(existing: list[Any], render: Any) -> tuple[list[Any], list[Any]]:
+        kept, added = list(existing), []
+        for statement in statements:
+            at = next((i for i, item in enumerate(existing) if quotes(item, statement.quote)), None)
+            if at is None:
+                added.append(statement)
+            else:
+                kept[at] = render(statement, existing[at])
+        return kept, added
+
     if population is not None and population.population_spec is not None:
         existing = list(population.population_spec.criteria)
-        ids = next_criterion_ids((item.id for item in existing), len(statements))
-        if len(ids) < len(statements):
+        kept, added = restate(existing, lambda st, item: st.typed_criterion(item.id))
+        ids = next_criterion_ids((item.id for item in existing), len(added))
+        if len(ids) < len(added):
             return spec, ()
         updated = SpecPopulation(population_spec=PopulationSpec.model_validate({"criteria": [
-            *(item.model_dump(mode="json") for item in existing),
-            *(item.typed_criterion(ident) for item, ident in zip(statements, ids)),
+            *(item if isinstance(item, dict) else item.model_dump(mode="json") for item in kept),
+            *(item.typed_criterion(ident) for item, ident in zip(added, ids)),
         ]}))
     else:
         current = population.model_dump(mode="json") if population is not None else {}
-        criteria = [*current.get("criteria", ()), *(item.legacy_criterion() for item in statements)]
+        legacy = [SimpleNamespace(**item) for item in current.get("criteria", ())]
+        kept, added = restate(legacy, lambda st, _item: st.legacy_criterion())
+        criteria = [
+            *(item if isinstance(item, dict) else vars(item) for item in kept),
+            *(item.legacy_criterion() for item in added),
+        ]
         inclusion = [*current.get("inclusion", ()), *(item.legacy_predicate() for item in statements)]
         if len(criteria) > 6 or len(inclusion) > 8:
             return spec, ()

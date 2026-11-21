@@ -217,6 +217,15 @@ The full list of changes since 0.1.0 is in the v0.1.3 release notes. Recorded he
   condition as the exposure again. Since the population reading of B31 it was taken as a
   restriction of the population, so the exposure lost the condition; the new population
   guard would then have kept only the patients with the condition.
+- A plan that only names a recorded condition from the question (for example 「脓毒症」
+  written as a criterion no variable expresses) no longer counts as selecting on it: it
+  goes back to the model, and if the condition is still not applied the system states it
+  in that criterion's place. Before, such a plan studied every patient and its card asked
+  you to accept the omission.
+- 确认方案并准备数据 no longer stops with "needs a sandbox" at the cohort step when the
+  plan selects on a condition column the run prepared (for example the Sepsis-3 flag).
+  The check before review now reads the cohort with the run's own concept list, as the
+  analysis does.
 
 ## 0.1.0 — 2026-11-11 — first public pre-release
 
