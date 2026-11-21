@@ -9021,8 +9021,11 @@ def make_research_pipeline_run_runner(
                 message = (
                     "A previous metadata model request still occupies the allowed "
                     "capacity. This request was not sent. Preserve the run record; "
-                    "the previous request may still be running or its remote status "
-                    "may be unknown."
+                    "the previous request may still be running at the model service. "
+                    "EasyICU frees the slot on its own once the earlier worker has "
+                    "surely ended. If this persists after a restart, quit EasyICU, "
+                    "move ~/.easyicu/metadata-provider-slots.sqlite3 aside (keep it, "
+                    "do not delete it) and start again."
                 )
             elif code == "research_pipeline_metadata_shared_scope_unavailable":
                 message = (

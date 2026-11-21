@@ -1267,8 +1267,8 @@
           '模型服务未及时返回结果。自动重试和恢复进展可在运行记录中查看。',
         ),
         research_pipeline_metadata_provider_capacity_unavailable: tr(
-          'An earlier model request still occupies the allowed capacity. This request was not sent. The earlier request may still be running or its remote status may be unknown. Keep the run record for support; do not repeatedly retry until the request status is resolved.',
-          '之前的模型请求仍占用可用容量，本次请求没有发出。之前的请求可能仍在运行，或其远端状态未知。请保留运行记录供排查，在请求状态确认前不要反复重试。',
+          'An earlier model request still occupies the allowed capacity. This request was not sent. The earlier request may still be running at the model service, so EasyICU frees its slot on its own only after it has surely ended. If this stays after restarting: quit EasyICU, move ~/.easyicu/metadata-provider-slots.sqlite3 aside (keep the file, do not delete it) and start EasyICU again; the earlier request may still have been running. Keep the run record for support.',
+          '之前的模型请求仍占用可用容量，本次请求没有发出。之前的请求可能仍在模型服务端运行，所以 EasyICU 只会在确认它已经结束后才自动释放占位。如果重启后仍是这样：退出 EasyICU，把 ~/.easyicu/metadata-provider-slots.sqlite3 移到别处（保留文件，不要删除），再重新启动；之前那次请求可能仍在运行。请保留运行记录供排查。',
         ),
         research_pipeline_metadata_shared_scope_unavailable: tr(
           'EasyICU could not verify the configured shared model coordination scope. This request was not sent. Check enrollment and earlier request records before continuing.',

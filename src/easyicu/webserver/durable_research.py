@@ -92,6 +92,33 @@ class DurableResearchService:
         # cannot strand an authorized command. Workflow IDs deduplicate enqueue.
         for identity in self.store.active_ids():
             self._dispatch(identity)
+        self._reclaim_orphaned_provider_slots()
+
+    def _resumable_provider_tasks(self) -> frozenset[str]:
+        """Provider tasks of commands that may still resume: their slots stay."""
+        tasks = set()
+        for identity in self.store.active_ids():
+            record = self.store.get(identity) or {}
+            binding = (record.get("payload") or {}).get("provider_binding")
+            task_id = binding.get("hard_stop_task_id") if isinstance(binding, dict) else None
+            if isinstance(task_id, str) and task_id:
+                tasks.add(task_id)
+        return frozenset(tasks)
+
+    def _reclaim_orphaned_provider_slots(self) -> None:
+        """After resume is decided, free slots whose worker is verifiably gone.
+
+        A slot of a task that can still resume is protected; every other slot
+        needs the proofs listed on ``reclaim_orphaned``. A failure here must
+        not stop the service: the slot then stays, as before.
+        """
+        from easyicu.webserver import metadata_provider_concurrency as slots
+
+        slots.set_protected_tasks_provider(self._resumable_provider_tasks)
+        try:
+            slots.reclaim_orphaned()
+        except Exception:
+            _LOG.exception("metadata provider slot reclaim failed")
 
     def reserve(self, payload: dict[str, Any]) -> jobs.Job:
         job = self.manager.reserve("agent-run")

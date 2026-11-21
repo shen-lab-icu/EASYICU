@@ -166,7 +166,8 @@ class MetadataProviderClient:
             try:
                 slots.reserve(attempt_id=attempt_id, account=bound["account"], task_id=task.task_id,
                               ledger_path=task.ledger.path, guard_path=guard, worker_sha256=identity(),
-                              request_sha256=current_metadata_request_sha256())
+                              request_sha256=current_metadata_request_sha256(),
+                              timeout_seconds=bound["timeout"])
             except slots.MetadataProviderCapacityExhausted:
                 # This branch is owned by the local slot admission itself and
                 # runs before the supervised worker can receive a request.
