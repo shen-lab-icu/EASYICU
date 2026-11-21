@@ -111,7 +111,8 @@ from ..contracts.association_execution import primary_binary_effect_measure
 from ..contracts.model_tokens import BinaryEffectMeasure
 from ..contracts.product_files import (
     DeliverableKind, HOST_DELIVERY_CLARIFICATION, HOST_DELIVERY_CLARIFICATION_MESSAGE, HOST_DELIVERY_KINDS,
-    HOST_DELIVERY_REASON, RUN_DELIVERABLES, neutral_delivery_kinds,
+    HOST_DELIVERY_REASON, MANUSCRIPT_DOCUMENT_KINDS, RUN_DELIVERABLES, manuscript_request_only,
+    neutral_delivery_kinds,
 )
 from ..schema import AnalysisPlan, ResearchContext, ValidationFinding
 from .progressive_contract import (
@@ -1273,6 +1274,11 @@ def _judge(
         and not (item.gap and item.gap.concept) else ()
     )
     stated_deliveries = requirement_delivery_kinds(item)
+    if (not stated_deliveries and planned == () and item.kind in {"analysis", "delivery"}
+            and not item.concepts and not item.analysis_exposures and not item.clauses and item.gap is None
+            and manuscript_request_only(item.quote)):
+        # 「写成论文」 alone asks for the paper: the card's manuscript documents answer it.
+        stated_deliveries = MANUSCRIPT_DOCUMENT_KINDS
     selection = getattr(plan, "deliverables", None)
     host_kinds = set(stated_deliveries).intersection(HOST_DELIVERY_KINDS)
     needs_document_choice = bool(selection and host_kinds and not selection.confirmed)

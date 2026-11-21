@@ -169,7 +169,7 @@ RUN_DELIVERABLES: Mapping[DeliverableKind, RunDeliverable] = MappingProxyType({
     ),
     "references": RunDeliverable(
         ("manuscript_scaffold.bib",),
-        r"reference\s+list|references|bibliography|citations?"
+        r"reference\s+list|references|bibliography|citations?|\.?bib(?:tex)?"
         r"|参考文献(?:清单|列表)?|引用(?:清单|列表)?|文献列表",
     ),
 })
@@ -182,10 +182,23 @@ RUN_DELIVERY_ARTIFACT_NAMES = tuple(dict.fromkeys(
 # destinations, formats, etc.) leave a residue and keep ordinary gap handling.
 _DELIVERY_VERB = (
     r"(?:\b(?:provide|include|deliver|(?:give|send)\s+me|export|generate|supply|share|render)\b"
-    r"|提供|包含|交付|导出|生成)"
+    r"|提供|包含|交付|导出|生成|给出)"
 )
+# Asking for the paper itself names no product kind; the card and the named
+# products decide which documents a run delivers.
+_MANUSCRIPT_NOUN = r"(?:(?:a|an|the)\s+)?(?:full\s+|research\s+)?(?:paper|manuscript|article)\b"
+_MANUSCRIPT_COMMAND = (
+    r"(?:写成|撰写|生成|整理成|写)(?:一篇|为)?(?:完整的?)?(?:论文稿?|稿件|文章)"
+    r"|\b(?:write|turn)\s+(?:(?:it|this|them|these\s+results|the\s+results)\s+)?(?:up\s+)?(?:as|into)\s+"
+    + _MANUSCRIPT_NOUN
+    + r"|\bwrite\s+(?:(?:it|this|them)\s+)?up\b"
+    r"|\b(?:write|produce|draft)\s+" + _MANUSCRIPT_NOUN
+)
+_MANUSCRIPT_ONLY = re.compile(rf"^\W*(?:\bplease\s+|请\s*)?(?:{_MANUSCRIPT_COMMAND})\W*$", re.IGNORECASE)
+#: A request for the paper itself is delivered as these documents.
+MANUSCRIPT_DOCUMENT_KINDS: tuple[HostDeliveryKind, ...] = ("article_preview", "manuscript_pdf")
 _DELIVERY_GRAMMAR = re.compile(
-    rf"{_DELIVERY_VERB}|\b(?:please|"
+    rf"{_MANUSCRIPT_COMMAND}|{_DELIVERY_VERB}|\b(?:please|"
     r"a|an|the|and|either|or|of|with|set|study|estimates|downloadable|download|manuscript|article|report|files?|readable)\b"
     r"|(?:请|以及|并|和|及|与|或者|或是|还是|或|可下载|下载|文件|论文|文章|报告|信息充分|清晰|且|可读|的)",
     re.IGNORECASE,
@@ -284,10 +297,23 @@ def neutral_delivery_kinds(quote: str) -> tuple[DeliverableKind, ...]:
             if exclusion:
                 clause = clause[exclusion.end():]
             matched = requested_deliverable_kinds(clause)
+            if not matched and not exclusion and _MANUSCRIPT_ONLY.match(clause):
+                continue
             if not matched:
                 return ()
             kinds.update(matched)
     return tuple(kind for kind in RUN_DELIVERABLES if kind in kinds)
+
+
+def manuscript_request_only(quote: str) -> bool:
+    """Whether every clause of a quote only asks for the paper itself."""
+    clauses = [
+        fragment.strip()
+        for sentence in _DELIVERY_SENTENCE_BOUNDARY.split(quote)
+        for fragment in _DELIVERY_CLAUSE_BOUNDARY.split(sentence)
+        if _SEPARATORS.sub("", fragment.strip())
+    ]
+    return bool(clauses) and all(_MANUSCRIPT_ONLY.match(clause) for clause in clauses)
 
 
 def _delivery_object_kinds(clause: str) -> set[DeliverableKind]:
@@ -479,6 +505,8 @@ def host_delivery_coverage(owners: Mapping[DeliverableKind, Sequence[str]]) -> d
 
 
 __all__ = [
+    "MANUSCRIPT_DOCUMENT_KINDS",
+    "manuscript_request_only",
     "DeliverableKind",
     "HOST_DELIVERY_REASON",
     "RUN_DELIVERABLES",
