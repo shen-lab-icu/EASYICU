@@ -1,5 +1,16 @@
 # Changelog
 
+## 0.1.4 — 2026-11-21 — pre-release
+
+A patch on 0.1.3; nothing else changed.
+
+- A model-request slot is reclaimed on its own after the app was quit or restarted
+  during a request (also normally), crashed or lost power, once the earlier worker has
+  verifiably ended and the request's timeout has passed. Before, every later request was
+  refused until `~/.easyicu/metadata-provider-slots.sqlite3` was moved aside.
+- The capacity stop says how to continue when the slot cannot be proven free.
+- The 0.1.3 known issues still apply.
+
 ## 0.1.3 — 2026-11-20 — pre-release
 
 The full list of changes since 0.1.0 is in the v0.1.3 release notes. Recorded here:
@@ -13,7 +24,7 @@ The full list of changes since 0.1.0 is in the v0.1.3 release notes. Recorded he
 - Known limit: a simple descriptive question may be planned as a full study and stop
   because a manuscript figure needs at least two data-backed panels; ask it as one direct
   numerical question about the selected data, which EasyICU answers with a quick-answer
-  card (planned for 0.1.4). Right after a page load, "Use this data" may fail with an
+  card (planned for 0.1.5). Right after a page load, "Use this data" may fail with an
   "Authority changed" banner; click "Rebind current state", then choose "Use this data" again.
 
 - On the official demo's raw data with a first-ICU-stay cohort, the next run after you
@@ -38,7 +49,7 @@ The full list of changes since 0.1.0 is in the v0.1.3 release notes. Recorded he
   the LaTeX manuscript keeps an inline bibliography and no separate `.bib` is written.
   This came in with 8165c4913 ("Honor reviewed article deliverables and explain tier
   omissions"); a `.bib` by default when the manuscript has citations is planned for
-  0.1.4.
+  0.1.5.
 - A plan no longer stops with no way forward when a study's cohort note (for example
   "first-stay handling remains for the formal plan") was read as a first-stay rule of
   the other scope than the study's setting (B17). When the words do not themselves name
@@ -140,7 +151,7 @@ The full list of changes since 0.1.0 is in the v0.1.3 release notes. Recorded he
   "requires a separate article run", which nothing on the card could start. It says that
   "Extend to a full article" appears on the card when the study's design supports it, and
   that landmark and other current-case designs cannot yet be extended to an article in the
-  desktop app (planned for 0.1.4).
+  desktop app (planned for 0.1.5).
 - A question that restricts its patients to a condition EasyICU records (for example
   「在脓毒症 ICU 患者中…」, "among patients with sepsis", "septic patients", AKI or
   mechanical ventilation) now names that population to the plan. The plan's requirement

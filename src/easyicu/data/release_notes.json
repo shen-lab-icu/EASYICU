@@ -2,6 +2,32 @@
   "schema_version": "easyicu.release-notes/1",
   "entries": [
     {
+      "version": "0.1.4",
+      "date": "2026-11-21",
+      "changes": [
+        {
+          "code": "provider_slot_reclaimed",
+          "zh": "在模型请求进行中退出或重启 EasyICU（包括正常退出）、程序崩溃或断电后，EasyICU 会在确认之前的工作进程已不存在、且超过该请求的超时时间后，自动释放被占用的模型请求名额；以前这会让之后的每次请求都被拒绝，只能手动移走状态文件。",
+          "en": "After EasyICU is quit or restarted during a model request (also normally), crashes or loses power, EasyICU now frees the held model-request slot on its own once the earlier worker has verifiably ended and the request's timeout has passed. Before, every later request was refused until the state file was moved aside by hand."
+        },
+        {
+          "code": "capacity_stop_recovery",
+          "zh": "「之前的模型请求仍占用可用容量」的提示现在直接写明恢复办法：退出 EasyICU，把 ~/.easyicu/metadata-provider-slots.sqlite3 移到别处（保留文件，不要删除），再重新启动；之前那次请求可能仍在运行。",
+          "en": "The \"earlier model request still occupies the allowed capacity\" stop now says how to continue: quit EasyICU, move ~/.easyicu/metadata-provider-slots.sqlite3 aside (keep the file, do not delete it) and start again; the earlier request may still have been running."
+        },
+        {
+          "code": "known_issues_carry_over",
+          "zh": "0.1.3 的已知问题仍然适用，完整列表见 v0.1.3 发布说明。",
+          "en": "The known issues of 0.1.3 still apply; the full list is in the v0.1.3 release notes."
+        },
+        {
+          "code": "use_for_exploration",
+          "zh": "用于探索研究问题，每个结果都需要您自己核对；不要用于发表或临床决策。",
+          "en": "Use v0.1.4 to explore questions and check every result yourself; do not use it for publication or clinical decisions."
+        }
+      ]
+    },
+    {
       "version": "0.1.3",
       "date": "2026-11-20",
       "changes": [
@@ -82,8 +108,8 @@
         },
         {
           "code": "known_issues",
-          "zh": "已知问题：自动编译后若要求确认数据源，点击一次即可继续；问题限定人群时，EasyICU 能按条件筛选的只有脓毒症（Sepsis-3）、急性肾损伤（AKI）和机械通气（数据中有相应记录而计划未写出或只写了未施加时，由系统按题面补入并在方案卡片上注明），其他人群（如心衰、ARDS、创伤）会在方案卡片上提示，请在方案审阅中确认人群条件已列出；若方案卡片提示计划没有回答题面要求，请点击「重新生成计划」；若方案卡片要求明确人群条件的判定方式，请在对话中说明无法判定的入住如何计入，再重新生成计划（计划在 0.1.4 提供列明的默认处理）；需要论文、PDF 和参考文献时，请在提问时就要求写成论文（论文需要 Docker 加 EasyICU 运行镜像；没有 Docker 时只给出表格和图形的首轮结果）；首轮结果的「扩展成完整论文」在 0.1.3 只补充论文级分析，不生成稿件；出现「再确认一次数据源」时请用「按本研究人群准备数据」，「确认数据源并继续」只会按元数据重新规划；第一次点「重新生成计划」没有反应时，刷新后再点一次；本机运行中，只有暴露在基线（入科时）取值的关联研究可以扩展首轮结果；暴露按首 24 小时取值的研究通常以 24 小时 landmark 设计运行，暂不能扩展（计划在 0.1.4 支持）；简单的描述性问题有时会被规划成完整研究，并因「论文图需要至少两个有数据的分面」而停止；请把它作为一个直接的数值问题来问（例如「这份数据里……的中位数是多少？」），EasyICU 会给出快速回答卡片（是否符合快速回答由系统按问题判断）；刚刷新页面后，「使用这份数据」偶尔会失败并出现「权威状态已变化」横幅，点击「重新绑定当前状态」后再选一次「使用这份数据」即可。完整列表见发布说明。",
-          "en": "Known issues: if an automatically compiled plan asks to confirm the data source, one click continues; when your question restricts the population, EasyICU selects only for sepsis (Sepsis-3), AKI and mechanical ventilation (when the data record the condition and the plan leaves it out or only names it, the system adds it from the question and the plan card says so), and other populations (for example heart failure, ARDS, trauma) are flagged on the plan card, so check in plan review that the population condition is listed; if the plan card says the plan does not answer something the question asks, click Generate fresh plan; if the plan card asks how to apply a population criterion, say in the conversation how stays where it cannot be determined count, then generate a fresh plan (a listed default is planned for 0.1.4); for a paper with its PDF and references, ask for a paper in your question (a paper needs Docker with the EasyICU runner image; without Docker you get first-round tables and figures only); in 0.1.3 \"Extend to a full article\" on a first result adds paper-level analyses only and writes no manuscript; on \"Confirm the data source again\" use \"Prepare data for this cohort\", since \"Confirm the data source and continue\" only plans again from metadata; if the first click on Generate fresh plan does nothing, reload and click again; on the local runner, only association studies whose exposure is taken at baseline (ICU admission) can extend a first result; studies whose exposure is read over the first 24 hours usually run as a 24-hour landmark design and cannot yet be extended (planned for 0.1.4); a simple descriptive question may be planned as a full study and then stop because a manuscript figure needs at least two data-backed panels; ask it as one direct numerical question about the selected data (for example \"what is the median … in this data?\"), which EasyICU answers with a quick-answer card (the system decides per question whether it qualifies); right after a page load, \"Use this data\" may fail with an \"Authority changed\" banner: click \"Rebind current state\", then choose \"Use this data\" again. See the release notes for the full list."
+          "zh": "已知问题：自动编译后若要求确认数据源，点击一次即可继续；问题限定人群时，EasyICU 能按条件筛选的只有脓毒症（Sepsis-3）、急性肾损伤（AKI）和机械通气（数据中有相应记录而计划未写出或只写了未施加时，由系统按题面补入并在方案卡片上注明），其他人群（如心衰、ARDS、创伤）会在方案卡片上提示，请在方案审阅中确认人群条件已列出；若方案卡片提示计划没有回答题面要求，请点击「重新生成计划」；若方案卡片要求明确人群条件的判定方式，请在对话中说明无法判定的入住如何计入，再重新生成计划（计划在 0.1.5 提供列明的默认处理）；需要论文、PDF 和参考文献时，请在提问时就要求写成论文（论文需要 Docker 加 EasyICU 运行镜像；没有 Docker 时只给出表格和图形的首轮结果）；首轮结果的「扩展成完整论文」在 0.1.3 只补充论文级分析，不生成稿件；出现「再确认一次数据源」时请用「按本研究人群准备数据」，「确认数据源并继续」只会按元数据重新规划；第一次点「重新生成计划」没有反应时，刷新后再点一次；本机运行中，只有暴露在基线（入科时）取值的关联研究可以扩展首轮结果；暴露按首 24 小时取值的研究通常以 24 小时 landmark 设计运行，暂不能扩展（计划在 0.1.5 支持）；简单的描述性问题有时会被规划成完整研究，并因「论文图需要至少两个有数据的分面」而停止；请把它作为一个直接的数值问题来问（例如「这份数据里……的中位数是多少？」），EasyICU 会给出快速回答卡片（是否符合快速回答由系统按问题判断）；刚刷新页面后，「使用这份数据」偶尔会失败并出现「权威状态已变化」横幅，点击「重新绑定当前状态」后再选一次「使用这份数据」即可。完整列表见发布说明。",
+          "en": "Known issues: if an automatically compiled plan asks to confirm the data source, one click continues; when your question restricts the population, EasyICU selects only for sepsis (Sepsis-3), AKI and mechanical ventilation (when the data record the condition and the plan leaves it out or only names it, the system adds it from the question and the plan card says so), and other populations (for example heart failure, ARDS, trauma) are flagged on the plan card, so check in plan review that the population condition is listed; if the plan card says the plan does not answer something the question asks, click Generate fresh plan; if the plan card asks how to apply a population criterion, say in the conversation how stays where it cannot be determined count, then generate a fresh plan (a listed default is planned for 0.1.5); for a paper with its PDF and references, ask for a paper in your question (a paper needs Docker with the EasyICU runner image; without Docker you get first-round tables and figures only); in 0.1.3 \"Extend to a full article\" on a first result adds paper-level analyses only and writes no manuscript; on \"Confirm the data source again\" use \"Prepare data for this cohort\", since \"Confirm the data source and continue\" only plans again from metadata; if the first click on Generate fresh plan does nothing, reload and click again; on the local runner, only association studies whose exposure is taken at baseline (ICU admission) can extend a first result; studies whose exposure is read over the first 24 hours usually run as a 24-hour landmark design and cannot yet be extended (planned for 0.1.5); a simple descriptive question may be planned as a full study and then stop because a manuscript figure needs at least two data-backed panels; ask it as one direct numerical question about the selected data (for example \"what is the median … in this data?\"), which EasyICU answers with a quick-answer card (the system decides per question whether it qualifies); right after a page load, \"Use this data\" may fail with an \"Authority changed\" banner: click \"Rebind current state\", then choose \"Use this data\" again. See the release notes for the full list."
         },
         {
           "code": "use_for_exploration",
