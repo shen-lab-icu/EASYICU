@@ -167,12 +167,25 @@ def test_write_phase_repair_callback_uses_current_step_ledger(tmp_path):
         if keyword.arg == "enforce_scaffold"
     ]
     assert len(callbacks) == 1
+    expression = callbacks[0]
+    if isinstance(expression, ast.Name):
+        # The callback is named once (stale citations keep their own sentence).
+        assigned = [
+            node.value
+            for node in ast.walk(tree)
+            if isinstance(node, ast.Assign)
+            and any(isinstance(target, ast.Name) and target.id == expression.id for target in node.targets)
+        ]
+        assert len(assigned) == 1
+        expression = assigned[0]
     callback = eval(  # noqa: S307 -- exercise the trusted repository callback expression
-        compile(ast.Expression(callbacks[0]), "writer_callback", "eval"),
+        compile(ast.Expression(expression), "writer_callback", "eval"),
         {
             "partial": partial,
             "evidence": evidence,
             "per_step_records": [],
+            "enforce_outside_stale_evidence": write_phase.enforce_outside_stale_evidence,
+            "unregistered_evidence": [],
         },
     )
     cleaned, drops, detail = _repair_pass(lambda *_args, **_kwargs: []).drop_residual(
