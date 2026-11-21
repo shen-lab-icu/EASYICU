@@ -609,9 +609,10 @@
         if (view.append.kind === 'exposure') sentences.push(tr(
           'This uses a different exposure definition; the earlier estimate stays in its own run.',
           '这里换了一种暴露定义，之前的估计仍保留在原来的运行里。'));
+        // An addition writes no manuscript (S1799): say so, and name the way to a paper.
         if (view.append.kind === 'article') return [...sentences, tr(
-          'The figure and traceable reporting materials are ready; the manuscript has not been reviewed yet.',
-          '图和可追溯的论文材料已生成，稿件还没有审阅。')];
+          'These are paper-level analyses only; no manuscript, PDF or references were written. For a paper, ask a new question that requests a paper with its PDF and references.',
+          '这些是论文级分析，没有生成稿件、PDF 或参考文献。需要论文时，请新提一个问题并写明需要论文、PDF 和参考文献。')];
       }
       // A prediction study answers only with its primary model's performance.
       if (PREDICTION_TYPES.has(view.analysisType)) {

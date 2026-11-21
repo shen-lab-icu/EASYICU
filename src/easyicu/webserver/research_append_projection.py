@@ -68,6 +68,10 @@ def publish_append_projection(child, *, result=None):
                 reason="human_plan_review_required" if pending else "research_agent_pipeline_complete_human_interpretation_required"
                 if complete else "human_plan_review_rejected" if state == "rejected" else "research_pipeline_execution_failed",
                 checks=[{"id": key, "passed": value} for key, value in checks.items()])
+    if complete and not stop:
+        # An addition reports analyses only: it never writes a manuscript, so
+        # no manuscript can have failed its checks (S1799).
+        gate["manuscript_outcome"] = {"status": "not_requested"}
     if stop:
         gate.update(reason=stop["failure_code"], detail=stop)
     requests = [dict(review_id=r.review_id, kind=r.kind, summary=r.summary, authority_sha256=r.authority_sha256,
