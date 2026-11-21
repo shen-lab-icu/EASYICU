@@ -66,7 +66,8 @@ def delivery_approval_stop(plan: AnalysisPlan, *, article_allowed: bool = True) 
         reason = FIRST_RESULT_DELIVERY_STOP
         message = (
             "Analysis-only first results cannot produce the requested article deliverables. "
-            "Revise the request in the conversation, or start a separate article run."
+            "A paper with its PDF and references needs the container runtime (Docker and the "
+            "EasyICU runner image); start it and run again."
         )
     else:
         kinds = tuple(kind for kind in requested if kind not in existing)

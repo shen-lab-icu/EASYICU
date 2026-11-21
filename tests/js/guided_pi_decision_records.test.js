@@ -421,7 +421,7 @@ test('a first-result delivery conflict prompts for a revision inside the main lo
   });
   const log = html.slice(html.indexOf('data-gpi-log'), html.indexOf('data-gpi-input'));
   assert.match(log, /data-gpi-confirm-edit[^>]*>Revise in the conversation<\/button>/);
-  assert.match(log, /separate article run/);
+  assert.match(log, /needs the container runtime: start Docker .*runner image/);
   assert.doesNotMatch(log, /data-gpi-confirm-action/);
 });
 
@@ -527,7 +527,7 @@ test('choosing an article output for an analysis-only review shows the composer 
   const html = owner.deliverablesField({
     requested: ['manuscript_pdf'], check: [], confirmed: true, article_required: true,
   }, { tr: en => en, esc, disabled: false });
-  assert.match(html, /separate article run/);
+  assert.match(html, /needs the container runtime: start Docker/);
   assert.match(html, /data-gpi-confirm-edit[^>]*>Revise in the conversation<\/button>/);
   fields[0].value = 'yes';
   assert.deepEqual(owner.deliverableSelection(form), { requested: [], deferred: ['manuscript_pdf'], excluded: [] });

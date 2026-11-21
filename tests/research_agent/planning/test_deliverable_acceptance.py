@@ -546,7 +546,7 @@ def test_delivery_request(tmp_path, monkeypatch, tier, language, kind, wording):
     if first and positive:
         _assert_card_choice(card, kind, "yes")
         assert "data-gpi-deliverables-article hidden" not in card
-        assert ("另行启动论文任务" if zh else "Start a separate article run") in card
+        assert ("请先启动 Docker 并确保 EasyICU 运行镜像可用" if zh else "needs the container runtime") in card
         assert approve_label not in card
         assert requests[0].payload["reason"] == "first_result_delivery_requires_article"
         assert requests[0].payload["deliverable_kinds"] == [kind]

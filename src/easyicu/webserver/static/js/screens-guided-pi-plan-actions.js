@@ -87,7 +87,7 @@
         <legend>${esc(tr('Deliverables', '交付物'))}</legend>
         <div class="gpi-plan-deliverable-choices">${fields}</div>
         <div data-gpi-deliverables-article${articleConflict ? '' : ' hidden'}>
-          <small>${esc(tr('Start a separate article run to keep these deliverables.', '如需保留这些交付物，请另行启动论文任务。'))}</small>
+          <small>${esc(tr('A paper with its PDF and references needs the container runtime: start Docker and make sure the EasyICU runner image is available, then run again.', '需要论文、PDF 和参考文献时，请先启动 Docker 并确保 EasyICU 运行镜像可用，再重新运行。'))}</small>
           <small>${esc(tr('Generate a fresh plan for analysis only to defer the items marked Yes.', '重新生成仅分析计划，将选“是”的交付物留到论文任务。'))}</small>
           <button type="button" class="btn sm" data-gpi-confirm-edit${disabled ? ' disabled' : ''}>${esc(tr('Revise in the conversation', '在对话里修改'))}</button>
         </div>

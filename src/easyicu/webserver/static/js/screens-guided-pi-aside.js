@@ -336,7 +336,7 @@
         question_requirement_capability_gap: tr('Planning found that this plan cannot do an analysis the question asks for, so it cannot be approved; revise that requirement or generate a new plan', '规划发现题面要求的一项分析，这份计划做不到，此计划不能批准；请修改这项要求或重新生成计划'),
         question_requirements_unreadable: tr('The record of what the question asks for could not be read or did not validate, so this plan was not checked against the question and cannot be approved; generate the plan again', '题面要求的核对记录读取或校验失败，这份计划未按题面核对，不能批准；请重新生成计划'),
         host_delivery_request_ambiguous: tr('The plan cannot be approved until you clarify the requested deliverables in the conversation', '请在对话里明确交付要求，这份计划目前不能批准'),
-        first_result_delivery_requires_article: tr('The requested deliverables require an article run, so this plan cannot be approved. Revise the request in the conversation.', '所请求的交付物需要在论文任务中生成，这份计划不能批准。请在对话里修改要求。'),
+        first_result_delivery_requires_article: tr('A paper with its PDF and references needs the container runtime (Docker and the EasyICU runner image); without it this computer can only give first-round tables and figures, so this plan cannot be approved.', '需要论文、PDF 和参考文献时，请先启动 Docker 并确保 EasyICU 运行镜像可用，再重新运行；当前只能给出表格和图形的首轮结果，这份计划不能批准。'),
         failed_pipeline_requires_fresh_plan: tr('The previous run failed. Review the record before creating a fresh plan.', '上次任务未完成，请查看记录后重新生成计划。'),
         failed_pipeline_execution_retry_available: tr('The approved analysis stopped at one step; it can be retried from that step', '已批准的分析停在某一步，可从该步重试'),
         failed_pipeline_execution_retry_futile: tr('A retry would repeat the failure; generate a fresh plan or update EasyICU first', '重试只会重复同样的失败；请重新生成计划，或先更新 EasyICU'),

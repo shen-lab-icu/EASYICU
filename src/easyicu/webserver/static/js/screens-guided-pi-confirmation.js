@@ -680,8 +680,8 @@
             'This plan cannot be approved until you clarify which deliverables to include. Specify your choices in the conversation.',
             '请在对话中说明需要哪些交付物，以及应省略哪些。明确交付要求后才能继续，这份计划目前不能批准。',
           ) : tr(
-            'This plan cannot be approved with the requested article deliverables. Revise the question for this analysis-only run, or start a separate article run to keep them.',
-            '本次仅分析任务无法满足论文交付要求，这份计划不能批准。请在对话中修改研究问题。如需保留这些要求，请另行启动论文任务。',
+            'This plan cannot be approved: a paper with its PDF and references needs the container runtime: start Docker (for example Docker Desktop or Colima), make sure the EasyICU runner image is available, then run again. Without it this computer can only give first-round tables and figures.',
+            '这份计划不能批准：需要论文、PDF 和参考文献时，请先启动 Docker（例如 Docker Desktop 或 Colima）并确保 EasyICU 运行镜像可用，再重新运行；当前只能给出表格和图形的首轮结果。',
           ),
           reviewMaterialsTitle: tr('View the plan and review evidence', '查看计划与审阅依据'),
           reviewResources: planStopResources.slice(0, 1),
