@@ -212,6 +212,31 @@ def registered_source_choice(row: Mapping[str, Any]) -> Dict[str, Any]:
     }
 
 
+def official_demo_exports(
+    registry: Mapping[str, Any], source_id: str,
+) -> tuple[list[Dict[str, Any]], RegisteredExportRecommendation]:
+    """The registered exports of one official demo release, by its identity.
+
+    A legacy demo shares its full database's loader key, so that key cannot
+    tell the demo's export from the full data; the stored release can. Only
+    exports of this exact release are offered, never the full database.
+    """
+    from easyicu.webserver import demo_sources
+
+    spec = demo_sources.get_source(source_id)
+    key = get_database_profile(spec.database).key
+    choices: list[Dict[str, Any]] = []
+    for row in registry.get("sources") or []:
+        if not isinstance(row, Mapping) or not row.get("ok") or not row.get("id"):
+            continue
+        if row.get("database") != key or sources.official_demo_release_id(row) != spec.id:
+            continue
+        choices.append(_registered_source_projection(row, active_path=registry.get("active_path")))
+        if len(choices) >= 40:
+            break
+    return choices, recommend_registered_export(choices, allow_official_demo=True)
+
+
 def official_demos_for_database(
     registry: Mapping[str, Any], database: Optional[str],
 ) -> list[Dict[str, Any]]:
@@ -256,6 +281,7 @@ __all__ = [
     "SelectionReason",
     "database_reader_label",
     "generated_date",
+    "official_demo_exports",
     "official_demos_for_database",
     "recommend_registered_export",
     "registered_source_choice",

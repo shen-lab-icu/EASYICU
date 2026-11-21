@@ -15,6 +15,7 @@ from easyicu.webserver import sources
 from . import study_context_update
 from .contracts import PiCopilotError, PiSessionRecord, ToolExecutionContext
 from .source_recommendation import (
+    official_demo_exports,
     official_demos_for_database,
     registered_source_choice,
     registered_sources_for_database,
@@ -53,11 +54,18 @@ def registered_source_offer(
                     for index, row in enumerate(recommendation.choices, start=1)],
         "reason": recommendation.reason,
     }
-    if recommendation.source is None and not recommendation.choices:
-        demos = official_demos_for_database(registry, profile.key)
+    demos = official_demos_for_database(registry, profile.key)
+    # A legacy demo shares this full database's key: its export is offered by
+    # its own release identity, also when the full data are registered, so a
+    # card naming that demo never has to fall back to the full database.
+    legacy_demo = len(demos) == 1 and demos[0]["database"] == profile.key
+    if legacy_demo or (recommendation.source is None and not recommendation.choices):
         if len(demos) == 1:
             demo = demos[0]
-            _, demo_exports = registered_sources_for_database(registry, demo["database"])
+            if legacy_demo:
+                _, demo_exports = official_demo_exports(registry, demo["source_id"])
+            else:
+                _, demo_exports = registered_sources_for_database(registry, demo["database"])
             offer["official_demo"] = {
                 "id": demo["source_id"], "database": demo["database"],
                 "label": f"{demo['label']} v{demo['version']}",
@@ -109,6 +117,12 @@ def bind_offered_registered_source(
             status_code=409,
         )
     eligible = ([offer["recommended"]] if offer["recommended"] else offer["choices"])
+    demo = offer.get("official_demo")
+    if demo and demo["database"] == database:
+        # The named demo's own export, offered by its release identity.
+        demo_offer = demo["registered_offer"]
+        eligible = [*eligible, *([demo_offer["recommended"]] if demo_offer["recommended"]
+                                 else demo_offer["choices"])]
     if selected_id not in {row["source_id"] for row in eligible}:
         raise PiCopilotError(
             "pi_data_source_not_offered", "This export is no longer offered. Refresh and choose again.",

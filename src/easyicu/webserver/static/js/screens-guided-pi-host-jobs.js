@@ -328,8 +328,9 @@
       const database = String(demo.database || '');
       // Legacy demos sharing a full loader key cannot identify a demo export
       // through that database's normal offer: it might recommend the full data.
+      // Only the host's official-demo offer for this exact release names it.
       const offer = hostedServer() ? (database.endsWith('_demo') ? registeredOffer(database)
-        : { state: 'ready', recommended: null, choices: [] }) : null;
+        : legacyDemoOffer(registeredOffer(database), String(demo.id || ''))) : null;
       return {
         id: String(demo.id || ''), label: String(demo.reader_label || [demo.title, demo.version ? `v${demo.version}` : ''].filter(Boolean).join(' ')),
         database, offer,
@@ -341,6 +342,16 @@
           && directoryRequired.id === String(demo.id || '')),
         directoryDestination: directoryRequired ? directoryRequired.destination : '',
       };
+    }
+
+    /* A legacy demo's own exports from its full database's offer: the host's
+       official_demo entry for this release, never that database's exports. */
+    function legacyDemoOffer(full, id) {
+      const demo = full && full.official_demo && full.official_demo.id === id ? full.official_demo : null;
+      const own = demo && demo.registered_offer ? demo.registered_offer : null;
+      if (!own) return { state: full && full.state === 'loading' ? 'loading' : 'ready', recommended: null, choices: [] };
+      return { state: 'ready', recommended: own.recommended || null,
+        choices: Array.isArray(own.choices) ? own.choices.slice() : [] };
     }
 
     /* The validated export of that database EasyICU already holds, as the

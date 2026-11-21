@@ -17,7 +17,7 @@ from dataclasses import dataclass
 from datetime import datetime
 from functools import wraps
 from pathlib import Path
-from typing import Any, Dict, Iterable, List, Mapping
+from typing import Any, Dict, Iterable, List, Mapping, Optional
 
 from easyicu.research_agent.research_context.export_selection import SourceIdentity
 from easyicu.webserver import state_paths
@@ -505,22 +505,30 @@ def _receipt_demo_release(source: Mapping[str, Any]) -> Any:
     return spec if not spec.archive_sha256 or source.get("archive_sha256") == spec.archive_sha256 else None
 
 
-def is_official_demo_source(source: Mapping[str, Any]) -> bool:
-    """Recognize the stored allowlisted release and its pinned archive digest.
+def official_demo_release_id(source: Mapping[str, Any]) -> Optional[str]:
+    """The allowlisted official demo release a registered row is, or ``None``.
 
-    Only legacy rows without a stored release identity fall back to the label;
-    a title match cannot override an unknown release or a mismatched digest.
+    A stored receipt names its release and pinned archive digest. Only legacy
+    rows without a stored release identity fall back to the release title; a
+    title match cannot override an unknown release or a mismatched digest.
     """
     from easyicu.webserver import demo_sources
 
     if "source_id" in source or "archive_sha256" in source:
-        return _receipt_demo_release(source) is not None
+        release = _receipt_demo_release(source)
+        return release.id if release is not None else None
     label = str(source.get("label") or "").strip().casefold()
-    return any(
-        label == f"{spec.title} v{spec.version}".casefold()
+    return next((
+        spec.id
         for source_id in demo_sources.allowed_source_ids()
         for spec in (demo_sources.get_source(source_id),)
-    )
+        if label == f"{spec.title} v{spec.version}".casefold()
+    ), None)
+
+
+def is_official_demo_source(source: Mapping[str, Any]) -> bool:
+    """Recognize the stored allowlisted release and its pinned archive digest."""
+    return official_demo_release_id(source) is not None
 
 
 def is_demo_source(source: Mapping[str, Any]) -> bool:
