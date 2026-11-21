@@ -113,8 +113,8 @@ PINNED_SUPPORT_MODULES = frozenset({"imv_recorded_compat", "rrt_time"})
 _PINNED_DATABASE_FAMILIES = frozenset({"aumc", "eicu", "hirid", "miiv", "mimic", "sic"})
 _PINNED_D0_RELEASE = "20261117_d93795ce4_default_r14"
 _PINNED_D0_MANIFEST_SHA16 = "7f14448b9d9d1870"
-_HOURLY_CONTRACT_PATH = Path(
-    "/home/zhuhb/workspace/claude-ws/_wt/rfrunL/L-HC/frozen/hc/config/hourly_core_v7.json"
+_HOURLY_CONTRACT_PATH = Path.home() / (
+    "workspace/claude-ws/_wt/rfrunL/L-HC/frozen/hc/config/hourly_core_v7.json"
 )
 _HOURLY_CONTRACT_SHA256 = "e937d67be3a335f491638c173179d6ec10f222c094e934f1a5bc474f2da971ae"
 _OUTCOME = ("stay_id", "los_icu")

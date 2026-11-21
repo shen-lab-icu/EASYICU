@@ -54,8 +54,8 @@ from easyicu.runtime import duckdb_spill
 from easyicu.storage_binding import StorageSourceChanged, bind_files, binding_unit
 from easyicu.storage_layout import StorageIntegrityError, parquet_relation
 
-_FROZEN_SOURCE_DIR = Path(
-    "/home/zhuhb/workspace/claude-ws/_wt/ys351lcommon/frozen_copies/L-COMMON/src/phd_common"
+_FROZEN_SOURCE_DIR = Path.home() / (
+    "workspace/claude-ws/_wt/ys351lcommon/frozen_copies/L-COMMON/src/phd_common"
 )
 _FROZEN_DIGESTS = {
     "sources": "35f160b2d8105af7ed76a887ceb247117676b255b64a9f7a7537fc18f4a1bdc6",
@@ -63,7 +63,7 @@ _FROZEN_DIGESTS = {
 }
 _PINNED_REFERENCES = {
     "hourly_core": (
-        Path("/home/zhuhb/workspace/claude-ws/_wt/rfrunL/L-HC/frozen/hc/src/data_processing/hourly_core.py"),
+        Path.home() / "workspace/claude-ws/_wt/rfrunL/L-HC/frozen/hc/src/data_processing/hourly_core.py",
         "5b073a7c9f899929ea4d823b6eb5d3b1ef2ac597e89f40afe70b59ef2858c759",
     ),
     "cohort": (
