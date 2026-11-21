@@ -133,12 +133,14 @@ def adopt_result_figures(source, predecessor, evidence):
     path = run_dir / "figure_gallery.json"
     if not path.exists():
         return []
-    registry = {r["relative_path"]: r for r in records if r["kind"] == "figure"}
+    sealed = [r for r in records if r["kind"] == "figure"]
+    registry = {r["relative_path"]: r for r in sealed}
     figures = []
     for row in read_json(path).get("figures", []):
         if not row.get("relative_path"):
             continue
-        original = registry.get(row["relative_path"])
+        original = registry.get(row["relative_path"]) or _sealed_figure_with_the_same_bytes(
+            run_dir, row["relative_path"], sealed)
         path = verified_run_evidence_path(run_dir, original) if original else None
         if path is None:
             raise ValueError("The earlier figure is not sealed evidence.")
@@ -152,6 +154,19 @@ def adopt_result_figures(source, predecessor, evidence):
         figures.append(dict(figure_id=identity, label=original["description"], relative_path=record.relative_path,
                             status="available", caption="Previously reported result; the source evidence is unchanged."))
     return figures
+
+
+def _sealed_figure_with_the_same_bytes(run_dir, relative, sealed):
+    """A gallery may show a step's own output; it is sealed when its bytes are a sealed figure's."""
+    try:
+        shown = contained(run_dir, relative)
+    except (ValueError, OSError):
+        return None
+    if not shown.is_file():
+        return None
+    digest = sha256_of_file(shown)
+    matches = sorted((record for record in sealed if record["sha256"] == digest), key=lambda r: r["evidence_id"])
+    return matches[0] if matches else None
 
 
 def merge_result_figures(child):
