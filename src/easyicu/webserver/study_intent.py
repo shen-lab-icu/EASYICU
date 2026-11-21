@@ -1954,6 +1954,22 @@ _POPULATION_WITH_CONDITION = re.compile(
 )
 
 
+# The condition's absence named as a comparison group: a negation directly before
+# the condition's own words (「未通气」「非脓毒症」「无 AKI」, "non-ventilated",
+# "without sepsis", "not on mechanical ventilation").
+_ABSENCE = r"(?:未(?:接受|行|发生|合并)?|非|无|没有|不伴|不伴有)\s*"
+_ABSENCE_EN = r"\b(?:non-?|without\s+|not\s+(?:on\s+|receiving\s+)?|no\s+)"
+_CONDITION_ABSENT_GROUP: dict = {
+    ("sep3", "sep3_sofa1", "sep3_sofa2"): re.compile(
+        _ABSENCE + r"(?:脓毒症|脓毒)|" + _ABSENCE_EN + r"(?:septic|sepsis)", re.IGNORECASE),
+    ("aki", "aki_stage"): re.compile(
+        _ABSENCE + r"(?:急性肾损伤|aki)|" + _ABSENCE_EN + r"(?:aki\b|acute\s+kidney\s+injury)", re.IGNORECASE),
+    ("vent_ind",): re.compile(
+        _ABSENCE + r"(?:机械通气|通气)|" + _ABSENCE_EN + r"(?:mechanical(?:ly)?\s+)?ventilat", re.IGNORECASE),
+}
+assert set(_CONDITION_ABSENT_GROUP) == {concepts for _pattern, concepts in _POPULATION_CONDITIONS}
+
+
 def stated_population_conditions(question: str) -> Tuple[Tuple[Tuple[str, ...], str], ...]:
     """Each recorded condition the sentence restricts its population to, with its words.
 
@@ -1970,6 +1986,11 @@ def stated_population_conditions(question: str) -> Tuple[Tuple[Tuple[str, ...], 
     found: List[Tuple[Tuple[str, ...], str]] = []
     for pattern, concepts in _POPULATION_CONDITIONS:
         if outcome_family & set(concepts):
+            continue
+        # A question that compares the condition with its absence (「与未通气的
+        # 患者相比」, "compared with non-ventilated patients") studies it as the
+        # exposure; it does not restrict whom the study includes.
+        if _CONDITION_ABSENT_GROUP[concepts].search(lowered):
             continue
         for match in re.finditer(pattern, lowered):
             if _negated(lowered, match.start()):

@@ -212,6 +212,11 @@ The full list of changes since 0.1.0 is in the v0.1.3 release notes. Recorded he
   "Generate fresh plan" beside "Request changes" again. Before, when an edit was offered,
   the only enabled action was "Request changes", which could save the population as a
   label only.
+- A question that compares a recorded condition with its absence (for example ventilated
+  patients against 「未通气的患者」, or septic against non-septic patients) reads the
+  condition as the exposure again. Since the population reading of B31 it was taken as a
+  restriction of the population, so the exposure lost the condition; the new population
+  guard would then have kept only the patients with the condition.
 
 ## 0.1.0 — 2026-11-11 — first public pre-release
 
