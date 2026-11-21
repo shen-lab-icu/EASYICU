@@ -93,6 +93,7 @@ from .manuscript_audit_repair import (
     NUMERIC_REMOVAL,
     UnregisteredEvidence,
     enforce_after_evidence_removals,
+    enforce_outside_stale_evidence,
     numeric_removal_feedback,
     removal_losses,
     scaffold_without_removed_sentences,
@@ -2109,14 +2110,19 @@ def _draft_manuscript(
         )
     # The final binder owns stale-citation removals so their sentence loss
     # reaches the bounded repair guard. It also resolves resumed host slots.
-    defer_validation = section_repair is not None or bool(unregistered_evidence) or (
-        "{claim:" in scaffold and ".report_fact_" in scaffold
+    resumed_host_slots = "{claim:" in scaffold and ".report_fact_" in scaffold
+    defer_validation = section_repair is not None or bool(unregistered_evidence) or resumed_host_slots
+    # A stale citation defers only its own sentence; the rest of the draft
+    # still gets STRICT and the one bounded repair pass.
+    strict_enforce = enforce_outside_stale_evidence(
+        unregistered_evidence,
+        partial(evidence.enforce_evidence_bound_scaffold, per_step_records=per_step_records),
     )
-    if scaffold and not defer_validation and strict:
+    if scaffold and strict and section_repair is None and not resumed_host_slots:
         strict_missing_sentences: List[str] = []
         strict_scientific_claim_sentences: List[str] = []
         try:
-            evidence.enforce_evidence_bound_scaffold(scaffold, per_step_records=per_step_records)
+            strict_enforce(scaffold)
         except EvidenceEnforcementError as exc:
             raw_missing = (exc.detail or {}).get("removed_sentences", [])
             if isinstance(raw_missing, list):
@@ -2158,10 +2164,7 @@ def _draft_manuscript(
                 claim_required_sentences=strict_scientific_claim_sentences,
                 allowed_claim_refs=tuple(claim_text_by_ref),
                 language=run_language,
-                enforce_scaffold=partial(
-                    evidence.enforce_evidence_bound_scaffold,
-                    per_step_records=per_step_records,
-                ),
+                enforce_scaffold=strict_enforce,
             )
             scaffold = repair_result.scaffold
             repair_message_prefix = (

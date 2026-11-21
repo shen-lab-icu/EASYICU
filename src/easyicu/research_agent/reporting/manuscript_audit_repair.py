@@ -723,6 +723,45 @@ def enforce_after_evidence_removals(
     return checked, removed, sentence_drops, feedback
 
 
+def enforce_outside_stale_evidence(
+    stale: Sequence[UnregisteredEvidence],
+    enforce: Callable[[str], tuple[str, list[str]]],
+) -> Callable[[str], tuple[str, list[str]]]:
+    """Apply STRICT to every sentence except those whose stale citation the binder owns.
+
+    A sentence that lost an unregistered evidence placeholder stays for
+    :func:`enforce_after_evidence_removals`, so its loss reaches the binding
+    guard. Every other rejected sentence still gets the draft's bounded repair.
+    """
+    if not stale:
+        return enforce
+    affected = {(item.section, item.sentence_key) for item in stale}
+
+    def check(scaffold: str) -> tuple[str, list[str]]:
+        try:
+            return enforce(scaffold)
+        except EvidenceEnforcementError as exc:
+            owned = Counter(
+                _normalized_text(scaffold[span.start:span.end])
+                for span in sentence_spans(scaffold) if (span.section, span.key) in affected
+            )
+            detail = dict(exc.detail or {})
+            for key in ("removed_sentences", "unsupported_scientific_claim_sentences"):
+                kept = []
+                for sentence in detail.get(key) or ():
+                    raw = _normalized_text(str(sentence))
+                    if owned[raw]:
+                        owned[raw] -= 1
+                    else:
+                        kept.append(sentence)
+                detail[key] = kept
+            if detail["removed_sentences"] or detail["unsupported_scientific_claim_sentences"]:
+                raise EvidenceEnforcementError(str(exc), detail=detail) from exc
+            return scaffold, []
+
+    return check
+
+
 def numeric_removal_feedback(
     manuscript: str, spans: Sequence[tuple[int, int, tuple[int, ...]]],
 ) -> tuple[list[SentenceSpan], list[SentenceSpan], tuple[RepairFeedback, ...]]:
