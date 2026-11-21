@@ -631,6 +631,7 @@ _CLASSIFIED = {
     ('research_resume_package.py', '_package_offer_verdict', 'prepared_package_identity'): (1, 'REGISTERED'),
     ('research_run_submission.py', 'submit_research_run', 'describe_source_tables'): (1, 'FOLDER'),
     ('research_run_submission.py', 'submit_research_run', '_with_repeated_stays_default'): (1, 'OWNER'),
+    ('research_run_submission.py', 'submit_research_run', '_with_first_stay_repair'): (1, 'OWNER'),
     ('research_run_submission.py', 'submit_research_run', 'prepared_export_manifest_path'): (1, 'OWNER'),
     ('research_run_submission.py', 'execution_input_available', 'prepared_export_manifest_path'): (1, 'OWNER'),
     ('research_run_submission.py', 'submit_research_run', 'validate_research_pipeline_source'): (2, 'REGISTERED'),

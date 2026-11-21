@@ -1095,7 +1095,7 @@
         : '';
       const populationPreparation = populationPreparationHtml(confirmation.populationPreparation);
       const populationAcceptance = populationAcceptanceHtml(((host.workflow() || {}).plan_review_summary || {}).population_acceptance);
-      const reviewedPopulation = hostStatedPopulationHtml(review && review.host_stated_population) + reviewedPopulationSpecHtml(review && review.reviewed_population_spec);
+      const reviewedPopulation = hostStatedPopulationHtml(review && review.host_stated_population, review && review.population_first_stay_dropped) + reviewedPopulationSpecHtml(review && review.reviewed_population_spec);
       const deferredInputScope = deferredInputScopeHtml(review && review.deferred_input_scope);
       // index.html always loads this owner (static contract); harnesses that
       // load the confirmation alone simply show no database card.

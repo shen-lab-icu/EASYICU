@@ -226,6 +226,13 @@ The full list of changes since 0.1.0 is in the v0.1.3 release notes. Recorded he
   plan selects on a condition column the run prepared (for example the Sepsis-3 flag).
   The check before review now reads the cohort with the run's own concept list, as the
   analysis does.
+- A plan no longer quotes the conversation's note about the study (the cohort review) as
+  your population: only the question and your own wording state it. Before, a note that
+  left first-stay handling to the plan became a "first ICU stay per hospitalization"
+  restriction the data could not verify, and every later plan stopped at prepare. Such a
+  restriction, when no wording of yours states it and the data cannot verify it, is now
+  taken off before the next plan and the plan card says so. Asking in 提出修改 to remove a
+  first-stay restriction now removes it.
 
 ## 0.1.0 — 2026-11-11 — first public pre-release
 

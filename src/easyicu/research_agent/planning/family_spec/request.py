@@ -38,6 +38,7 @@ from ...research_context.stay_events import recorded_event_time_semantics
 from ...research_context.export_selection import export_applied_selection
 from ...research_context.minimum_stay import minimum_icu_stay_hours
 from ...schema import ResearchContext
+from ..population_spec import STUDY_WORDING_COHORT_FIELDS
 from ...contracts.claim_ceiling import tier_from_planning_contract
 from ..figure_plan_mutation import requires_visualization_step
 from ...trajectory.plan_contract import trajectory_context_is_bound
@@ -1276,7 +1277,8 @@ def build_family_spec_request(
 
 
 #: The study's own cohort wording the Planner reads as a population source.
-_STUDY_COHORT_WORDING_KEYS = ("label", "review", "exclusion_statement")
+#: The cohort ``review`` is the conversation's note, never a source.
+_STUDY_COHORT_WORDING_KEYS = ("label", *STUDY_WORDING_COHORT_FIELDS)
 _STUDY_COHORT_WORDING_MAX = 1200
 
 

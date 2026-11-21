@@ -359,6 +359,11 @@ def diagnosis_code_token(code: str) -> str:
 #: and a preset, are the Planner's or the host's, with no text of the study's
 #: to hold a quote against.
 STUDY_WORDING_SOURCES = frozenset({"question", "study_wording"})
+#: The ``data_constraints.cohort`` fields a ``study_wording`` quote may cite: the
+#: researcher's own statement of a removal. The cohort ``review`` is written by
+#: the conversation about the study (it may say a choice is left to the plan),
+#: so it is never a source of the study's population.
+STUDY_WORDING_COHORT_FIELDS = ("exclusion_statement",)
 #: The owner's errors kept for a refused spec.
 _MAX_SPEC_ERRORS = 20
 _SPACE = re.compile(r"\s+")
@@ -451,6 +456,7 @@ __all__ = [
     "MAX_POPULATION_CRITERIA",
     "MAX_POPULATION_HOURS",
     "POPULATION_SPEC_SCHEMA_VERSION",
+    "STUDY_WORDING_COHORT_FIELDS",
     "STUDY_WORDING_SOURCES",
     "AgeYears",
     "AliveAt",

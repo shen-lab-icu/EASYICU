@@ -115,6 +115,7 @@ from .population_review import (
 )
 from .population_provenance import names_first_stay_scope, typed_first_stay_scope
 from .population_spec import (
+    STUDY_WORDING_COHORT_FIELDS,
     PopulationSpec,
     PopulationSpecRefused,
     read_stated_population_spec,
@@ -747,12 +748,14 @@ def _stated_population_spec(
         ) from exc
     if spec is None:
         return None
-    # Explicit review/exclusion text can supply study wording; a display label
-    # alone cannot establish population intent. Wording never proves that the
-    # input rows already satisfy a restriction.
+    # An explicit exclusion statement can supply study wording; a display label
+    # alone cannot establish population intent, and the cohort ``review`` is the
+    # conversation's note about the study, not the researcher's words (UX rc_150
+    # age leg: 「首次 ICU 住院 … 留待候选研究计划提出」 became a restriction).
+    # Wording never proves that the input rows already satisfy a restriction.
     cohort_wording = context_data_constraints(context).get("cohort")
     stated_wording = (
-        tuple(value for key in ("review", "exclusion_statement")
+        tuple(value for key in STUDY_WORDING_COHORT_FIELDS
               if isinstance(value := cohort_wording.get(key), str) and value.strip())
         if isinstance(cohort_wording, Mapping) else ()
     )

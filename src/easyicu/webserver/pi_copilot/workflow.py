@@ -64,7 +64,9 @@ from .contracts import (
 from .plan_projection import project_plan_conversation_preview
 from .exposure_group_notes import project_exposure_groups
 from .question_requirement_notes import exposure_arrangement_offer, project_question_requirement_notes
-from .population_preparation import current_population_preparation, study_for_next_plan
+from .population_preparation import (
+    UNSOURCED_FIRST_STAY_DROPPED, current_population_preparation, study_for_next_plan,
+)
 from .population_acceptance import current_population_acceptance
 from .survival_plan_decision import SurvivalLandmarkDecision, pending_survival_decision
 from .source_adjustments import current_source_adjustments
@@ -852,6 +854,10 @@ def build_research_workflow_snapshot(
             **({"host_stated_population": review_authority["host_stated_population"]}
                if isinstance(review_authority.get("host_stated_population"), list)
                and review_authority["host_stated_population"] else {}),
+            # A first-stay restriction the system took off before planning (S1782).
+            **({"population_first_stay_dropped": True}
+               if isinstance(study_row.get("confirmations"), Mapping)
+               and study_row["confirmations"].get(UNSOURCED_FIRST_STAY_DROPPED) is True else {}),
             # How the selected database changes the study (db capability review).
             **({"source_adjustments": source_adjustments} if source_adjustments is not None else {}),
         }

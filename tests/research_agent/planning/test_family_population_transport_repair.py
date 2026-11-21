@@ -112,7 +112,9 @@ def test_a_null_upper_bound_is_shown_as_json_null():
     assert "Do not write null as a string" in text
 
 
-@pytest.mark.parametrize("field", ["review", "exclusion_statement"])
+# The cohort review is the conversation's note, never a quote source (S1782;
+# test_a_conversation_note_is_not_the_studys_population.py).
+@pytest.mark.parametrize("field", ["exclusion_statement"])
 def test_displayed_study_wording_is_a_quote_source_but_not_applied_proof(field):
     ctx = context().model_copy(update={
         "research_question": "Describe group mortality within the study's stated population.",
@@ -161,7 +163,8 @@ def test_a_complete_typed_population_retries_its_quote_without_losing_the_host_b
 def test_a_cohort_note_typed_as_the_other_first_stay_scope_is_repaired_in_one_retry():
     # A study keeping each patient's first ICU stay, with a cohort note that
     # states no rule: a per-hospitalization criterion quoting the note goes
-    # back to the Planner instead of reaching an unapprovable plan.
+    # back to the Planner instead of reaching an unapprovable plan. The note
+    # is not the study's wording at all (S1782), so the quote itself is refused.
     note = "first-stay handling remains for the formal plan"
     ctx = context().model_copy(update={"research_question": "Describe group mortality in adults age 18 or older."})
     constraints = json.loads(ctx.user_preferences.data_constraints)
@@ -176,6 +179,6 @@ def test_a_cohort_note_typed_as_the_other_first_stay_scope_is_repaired_in_one_re
     llm, result = _run(ctx, [json.dumps(bad), json.dumps(good)])
     assert len(llm.calls) == 2
     feedback = llm.calls[1][0][-1].content
-    assert "progressive_population_first_stay_scope_conflict" in feedback
-    assert "cohort.population_spec.criteria[1].kind" in feedback
+    assert "progressive_population_quote_not_verbatim" in feedback
+    assert "cohort.population_spec.criteria[1].quote" in feedback
     assert note not in list(result.output.cohort.unapplied_population_criteria)

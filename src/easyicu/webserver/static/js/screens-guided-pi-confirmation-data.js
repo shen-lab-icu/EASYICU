@@ -130,13 +130,17 @@
     }
 
     // Conditions the system stated from the question after the planner left
-    // them out (S1757); 修改人群 on this card changes them.
-    function hostStatedPopulationHtml(items) {
-      if (!Array.isArray(items) || !items.length) return '';
-      const rows = items.filter(item => item && item.quote && item.concept).map(item => {
+    // them out (S1757), and a first-stay restriction it took off because no
+    // researcher wording states it and the data cannot verify it (S1782);
+    // 修改人群 on this card changes them.
+    function hostStatedPopulationHtml(items, firstStayDropped) {
+      const rows = (Array.isArray(items) ? items : []).filter(item => item && item.quote && item.concept).map(item => {
         const hours = `${tr('ICU admission', '入科')} ${item.start_hours}–${item.end_hours} h`;
         return `<li>${esc(tr('Population condition added by the system from the question', '人群条件由系统按题面补入'))}${esc(tr(': ', '：'))}${esc(item.quote)}${esc(tr(` (${item.concept}, ${hours})`, `（${item.concept}，${hours}）`))}</li>`;
-      }).join('');
+      }).join('') + (firstStayDropped === true ? `<li data-first-stay-dropped>${esc(tr(
+        'Removed by the system: the restriction to the first ICU stay of each hospitalization. Neither the question nor your own wording asks for it, and the data cannot verify it.',
+        '系统已去掉「每次住院的首次 ICU 入住」限制：题面和你的表述都没有要求，当前数据也无法核实。',
+      ))}</li>` : '');
       return rows ? `<ul class="gpi-host-stated-population" data-host-stated-population>${rows}</ul>` : '';
     }
 

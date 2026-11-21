@@ -206,13 +206,19 @@ def test_question_attribution_cannot_borrow_explicit_study_review_words(field):
         _read(source="question", quote="Adult patients", settings={field: "Adult patients"})
 
 
-@pytest.mark.parametrize("field", ["review", "exclusion_statement"])
-def test_explicit_study_wording_keeps_its_own_source(field):
-    criterion = _read(source="study_wording", quote="Adult patients", settings={field: "Adult patients"}).criteria[0]
+def test_explicit_study_wording_keeps_its_own_source():
+    settings = {"exclusion_statement": "Adult patients"}
+    criterion = _read(source="study_wording", quote="Adult patients", settings=settings).criteria[0]
     assert criterion.source == "study_wording" and criterion.quote == "Adult patients"
 
 
-@pytest.mark.parametrize("field", ["review", "exclusion_statement"])
+def test_the_cohort_review_note_is_not_the_studys_wording():
+    # S1782: the review is the conversation's note about the study, never a source.
+    with pytest.raises(ValueError, match="not written there"):
+        _read(source="study_wording", quote="Adult patients", settings={"review": "Adult patients"})
+
+
+@pytest.mark.parametrize("field", ["exclusion_statement"])
 def test_cohort_wording_absent_from_the_question_is_never_stated_by_the_study(field):
     # S1570: cohort wording can hold the assistant's own notes. A quote it
     # holds but the question does not is the plan's interpretation, recorded

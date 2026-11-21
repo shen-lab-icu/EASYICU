@@ -284,6 +284,26 @@ test('S1758: an unanswered population condition is named on the card that offers
   assert.match(log, /data-gpi-confirm-edit>提出修改<\/button>/);
 });
 
+test('S1782: the card lists a first-stay restriction the system took off', () => {
+  const workflow = m3Workflow('C');
+  workflow.plan_review_summary.population_first_stay_dropped = true;
+  const researchProvider = { provider: 'synthetic', model: 'scripted', credential_source: 'pi_verified' };
+  const readiness = modules.require('runReadiness').create({
+    tr: (en, zh) => zh,
+    state: { workflow, session: { research_provider: researchProvider },
+      runtime: { status: 'ready', api_transport: 'openai-completions' } },
+  });
+  const render_ = flag => {
+    workflow.plan_review_summary.population_first_stay_dropped = flag;
+    return conversationLog(render('zh', workflow, { research_provider: researchProvider }, false,
+      { runReadiness: readiness.forAction }, {
+        messages: [{ role: 'user', text: '确认方案并准备数据' }, { role: 'assistant', complete: true, text: '候选计划已保存。' }],
+      }).html);
+  };
+  assert.match(render_(true), /<li data-first-stay-dropped>系统已去掉「每次住院的首次 ICU 入住」限制：题面和你的表述都没有要求，当前数据也无法核实。<\/li>/);
+  assert.doesNotMatch(render_(undefined), /data-first-stay-dropped/);
+});
+
 for (const shape of ['A', 'C']) {
   test(`Dev9 M3 shape ${shape} keeps Check connection primary when disconnected`, () => {
     const workflow = m3Workflow(shape);

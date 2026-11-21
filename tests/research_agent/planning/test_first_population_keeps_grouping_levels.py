@@ -402,6 +402,9 @@ def test_share_reconciles_a_typed_spec_and_keeps_the_other_criterion_and_quote()
     assert "47" in result.output.design_selection.selected.reviewable_plan[0]
 
 
+_QUOTES_THE_COHORT_NOTE = frozenset({"v24a", "v24c", "v24g"})
+
+
 @pytest.mark.parametrize("sequence", [f"v24{letter}" for letter in "abcdefgh"])
 @pytest.mark.parametrize("caller_mode", ["predicate_filtered", "all_input_rows"])
 def test_recorded_public_demo_share_answers_reach_an_acceptable_plan(sequence, caller_mode, tmp_path):
@@ -419,6 +422,20 @@ def test_recorded_public_demo_share_answers_reach_an_acceptable_plan(sequence, c
     fixture = json.loads((Path(__file__).parent / "fixtures/population_share_demo.json").read_text())
     context = parse_research_context_json(json.dumps(fixture["context"]))
     llm = ScriptedMockLLMClient(fixture["responses"][sequence])
+    if sequence in _QUOTES_THE_COHORT_NOTE:
+        # These recordings quote the cohort's label/review note as the study's
+        # wording for the age bound; that note is never a source (S1782), so
+        # each attempt goes back to the Planner until the recording runs out.
+        from easyicu.research_agent.providers.structured_retry import StructuredResponseFailure
+
+        with pytest.raises(StructuredResponseFailure, match="progressive_population_quote_not_verbatim"):
+            ProgressivePlannerAgent(llm).run_attempt(
+                context, planner_strategy=FAMILY_SPEC_STRATEGY,
+                allowed_literature_citation_keys=[], direct_comparator_literature_keys=[],
+                comparison_literature_keys=[], required_primary_cohort_selection_mode=caller_mode,
+                enforce_article_contract=False, planning_contract_context="execution_tier=first_result",
+            )
+        return
     result = ProgressivePlannerAgent(llm).run_attempt(
         context, planner_strategy=FAMILY_SPEC_STRATEGY,
         allowed_literature_citation_keys=[], direct_comparator_literature_keys=[],

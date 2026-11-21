@@ -85,6 +85,9 @@ _WORDING = {
     "review": "Stays of older adults whose comorbidity burden is high.",
     "exclusion_statement": "Stays transferred in from another ICU.",
 }
+#: What the family request offers of it: the cohort review is the
+#: conversation's note, never the study's wording (S1782).
+_OFFERED_WORDING = {key: value for key, value in _WORDING.items() if key != "review"}
 
 
 def _with_cohort(context: ResearchContext, **fields: Any) -> ResearchContext:
@@ -167,13 +170,13 @@ def test_a_family_applying_its_own_cohort_is_offered_the_population_authority() 
         progressive_population_concept_ids(context, variables)
     )
     assert {"age", "comorbidity_index"} <= set(request.population_concepts)
-    assert request.study_cohort_wording == _WORDING
+    assert request.study_cohort_wording == _OFFERED_WORDING
     prompt = family_spec_user_prompt(request, variable_descriptions={})
     authority = json.loads(prompt.split("population you write):\n", 1)[1].split("\n\n", 1)[0])
     assert authority == {
         "time_zero_hours_after_icu_admission": 24.0,
         "already_applied": {"age_min": 18.0},
-        "study_cohort_wording": _WORDING,
+        "study_cohort_wording": _OFFERED_WORDING,
         "population_concepts": request.population_concepts,
         "population_required": False,
     }

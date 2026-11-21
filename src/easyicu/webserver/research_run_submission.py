@@ -363,6 +363,48 @@ def _with_stated_first_stay(study: Dict[str, Any]) -> Dict[str, Any]:
     return _with_planning_default(study, patch, label="stated first-stay")
 
 
+def _with_first_stay_repair(
+    study: Dict[str, Any], request: "ResearchRunSubmissionRequest", *, path: str,
+) -> tuple[Dict[str, Any], "ResearchRunSubmissionRequest"]:
+    """Take off a first-stay restriction nobody keeps before a fresh plan.
+
+    ``population_preparation.first_stay_planning_repair`` owns the rule. A
+    plan change request is drafted on the repaired study, so its target
+    configuration follows the repair; its source plan is unchanged.
+    """
+
+    from easyicu.webserver import source_identity_authority
+    from easyicu.webserver.pi_copilot import population_preparation
+    from easyicu.webserver.research_launch_scientific import bound_source_authority_path
+
+    cohort = study.get("cohort")
+    if not isinstance(cohort, Mapping) or not (
+        cohort.get("first_icu_stay_per_hospitalization") or cohort.get("exclude_readmissions")
+        or str(cohort.get("preset") or "").strip().lower() == "adult_first"
+    ):
+        return study, request
+    change = request.plan_change_request
+    source = study.get("data_source")
+    database = str(source.get("database") or "") if isinstance(source, Mapping) else ""
+    try:
+        proves = source_identity_authority.resolve_study_first_icu_stay_per_hospitalization(
+            export_path=bound_source_authority_path(path, study), database=database,
+        ) is not None
+    except source_identity_authority.PatientGroupingAuthorityError:
+        proves = False
+    patch = population_preparation.first_stay_planning_repair(
+        study, message=change.user_message if change is not None else "",
+        source_proves_hospital_first=proves,
+    )
+    repaired = _with_planning_default(study, patch, label="first-stay repair")
+    if repaired is study or change is None or change.target_scientific_configuration_sha256 is None:
+        return repaired, request
+    change = change.model_copy(update={
+        "target_scientific_configuration_sha256": context_store.scientific_configuration_sha256(repaired),
+    })
+    return repaired, request.model_copy(update={"plan_change_request": change})
+
+
 def _breaks_signed_demo_choice(study: Mapping[str, Any], patch: Mapping[str, Any]) -> bool:
     """Whether ``patch`` would make a raw Demo study's resolving signed choice stale.
 
@@ -528,6 +570,10 @@ def submit_research_run(
             "owner": "easyicu.webserver.pi_copilot.demo_planning_source",
             "next_action_code": "demo_planning_source_reconfirm_required",
         }, status_code=409)
+    if (_deferred_binding is None and _controlled_candidate is None
+            and request.intent == "candidate_plan" and request.planner_start_mode == "fresh"
+            and not request.plan_revision_source_run_id and not request.execution_resume_source_run_id):
+        study_context, request = _with_first_stay_repair(study_context, request, path=path)
     if (_deferred_binding is None and _controlled_candidate is None
             and request.intent == "candidate_plan" and request.planner_start_mode == "fresh"
             and request.plan_change_request is None

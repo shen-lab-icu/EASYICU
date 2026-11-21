@@ -720,8 +720,9 @@ def _typed_population_response_contract(request: FamilySpecRequest) -> str:
         "criterion has id, quote, source, role, kind and that kind's own fields. "
         'Each id is a unique string matching ^c[1-9][0-9]?$: "c1", "c2", ..., "c99"; '
         'never a number, a kind name, "age", or "first_icu". Each quote copies its '
-        "source words exactly, including the study's explicit cohort review/exclusion "
-        "wording when source is study_wording; a display label alone is not source evidence. "
+        "source words exactly, including the study's explicit exclusion statement "
+        "when source is study_wording; a display label alone is not source evidence, and "
+        "the cohort review is a note about the study, never a source. "
         "When source is question, quote the question or its canonical inclusion/exclusion text. A kind with no extra fields still keeps these "
         "five common fields. For age_years, include min_years and max_years as numbers or "
         "null (an open bound); for icu_stay_hours use min_hours and max_hours the same way. "

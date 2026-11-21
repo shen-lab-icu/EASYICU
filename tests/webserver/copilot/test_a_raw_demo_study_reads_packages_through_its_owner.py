@@ -263,6 +263,7 @@ _CLASSIFIED = {
     ("research_resume_package.py", "_package_offer_verdict", "validate_research_pipeline_source"): (1, "REGISTERED"),
     ("research_resume_package.py", "prepared_package_identity", "prepared_export_manifest_path"): (1, "REGISTERED"),
     ("research_run_submission.py", "_with_repeated_stays_default", "resolve_study_patient_grouping"): (1, "OWNER"),
+    ("research_run_submission.py", "_with_first_stay_repair", "resolve_study_first_icu_stay_per_hospitalization"): (1, "OWNER"),
     ("research_run_submission.py", "submit_research_run", "describe_source_tables"): (1, "FOLDER"),
     ("research_run_submission.py", "submit_research_run", "prepared_export_manifest_path"): (1, "OWNER"),
     ("research_run_submission.py", "execution_input_available", "prepared_export_manifest_path"): (1, "OWNER"),
@@ -284,6 +285,7 @@ _CLASSIFIED = {
     ("research_launch_scientific.py", "target_trial_launch_inputs", "_data_foundation_profile"): (1, "REGISTERED"),
     ("research_pipeline_run_preparation.py", "_prepare_scientific_launch", "_data_foundation_profile"): (1, "REGISTERED"),
     ("research_run_submission.py", "_with_repeated_stays_default", "bound_source_authority_path"): (1, "OWNER"),
+    ("research_run_submission.py", "_with_first_stay_repair", "bound_source_authority_path"): (1, "OWNER"),
 }
 
 

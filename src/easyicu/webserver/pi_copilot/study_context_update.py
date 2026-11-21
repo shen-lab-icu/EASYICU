@@ -232,6 +232,10 @@ def message_explicitly_selects_all_stays(message: str) -> bool:
             r"所有符合条件.*?(?:icu|重症监护).*?(?:stay|入住|住院)",
             r"(?:包括|保留|纳入).*?(?:重复|再次|再入).*?(?:icu|重症监护)",
             r"不(?:限制|限于|只纳入).*?(?:首次|首个|第一).*?(?:icu|重症监护)",
+            # Removing the restriction in so many words keeps every stay
+            # (UX rc_150 age leg: 提出修改 asking to drop it changed nothing).
+            r"(?:去掉|去除|取消|删除|删掉|移除|不要|撤销|撤掉).{0,8}(?:首次|首个|第一(?:次|个)?).{0,8}(?:icu|重症监护)",
+            r"\b(?:remove|drop|lift|undo)[\s_-]+(?:the[\s_-]+)?first[\s_-]+(?:icu|intensive[\s_-]+care)\b",
             r"\ball[\s_-]+eligible[\s_-]+(?:adult[\s_-]+)?icu[\s_-]+stays?\b",
             r"\b(?:include|retain)[\s_-]+(?:repeated|repeat|readmission)[\s_-]+(?:icu[\s_-]+)?stays?\b",
             r"\bnot[\s_-]+(?:restricted[\s_-]+to[\s_-]+)?(?:the[\s_-]+)?first[\s_-]+icu[\s_-]+stay\b",

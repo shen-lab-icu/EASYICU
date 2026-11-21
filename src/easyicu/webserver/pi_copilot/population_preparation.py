@@ -102,6 +102,63 @@ def stated_first_stay_planning_default(study: Mapping[str, Any]) -> dict[str, An
     return {"cohort": cohort}
 
 
+#: Host receipt (``confirmations``) that a first-stay-per-hospitalization
+#: restriction no researcher wording states, which the bound source cannot
+#: prove, was taken off before a plan was drafted; the plan card lists it.
+UNSOURCED_FIRST_STAY_DROPPED = "population_unsourced_first_stay_dropped"
+
+
+def _researcher_states_first_stay(study: Mapping[str, Any]) -> bool:
+    """Whether the researcher's own words or choice select a first ICU stay.
+
+    The question, the cohort's label and its exclusion statement are the
+    researcher's wording; the cohort ``review`` is the conversation's note and
+    may say the choice is left to the plan (S1782).
+    """
+    from .study_context_update import message_explicitly_selects_first_stay
+
+    cohort = study.get("cohort") if isinstance(study.get("cohort"), Mapping) else {}
+    confirmations = study.get("confirmations")
+    confirmations = confirmations if isinstance(confirmations, Mapping) else {}
+    texts = (study.get("question"), cohort.get("label"), cohort.get("exclusion_statement"))
+    return confirmations.get("plan_repeated_stays_first") is True or any(
+        message_explicitly_selects_first_stay(str(text or "")) for text in texts
+    )
+
+
+def first_stay_planning_repair(
+    study: Mapping[str, Any], *, message: str = "", source_proves_hospital_first: bool,
+) -> dict[str, Any] | None:
+    """The study patch that takes off a first-stay restriction nobody keeps.
+
+    ``message`` is the researcher's request for this plan: one that removes the
+    restriction in so many words keeps every stay (both scopes ``False``, the
+    researcher's choice).  Otherwise a first stay per hospitalization that no
+    researcher wording states and the bound source cannot prove is dropped with
+    its receipt (UX rc_150 age leg: a plan quoted the conversation's note, the
+    population proposal saved it, and every later plan stopped on it).
+    ``None`` leaves the study unchanged.
+    """
+    from .study_context_update import message_explicitly_selects_all_stays
+
+    cohort = dict(study.get("cohort") or {})
+    current = primary_cohort.normalize_execution_cohort(cohort)
+    restricted = current["exclude_readmissions"] or current["first_icu_stay_per_hospitalization"]
+    if message and restricted and message_explicitly_selects_all_stays(message):
+        return {"cohort": {**cohort, "exclude_readmissions": False,
+                           "first_icu_stay_per_hospitalization": False}}
+    if (
+        not current["first_icu_stay_per_hospitalization"]
+        or source_proves_hospital_first
+        or _researcher_states_first_stay(study)
+    ):
+        return None
+    cohort.pop("first_icu_stay_per_hospitalization", None)
+    confirmations = study.get("confirmations")
+    confirmations = dict(confirmations) if isinstance(confirmations, Mapping) else {}
+    return {"cohort": cohort, "confirmations": {**confirmations, UNSOURCED_FIRST_STAY_DROPPED: True}}
+
+
 def study_for_first_plan(study: Mapping[str, Any]) -> Mapping[str, Any]:
     """The study a first candidate plan is drafted on, without saving it.
 

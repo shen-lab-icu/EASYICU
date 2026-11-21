@@ -545,7 +545,7 @@ def _with_study_cohort(context: ResearchContext, **cohort: Any) -> ResearchConte
 def test_a_first_stay_rule_of_the_other_scope_from_cohort_wording_goes_back_to_the_planner(
     setting, kind,
 ) -> None:
-    context = _with_study_cohort(_context(question="Is X associated with Y?"), **setting)
+    context = _with_study_cohort(_context(question="Is X associated with Y?", wording=[_NOTE]), **setting)
     spec = _spec({"quote": _NOTE, "kind": kind}, source="study_wording")
 
     with pytest.raises(ProgressivePlanCompileError) as refused:
@@ -567,12 +567,12 @@ def test_a_first_stay_rule_of_the_other_scope_from_cohort_wording_goes_back_to_t
     ids=["same-patient-scope", "same-hospitalization-scope", "no-typed-scope", "all-stays-typed"],
 )
 def test_a_first_stay_rule_the_study_setting_does_not_contradict_is_kept(setting, kind) -> None:
-    context = _with_study_cohort(_context(question="Is X associated with Y?"), **setting)
+    context = _with_study_cohort(_context(question="Is X associated with Y?", wording=[_NOTE]), **setting)
 
     _foundation(_cohort(_spec({"quote": _NOTE, "kind": kind}, source="study_wording")), context)
 
 
-@pytest.mark.parametrize("where", ["question", "review", "inclusion"])
+@pytest.mark.parametrize("where", ["question", "inclusion"])
 def test_words_naming_the_other_scope_are_a_real_conflict_the_review_states(where) -> None:
     # Carbon b25 #1: explicit words are never retyped to the study's scope.
     # They compile, the extraction remedy refuses them, and the card says so.
@@ -580,10 +580,6 @@ def test_words_naming_the_other_scope_are_a_real_conflict_the_review_states(wher
     question = f"Among the {words}, is X associated with Y?" if where == "question" else "Is X associated with Y?"
     context = _context(question=question, wording=[words] if where == "inclusion" else ())
     context = _with_study_cohort(context, exclude_readmissions=True)
-    if where == "review":
-        constraints = json.loads(context.user_preferences.data_constraints)
-        constraints["cohort"]["review"] = f"Adults; {words}."
-        context = context.model_copy(update={"user_preferences": UserPreferences(data_constraints=json.dumps(constraints))})
     spec = _spec({"quote": words, "kind": "first_icu_stay_per_hospitalization"},
                  source="question" if where == "question" else "study_wording")
 
